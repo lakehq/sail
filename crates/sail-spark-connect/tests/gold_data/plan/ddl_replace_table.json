@@ -199,7 +199,12 @@
                   },
                   {
                     "name": "part",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -251,7 +256,12 @@
                   },
                   {
                     "name": "part",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -319,7 +329,12 @@
                   },
                   {
                     "name": "part",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -371,7 +386,12 @@
                   },
                   {
                     "name": "part",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -430,7 +450,12 @@
                   },
                   {
                     "name": "part",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -489,7 +514,12 @@
                   },
                   {
                     "name": "part",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -564,7 +594,12 @@
                   },
                   {
                     "name": "part",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -623,7 +658,12 @@
                   },
                   {
                     "name": "part",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -679,7 +719,12 @@
                   },
                   {
                     "name": "part",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -767,7 +812,12 @@
                 "fields": [
                   {
                     "name": "part",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -816,7 +866,12 @@
                   },
                   {
                     "name": "b",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": false,
                     "metadata": []
                   }
@@ -866,7 +921,12 @@
                   },
                   {
                     "name": "b",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -968,7 +1028,12 @@
                   },
                   {
                     "name": "b",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": false,
                     "metadata": []
                   }
@@ -1096,7 +1161,12 @@
                   },
                   {
                     "name": "b",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -1146,7 +1216,12 @@
                   },
                   {
                     "name": "b",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -1196,7 +1271,12 @@
                   },
                   {
                     "name": "b",
-                    "dataType": "utf8",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }

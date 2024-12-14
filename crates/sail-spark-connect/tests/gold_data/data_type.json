@@ -4,111 +4,101 @@
       "input": "\nstruct<\n  struct:struct<deciMal:DECimal, anotherDecimal:decimAL(5,2)>,\n  MAP:Map<timestamp, varchar(10)>,\n  arrAy:Array<double>,\n  anotherArray:Array<char(9)>>\n    ",
       "output": {
         "success": {
-          "struct": [
-            {
-              "name": "struct",
-              "dataType": {
-                "struct": [
-                  {
-                    "name": "deciMal",
-                    "dataType": {
-                      "decimal128": [
-                        10,
-                        0
-                      ]
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  },
-                  {
-                    "name": "anotherDecimal",
-                    "dataType": {
-                      "decimal128": [
-                        5,
-                        2
-                      ]
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "MAP",
-              "dataType": {
-                "map": [
-                  {
-                    "name": "entries",
-                    "dataType": {
-                      "struct": [
-                        {
-                          "name": "key",
-                          "dataType": {
-                            "timestamp": [
-                              "microsecond",
-                              null
-                            ]
-                          },
-                          "nullable": false,
-                          "metadata": []
+          "struct": {
+            "fields": [
+              {
+                "name": "struct",
+                "dataType": {
+                  "struct": {
+                    "fields": [
+                      {
+                        "name": "deciMal",
+                        "dataType": {
+                          "decimal128": {
+                            "precision": 10,
+                            "scale": 0
+                          }
                         },
-                        {
-                          "name": "value",
-                          "dataType": {
-                            "configuredUtf8": [
-                              10,
-                              "varChar"
-                            ]
-                          },
-                          "nullable": true,
-                          "metadata": []
-                        }
-                      ]
-                    },
-                    "nullable": false,
-                    "metadata": []
-                  },
-                  false
-                ]
-              },
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "arrAy",
-              "dataType": {
-                "list": {
-                  "name": "item",
-                  "dataType": "float64",
-                  "nullable": true,
-                  "metadata": []
-                }
-              },
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "anotherArray",
-              "dataType": {
-                "list": {
-                  "name": "item",
-                  "dataType": {
-                    "configuredUtf8": [
-                      9,
-                      "char"
+                        "nullable": true,
+                        "metadata": []
+                      },
+                      {
+                        "name": "anotherDecimal",
+                        "dataType": {
+                          "decimal128": {
+                            "precision": 5,
+                            "scale": 2
+                          }
+                        },
+                        "nullable": true,
+                        "metadata": []
+                      }
                     ]
-                  },
-                  "nullable": true,
-                  "metadata": []
-                }
+                  }
+                },
+                "nullable": true,
+                "metadata": []
               },
-              "nullable": true,
-              "metadata": []
-            }
-          ]
+              {
+                "name": "MAP",
+                "dataType": {
+                  "map": {
+                    "keyType": {
+                      "timestamp": {
+                        "timeUnit": "microsecond",
+                        "timeZoneInfo": "configured"
+                      }
+                    },
+                    "valueType": {
+                      "configuredUtf8": {
+                        "length": 10,
+                        "utf8Type": "varChar"
+                      }
+                    },
+                    "valueTypeNullable": true,
+                    "keysAreSorted": false
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "arrAy",
+                "dataType": {
+                  "list": {
+                    "field": {
+                      "name": "item",
+                      "dataType": "float64",
+                      "nullable": true,
+                      "metadata": []
+                    }
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "anotherArray",
+                "dataType": {
+                  "list": {
+                    "field": {
+                      "name": "item",
+                      "dataType": {
+                        "configuredUtf8": {
+                          "length": 9,
+                          "utf8Type": "char"
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
+                    }
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
         }
       }
     },
@@ -117,35 +107,19 @@
       "output": {
         "success": {
           "list": {
-            "name": "item",
-            "dataType": {
-              "map": [
-                {
-                  "name": "entries",
-                  "dataType": {
-                    "struct": [
-                      {
-                        "name": "key",
-                        "dataType": "int32",
-                        "nullable": false,
-                        "metadata": []
-                      },
-                      {
-                        "name": "value",
-                        "dataType": "int8",
-                        "nullable": true,
-                        "metadata": []
-                      }
-                    ]
-                  },
-                  "nullable": false,
-                  "metadata": []
-                },
-                false
-              ]
-            },
-            "nullable": true,
-            "metadata": []
+            "field": {
+              "name": "item",
+              "dataType": {
+                "map": {
+                  "keyType": "int32",
+                  "valueType": "int8",
+                  "valueTypeNullable": true,
+                  "keysAreSorted": false
+                }
+              },
+              "nullable": true,
+              "metadata": []
+            }
           }
         }
       }
@@ -153,7 +127,7 @@
     {
       "input": "BINARY",
       "output": {
-        "success": "binary"
+        "success": "configuredBinary"
       }
     },
     {
@@ -166,10 +140,10 @@
       "input": "ChaR(5)",
       "output": {
         "success": {
-          "configuredUtf8": [
-            5,
-            "char"
-          ]
+          "configuredUtf8": {
+            "length": 5,
+            "utf8Type": "char"
+          }
         }
       }
     },
@@ -177,10 +151,10 @@
       "input": "ChaRacter(5)",
       "output": {
         "success": {
-          "configuredUtf8": [
-            5,
-            "char"
-          ]
+          "configuredUtf8": {
+            "length": 5,
+            "utf8Type": "char"
+          }
         }
       }
     },
@@ -194,10 +168,10 @@
       "input": "Dec(10, 5)",
       "output": {
         "success": {
-          "decimal128": [
-            10,
-            5
-          ]
+          "decimal128": {
+            "precision": 10,
+            "scale": 5
+          }
         }
       }
     },
@@ -217,11 +191,11 @@
       "input": "INTERVAL YEAR TO MONTH",
       "output": {
         "success": {
-          "interval": [
-            "yearMonth",
-            "year",
-            "month"
-          ]
+          "interval": {
+            "intervalUnit": "yearMonth",
+            "startField": "year",
+            "endField": "month"
+          }
         }
       }
     },
@@ -229,30 +203,17 @@
       "input": "MAP<int, STRING>",
       "output": {
         "success": {
-          "map": [
-            {
-              "name": "entries",
-              "dataType": {
-                "struct": [
-                  {
-                    "name": "key",
-                    "dataType": "int32",
-                    "nullable": false,
-                    "metadata": []
-                  },
-                  {
-                    "name": "value",
-                    "dataType": "utf8",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
-              "nullable": false,
-              "metadata": []
+          "map": {
+            "keyType": "int32",
+            "valueType": {
+              "configuredUtf8": {
+                "length": null,
+                "utf8Type": null
+              }
             },
-            false
-          ]
+            "valueTypeNullable": true,
+            "keysAreSorted": false
+          }
         }
       }
     },
@@ -260,39 +221,28 @@
       "input": "MAP<int, struct<varchar:string>>",
       "output": {
         "success": {
-          "map": [
-            {
-              "name": "entries",
-              "dataType": {
-                "struct": [
+          "map": {
+            "keyType": "int32",
+            "valueType": {
+              "struct": {
+                "fields": [
                   {
-                    "name": "key",
-                    "dataType": "int32",
-                    "nullable": false,
-                    "metadata": []
-                  },
-                  {
-                    "name": "value",
+                    "name": "varchar",
                     "dataType": {
-                      "struct": [
-                        {
-                          "name": "varchar",
-                          "dataType": "utf8",
-                          "nullable": true,
-                          "metadata": []
-                        }
-                      ]
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
                     },
                     "nullable": true,
                     "metadata": []
                   }
                 ]
-              },
-              "nullable": false,
-              "metadata": []
+              }
             },
-            false
-          ]
+            "valueTypeNullable": true,
+            "keysAreSorted": false
+          }
         }
       }
     },
@@ -300,37 +250,21 @@
       "input": "MAp<int, ARRAY<double>>",
       "output": {
         "success": {
-          "map": [
-            {
-              "name": "entries",
-              "dataType": {
-                "struct": [
-                  {
-                    "name": "key",
-                    "dataType": "int32",
-                    "nullable": false,
-                    "metadata": []
-                  },
-                  {
-                    "name": "value",
-                    "dataType": {
-                      "list": {
-                        "name": "item",
-                        "dataType": "float64",
-                        "nullable": true,
-                        "metadata": []
-                      }
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
-              "nullable": false,
-              "metadata": []
+          "map": {
+            "keyType": "int32",
+            "valueType": {
+              "list": {
+                "field": {
+                  "name": "item",
+                  "dataType": "float64",
+                  "nullable": true,
+                  "metadata": []
+                }
+              }
             },
-            false
-          ]
+            "valueTypeNullable": true,
+            "keysAreSorted": false
+          }
         }
       }
     },
@@ -338,20 +272,27 @@
       "input": "Struct<TABLE: string, DATE:boolean>",
       "output": {
         "success": {
-          "struct": [
-            {
-              "name": "TABLE",
-              "dataType": "utf8",
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "DATE",
-              "dataType": "boolean",
-              "nullable": true,
-              "metadata": []
-            }
-          ]
+          "struct": {
+            "fields": [
+              {
+                "name": "TABLE",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": null,
+                    "utf8Type": null
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "DATE",
+                "dataType": "boolean",
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
         }
       }
     },
@@ -359,25 +300,27 @@
       "input": "Struct<int: int, timestamp:timestamp>",
       "output": {
         "success": {
-          "struct": [
-            {
-              "name": "int",
-              "dataType": "int32",
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "timestamp",
-              "dataType": {
-                "timestamp": [
-                  "microsecond",
-                  null
-                ]
+          "struct": {
+            "fields": [
+              {
+                "name": "int",
+                "dataType": "int32",
+                "nullable": true,
+                "metadata": []
               },
-              "nullable": true,
-              "metadata": []
-            }
-          ]
+              {
+                "name": "timestamp",
+                "dataType": {
+                  "timestamp": {
+                    "timeUnit": "microsecond",
+                    "timeZoneInfo": "configured"
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
         }
       }
     },
@@ -385,25 +328,32 @@
       "input": "Struct<x: INT, y: STRING COMMENT 'test'>",
       "output": {
         "success": {
-          "struct": [
-            {
-              "name": "x",
-              "dataType": "int32",
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "y",
-              "dataType": "utf8",
-              "nullable": true,
-              "metadata": [
-                [
-                  "comment",
-                  "test"
+          "struct": {
+            "fields": [
+              {
+                "name": "x",
+                "dataType": "int32",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "y",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": null,
+                    "utf8Type": null
+                  }
+                },
+                "nullable": true,
+                "metadata": [
+                  [
+                    "comment",
+                    "test"
+                  ]
                 ]
-              ]
-            }
-          ]
+              }
+            ]
+          }
         }
       }
     },
@@ -412,10 +362,12 @@
       "output": {
         "success": {
           "list": {
-            "name": "item",
-            "dataType": "float64",
-            "nullable": true,
-            "metadata": []
+            "field": {
+              "name": "item",
+              "dataType": "float64",
+              "nullable": true,
+              "metadata": []
+            }
           }
         }
       }
@@ -425,19 +377,23 @@
       "output": {
         "success": {
           "list": {
-            "name": "item",
-            "dataType": {
-              "struct": [
-                {
-                  "name": "tinYint",
-                  "dataType": "int8",
-                  "nullable": true,
-                  "metadata": []
+            "field": {
+              "name": "item",
+              "dataType": {
+                "struct": {
+                  "fields": [
+                    {
+                      "name": "tinYint",
+                      "dataType": "int8",
+                      "nullable": true,
+                      "metadata": []
+                    }
+                  ]
                 }
-              ]
-            },
-            "nullable": true,
-            "metadata": []
+              },
+              "nullable": true,
+              "metadata": []
+            }
           }
         }
       }
@@ -452,10 +408,10 @@
       "input": "cHaR(27)",
       "output": {
         "success": {
-          "configuredUtf8": [
-            27,
-            "char"
-          ]
+          "configuredUtf8": {
+            "length": 27,
+            "utf8Type": "char"
+          }
         }
       }
     },
@@ -469,10 +425,10 @@
       "input": "deC",
       "output": {
         "success": {
-          "decimal128": [
-            10,
-            0
-          ]
+          "decimal128": {
+            "precision": 10,
+            "scale": 0
+          }
         }
       }
     },
@@ -480,10 +436,10 @@
       "input": "decimal",
       "output": {
         "success": {
-          "decimal128": [
-            10,
-            0
-          ]
+          "decimal128": {
+            "precision": 10,
+            "scale": 0
+          }
         }
       }
     },
@@ -491,10 +447,10 @@
       "input": "decimal(10, 5)",
       "output": {
         "success": {
-          "decimal128": [
-            10,
-            5
-          ]
+          "decimal128": {
+            "precision": 10,
+            "scale": 5
+          }
         }
       }
     },
@@ -514,11 +470,11 @@
       "input": "interval",
       "output": {
         "success": {
-          "interval": [
-            "monthDayNano",
-            null,
-            null
-          ]
+          "interval": {
+            "intervalUnit": "monthDayNano",
+            "startField": null,
+            "endField": null
+          }
         }
       }
     },
@@ -526,7 +482,9 @@
       "input": "interval day to second",
       "output": {
         "success": {
-          "duration": "microsecond"
+          "duration": {
+            "timeUnit": "microsecond"
+          }
         }
       }
     },
@@ -547,45 +505,59 @@
       "input": "strUCt<>",
       "output": {
         "success": {
-          "struct": []
+          "struct": {
+            "fields": []
+          }
         }
       }
     },
     {
       "input": "string",
       "output": {
-        "success": "utf8"
+        "success": {
+          "configuredUtf8": {
+            "length": null,
+            "utf8Type": null
+          }
+        }
       }
     },
     {
       "input": "struct<`x+y`:int, `!@#$%^&*()`:string, `1_2.345<>:\"`:varchar(20)>",
       "output": {
         "success": {
-          "struct": [
-            {
-              "name": "x+y",
-              "dataType": "int32",
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "!@#$%^&*()",
-              "dataType": "utf8",
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "1_2.345<>:\"",
-              "dataType": {
-                "configuredUtf8": [
-                  20,
-                  "varChar"
-                ]
+          "struct": {
+            "fields": [
+              {
+                "name": "x+y",
+                "dataType": "int32",
+                "nullable": true,
+                "metadata": []
               },
-              "nullable": true,
-              "metadata": []
-            }
-          ]
+              {
+                "name": "!@#$%^&*()",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": null,
+                    "utf8Type": null
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "1_2.345<>:\"",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": 20,
+                    "utf8Type": "varChar"
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
         }
       }
     },
@@ -593,26 +565,33 @@
       "input": "struct<end: long, select: int, from: string>",
       "output": {
         "success": {
-          "struct": [
-            {
-              "name": "end",
-              "dataType": "int64",
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "select",
-              "dataType": "int32",
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "from",
-              "dataType": "utf8",
-              "nullable": true,
-              "metadata": []
-            }
-          ]
+          "struct": {
+            "fields": [
+              {
+                "name": "end",
+                "dataType": "int64",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "select",
+                "dataType": "int32",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "from",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": null,
+                    "utf8Type": null
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
         }
       }
     },
@@ -620,25 +599,27 @@
       "input": "struct<intType: int, ts:timestamp>",
       "output": {
         "success": {
-          "struct": [
-            {
-              "name": "intType",
-              "dataType": "int32",
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "ts",
-              "dataType": {
-                "timestamp": [
-                  "microsecond",
-                  null
-                ]
+          "struct": {
+            "fields": [
+              {
+                "name": "intType",
+                "dataType": "int32",
+                "nullable": true,
+                "metadata": []
               },
-              "nullable": true,
-              "metadata": []
-            }
-          ]
+              {
+                "name": "ts",
+                "dataType": {
+                  "timestamp": {
+                    "timeUnit": "microsecond",
+                    "timeZoneInfo": "configured"
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
         }
       }
     },
@@ -646,20 +627,27 @@
       "input": "struct<x int, y string>",
       "output": {
         "success": {
-          "struct": [
-            {
-              "name": "x",
-              "dataType": "int32",
-              "nullable": true,
-              "metadata": []
-            },
-            {
-              "name": "y",
-              "dataType": "utf8",
-              "nullable": true,
-              "metadata": []
-            }
-          ]
+          "struct": {
+            "fields": [
+              {
+                "name": "x",
+                "dataType": "int32",
+                "nullable": true,
+                "metadata": []
+              },
+              {
+                "name": "y",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": null,
+                    "utf8Type": null
+                  }
+                },
+                "nullable": true,
+                "metadata": []
+              }
+            ]
+          }
         }
       }
     },
@@ -681,10 +669,10 @@
       "input": "timestamp",
       "output": {
         "success": {
-          "timestamp": [
-            "microsecond",
-            null
-          ]
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timeZoneInfo": "configured"
+          }
         }
       }
     },
@@ -692,10 +680,10 @@
       "input": "timestamp_ltz",
       "output": {
         "success": {
-          "timestamp": [
-            "microsecond",
-            "ltz"
-          ]
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timeZoneInfo": "localTimeZone"
+          }
         }
       }
     },
@@ -703,10 +691,10 @@
       "input": "timestamp_ntz",
       "output": {
         "success": {
-          "timestamp": [
-            "microsecond",
-            null
-          ]
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timeZoneInfo": "noTimeZone"
+          }
         }
       }
     },
@@ -734,10 +722,10 @@
       "input": "varchAr(20)",
       "output": {
         "success": {
-          "configuredUtf8": [
-            20,
-            "varChar"
-          ]
+          "configuredUtf8": {
+            "length": 20,
+            "utf8Type": "varChar"
+          }
         }
       }
     },

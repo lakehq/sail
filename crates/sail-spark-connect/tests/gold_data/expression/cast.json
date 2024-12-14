@@ -15,10 +15,12 @@
             },
             "castToType": {
               "list": {
-                "name": "item",
-                "dataType": "int32",
-                "nullable": true,
-                "metadata": []
+                "field": {
+                  "name": "item",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "metadata": []
+                }
               }
             }
           }
@@ -57,10 +59,10 @@
               }
             },
             "castToType": {
-              "timestamp": [
-                "microsecond",
-                null
-              ]
+              "timestamp": {
+                "timeUnit": "microsecond",
+                "timeZoneInfo": "configured"
+              }
             }
           }
         }

@@ -31,7 +31,12 @@
           "fields": [
             {
               "name": "!@#$%.^&*()",
-              "dataType": "utf8",
+              "dataType": {
+                "configuredUtf8": {
+                  "length": null,
+                  "utf8Type": null
+                }
+              },
               "nullable": true,
               "metadata": []
             }
@@ -97,25 +102,27 @@
             {
               "name": "a",
               "dataType": {
-                "struct": [
-                  {
-                    "name": "intType",
-                    "dataType": "int32",
-                    "nullable": true,
-                    "metadata": []
-                  },
-                  {
-                    "name": "ts",
-                    "dataType": {
-                      "timestamp": [
-                        "microsecond",
-                        null
-                      ]
+                "struct": {
+                  "fields": [
+                    {
+                      "name": "intType",
+                      "dataType": "int32",
+                      "nullable": true,
+                      "metadata": []
                     },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
+                    {
+                      "name": "ts",
+                      "dataType": {
+                        "timestamp": {
+                          "timeUnit": "microsecond",
+                          "timeZoneInfo": "configured"
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
+                    }
+                  ]
+                }
               },
               "nullable": true,
               "metadata": []
@@ -173,111 +180,101 @@
             {
               "name": "complexStructCol",
               "dataType": {
-                "struct": [
-                  {
-                    "name": "struct",
-                    "dataType": {
-                      "struct": [
-                        {
-                          "name": "deciMal",
-                          "dataType": {
-                            "decimal128": [
-                              10,
-                              0
-                            ]
-                          },
-                          "nullable": true,
-                          "metadata": []
-                        },
-                        {
-                          "name": "anotherDecimal",
-                          "dataType": {
-                            "decimal128": [
-                              5,
-                              2
-                            ]
-                          },
-                          "nullable": true,
-                          "metadata": []
-                        }
-                      ]
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  },
-                  {
-                    "name": "MAP",
-                    "dataType": {
-                      "map": [
-                        {
-                          "name": "entries",
-                          "dataType": {
-                            "struct": [
-                              {
-                                "name": "key",
-                                "dataType": {
-                                  "timestamp": [
-                                    "microsecond",
-                                    null
-                                  ]
-                                },
-                                "nullable": false,
-                                "metadata": []
+                "struct": {
+                  "fields": [
+                    {
+                      "name": "struct",
+                      "dataType": {
+                        "struct": {
+                          "fields": [
+                            {
+                              "name": "deciMal",
+                              "dataType": {
+                                "decimal128": {
+                                  "precision": 10,
+                                  "scale": 0
+                                }
                               },
-                              {
-                                "name": "value",
-                                "dataType": {
-                                  "configuredUtf8": [
-                                    10,
-                                    "varChar"
-                                  ]
-                                },
-                                "nullable": true,
-                                "metadata": []
-                              }
-                            ]
-                          },
-                          "nullable": false,
-                          "metadata": []
-                        },
-                        false
-                      ]
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  },
-                  {
-                    "name": "arrAy",
-                    "dataType": {
-                      "list": {
-                        "name": "item",
-                        "dataType": "float64",
-                        "nullable": true,
-                        "metadata": []
-                      }
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  },
-                  {
-                    "name": "anotherArray",
-                    "dataType": {
-                      "list": {
-                        "name": "item",
-                        "dataType": {
-                          "configuredUtf8": [
-                            9,
-                            "char"
+                              "nullable": true,
+                              "metadata": []
+                            },
+                            {
+                              "name": "anotherDecimal",
+                              "dataType": {
+                                "decimal128": {
+                                  "precision": 5,
+                                  "scale": 2
+                                }
+                              },
+                              "nullable": true,
+                              "metadata": []
+                            }
                           ]
-                        },
-                        "nullable": true,
-                        "metadata": []
-                      }
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
                     },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
+                    {
+                      "name": "MAP",
+                      "dataType": {
+                        "map": {
+                          "keyType": {
+                            "timestamp": {
+                              "timeUnit": "microsecond",
+                              "timeZoneInfo": "configured"
+                            }
+                          },
+                          "valueType": {
+                            "configuredUtf8": {
+                              "length": 10,
+                              "utf8Type": "varChar"
+                            }
+                          },
+                          "valueTypeNullable": true,
+                          "keysAreSorted": false
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
+                    },
+                    {
+                      "name": "arrAy",
+                      "dataType": {
+                        "list": {
+                          "field": {
+                            "name": "item",
+                            "dataType": "float64",
+                            "nullable": true,
+                            "metadata": []
+                          }
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
+                    },
+                    {
+                      "name": "anotherArray",
+                      "dataType": {
+                        "list": {
+                          "field": {
+                            "name": "item",
+                            "dataType": {
+                              "configuredUtf8": {
+                                "length": 9,
+                                "utf8Type": "char"
+                              }
+                            },
+                            "nullable": true,
+                            "metadata": []
+                          }
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
+                    }
+                  ]
+                }
               },
               "nullable": true,
               "metadata": []
