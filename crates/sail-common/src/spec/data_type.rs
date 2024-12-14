@@ -10,280 +10,180 @@ pub const LOCAL_TIME_ZONE_IDENTIFIER: &str = "ltz";
 pub const NO_TIME_ZONE_IDENTIFIER: &str = "ntz";
 
 /// Native Sail data types that convert to Arrow types.
-/// These types usually directly match to [arrow_schema::DataType] variants when there is a corresponding type.
-/// Exceptions to this are: [`Interval`].
-/// Additionally, custom data types are supported for cases not covered by Arrow (e.g. [`UserDefined`]).
-/// [Credit]: Comments within the enum are copied from [`arrow_schema::DataType`].
+/// Types directly match to [arrow_schema::DataType] variants when there is a corresponding type.
+/// Additionally, custom data types are supported for cases not covered by Arrow.
+/// The style of expressing the type may not always be exactly the same as Arrow's.
+/// The spec is designed to have an easy-to-read JSON representation,
+/// making language interoperability easier in the future.
+/// This is achieved by eliminating the use of tuple structs and using named fields instead.
+/// [Credit]: Comments within the enum are copied from [arrow_schema::DataType].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DataType {
-    /// Null type
+    /// Null type.
+    /// Corresponds to [arrow_schema::DataType::Null].
     Null,
     /// A boolean datatype representing the values `true` and `false`.
+    /// Corresponds to [arrow_schema::DataType::Boolean].
     Boolean,
     /// A signed 8-bit integer.
+    /// Corresponds to [arrow_schema::DataType::Int8].
     Int8,
     /// A signed 16-bit integer.
+    /// Corresponds to [arrow_schema::DataType::Int16].
     Int16,
     /// A signed 32-bit integer.
+    /// Corresponds to [arrow_schema::DataType::Int32].
     Int32,
     /// A signed 64-bit integer.
+    /// Corresponds to [arrow_schema::DataType::Int64].
     Int64,
     /// An unsigned 8-bit integer.
+    /// Corresponds to [arrow_schema::DataType::UInt8].
     UInt8,
     /// An unsigned 16-bit integer.
+    /// Corresponds to [arrow_schema::DataType::UInt16].
     UInt16,
     /// An unsigned 32-bit integer.
+    /// Corresponds to [arrow_schema::DataType::UInt32].
     UInt32,
     /// An unsigned 64-bit integer.
+    /// Corresponds to [arrow_schema::DataType::UInt64].
     UInt64,
     /// A 16-bit floating point number.
+    /// Corresponds to [arrow_schema::DataType::Float16].
     Float16,
     /// A 32-bit floating point number.
+    /// Corresponds to [arrow_schema::DataType::Float32].
     Float32,
     /// A 64-bit floating point number.
+    /// Corresponds to [arrow_schema::DataType::Float64].
     Float64,
     /// A timestamp with an optional timezone.
-    ///
-    /// Time is measured as a Unix epoch, counting the seconds from
-    /// 00:00:00.000 on 1 January 1970, excluding leap seconds,
-    /// as a signed 64-bit integer.
-    ///
-    /// The time zone is a string indicating the name of a time zone, one of:
-    ///
-    /// * As used in the Olson time zone database (the "tz database" or
-    ///   "tzdata"), such as "America/New_York"
-    /// * An absolute time zone offset of the form +XX:XX or -XX:XX, such as +07:30
-    ///
-    /// Timestamps with a non-empty timezone
-    /// ------------------------------------
-    ///
-    /// If a Timestamp column has a non-empty timezone value, its epoch is
-    /// 1970-01-01 00:00:00 (January 1st 1970, midnight) in the *UTC* timezone
-    /// (the Unix epoch), regardless of the Timestamp's own timezone.
-    ///
-    /// Therefore, timestamp values with a non-empty timezone correspond to
-    /// physical points in time together with some additional information about
-    /// how the data was obtained and/or how to display it (the timezone).
-    ///
-    ///   For example, the timestamp value 0 with the timezone string "Europe/Paris"
-    ///   corresponds to "January 1st 1970, 00h00" in the UTC timezone, but the
-    ///   application may prefer to display it as "January 1st 1970, 01h00" in
-    ///   the Europe/Paris timezone (which is the same physical point in time).
-    ///
-    /// One consequence is that timestamp values with a non-empty timezone
-    /// can be compared and ordered directly, since they all share the same
-    /// well-known point of reference (the Unix epoch).
-    ///
-    /// Timestamps with an unset / empty timezone
-    /// -----------------------------------------
-    ///
-    /// If a Timestamp column has no timezone value, its epoch is
-    /// 1970-01-01 00:00:00 (January 1st 1970, midnight) in an *unknown* timezone.
-    ///
-    /// Therefore, timestamp values without a timezone cannot be meaningfully
-    /// interpreted as physical points in time, but only as calendar / clock
-    /// indications ("wall clock time") in an unspecified timezone.
-    ///
-    ///   For example, the timestamp value 0 with an empty timezone string
-    ///   corresponds to "January 1st 1970, 00h00" in an unknown timezone: there
-    ///   is not enough information to interpret it as a well-defined physical
-    ///   point in time.
-    ///
-    /// One consequence is that timestamp values without a timezone cannot
-    /// be reliably compared or ordered, since they may have different points of
-    /// reference.  In particular, it is *not* possible to interpret an unset
-    /// or empty timezone as the same as "UTC".
-    ///
-    /// Conversion between timezones
-    /// ----------------------------
-    ///
-    /// If a Timestamp column has a non-empty timezone, changing the timezone
-    /// to a different non-empty value is a metadata-only operation:
-    /// the timestamp values need not change as their point of reference remains
-    /// the same (the Unix epoch).
-    ///
-    /// However, if a Timestamp column has no timezone value, changing it to a
-    /// non-empty value requires to think about the desired semantics.
-    /// One possibility is to assume that the original timestamp values are
-    /// relative to the epoch of the timezone being set; timestamp values should
-    /// then adjust to the Unix epoch (for example, changing the timezone from
-    /// empty to "Europe/Paris" would require converting the timestamp values
-    /// from "Europe/Paris" to "UTC", which seems counter-intuitive but is
-    /// nevertheless correct).
-    ///
-    /// ```
-    /// # use arrow_schema::{DataType, TimeUnit};
-    /// DataType::Timestamp(TimeUnit::Second, None);
-    /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
-    /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
-    /// ```
-    Timestamp(TimeUnit, Option<Arc<str>>),
-    /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
-    /// in days.
+    /// Corresponds to [arrow_schema::DataType::Timestamp].
+    Timestamp {
+        time_unit: TimeUnit,
+        time_zone_info: TimeZoneInfo,
+    },
+    /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01) in days.
+    /// Corresponds to [arrow_schema::DataType::Date32].
     Date32,
-    /// A signed 64-bit date representing the elapsed time since UNIX epoch (1970-01-01)
-    /// in milliseconds.
-    ///
-    /// # Valid Ranges
-    ///
-    /// According to the Arrow specification ([Schema.fbs]), values of Date64
-    /// are treated as the number of *days*, in milliseconds, since the UNIX
-    /// epoch. Therefore, values of this type  must be evenly divisible by
-    /// `86_400_000`, the number of milliseconds in a standard day.
-    ///
-    /// It is not valid to store milliseconds that do not represent an exact
-    /// day. The reason for this restriction is compatibility with other
-    /// language's native libraries (specifically Java), which historically
-    /// lacked a dedicated date type and only supported timestamps.
-    ///
-    /// # Validation
-    ///
-    /// This library does not validate or enforce that Date64 values are evenly
-    /// divisible by `86_400_000`  for performance and usability reasons. Date64
-    /// values are treated similarly to `Timestamp(TimeUnit::Millisecond,
-    /// None)`: values will be displayed with a time of day if the value does
-    /// not represent an exact day, and arithmetic will be done at the
-    /// millisecond granularity.
-    ///
-    /// # Recommendation
-    ///
-    /// Users should prefer [`DataType::Date32`] to cleanly represent the number
-    /// of days, or one of the Timestamp variants to include time as part of the
-    /// representation, depending on their use case.
-    ///
-    /// # Further Reading
-    ///
-    /// For more details, see [#5288](https://github.com/apache/arrow-rs/issues/5288).
-    ///
-    /// [Schema.fbs]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
+    /// A signed 64-bit date representing the elapsed time since UNIX epoch (1970-01-01) in milliseconds.
+    /// Corresponds to [arrow_schema::DataType::Date64].
     Date64,
     /// A signed 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
     /// Must be either seconds or milliseconds.
-    Time32(TimeUnit),
+    /// Corresponds to [arrow_schema::DataType::Time32].
+    Time32 {
+        time_unit: TimeUnit,
+    },
     /// A signed 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
     /// Must be either microseconds or nanoseconds.
-    Time64(TimeUnit),
+    /// Corresponds to [arrow_schema::DataType::Time64].
+    Time64 {
+        time_unit: TimeUnit,
+    },
     /// Measure of elapsed time in either seconds, milliseconds, microseconds or nanoseconds.
-    Duration(TimeUnit),
+    /// Corresponds to [arrow_schema::DataType::Duration].
+    Duration {
+        time_unit: TimeUnit,
+    },
     /// A "calendar" interval which models types that don't necessarily
     /// have a precise duration without the context of a base timestamp (e.g.
     /// days can differ in length during daylight savings time transitions).
-    ///
-    /// This differs from the Arrow specification.
-    /// Sail's specification allows for an optional `start_field` and `end_field`.
-    Interval(
-        IntervalUnit,
-        Option<IntervalFieldType>, // `start_field`
-        Option<IntervalFieldType>, // `end_field`
-    ),
+    /// Corresponds to [arrow_schema::DataType::Interval].
+    Interval {
+        interval_unit: IntervalUnit,
+        start_field: Option<IntervalFieldType>,
+        end_field: Option<IntervalFieldType>,
+    },
     /// Opaque binary data of variable length.
-    ///
-    /// A single Binary array can store up to [`i32::MAX`] bytes
-    /// of binary data in total.
+    /// A single Binary array can store up to [`i32::MAX`] bytes of binary data in total.
+    /// Corresponds to [arrow_schema::DataType::Binary].
     Binary,
     /// Opaque binary data of fixed size.
     /// Enum parameter specifies the number of bytes per value.
-    FixedSizeBinary(i32),
+    /// Corresponds to [arrow_schema::DataType::FixedSizeBinary].
+    FixedSizeBinary {
+        size: i32,
+    },
     /// Opaque binary data of variable length and 64-bit offsets.
-    ///
-    /// A single LargeBinary array can store up to [`i64::MAX`] bytes
-    /// of binary data in total.
+    /// A single LargeBinary array can store up to [`i64::MAX`] bytes of binary data in total.
+    /// Corresponds to [arrow_schema::DataType::LargeBinary].
     LargeBinary,
     /// Opaque binary data of variable length.
-    ///
-    /// Logically the same as [`Self::Binary`], but the internal representation uses a view
-    /// struct that contains the string length and either the string's entire data
-    /// inline (for small strings) or an inlined prefix, an index of another buffer,
-    /// and an offset pointing to a slice in that buffer (for non-small strings).
+    /// Logically the same as [DataType::Binary].
+    /// Corresponds to [arrow_schema::DataType::BinaryView].
     BinaryView,
     /// A variable-length string in Unicode with UTF-8 encoding.
-    ///
-    /// A single Utf8 array can store up to [`i32::MAX`] bytes
-    /// of string data in total.
+    /// A single Utf8 array can store up to [`i32::MAX`] bytes of string data in total.
+    /// Corresponds to [arrow_schema::DataType::Utf8].
     Utf8,
     /// A variable-length string in Unicode with UFT-8 encoding and 64-bit offsets.
-    ///
-    /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes
-    /// of string data in total.
+    /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes of string data in total.
+    /// Corresponds to [arrow_schema::DataType::LargeUtf8].
     LargeUtf8,
     /// A variable-length string in Unicode with UTF-8 encoding
-    ///
-    /// Logically the same as [`Self::Utf8`], but the internal representation uses a view
-    /// struct that contains the string length and either the string's entire data
-    /// inline (for small strings) or an inlined prefix, an index of another buffer,
-    /// and an offset pointing to a slice in that buffer (for non-small strings).
+    /// Logically the same as [DataType::Utf8].
+    /// Corresponds to [arrow_schema::DataType::Utf8View].
     Utf8View,
     /// A list of some logical data type with variable length.
-    ///
     /// A single List array can store up to [`i32::MAX`] elements in total.
-    List(FieldRef),
+    /// Corresponds to [arrow_schema::DataType::List].
+    List {
+        field: FieldRef,
+    },
     /// A list of some logical data type with fixed length.
-    FixedSizeList(FieldRef, i32),
+    /// Corresponds to [arrow_schema::DataType::FixedSizeList].
+    FixedSizeList {
+        field: FieldRef,
+        length: i32,
+    },
     /// A list of some logical data type with variable length and 64-bit offsets.
-    ///
     /// A single LargeList array can store up to [`i64::MAX`] elements in total.
-    LargeList(FieldRef),
+    /// Corresponds to [arrow_schema::DataType::LargeList].
+    LargeList {
+        field: FieldRef,
+    },
     /// A nested datatype that contains a number of sub-fields.
-    Struct(Fields),
-    /// A nested datatype that can represent slots of differing types. Components:
-    ///
-    /// 1. [`UnionFields`]
-    /// 2. The type of union (Sparse or Dense)
-    Union(UnionFields, UnionMode),
-    /// A dictionary encoded array (`key_type`, `value_type`), where
-    /// each array element is an index of `key_type` into an
-    /// associated dictionary of `value_type`.
-    ///
-    /// Dictionary arrays are used to store columns of `value_type`
-    /// that contain many repeated values using less memory, but with
-    /// a higher CPU overhead for some operations.
-    ///
-    /// This type mostly used to represent low cardinality string
-    /// arrays or a limited set of primitive types as integers.
-    Dictionary(Box<DataType>, Box<DataType>),
-    /// Exact 128-bit width decimal value with precision and scale
-    ///
-    /// * precision is the total number of digits
-    /// * scale is the number of digits past the decimal
-    ///
-    /// For example the number 123.45 has precision 5 and scale 2.
-    ///
-    /// In certain situations, scale could be negative number. For
-    /// negative scale, it is the number of padding 0 to the right
-    /// of the digits.
-    ///
-    /// For example the number 12300 could be treated as a decimal
-    /// has precision 3 and scale -2.
-    Decimal128(u8, i8),
+    /// Corresponds to [arrow_schema::DataType::Struct].
+    Struct {
+        fields: Fields,
+    },
+    /// A nested datatype that can represent slots of differing types.
+    /// Corresponds to [arrow_schema::DataType::Union].
+    Union {
+        union_fields: UnionFields,
+        union_mode: UnionMode,
+    },
+    /// A dictionary encoded array (`key_type`, `value_type`), where each array element is an index
+    /// of `key_type` into an associated dictionary of `value_type`.
+    /// Corresponds to [arrow_schema::DataType::Dictionary].
+    Dictionary {
+        key_type: Box<DataType>,
+        value_type: Box<DataType>,
+    },
+    /// Exact 128-bit width decimal value with precision and scale.
+    /// Corresponds to [arrow_schema::DataType::Decimal128].
+    Decimal128 {
+        precision: u8,
+        scale: i8,
+    },
     /// Exact 256-bit width decimal value with precision and scale
-    ///
-    /// * precision is the total number of digits
-    /// * scale is the number of digits past the decimal
-    ///
-    /// For example the number 123.45 has precision 5 and scale 2.
-    ///
-    /// In certain situations, scale could be negative number. For
-    /// negative scale, it is the number of padding 0 to the right
-    /// of the digits.
-    ///
-    /// For example the number 12300 could be treated as a decimal
-    /// has precision 3 and scale -2.
-    Decimal256(u8, i8),
+    /// Corresponds to [arrow_schema::DataType::Decimal256].
+    Decimal256 {
+        precision: u8,
+        scale: i8,
+    },
     /// A Map is a logical-nested type that is represented as
-    ///
     /// `List<entries: Struct<key: K, value: V>>`
-    ///
-    /// The keys and values are each respectively contiguous.
-    /// The key and value types are not constrained, but keys should be
-    /// hashable and unique.
-    /// Whether the keys are sorted can be set in the `bool` after the `Field`.
-    ///
-    /// In a field with Map type, the field has a child Struct field, which then
-    /// has two children: key type and the second the value type. The names of the
-    /// child fields may be respectively "entries", "key", and "value", but this is
-    /// not enforced.
-    Map(FieldRef, bool),
+    /// Corresponds to [arrow_schema::DataType::Map].
+    Map {
+        key_type: Box<DataType>,
+        value_type: Box<DataType>,
+        value_type_nullable: bool,
+        keys_are_sorted: bool,
+    },
     ///
     /// Everything below this line is not part of the Arrow specification.
     ///
@@ -293,18 +193,20 @@ pub enum DataType {
         serialized_python_class: Option<String>,
         sql_type: Box<DataType>,
     },
-    /// Resolves to either [`Self::Utf8`] or [`Self::LargeUtf8`], based on `config.arrow_use_large_var_types`.
+    /// Resolves to either [DataType::Utf8] or [DataType::LargeUtf8],
+    /// based on `config.arrow_use_large_var_types`.
     /// Optional length parameter is currently unused but retained for potential future use.
     /// Optional `ConfiguredUtf8Type` specifies if the type is a `varchar` or `char`.
-    ///
-    /// The [`sail-spark-connect`] crate uses `TryFrom` for mapping Spark types to Sail types,
-    /// whereas [`PlanResolver`] resolves `DataType` without `TryFrom`. This makes
-    /// [`PlanResolver::resolve_data_type`] more suitable here, as it has access to `config`
-    /// and can determine the type accordingly.
-    ///
-    /// TODO: Refactor data type resolution in [`sail-spark-connect`] to avoid using `TryFrom`,
-    ///       which would allow for removal of this variant.
-    ConfiguredUtf8(Option<u32>, Option<ConfiguredUtf8Type>),
+    // TODO: The [`sail-spark-connect`] crate uses `TryFrom` for mapping Spark types to Sail types,
+    //  whereas [`PlanResolver`] resolves `DataType` without `TryFrom`.
+    //  This makes [`PlanResolver::resolve_data_type`] more suitable here,
+    //  as it has access to `config` and can determine the type accordingly.
+    //  Refactor data type resolution in [`sail-spark-connect`] to avoid using `TryFrom`,
+    //  which would allow for removal of this variant.
+    ConfiguredUtf8 {
+        length: Option<u32>,
+        utf8_type: Option<ConfiguredUtf8Type>,
+    },
     // TODO: Same TODO as `ConfiguredUtf8`.
     ConfiguredBinary,
 }
@@ -312,7 +214,7 @@ pub enum DataType {
 impl DataType {
     pub fn into_schema(self, default_field_name: &str, nullable: bool) -> Schema {
         let fields = match self {
-            DataType::Struct(fields) => fields,
+            DataType::Struct { fields } => fields,
             x => Fields::from(vec![Field {
                 name: default_field_name.to_string(),
                 data_type: x,
@@ -668,4 +570,13 @@ impl ConfiguredUtf8Type {
     fn invalid(value: i32) -> CommonError {
         CommonError::invalid(format!("configured utf8 type: {value}"))
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimeZoneInfo {
+    ConfiguredTimeZone, // TODO: After refactoring can get rid of this variant
+    LocalTimeZone,
+    NoTimeZone,
+    TimeZone(Arc<str>),
 }

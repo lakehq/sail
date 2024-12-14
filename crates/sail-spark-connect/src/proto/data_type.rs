@@ -208,7 +208,9 @@ impl TryFrom<DataType> for spec::DataType {
                     .into_iter()
                     .map(spec::FieldRef::try_from)
                     .collect::<SparkResult<_>>()?;
-                Ok(spec::DataType::Struct(spec::Fields::from(fields)))
+                Ok(spec::DataType::Struct {
+                    fields: spec::Fields::from(fields),
+                })
             }
             Kind::Map(map) => {
                 let sdt::Map {
@@ -438,7 +440,7 @@ impl TryFrom<spec::DataType> for DataType {
                     metadata: _,
                 } = field.as_ref();
                 let fields = match data_type {
-                    spec::DataType::Struct(fields) => fields,
+                    spec::DataType::Struct { fields: fields } => fields,
                     _ => {
                         return Err(SparkError::invalid(
                             "TryFrom spec::DataType::Map to Kind::Map: Invalid Map data type.",
