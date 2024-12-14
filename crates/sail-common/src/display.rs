@@ -2,15 +2,25 @@
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
-use arrow::array::cast::*;
-use arrow::array::temporal_conversions::*;
-use arrow::array::timezone::Tz;
-use arrow::array::types::*;
-use arrow::array::*;
-use arrow::datatypes::ArrowNativeType;
-use arrow::error::ArrowError;
-use arrow_schema::*;
 use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use datafusion::arrow::array::timezone::Tz;
+use datafusion::arrow::array::*;
+use datafusion::arrow::datatypes::{
+    ArrowDictionaryKeyType, ArrowNativeType, DataType, Date32Type, Date64Type, Decimal128Type,
+    Decimal256Type, DecimalType, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalYearMonthType, RunEndIndexType, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type, UnionMode,
+};
+use datafusion::arrow::error::ArrowError;
+use datafusion::arrow::temporal_conversions::{
+    as_datetime, date32_to_datetime, date64_to_datetime, duration_ms_to_duration,
+    duration_ns_to_duration, duration_s_to_duration, duration_us_to_duration, time32ms_to_time,
+    time32s_to_time, time64ns_to_time, time64us_to_time,
+};
 use lexical_core::FormattedSize;
 
 type TimeFormat<'a> = Option<&'a str>;
@@ -181,9 +191,9 @@ impl Display for ValueFormatter<'_> {
 ///
 /// ```
 /// # use std::fmt::{Display, Formatter, Write};
-/// # use arrow::array::{Array, ArrayRef, Int32Array};
-/// # use arrow_cast::display::{ArrayFormatter, FormatOptions};
-/// # use arrow::error::ArrowError;
+/// # use datafusion::arrow::array::{Array, ArrayRef, Int32Array};
+/// # use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+/// # use datafusion::arrow::error::ArrowError;
 /// struct MyContainer {
 ///     values: ArrayRef,
 /// }
@@ -211,9 +221,9 @@ impl Display for ValueFormatter<'_> {
 ///
 /// ```
 /// # use std::fmt::Write;
-/// # use arrow::array::Array;
-/// # use arrow_cast::display::{ArrayFormatter, FormatOptions};
-/// # use arrow::error::ArrowError;
+/// # use datafusion::arrow::array::Array;
+/// # use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+/// # use datafusion::arrow::error::ArrowError;
 /// fn format_array(
 ///     f: &mut dyn Write,
 ///     array: &dyn Array,
@@ -1061,7 +1071,8 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::builder::StringRunBuilder;
+    use datafusion::arrow::array::builder::StringRunBuilder;
+    use datafusion::arrow::datatypes::Int32Type;
 
     use super::*;
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::datatypes::i256;
+use datafusion::arrow::datatypes::i256;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::spec::DataType;

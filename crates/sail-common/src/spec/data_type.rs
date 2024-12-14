@@ -584,7 +584,7 @@ impl Display for ConfiguredUtf8Type {
 pub enum TimeZoneInfo {
     // TODO: Refactor data type resolution in [`sail-spark-connect`] to avoid using `TryFrom`,
     //  which would allow for removal of ConfiguredTimeZone.
-    ConfiguredTimeZone,
+    Configured,
     LocalTimeZone,
     NoTimeZone,
     TimeZone { time_zone: Arc<str> },

@@ -3,7 +3,7 @@ use std::num::ParseIntError;
 use std::str::ParseBoolError;
 use std::sync::PoisonError;
 
-use arrow::error::ArrowError;
+use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use log::error;
 use prost::{DecodeError, UnknownEnumValue};

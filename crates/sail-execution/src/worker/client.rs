@@ -1,6 +1,6 @@
-use arrow::datatypes::SchemaRef;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::flight_service_client::FlightServiceClient;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::exec_datafusion_err;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;

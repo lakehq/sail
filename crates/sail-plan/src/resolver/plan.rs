@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes as adt;
 use datafusion::dataframe::DataFrame;
@@ -1605,7 +1604,7 @@ impl PlanResolver<'_> {
         let input_names = state.get_field_names(input.schema().inner())?;
         let function = self.resolve_python_udf(function)?;
         let output_schema = match function.output_type {
-            DataType::Struct(fields) => Arc::new(adt::Schema::new(fields)),
+            adt::DataType::Struct(fields) => Arc::new(adt::Schema::new(fields)),
             _ => {
                 return Err(PlanError::invalid(
                     "MapPartitions UDF output type must be struct",
@@ -1719,15 +1718,15 @@ impl PlanResolver<'_> {
         } = function;
         let function = self.resolve_python_udf(function)?;
         let output_fields = match function.output_type {
-            DataType::Struct(fields) => fields,
+            adt::DataType::Struct(fields) => fields,
             _ => {
                 return Err(PlanError::invalid(
                     "GroupMap UDF output type must be struct",
                 ))
             }
         };
-        let udf_output_type = DataType::List(Arc::new(adt::Field::new_list_field(
-            DataType::Struct(output_fields.clone()),
+        let udf_output_type = adt::DataType::List(Arc::new(adt::Field::new_list_field(
+            adt::DataType::Struct(output_fields.clone()),
             false,
         )));
         if !matches!(function.eval_type, spec::PySparkUdfType::GroupedMapPandas) {
@@ -1855,15 +1854,15 @@ impl PlanResolver<'_> {
         } = function;
         let function = self.resolve_python_udf(function)?;
         let output_fields = match function.output_type {
-            DataType::Struct(fields) => fields,
+            adt::DataType::Struct(fields) => fields,
             _ => {
                 return Err(PlanError::invalid(
                     "GroupMap UDF output type must be struct",
                 ))
             }
         };
-        let mapper_output_type = DataType::List(Arc::new(adt::Field::new_list_field(
-            DataType::Struct(output_fields.clone()),
+        let mapper_output_type = adt::DataType::List(Arc::new(adt::Field::new_list_field(
+            adt::DataType::Struct(output_fields.clone()),
             false,
         )));
         if !matches!(function.eval_type, spec::PySparkUdfType::CogroupedMapPandas) {
@@ -1958,8 +1957,8 @@ impl PlanResolver<'_> {
             .zip(input_types.iter())
             .map(|(n, t)| adt::Field::new(n.clone(), t.clone(), false))
             .collect::<Vec<_>>();
-        let agg_output_type = DataType::List(Arc::new(adt::Field::new_list_field(
-            DataType::Struct(input_fields.into()),
+        let agg_output_type = adt::DataType::List(Arc::new(adt::Field::new_list_field(
+            adt::DataType::Struct(input_fields.into()),
             false,
         )));
         let udaf = PySparkBatchCollectorUDF::new(input_types, agg_output_type.clone());
@@ -3175,7 +3174,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-        let covar_samp = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+        let covar_samp = Expr::AggregateFunction(expr::AggregateFunction {
             func: datafusion::functions_aggregate::covariance::covar_samp_udaf(),
             args: vec![
                 Expr::Column(self.get_resolved_column(
@@ -3214,7 +3213,7 @@ impl PlanResolver<'_> {
             )));
         }
         let input = self.resolve_query_plan(input, state).await?;
-        let corr = Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+        let corr = Expr::AggregateFunction(expr::AggregateFunction {
             func: datafusion::functions_aggregate::correlation::corr_udaf(),
             args: vec![
                 Expr::Column(self.get_resolved_column(
@@ -3502,7 +3501,10 @@ impl PlanResolver<'_> {
         Ok((out, offsets))
     }
 
-    fn resolve_expression_types(exprs: &[Expr], schema: &DFSchema) -> PlanResult<Vec<DataType>> {
+    fn resolve_expression_types(
+        exprs: &[Expr],
+        schema: &DFSchema,
+    ) -> PlanResult<Vec<adt::DataType>> {
         exprs
             .iter()
             .map(|arg| {
@@ -3530,6 +3532,6 @@ struct CoGroupMapData {
     plan: LogicalPlan,
     grouping: Vec<Expr>,
     mapper_input: Expr,
-    mapper_input_type: DataType,
+    mapper_input_type: adt::DataType,
     offsets: Vec<usize>,
 }

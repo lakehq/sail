@@ -4,8 +4,8 @@ use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 
-use arrow::ipc::writer::StreamWriter;
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;

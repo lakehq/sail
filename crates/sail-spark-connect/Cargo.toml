@@ -35,8 +35,6 @@ glob = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 pyo3 = { workspace = true }
-arrow = { workspace = true }
-arrow-cast = { workspace = true }
 sqlparser = { workspace = true }
 serde_arrow = { workspace = true }
 phf = { workspace = true }

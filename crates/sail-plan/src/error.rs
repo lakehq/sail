@@ -1,4 +1,4 @@
-use arrow::error::ArrowError;
+use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use sail_common::error::CommonError;
 use sail_python_udf::error::PyUdfError;

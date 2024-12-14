@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes as adt;
+use datafusion::arrow::datatypes as adt;
 use sail_common::spec;
 
 use crate::config::TimestampType;
@@ -444,7 +444,7 @@ impl PlanResolver<'_> {
 
     pub fn resolve_timezone(&self, time_zone: &spec::TimeZoneInfo) -> PlanResult<Option<Arc<str>>> {
         match time_zone {
-            spec::TimeZoneInfo::ConfiguredTimeZone => match self.config.timestamp_type {
+            spec::TimeZoneInfo::Configured => match self.config.timestamp_type {
                 TimestampType::TimestampLtz => {
                     Ok(Some(Arc::<str>::from(self.config.time_zone.as_str())))
                 }

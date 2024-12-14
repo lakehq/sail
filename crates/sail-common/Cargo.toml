@@ -12,9 +12,6 @@ ryu = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
-arrow = { workspace = true }
-arrow-cast = { workspace = true }
-arrow-schema = { workspace = true }
 glob = { workspace = true }
 pyo3 = { workspace = true }
 lexical-core = { workspace = true }

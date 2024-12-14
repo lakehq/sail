@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use arrow::datatypes as adt;
+use datafusion::arrow::datatypes as adt;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
 use datafusion_common::plan_err;
 use futures::TryStreamExt;

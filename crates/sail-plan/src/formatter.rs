@@ -528,7 +528,7 @@ fn format_decimal<T: Display>(value: &T, scale: i8, f: &mut Formatter<'_>) -> st
 mod tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::i256;
+    use datafusion::arrow::datatypes::i256;
     use sail_common::spec::Literal;
 
     use super::*;

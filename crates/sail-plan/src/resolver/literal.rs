@@ -1,4 +1,4 @@
-use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNanoType};
+use datafusion::arrow::datatypes::{IntervalDayTime, IntervalMonthDayNanoType};
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::ScalarValue;
 use sail_common::spec;

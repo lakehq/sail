@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
+use datafusion::arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
 use sail_sql::data_type::parse_data_type;
 
@@ -134,7 +134,7 @@ impl TryFrom<DataType> for spec::DataType {
             Kind::Date(_) => Ok(spec::DataType::Date32),
             Kind::Timestamp(_) => Ok(spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
-                time_zone_info: spec::TimeZoneInfo::ConfiguredTimeZone,
+                time_zone_info: spec::TimeZoneInfo::Configured,
             }),
             Kind::TimestampNtz(_) => Ok(spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
@@ -351,7 +351,7 @@ impl TryFrom<spec::DataType> for DataType {
             spec::DataType::Timestamp { time_unit: spec::TimeUnit::Microsecond, time_zone_info: spec::TimeZoneInfo::NoTimeZone } => {
                 Ok(Kind::TimestampNtz(sdt::TimestampNtz::default()))
             }
-            spec::DataType::Timestamp { time_unit: spec::TimeUnit::Microsecond, time_zone_info: spec::TimeZoneInfo::ConfiguredTimeZone }
+            spec::DataType::Timestamp { time_unit: spec::TimeUnit::Microsecond, time_zone_info: spec::TimeZoneInfo::Configured }
             | spec::DataType::Timestamp { time_unit: spec::TimeUnit::Microsecond, time_zone_info: spec::TimeZoneInfo::LocalTimeZone }
             | spec::DataType::Timestamp { time_unit: spec::TimeUnit::Microsecond, time_zone_info: spec::TimeZoneInfo::TimeZone { time_zone: _ } }=> {
                 Ok(Kind::Timestamp(sdt::Timestamp::default()))

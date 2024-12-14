@@ -1,4 +1,4 @@
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use sail_server::actor::ActorHandle;

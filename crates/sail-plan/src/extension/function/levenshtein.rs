@@ -137,7 +137,7 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::StringArray;
+    use datafusion::arrow::array::StringArray;
     use datafusion_common::cast::as_int32_array;
     use datafusion_common::Result;
 

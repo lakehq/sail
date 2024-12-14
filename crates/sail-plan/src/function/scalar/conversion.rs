@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow_cast::parse::string_to_timestamp_nanos;
+use datafusion::arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;

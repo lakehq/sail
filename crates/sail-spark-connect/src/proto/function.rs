@@ -3,9 +3,9 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    use arrow::array::RecordBatch;
-    use arrow::error::ArrowError;
-    use arrow_cast::display::{ArrayFormatter, FormatOptions};
+    use datafusion::arrow::array::RecordBatch;
+    use datafusion::arrow::error::ArrowError;
+    use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
     use sail_common::config::AppConfig;
     use sail_common::tests::test_gold_set;
     use sail_plan::resolve_and_execute_plan;

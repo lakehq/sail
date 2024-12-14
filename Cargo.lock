@@ -4594,9 +4594,6 @@ dependencies = [
 name = "sail-common"
 version = "0.2.0"
 dependencies = [
- "arrow",
- "arrow-cast",
- "arrow-schema",
  "chrono",
  "datafusion",
  "datafusion-common",
@@ -4617,7 +4614,6 @@ dependencies = [
 name = "sail-execution"
 version = "0.2.0"
 dependencies = [
- "arrow",
  "arrow-flight",
  "datafusion",
  "datafusion-functions-json",
@@ -4647,8 +4643,6 @@ version = "0.2.0"
 dependencies = [
  "aes",
  "aes-gcm",
- "arrow",
- "arrow-cast",
  "async-recursion",
  "async-trait",
  "aws-config",
@@ -4742,8 +4736,6 @@ dependencies = [
 name = "sail-spark-connect"
 version = "0.2.0"
 dependencies = [
- "arrow",
- "arrow-cast",
  "async-recursion",
  "async-stream",
  "chrono",
