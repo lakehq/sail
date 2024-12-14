@@ -137,7 +137,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         ast::DataType::Timestamp(precision, tz_info) => {
             use ast::TimezoneInfo;
 
-            let time_zone_info = match tz_info {
+            let timezone_info = match tz_info {
                 TimezoneInfo::WithoutTimeZone => spec::TimeZoneInfo::NoTimeZone,
                 TimezoneInfo::None => spec::TimeZoneInfo::Configured,
                 TimezoneInfo::WithLocalTimeZone | TimezoneInfo::WithTimeZone | TimezoneInfo::Tz => {
@@ -153,7 +153,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
             };
             Ok(spec::DataType::Timestamp {
                 time_unit,
-                time_zone_info,
+                timezone_info,
             })
         }
         ast::DataType::Date | ast::DataType::Date32 => Ok(spec::DataType::Date32),

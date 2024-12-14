@@ -46,7 +46,7 @@
                     "keyType": {
                       "timestamp": {
                         "timeUnit": "microsecond",
-                        "timeZoneInfo": "configured"
+                        "timezoneInfo": "configured"
                       }
                     },
                     "valueType": {
@@ -313,7 +313,7 @@
                 "dataType": {
                   "timestamp": {
                     "timeUnit": "microsecond",
-                    "timeZoneInfo": "configured"
+                    "timezoneInfo": "configured"
                   }
                 },
                 "nullable": true,
@@ -612,7 +612,7 @@
                 "dataType": {
                   "timestamp": {
                     "timeUnit": "microsecond",
-                    "timeZoneInfo": "configured"
+                    "timezoneInfo": "configured"
                   }
                 },
                 "nullable": true,
@@ -671,7 +671,7 @@
         "success": {
           "timestamp": {
             "timeUnit": "microsecond",
-            "timeZoneInfo": "configured"
+            "timezoneInfo": "configured"
           }
         }
       }
@@ -682,7 +682,7 @@
         "success": {
           "timestamp": {
             "timeUnit": "microsecond",
-            "timeZoneInfo": "localTimeZone"
+            "timezoneInfo": "localTimeZone"
           }
         }
       }
@@ -693,7 +693,7 @@
         "success": {
           "timestamp": {
             "timeUnit": "microsecond",
-            "timeZoneInfo": "noTimeZone"
+            "timezoneInfo": "noTimeZone"
           }
         }
       }

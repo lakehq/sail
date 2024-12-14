@@ -61,7 +61,7 @@
             "castToType": {
               "timestamp": {
                 "timeUnit": "microsecond",
-                "timeZoneInfo": "configured"
+                "timezoneInfo": "configured"
               }
             }
           }

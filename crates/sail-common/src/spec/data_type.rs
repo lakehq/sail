@@ -61,7 +61,7 @@ pub enum DataType {
     /// Corresponds to [arrow_schema::DataType::Timestamp].
     Timestamp {
         time_unit: TimeUnit,
-        time_zone_info: TimeZoneInfo,
+        timezone_info: TimeZoneInfo,
     },
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01) in days.
     /// Corresponds to [arrow_schema::DataType::Date32].
@@ -596,5 +596,5 @@ pub enum TimeZoneInfo {
     Configured,
     LocalTimeZone,
     NoTimeZone,
-    TimeZone { time_zone: Arc<str> },
+    TimeZone { timezone: Arc<str> },
 }

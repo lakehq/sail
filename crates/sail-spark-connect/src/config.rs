@@ -176,7 +176,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .get(SPARK_SQL_SESSION_TIME_ZONE)?
             .map(|x| x.to_string())
         {
-            output.time_zone = value;
+            output.timezone = value;
         }
 
         if let Some(value) = config

@@ -47,10 +47,10 @@ impl PlanResolver<'_> {
             DataType::Float64 => Ok(adt::DataType::Float64),
             DataType::Timestamp {
                 time_unit,
-                time_zone_info,
+                timezone_info,
             } => Ok(adt::DataType::Timestamp(
                 Self::resolve_time_unit(time_unit)?,
-                self.resolve_timezone(time_zone_info)?,
+                self.resolve_timezone(timezone_info)?,
             )),
             DataType::Date32 => Ok(adt::DataType::Date32),
             DataType::Date64 => Ok(adt::DataType::Date64),
@@ -183,7 +183,7 @@ impl PlanResolver<'_> {
             adt::DataType::Float64 => Ok(DataType::Float64),
             adt::DataType::Timestamp(time_unit, timezone) => Ok(DataType::Timestamp {
                 time_unit: Self::unresolve_time_unit(time_unit)?,
-                time_zone_info: Self::unresolve_timezone(timezone)?,
+                timezone_info: Self::unresolve_timezone(timezone)?,
             }),
             adt::DataType::Date32 => Ok(DataType::Date32),
             adt::DataType::Date64 => Ok(DataType::Date64),
@@ -442,33 +442,33 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn resolve_timezone(&self, time_zone: &spec::TimeZoneInfo) -> PlanResult<Option<Arc<str>>> {
-        match time_zone {
+    pub fn resolve_timezone(&self, timezone: &spec::TimeZoneInfo) -> PlanResult<Option<Arc<str>>> {
+        match timezone {
             spec::TimeZoneInfo::Configured => match self.config.timestamp_type {
                 TimestampType::TimestampLtz => {
-                    Ok(Some(Arc::<str>::from(self.config.time_zone.as_str())))
+                    Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
                 }
                 TimestampType::TimestampNtz => Ok(None),
             },
             spec::TimeZoneInfo::LocalTimeZone => {
-                Ok(Some(Arc::<str>::from(self.config.time_zone.as_str())))
+                Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
             }
             spec::TimeZoneInfo::NoTimeZone => Ok(None),
-            spec::TimeZoneInfo::TimeZone { time_zone } => {
-                if time_zone.is_empty() {
-                    Ok(Some(Arc::<str>::from(self.config.time_zone.as_str())))
+            spec::TimeZoneInfo::TimeZone { timezone } => {
+                if timezone.is_empty() {
+                    Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
                 } else {
-                    Ok(Some(Arc::clone(time_zone)))
+                    Ok(Some(Arc::clone(timezone)))
                 }
             }
         }
     }
 
-    pub fn unresolve_timezone(time_zone: &Option<Arc<str>>) -> PlanResult<spec::TimeZoneInfo> {
-        match time_zone {
+    pub fn unresolve_timezone(timezone: &Option<Arc<str>>) -> PlanResult<spec::TimeZoneInfo> {
+        match timezone {
             None => Ok(spec::TimeZoneInfo::NoTimeZone),
             Some(timezone) => Ok(spec::TimeZoneInfo::TimeZone {
-                time_zone: Arc::clone(timezone),
+                timezone: Arc::clone(timezone),
             }),
         }
     }

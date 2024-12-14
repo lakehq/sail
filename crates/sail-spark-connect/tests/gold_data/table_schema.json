@@ -115,7 +115,7 @@
                       "dataType": {
                         "timestamp": {
                           "timeUnit": "microsecond",
-                          "timeZoneInfo": "configured"
+                          "timezoneInfo": "configured"
                         }
                       },
                       "nullable": true,
@@ -222,7 +222,7 @@
                           "keyType": {
                             "timestamp": {
                               "timeUnit": "microsecond",
-                              "timeZoneInfo": "configured"
+                              "timezoneInfo": "configured"
                             }
                           },
                           "valueType": {

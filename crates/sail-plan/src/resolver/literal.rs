@@ -42,15 +42,13 @@ impl PlanResolver<'_> {
                 microseconds,
                 timezone,
             } => {
-                let time_zone_info = match timezone {
-                    Some(timezone) => spec::TimeZoneInfo::TimeZone {
-                        time_zone: timezone,
-                    },
+                let timezone_info = match timezone {
+                    Some(timezone) => spec::TimeZoneInfo::TimeZone { timezone },
                     None => spec::TimeZoneInfo::Configured,
                 };
                 Ok(ScalarValue::TimestampMicrosecond(
                     Some(microseconds),
-                    self.resolve_timezone(&time_zone_info)?,
+                    self.resolve_timezone(&timezone_info)?,
                 ))
             }
             Literal::TimestampNtz { microseconds } => {

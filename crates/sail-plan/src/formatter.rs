@@ -112,19 +112,19 @@ impl PlanFormatter for DefaultPlanFormatter {
             )),
             DataType::Timestamp {
                 time_unit: _,
-                time_zone_info: spec::TimeZoneInfo::Configured,
+                timezone_info: spec::TimeZoneInfo::Configured,
             }
             | DataType::Timestamp {
                 time_unit: _,
-                time_zone_info: spec::TimeZoneInfo::LocalTimeZone,
+                timezone_info: spec::TimeZoneInfo::LocalTimeZone,
             }
             | DataType::Timestamp {
                 time_unit: _,
-                time_zone_info: spec::TimeZoneInfo::TimeZone { time_zone: _ },
+                timezone_info: spec::TimeZoneInfo::TimeZone { timezone: _ },
             } => Ok("timestamp".to_string()),
             DataType::Timestamp {
                 time_unit: _,
-                time_zone_info: spec::TimeZoneInfo::NoTimeZone,
+                timezone_info: spec::TimeZoneInfo::NoTimeZone,
             } => Ok("timestamp_ntz".to_string()),
             DataType::Interval {
                 interval_unit: spec::IntervalUnit::MonthDayNano,
