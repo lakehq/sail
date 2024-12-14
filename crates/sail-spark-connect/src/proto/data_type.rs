@@ -351,7 +351,8 @@ impl TryFrom<spec::DataType> for DataType {
             spec::DataType::Timestamp { time_unit: spec::TimeUnit::Microsecond, timezone_info: spec::TimeZoneInfo::NoTimeZone } => {
                 Ok(Kind::TimestampNtz(sdt::TimestampNtz::default()))
             }
-            spec::DataType::Timestamp { time_unit: spec::TimeUnit::Microsecond, timezone_info: spec::TimeZoneInfo::LocalTimeZone }
+            spec::DataType::Timestamp { time_unit: spec::TimeUnit::Microsecond, timezone_info: spec::TimeZoneInfo::Configured }
+            | spec::DataType::Timestamp { time_unit: spec::TimeUnit::Microsecond, timezone_info: spec::TimeZoneInfo::LocalTimeZone }
             | spec::DataType::Timestamp { time_unit: spec::TimeUnit::Microsecond, timezone_info: spec::TimeZoneInfo::TimeZone { timezone: _ } }=> {
                 Ok(Kind::Timestamp(sdt::Timestamp::default()))
             }
@@ -361,12 +362,6 @@ impl TryFrom<spec::DataType> for DataType {
                 // This error theoretically should never be reached.
                 Err(SparkError::unsupported(
                     "TryFrom spec::DataType::Timestamp { time_unit: Second | Millisecond | Nanosecond } to Spark Kind",
-                ))
-            }
-            spec::DataType::Timestamp { time_unit: _, timezone_info: spec::TimeZoneInfo::Configured } => {
-                // This error theoretically should never be reached.
-                Err(SparkError::invalid(
-                    "TryFrom spec::DataType::Timestamp { time_unit: _, timezone_info: Configured } to Spark Kind. Timezone must be NoTimeZone, LocalTimeZone, or TimeZone",
                 ))
             }
             spec::DataType::Interval { interval_unit: spec::IntervalUnit::MonthDayNano, start_field: _, end_field: _ } => {
