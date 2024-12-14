@@ -381,7 +381,6 @@ impl TryFrom<spec::DataType> for DataType {
                 ))
             }
             spec::DataType::Duration { time_unit: spec::TimeUnit::Microsecond } => {
-                // TODO: [CHECK HERE] BEFORE MERGING IN MAKE SURE IT DOESN'T BREAK TPC-H
                 Ok(Kind::DayTimeInterval(sdt::DayTimeInterval {
                     start_field: None,
                     end_field: None,

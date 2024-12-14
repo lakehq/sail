@@ -203,8 +203,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config.get(SPARK_SQL_TIMESTAMP_TYPE)? {
-            // [check here] use this
-            let value = value.as_ref().to_uppercase().trim();
+            let value = value.to_uppercase().trim().to_string();
             if value == "TIMESTAMP_NTZ" {
                 output.timestamp_type = TimestampType::TimestampNtz;
             } else if value.is_empty() || value == "TIMESTAMP_LTZ" {

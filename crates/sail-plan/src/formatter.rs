@@ -58,7 +58,7 @@ impl PlanFormatter for DefaultPlanFormatter {
         match data_type {
             DataType::Null => Ok("void".to_string()),
             DataType::Binary
-            | DataType::FixedSizeBinary(_)
+            | DataType::FixedSizeBinary { size: _ }
             | DataType::LargeBinary
             | DataType::BinaryView
             | DataType::ConfiguredBinary => Ok("binary".to_string()),
@@ -74,16 +74,23 @@ impl PlanFormatter for DefaultPlanFormatter {
             DataType::Float16 => Ok("half-float".to_string()),
             DataType::Float32 => Ok("float".to_string()),
             DataType::Float64 => Ok("double".to_string()),
-            DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
+            DataType::Decimal128 { precision, scale }
+            | DataType::Decimal256 { precision, scale } => {
                 Ok(format!("decimal({},{})", precision, scale))
             }
             DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
-            | DataType::ConfiguredUtf8(_, None) => Ok("string".to_string()),
-            DataType::ConfiguredUtf8(length, Some(utf8_type)) => {
+            | DataType::ConfiguredUtf8 {
+                length: None,
+                utf8_type: None,
+            } => Ok("string".to_string()),
+            DataType::ConfiguredUtf8 { length, utf8_type } => {
                 let length =
                     length.ok_or(PlanError::invalid("Length required for Char and Varchar."))?;
+                let utf8_type = utf8_type.ok_or(PlanError::invalid(
+                    "Can only specify length for Char and Varchar.",
+                ))?;
                 match utf8_type {
                     spec::ConfiguredUtf8Type::Char => Ok(format!("char({})", length)),
                     spec::ConfiguredUtf8Type::VarChar => Ok(format!("varchar({})", length)),
@@ -91,24 +98,44 @@ impl PlanFormatter for DefaultPlanFormatter {
             }
             DataType::Date32 => Ok("date".to_string()),
             DataType::Date64 => Ok("date64".to_string()),
-            DataType::Time32(time_unit) => Ok(format!(
+            DataType::Time32 { time_unit } => Ok(format!(
                 "time32({})",
                 Self::time_unit_to_simple_string(*time_unit)
             )),
-            DataType::Time64(time_unit) => Ok(format!(
+            DataType::Time64 { time_unit } => Ok(format!(
                 "time64({})",
                 Self::time_unit_to_simple_string(*time_unit)
             )),
-            DataType::Duration(time_unit) => Ok(format!(
+            DataType::Duration { time_unit } => Ok(format!(
                 "duration({})",
                 Self::time_unit_to_simple_string(*time_unit)
             )),
-            DataType::Timestamp(_time_unit, Some(_timezone)) => Ok("timestamp".to_string()),
-            DataType::Timestamp(_time_unit, None) => Ok("timestamp_ntz".to_string()),
-            DataType::Interval(spec::IntervalUnit::MonthDayNano, _, _) => {
-                Ok("interval".to_string())
+            DataType::Timestamp {
+                time_unit: _,
+                time_zone_info: spec::TimeZoneInfo::Configured,
             }
-            DataType::Interval(spec::IntervalUnit::YearMonth, start_field, end_field) => {
+            | DataType::Timestamp {
+                time_unit: _,
+                time_zone_info: spec::TimeZoneInfo::LocalTimeZone,
+            }
+            | DataType::Timestamp {
+                time_unit: _,
+                time_zone_info: spec::TimeZoneInfo::TimeZone { time_zone: _ },
+            } => Ok("timestamp".to_string()),
+            DataType::Timestamp {
+                time_unit: _,
+                time_zone_info: spec::TimeZoneInfo::NoTimeZone,
+            } => Ok("timestamp_ntz".to_string()),
+            DataType::Interval {
+                interval_unit: spec::IntervalUnit::MonthDayNano,
+                start_field: _,
+                end_field: _,
+            } => Ok("interval".to_string()),
+            DataType::Interval {
+                interval_unit: spec::IntervalUnit::YearMonth,
+                start_field,
+                end_field,
+            } => {
                 let (start_field, end_field) = match (*start_field, *end_field) {
                     (Some(start), Some(end)) => (start, end),
                     (Some(start), None) => (start, start),
@@ -138,7 +165,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                     )),
                 }
             }
-            DataType::Interval(spec::IntervalUnit::DayTime, start_field, end_field) => {
+            DataType::Interval {
+                interval_unit: spec::IntervalUnit::DayTime,
+                start_field,
+                end_field,
+            } => {
                 let (start_field, end_field) = match (*start_field, *end_field) {
                     (Some(start), Some(end)) => (start, end),
                     (Some(start), None) => (start, start),
@@ -168,9 +199,9 @@ impl PlanFormatter for DefaultPlanFormatter {
                     )),
                 }
             }
-            DataType::List(field)
-            | DataType::FixedSizeList(field, _)
-            | DataType::LargeList(field) => {
+            DataType::List { field }
+            | DataType::FixedSizeList { field, length: _ }
+            | DataType::LargeList { field } => {
                 let spec::Field {
                     name: _,
                     data_type,
@@ -182,7 +213,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                     self.data_type_to_simple_string(data_type)?
                 ))
             }
-            DataType::Struct(fields) => {
+            DataType::Struct { fields } => {
                 let fields = fields
                     .iter()
                     .map(|field| {
@@ -195,42 +226,30 @@ impl PlanFormatter for DefaultPlanFormatter {
                     .collect::<PlanResult<Vec<String>>>()?;
                 Ok(format!("struct<{}>", fields.join(",")))
             }
-            DataType::Map(field, _keys_are_sorted) => {
-                let spec::Field {
-                    name: _,
-                    data_type,
-                    nullable: _,
-                    metadata: _,
-                } = field.as_ref();
-                let fields = match data_type {
-                    DataType::Struct(fields) => fields,
-                    _ => {
-                        return Err(PlanError::invalid(
-                            "data_type_to_simple_string Invalid Map data type.",
-                        ))
-                    }
-                };
-                if fields.len() != 2 {
-                    return Err(PlanError::invalid(
-                        "data_type_to_simple_string Map data type must have key and value fields",
-                    ));
-                }
-                let key_type = &fields[0].data_type;
-                let value_type = &fields[1].data_type;
-                Ok(format!(
-                    "map<{},{}>",
-                    self.data_type_to_simple_string(key_type)?,
-                    self.data_type_to_simple_string(value_type)?
-                ))
-            }
+            DataType::Map {
+                key_type,
+                value_type,
+                value_type_nullable: _,
+                keys_are_sorted: _,
+            } => Ok(format!(
+                "map<{},{}>",
+                self.data_type_to_simple_string(key_type.as_ref())?,
+                self.data_type_to_simple_string(value_type.as_ref())?
+            )),
             DataType::UserDefined { sql_type, .. } => {
                 self.data_type_to_simple_string(sql_type.as_ref())
             }
-            DataType::Union(_union_fields, _union_mode) => {
+            DataType::Union {
+                union_fields: _,
+                union_mode: _,
+            } => {
                 // TODO: Add union_fields and union_mode
                 Ok("union".to_string())
             }
-            DataType::Dictionary(key_type, value_type) => Ok(format!(
+            DataType::Dictionary {
+                key_type,
+                value_type,
+            } => Ok(format!(
                 "dictionary<{},{}>",
                 self.data_type_to_simple_string(key_type)?,
                 self.data_type_to_simple_string(value_type)?
@@ -355,7 +374,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 elements,
             } => {
                 let fields = match struct_type {
-                    spec::DataType::Struct(fields) => fields,
+                    spec::DataType::Struct { fields } => fields,
                     _ => return Err(PlanError::invalid("struct type")),
                 };
                 let fields = fields
@@ -709,44 +728,50 @@ mod tests {
         );
         assert_eq!(
             to_string(Literal::Struct {
-                struct_type: spec::DataType::Struct(spec::Fields::from(vec![
-                    spec::Field {
-                        name: "foo".to_string(),
-                        data_type: spec::DataType::List(Arc::new(spec::Field {
-                            name: "item".to_string(),
-                            data_type: spec::DataType::Int64,
-                            nullable: true,
-                            metadata: vec![],
-                        })),
-                        nullable: false,
-                        metadata: vec![],
-                    },
-                    spec::Field {
-                        name: "bar".to_string(),
-                        data_type: spec::DataType::Struct(spec::Fields::from(vec![spec::Field {
-                            name: "baz".to_string(),
-                            data_type: spec::DataType::Utf8,
+                struct_type: spec::DataType::Struct {
+                    fields: spec::Fields::from(vec![
+                        spec::Field {
+                            name: "foo".to_string(),
+                            data_type: spec::DataType::List {
+                                field: Arc::new(spec::Field {
+                                    name: "item".to_string(),
+                                    data_type: spec::DataType::Int64,
+                                    nullable: true,
+                                    metadata: vec![],
+                                })
+                            },
                             nullable: false,
                             metadata: vec![],
-                        }]),),
-                        nullable: true,
-                        metadata: vec![],
-                    },
-                ])),
+                        },
+                        spec::Field {
+                            name: "bar".to_string(),
+                            data_type: spec::DataType::Struct {
+                                fields: spec::Fields::from(vec![spec::Field {
+                                    name: "baz".to_string(),
+                                    data_type: spec::DataType::Utf8,
+                                    nullable: false,
+                                    metadata: vec![],
+                                }])
+                            },
+                            nullable: true,
+                            metadata: vec![],
+                        },
+                    ])
+                },
                 elements: vec![
                     Literal::Array {
                         elements: vec![Literal::Long(1), Literal::Null],
                         element_type: spec::DataType::Int64,
                     },
                     Literal::Struct {
-                        struct_type: spec::DataType::Struct(spec::Fields::from(vec![
-                            spec::Field {
+                        struct_type: spec::DataType::Struct {
+                            fields: spec::Fields::from(vec![spec::Field {
                                 name: "baz".to_string(),
                                 data_type: spec::DataType::Utf8,
                                 nullable: false,
                                 metadata: vec![],
-                            }
-                        ]),),
+                            }])
+                        },
                         elements: vec![Literal::String("hello".to_string())],
                     },
                 ],

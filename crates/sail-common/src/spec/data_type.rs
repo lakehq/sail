@@ -363,6 +363,15 @@ impl UnionMode {
     }
 }
 
+impl Display for UnionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnionMode::Sparse => write!(f, "Sparse"),
+            UnionMode::Dense => write!(f, "Dense"),
+        }
+    }
+}
+
 /// YEAR_MONTH, DAY_TIME, MONTH_DAY_NANO interval in SQL style.
 #[derive(
     Debug,

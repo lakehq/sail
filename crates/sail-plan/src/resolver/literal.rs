@@ -41,10 +41,18 @@ impl PlanResolver<'_> {
             Literal::TimestampMicrosecond {
                 microseconds,
                 timezone,
-            } => Ok(ScalarValue::TimestampMicrosecond(
-                Some(microseconds),
-                self.resolve_timezone(&timezone)?,
-            )),
+            } => {
+                let time_zone_info = match timezone {
+                    Some(timezone) => spec::TimeZoneInfo::TimeZone {
+                        time_zone: timezone,
+                    },
+                    None => spec::TimeZoneInfo::Configured,
+                };
+                Ok(ScalarValue::TimestampMicrosecond(
+                    Some(microseconds),
+                    self.resolve_timezone(&time_zone_info)?,
+                ))
+            }
             Literal::TimestampNtz { microseconds } => {
                 Ok(ScalarValue::TimestampMicrosecond(Some(microseconds), None))
             }
@@ -102,7 +110,7 @@ impl PlanResolver<'_> {
             } => {
                 let struct_type = self.resolve_data_type(&struct_type)?;
                 let fields = match &struct_type {
-                    arrow::datatypes::DataType::Struct(fields) => fields.clone(),
+                    datafusion::arrow::datatypes::DataType::Struct(fields) => fields.clone(),
                     _ => return Err(PlanError::invalid("expected struct type")),
                 };
 
