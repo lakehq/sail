@@ -8,7 +8,7 @@ use crate::session::SparkExtension;
 use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
 use crate::spark::connect::{ConfigResponse, KeyValue};
 
-fn config_set_time_zone(ctx: &SessionContext, value: String) -> SparkResult<()> {
+fn config_set_timezone(ctx: &SessionContext, value: String) -> SparkResult<()> {
     let state = ctx.state_ref();
     let mut state = state.write();
     let offset_string = if value.starts_with("+") || value.starts_with("-") {
@@ -59,7 +59,7 @@ pub(crate) fn handle_config_set(
     for ConfigKeyValue { key, value } in &kv {
         if key == SPARK_SQL_SESSION_TIME_ZONE {
             if let Some(value) = value {
-                config_set_time_zone(ctx, value.clone())?;
+                config_set_timezone(ctx, value.clone())?;
             }
         }
     }

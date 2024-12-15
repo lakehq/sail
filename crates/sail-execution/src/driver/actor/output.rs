@@ -1,4 +1,4 @@
-use arrow::array::RecordBatch;
+use datafusion::arrow::array::RecordBatch;
 use datafusion::common::{exec_err, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use futures::StreamExt;

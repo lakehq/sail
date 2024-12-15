@@ -808,12 +808,14 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         } => {
             let expr = Box::new(from_ast_expression(*timestamp)?);
             let cast_to_type = match *time_zone {
-                Expr::Value(ast::Value::SingleQuotedString(time_zone))
-                | Expr::Value(ast::Value::DoubleQuotedString(time_zone)) => {
-                    spec::DataType::Timestamp(
-                        Some(spec::TimeUnit::Microsecond),
-                        Some(time_zone.into()),
-                    )
+                Expr::Value(ast::Value::SingleQuotedString(timezone))
+                | Expr::Value(ast::Value::DoubleQuotedString(timezone)) => {
+                    spec::DataType::Timestamp {
+                        time_unit: spec::TimeUnit::Microsecond,
+                        timezone_info: spec::TimeZoneInfo::TimeZone {
+                            timezone: timezone.into(),
+                        },
+                    }
                 }
                 _ => {
                     return Err(SqlError::invalid(

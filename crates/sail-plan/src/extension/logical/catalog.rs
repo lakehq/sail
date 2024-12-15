@@ -2,8 +2,8 @@ use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::datatypes::{FieldRef, Schema, SchemaRef};
+use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
+use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::common::{DFSchemaRef, Result};
 use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};

@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::physical_plan::ExecutionPlan;

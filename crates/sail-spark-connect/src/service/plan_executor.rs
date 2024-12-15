@@ -1,7 +1,7 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use arrow::compute::concat_batches;
+use datafusion::arrow::compute::concat_batches;
 use datafusion::prelude::SessionContext;
 use log::debug;
 use sail_common::spec;

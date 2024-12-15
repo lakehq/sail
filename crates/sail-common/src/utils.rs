@@ -1,11 +1,11 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::ipc::reader::StreamReader;
-use arrow::ipc::writer::StreamWriter;
-use arrow_cast::cast;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::compute::cast;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::ipc::reader::StreamReader;
+use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::projection::ProjectionExec;

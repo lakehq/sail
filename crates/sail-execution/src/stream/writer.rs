@@ -1,9 +1,9 @@
 use std::fmt::{Debug, Display};
 use std::io::Write;
 
-use arrow::array::RecordBatch;
-use arrow::datatypes::SchemaRef;
-use arrow::ipc::writer::StreamWriter;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::common::{DataFusionError, Result};
 use tokio::sync::mpsc;
 

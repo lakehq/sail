@@ -101,7 +101,7 @@ where
 
 #[cfg(test)]
 pub mod test {
-    use arrow::datatypes::DataType;
+    use datafusion::arrow::datatypes::DataType;
 
     use super::*;
 

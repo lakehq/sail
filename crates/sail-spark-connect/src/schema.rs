@@ -11,7 +11,7 @@ use crate::spark::connect as sc;
 use crate::spark::connect::data_type::Kind;
 
 pub(crate) fn to_spark_schema(schema: adt::SchemaRef) -> SparkResult<sc::DataType> {
-    let fields = PlanResolver::unresolve_fields(schema.fields().clone())?;
+    let fields = PlanResolver::unresolve_fields(schema.fields())?;
     spec::DataType::Struct { fields }.try_into()
 }
 

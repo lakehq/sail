@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::execution::SendableRecordBatchStream;
 

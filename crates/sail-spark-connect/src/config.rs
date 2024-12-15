@@ -11,7 +11,8 @@ use crate::spark::config::{
     SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
     SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY, SPARK_SQL_GLOBAL_TEMP_DATABASE,
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
-    SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_WAREHOUSE_DIR,
+    SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_TIMESTAMP_TYPE,
+    SPARK_SQL_WAREHOUSE_DIR,
 };
 use crate::spark::connect as sc;
 
@@ -175,7 +176,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .get(SPARK_SQL_SESSION_TIME_ZONE)?
             .map(|x| x.to_string())
         {
-            output.time_zone = value;
+            output.timezone = value;
         }
 
         if let Some(value) = config
@@ -201,8 +202,19 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.global_temp_database = value.to_string();
         }
 
-        // TODO: get the default timestamp type from configuration
-        output.timestamp_type = TimestampType::TimestampLtz;
+        if let Some(value) = config.get(SPARK_SQL_TIMESTAMP_TYPE)? {
+            let value = value.to_uppercase().trim().to_string();
+            if value == "TIMESTAMP_NTZ" {
+                output.timestamp_type = TimestampType::TimestampNtz;
+            } else if value.is_empty() || value == "TIMESTAMP_LTZ" {
+                output.timestamp_type = TimestampType::TimestampLtz;
+            } else {
+                return Err(SparkError::invalid(format!(
+                    "invalid timestamp type: {value}"
+                )));
+            }
+        }
+
         output.plan_formatter = Arc::new(DefaultPlanFormatter);
         output.spark_udf_config = SparkUdfConfig::try_from(config)?;
 

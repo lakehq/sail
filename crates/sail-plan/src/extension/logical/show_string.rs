@@ -4,9 +4,9 @@ use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
-use arrow::datatypes::{DataType, Field};
 use comfy_table::{Cell, CellAlignment, ColumnConstraint, Table, Width};
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use sail_common::display::{ArrayFormatter, FormatOptions};

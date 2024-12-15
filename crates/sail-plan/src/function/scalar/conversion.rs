@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow_cast::parse::string_to_timestamp_nanos;
+use datafusion::arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
@@ -18,13 +18,13 @@ fn timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<
             Expr::Literal(ScalarValue::Utf8(Some(timestamp_string))) => {
                 let timestamp_micros =
                     string_to_timestamp_nanos(&timestamp_string).map(|x| x / 1_000)?;
-                let timezone: Arc<str> = function_context.plan_config().time_zone.clone().into();
+                let timezone: Arc<str> = function_context.plan_config().timezone.clone().into();
                 Ok(Expr::Literal(ScalarValue::TimestampMicrosecond(
                     Some(timestamp_micros),
                     Some(timezone),
                 )))
             }
-            _ => Ok(expr_fn::to_timestamp(vec![arg])),
+            _ => Ok(expr_fn::to_timestamp_micros(vec![arg])),
         }
     } else {
         Ok(expr_fn::to_timestamp_micros(args))

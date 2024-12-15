@@ -16,7 +16,7 @@
           "fields": [
             {
               "name": "A",
-              "dataType": "integer",
+              "dataType": "int32",
               "nullable": true,
               "metadata": []
             }
@@ -31,7 +31,12 @@
           "fields": [
             {
               "name": "!@#$%.^&*()",
-              "dataType": "string",
+              "dataType": {
+                "configuredUtf8": {
+                  "length": null,
+                  "utf8Type": null
+                }
+              },
               "nullable": true,
               "metadata": []
             }
@@ -53,7 +58,7 @@
           "fields": [
             {
               "name": "a",
-              "dataType": "integer",
+              "dataType": "int32",
               "nullable": true,
               "metadata": []
             }
@@ -101,17 +106,17 @@
                   "fields": [
                     {
                       "name": "intType",
-                      "dataType": "integer",
+                      "dataType": "int32",
                       "nullable": true,
                       "metadata": []
                     },
                     {
                       "name": "ts",
                       "dataType": {
-                        "timestamp": [
-                          "microsecond",
-                          null
-                        ]
+                        "timestamp": {
+                          "timeUnit": "microsecond",
+                          "timezoneInfo": "configured"
+                        }
                       },
                       "nullable": true,
                       "metadata": []
@@ -133,7 +138,7 @@
           "fields": [
             {
               "name": "a",
-              "dataType": "integer",
+              "dataType": "int32",
               "nullable": true,
               "metadata": [
                 [
@@ -153,13 +158,13 @@
           "fields": [
             {
               "name": "a",
-              "dataType": "integer",
+              "dataType": "int32",
               "nullable": true,
               "metadata": []
             },
             {
               "name": "b",
-              "dataType": "long",
+              "dataType": "int64",
               "nullable": true,
               "metadata": []
             }
@@ -215,17 +220,19 @@
                       "dataType": {
                         "map": {
                           "keyType": {
-                            "timestamp": [
-                              "microsecond",
-                              null
-                            ]
-                          },
-                          "valueType": {
-                            "varChar": {
-                              "length": 10
+                            "timestamp": {
+                              "timeUnit": "microsecond",
+                              "timezoneInfo": "configured"
                             }
                           },
-                          "valueContainsNull": true
+                          "valueType": {
+                            "configuredUtf8": {
+                              "length": 10,
+                              "utf8Type": "varChar"
+                            }
+                          },
+                          "valueTypeNullable": true,
+                          "keysAreSorted": false
                         }
                       },
                       "nullable": true,
@@ -234,9 +241,13 @@
                     {
                       "name": "arrAy",
                       "dataType": {
-                        "array": {
-                          "elementType": "double",
-                          "containsNull": true
+                        "list": {
+                          "field": {
+                            "name": "item",
+                            "dataType": "float64",
+                            "nullable": true,
+                            "metadata": []
+                          }
                         }
                       },
                       "nullable": true,
@@ -245,13 +256,18 @@
                     {
                       "name": "anotherArray",
                       "dataType": {
-                        "array": {
-                          "elementType": {
-                            "char": {
-                              "length": 9
-                            }
-                          },
-                          "containsNull": true
+                        "list": {
+                          "field": {
+                            "name": "item",
+                            "dataType": {
+                              "configuredUtf8": {
+                                "length": 9,
+                                "utf8Type": "char"
+                              }
+                            },
+                            "nullable": true,
+                            "metadata": []
+                          }
                         }
                       },
                       "nullable": true,

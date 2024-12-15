@@ -14,9 +14,13 @@
               }
             },
             "castToType": {
-              "array": {
-                "elementType": "integer",
-                "containsNull": true
+              "list": {
+                "field": {
+                  "name": "item",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "metadata": []
+                }
               }
             }
           }
@@ -36,7 +40,7 @@
                 "planId": null
               }
             },
-            "castToType": "integer"
+            "castToType": "int32"
           }
         }
       }
@@ -55,10 +59,10 @@
               }
             },
             "castToType": {
-              "timestamp": [
-                "microsecond",
-                null
-              ]
+              "timestamp": {
+                "timeUnit": "microsecond",
+                "timezoneInfo": "configured"
+              }
             }
           }
         }
@@ -79,10 +83,10 @@
                     "planId": null
                   }
                 },
-                "castToType": "integer"
+                "castToType": "int32"
               }
             },
-            "castToType": "long"
+            "castToType": "int64"
           }
         }
       }

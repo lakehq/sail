@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::{expr, AggregateUDF, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};

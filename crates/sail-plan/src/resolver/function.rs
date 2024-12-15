@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{expr, AggregateUDF, Expr, ExprSchemable, ScalarUDF};
 use sail_common::spec;
@@ -42,7 +42,7 @@ impl PlanResolver<'_> {
                 return Err(PlanError::invalid("UDF function type must be Python UDF"));
             }
         };
-        let output_type = self.resolve_data_type(output_type.clone())?;
+        let output_type = self.resolve_data_type(&output_type)?;
         Ok(PythonUdf {
             python_version,
             eval_type,
@@ -63,7 +63,7 @@ impl PlanResolver<'_> {
                 python_version,
             } => (return_type, eval_type, command, python_version),
         };
-        let return_type = self.resolve_data_type(return_type.clone())?;
+        let return_type = self.resolve_data_type(&return_type)?;
         Ok(PythonUdtf {
             python_version,
             eval_type,

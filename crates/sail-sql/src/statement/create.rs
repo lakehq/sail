@@ -354,9 +354,9 @@ mod tests {
                 table: spec::ObjectName::from(vec!["foo".to_string(), "1m".to_string()]),
                 definition: spec::TableDefinition {
                     schema: spec::Schema {
-                        fields: spec::Fields(vec![spec::Field {
+                        fields: spec::Fields::from(vec![spec::Field {
                             name: "a".to_string(),
-                            data_type: spec::DataType::Integer,
+                            data_type: spec::DataType::Int32,
                             nullable: true,
                             metadata: vec![],
                         }]),
@@ -388,9 +388,9 @@ mod tests {
                 table: spec::ObjectName::from(vec!["foo".to_string(), "1m".to_string()]),
                 definition: spec::TableDefinition {
                     schema: spec::Schema {
-                        fields: spec::Fields(vec![spec::Field {
+                        fields: spec::Fields::from(vec![spec::Field {
                             name: "a".to_string(),
-                            data_type: spec::DataType::Integer,
+                            data_type: spec::DataType::Int32,
                             nullable: true,
                             metadata: vec![],
                         }]),

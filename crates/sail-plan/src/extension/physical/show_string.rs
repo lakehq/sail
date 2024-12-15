@@ -3,9 +3,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{RecordBatch, StringArray};
-use arrow::compute::concat_batches;
-use arrow::datatypes::SchemaRef;
+use datafusion::arrow::array::{RecordBatch, StringArray};
+use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::{

@@ -44,17 +44,19 @@
                 "dataType": {
                   "map": {
                     "keyType": {
-                      "timestamp": [
-                        "microsecond",
-                        null
-                      ]
-                    },
-                    "valueType": {
-                      "varChar": {
-                        "length": 10
+                      "timestamp": {
+                        "timeUnit": "microsecond",
+                        "timezoneInfo": "configured"
                       }
                     },
-                    "valueContainsNull": true
+                    "valueType": {
+                      "configuredUtf8": {
+                        "length": 10,
+                        "utf8Type": "varChar"
+                      }
+                    },
+                    "valueTypeNullable": true,
+                    "keysAreSorted": false
                   }
                 },
                 "nullable": true,
@@ -63,9 +65,13 @@
               {
                 "name": "arrAy",
                 "dataType": {
-                  "array": {
-                    "elementType": "double",
-                    "containsNull": true
+                  "list": {
+                    "field": {
+                      "name": "item",
+                      "dataType": "float64",
+                      "nullable": true,
+                      "metadata": []
+                    }
                   }
                 },
                 "nullable": true,
@@ -74,13 +80,18 @@
               {
                 "name": "anotherArray",
                 "dataType": {
-                  "array": {
-                    "elementType": {
-                      "char": {
-                        "length": 9
-                      }
-                    },
-                    "containsNull": true
+                  "list": {
+                    "field": {
+                      "name": "item",
+                      "dataType": {
+                        "configuredUtf8": {
+                          "length": 9,
+                          "utf8Type": "char"
+                        }
+                      },
+                      "nullable": true,
+                      "metadata": []
+                    }
                   }
                 },
                 "nullable": true,
@@ -95,15 +106,20 @@
       "input": "Array<map<int, tinYint>>",
       "output": {
         "success": {
-          "array": {
-            "elementType": {
-              "map": {
-                "keyType": "integer",
-                "valueType": "byte",
-                "valueContainsNull": true
-              }
-            },
-            "containsNull": true
+          "list": {
+            "field": {
+              "name": "item",
+              "dataType": {
+                "map": {
+                  "keyType": "int32",
+                  "valueType": "int8",
+                  "valueTypeNullable": true,
+                  "keysAreSorted": false
+                }
+              },
+              "nullable": true,
+              "metadata": []
+            }
           }
         }
       }
@@ -111,7 +127,7 @@
     {
       "input": "BINARY",
       "output": {
-        "success": "binary"
+        "success": "configuredBinary"
       }
     },
     {
@@ -124,8 +140,9 @@
       "input": "ChaR(5)",
       "output": {
         "success": {
-          "char": {
-            "length": 5
+          "configuredUtf8": {
+            "length": 5,
+            "utf8Type": "char"
           }
         }
       }
@@ -134,8 +151,9 @@
       "input": "ChaRacter(5)",
       "output": {
         "success": {
-          "char": {
-            "length": 5
+          "configuredUtf8": {
+            "length": 5,
+            "utf8Type": "char"
           }
         }
       }
@@ -143,7 +161,7 @@
     {
       "input": "DATE",
       "output": {
-        "success": "date"
+        "success": "date32"
       }
     },
     {
@@ -160,20 +178,21 @@
     {
       "input": "INT",
       "output": {
-        "success": "integer"
+        "success": "int32"
       }
     },
     {
       "input": "INTEGER",
       "output": {
-        "success": "integer"
+        "success": "int32"
       }
     },
     {
       "input": "INTERVAL YEAR TO MONTH",
       "output": {
         "success": {
-          "yearMonthInterval": {
+          "interval": {
+            "intervalUnit": "yearMonth",
             "startField": "year",
             "endField": "month"
           }
@@ -185,9 +204,15 @@
       "output": {
         "success": {
           "map": {
-            "keyType": "integer",
-            "valueType": "string",
-            "valueContainsNull": true
+            "keyType": "int32",
+            "valueType": {
+              "configuredUtf8": {
+                "length": null,
+                "utf8Type": null
+              }
+            },
+            "valueTypeNullable": true,
+            "keysAreSorted": false
           }
         }
       }
@@ -197,20 +222,26 @@
       "output": {
         "success": {
           "map": {
-            "keyType": "integer",
+            "keyType": "int32",
             "valueType": {
               "struct": {
                 "fields": [
                   {
                     "name": "varchar",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
                 ]
               }
             },
-            "valueContainsNull": true
+            "valueTypeNullable": true,
+            "keysAreSorted": false
           }
         }
       }
@@ -220,14 +251,19 @@
       "output": {
         "success": {
           "map": {
-            "keyType": "integer",
+            "keyType": "int32",
             "valueType": {
-              "array": {
-                "elementType": "double",
-                "containsNull": true
+              "list": {
+                "field": {
+                  "name": "item",
+                  "dataType": "float64",
+                  "nullable": true,
+                  "metadata": []
+                }
               }
             },
-            "valueContainsNull": true
+            "valueTypeNullable": true,
+            "keysAreSorted": false
           }
         }
       }
@@ -240,7 +276,12 @@
             "fields": [
               {
                 "name": "TABLE",
-                "dataType": "string",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": null,
+                    "utf8Type": null
+                  }
+                },
                 "nullable": true,
                 "metadata": []
               },
@@ -263,17 +304,17 @@
             "fields": [
               {
                 "name": "int",
-                "dataType": "integer",
+                "dataType": "int32",
                 "nullable": true,
                 "metadata": []
               },
               {
                 "name": "timestamp",
                 "dataType": {
-                  "timestamp": [
-                    "microsecond",
-                    null
-                  ]
+                  "timestamp": {
+                    "timeUnit": "microsecond",
+                    "timezoneInfo": "configured"
+                  }
                 },
                 "nullable": true,
                 "metadata": []
@@ -291,13 +332,18 @@
             "fields": [
               {
                 "name": "x",
-                "dataType": "integer",
+                "dataType": "int32",
                 "nullable": true,
                 "metadata": []
               },
               {
                 "name": "y",
-                "dataType": "string",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": null,
+                    "utf8Type": null
+                  }
+                },
                 "nullable": true,
                 "metadata": [
                   [
@@ -315,9 +361,13 @@
       "input": "array<doublE>",
       "output": {
         "success": {
-          "array": {
-            "elementType": "double",
-            "containsNull": true
+          "list": {
+            "field": {
+              "name": "item",
+              "dataType": "float64",
+              "nullable": true,
+              "metadata": []
+            }
           }
         }
       }
@@ -326,20 +376,24 @@
       "input": "array<struct<tinYint:tinyint>>",
       "output": {
         "success": {
-          "array": {
-            "elementType": {
-              "struct": {
-                "fields": [
-                  {
-                    "name": "tinYint",
-                    "dataType": "byte",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              }
-            },
-            "containsNull": true
+          "list": {
+            "field": {
+              "name": "item",
+              "dataType": {
+                "struct": {
+                  "fields": [
+                    {
+                      "name": "tinYint",
+                      "dataType": "int8",
+                      "nullable": true,
+                      "metadata": []
+                    }
+                  ]
+                }
+              },
+              "nullable": true,
+              "metadata": []
+            }
           }
         }
       }
@@ -347,15 +401,16 @@
     {
       "input": "bigint",
       "output": {
-        "success": "long"
+        "success": "int64"
       }
     },
     {
       "input": "cHaR(27)",
       "output": {
         "success": {
-          "char": {
-            "length": 27
+          "configuredUtf8": {
+            "length": 27,
+            "utf8Type": "char"
           }
         }
       }
@@ -363,7 +418,7 @@
     {
       "input": "dOUBle",
       "output": {
-        "success": "double"
+        "success": "float64"
       }
     },
     {
@@ -402,28 +457,33 @@
     {
       "input": "float",
       "output": {
-        "success": "float"
+        "success": "float32"
       }
     },
     {
       "input": "integer",
       "output": {
-        "success": "integer"
+        "success": "int32"
       }
     },
     {
       "input": "interval",
       "output": {
-        "success": "calendarInterval"
+        "success": {
+          "interval": {
+            "intervalUnit": "monthDayNano",
+            "startField": null,
+            "endField": null
+          }
+        }
       }
     },
     {
       "input": "interval day to second",
       "output": {
         "success": {
-          "dayTimeInterval": {
-            "startField": "day",
-            "endField": "second"
+          "duration": {
+            "timeUnit": "microsecond"
           }
         }
       }
@@ -438,7 +498,7 @@
     {
       "input": "smallINT",
       "output": {
-        "success": "short"
+        "success": "int16"
       }
     },
     {
@@ -454,7 +514,12 @@
     {
       "input": "string",
       "output": {
-        "success": "string"
+        "success": {
+          "configuredUtf8": {
+            "length": null,
+            "utf8Type": null
+          }
+        }
       }
     },
     {
@@ -465,21 +530,27 @@
             "fields": [
               {
                 "name": "x+y",
-                "dataType": "integer",
+                "dataType": "int32",
                 "nullable": true,
                 "metadata": []
               },
               {
                 "name": "!@#$%^&*()",
-                "dataType": "string",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": null,
+                    "utf8Type": null
+                  }
+                },
                 "nullable": true,
                 "metadata": []
               },
               {
                 "name": "1_2.345<>:\"",
                 "dataType": {
-                  "varChar": {
-                    "length": 20
+                  "configuredUtf8": {
+                    "length": 20,
+                    "utf8Type": "varChar"
                   }
                 },
                 "nullable": true,
@@ -498,19 +569,24 @@
             "fields": [
               {
                 "name": "end",
-                "dataType": "long",
+                "dataType": "int64",
                 "nullable": true,
                 "metadata": []
               },
               {
                 "name": "select",
-                "dataType": "integer",
+                "dataType": "int32",
                 "nullable": true,
                 "metadata": []
               },
               {
                 "name": "from",
-                "dataType": "string",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": null,
+                    "utf8Type": null
+                  }
+                },
                 "nullable": true,
                 "metadata": []
               }
@@ -527,17 +603,17 @@
             "fields": [
               {
                 "name": "intType",
-                "dataType": "integer",
+                "dataType": "int32",
                 "nullable": true,
                 "metadata": []
               },
               {
                 "name": "ts",
                 "dataType": {
-                  "timestamp": [
-                    "microsecond",
-                    null
-                  ]
+                  "timestamp": {
+                    "timeUnit": "microsecond",
+                    "timezoneInfo": "configured"
+                  }
                 },
                 "nullable": true,
                 "metadata": []
@@ -555,13 +631,18 @@
             "fields": [
               {
                 "name": "x",
-                "dataType": "integer",
+                "dataType": "int32",
                 "nullable": true,
                 "metadata": []
               },
               {
                 "name": "y",
-                "dataType": "string",
+                "dataType": {
+                  "configuredUtf8": {
+                    "length": null,
+                    "utf8Type": null
+                  }
+                },
                 "nullable": true,
                 "metadata": []
               }
@@ -588,10 +669,10 @@
       "input": "timestamp",
       "output": {
         "success": {
-          "timestamp": [
-            "microsecond",
-            null
-          ]
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timezoneInfo": "configured"
+          }
         }
       }
     },
@@ -599,23 +680,28 @@
       "input": "timestamp_ltz",
       "output": {
         "success": {
-          "timestamp": [
-            "microsecond",
-            "ltz"
-          ]
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timezoneInfo": "localTimeZone"
+          }
         }
       }
     },
     {
       "input": "timestamp_ntz",
       "output": {
-        "success": "timestampNtz"
+        "success": {
+          "timestamp": {
+            "timeUnit": "microsecond",
+            "timezoneInfo": "noTimeZone"
+          }
+        }
       }
     },
     {
       "input": "tinYint",
       "output": {
-        "success": "byte"
+        "success": "int8"
       }
     },
     {
@@ -636,8 +722,9 @@
       "input": "varchAr(20)",
       "output": {
         "success": {
-          "varChar": {
-            "length": 20
+          "configuredUtf8": {
+            "length": 20,
+            "utf8Type": "varChar"
           }
         }
       }

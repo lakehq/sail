@@ -18,7 +18,6 @@ prost-types = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-functions-json = { workspace = true }
-arrow = { workspace = true }
 arrow-flight = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }

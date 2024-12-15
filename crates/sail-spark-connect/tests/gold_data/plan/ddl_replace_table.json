@@ -149,7 +149,7 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   }
@@ -193,13 +193,18 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -245,13 +250,18 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -313,13 +323,18 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -365,13 +380,18 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -424,13 +444,18 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -483,13 +508,18 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -558,13 +588,18 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -617,13 +652,18 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -673,13 +713,18 @@
                 "fields": [
                   {
                     "name": "id",
-                    "dataType": "long",
+                    "dataType": "int64",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -767,7 +812,12 @@
                 "fields": [
                   {
                     "name": "part",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -810,13 +860,18 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": false,
                     "metadata": []
                   }
@@ -860,13 +915,18 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -912,13 +972,13 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": false,
                     "metadata": []
                   }
@@ -962,13 +1022,18 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": false,
                     "metadata": []
                   }
@@ -1090,13 +1155,18 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -1140,13 +1210,18 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
@@ -1190,13 +1265,18 @@
                 "fields": [
                   {
                     "name": "a",
-                    "dataType": "integer",
+                    "dataType": "int32",
                     "nullable": true,
                     "metadata": []
                   },
                   {
                     "name": "b",
-                    "dataType": "string",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": null,
+                        "utf8Type": null
+                      }
+                    },
                     "nullable": true,
                     "metadata": []
                   }
