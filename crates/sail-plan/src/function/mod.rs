@@ -47,3 +47,5 @@ pub fn is_built_in_generator_function(name: &str) -> bool {
     let name = name.to_lowercase();
     BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name.as_str())
 }
+
+pub use generator::get_outer_built_in_generator_functions;

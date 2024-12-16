@@ -261,6 +261,13 @@ pub enum QueryNode {
         recursive: bool,
         ctes: Vec<(Identifier, QueryPlan)>,
     },
+    LateralView {
+        input: Box<QueryPlan>,
+        expression: Expr,
+        table_alias: Option<ObjectName>,
+        column_aliases: Vec<Identifier>,
+        outer: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -2,9 +2,10 @@ use sail_common::spec;
 use sqlparser::ast;
 
 use crate::error::SqlResult;
+use crate::expression::common::{from_ast_expression, from_ast_ident, from_ast_object_name};
 use crate::query::from_ast_table_with_joins;
 
-pub fn join_plan_from_tables(from: Vec<ast::TableWithJoins>) -> SqlResult<spec::QueryPlan> {
+pub fn query_plan_from_tables(from: Vec<ast::TableWithJoins>) -> SqlResult<spec::QueryPlan> {
     let plan = from
         .into_iter()
         .try_fold(
@@ -32,4 +33,30 @@ pub fn join_plan_from_tables(from: Vec<ast::TableWithJoins>) -> SqlResult<spec::
             })
         });
     Ok(plan)
+}
+
+pub fn query_plan_with_lateral_views(
+    plan: spec::QueryPlan,
+    lateral_views: Vec<ast::LateralView>,
+) -> SqlResult<spec::QueryPlan> {
+    lateral_views
+        .into_iter()
+        .try_fold(plan, |plan, lateral_view| -> SqlResult<_> {
+            let ast::LateralView {
+                lateral_view,
+                lateral_view_name,
+                lateral_col_alias,
+                outer,
+            } = lateral_view;
+            Ok(spec::QueryPlan::new(spec::QueryNode::LateralView {
+                input: Box::new(plan),
+                expression: from_ast_expression(lateral_view)?,
+                table_alias: Some(from_ast_object_name(lateral_view_name)?),
+                column_aliases: lateral_col_alias
+                    .iter()
+                    .map(|x| from_ast_ident(x, true))
+                    .collect::<SqlResult<_>>()?,
+                outer,
+            }))
+        })
 }

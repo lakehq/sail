@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.sql.types import Row
 
 
 @pytest.mark.parametrize(
@@ -17,5 +18,50 @@ from pandas.testing import assert_frame_equal
 )
 def test_range(sail, sql, expected):
     assert_frame_equal(
-        sail.sql(sql).toPandas().sort_values("id").reset_index(drop=True), pd.DataFrame({"id": expected}, dtype="int64")
+        sail.sql(sql).toPandas().sort_values("id").reset_index(drop=True),
+        pd.DataFrame({"id": expected}, dtype="int64"),
     )
+
+
+def test_lateral_view(sail):
+    df = sail.sql("""
+        SELECT * FROM range(2)
+            LATERAL VIEW explode(array(id, id + 1)) AS v
+    """)
+    assert_frame_equal(
+        df.toPandas(),
+        pd.DataFrame({"id": [0, 0, 1, 1], "v": [0, 1, 1, 2]}, dtype="int64"),
+    )
+
+    df = sail.sql("""
+        SELECT * FROM range(2)
+            LATERAL VIEW explode(array(id, id + 1)) t AS u
+            LATERAL VIEW explode(array(u, t.u * 2)) AS v
+    """)
+    assert_frame_equal(
+        df.toPandas(),
+        pd.DataFrame(
+            {"id": [0, 0, 0, 0, 1, 1, 1, 1], "u": [0, 0, 1, 1, 1, 1, 2, 2], "v": [0, 0, 1, 2, 1, 2, 2, 4]},
+            dtype="int64",
+        ),
+    )
+
+
+def test_lateral_view_outer(sail):
+    df = sail.sql("""
+        SELECT * FROM range(1)
+            LATERAL VIEW explode(CAST(NULL AS array<int>)) AS v
+    """)
+    assert df.collect() == []
+
+    df = sail.sql("""
+        SELECT * FROM range(1)
+            LATERAL VIEW OUTER explode(CAST(NULL AS array<int>)) AS v
+    """)
+    assert df.collect() == [Row(id=0, v=None)]
+
+    df = sail.sql("""
+        SELECT * FROM range(1)
+            LATERAL VIEW explode_outer(CAST(NULL AS array<int>)) AS v
+    """)
+    assert df.collect() == [Row(id=0, v=None)]

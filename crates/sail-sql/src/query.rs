@@ -8,7 +8,7 @@ use crate::expression::common::{
 };
 use crate::literal::LiteralValue;
 use crate::operation::filter::query_plan_with_filter;
-use crate::operation::join::join_plan_from_tables;
+use crate::operation::join::{query_plan_from_tables, query_plan_with_lateral_views};
 use crate::utils::normalize_ident;
 
 pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
@@ -128,9 +128,6 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
     if into.is_some() {
         return Err(SqlError::unsupported("INTO clause in SELECT"));
     }
-    if !lateral_views.is_empty() {
-        return Err(SqlError::todo("LATERAL VIEW clause in SELECT"));
-    }
     if prewhere.is_some() {
         return Err(SqlError::unsupported("PREWHERE clause in SELECT"));
     }
@@ -153,8 +150,9 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
         return Err(SqlError::unsupported("CONNECT BY clause in SELECT"));
     }
 
-    let plan = join_plan_from_tables(from)?;
+    let plan = query_plan_from_tables(from)?;
     let plan = query_plan_with_filter(plan, selection)?;
+    let plan = query_plan_with_lateral_views(plan, lateral_views)?;
 
     let projection = projection
         .into_iter()
