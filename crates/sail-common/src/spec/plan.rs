@@ -262,10 +262,10 @@ pub enum QueryNode {
         ctes: Vec<(Identifier, QueryPlan)>,
     },
     LateralView {
-        input: Box<QueryPlan>,
+        input: Option<Box<QueryPlan>>,
         expression: Expr,
         table_alias: Option<ObjectName>,
-        column_aliases: Vec<Identifier>,
+        column_aliases: Option<Vec<Identifier>>,
         outer: bool,
     },
 }

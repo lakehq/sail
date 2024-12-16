@@ -368,7 +368,7 @@ impl PlanResolver<'_> {
                 outer,
             } => {
                 self.resolve_query_lateral_view(
-                    *input,
+                    input.map(|x| *x),
                     expression,
                     table_alias,
                     column_aliases,
@@ -381,6 +381,21 @@ impl PlanResolver<'_> {
         self.verify_query_plan(&plan, state)?;
         self.register_schema_with_plan_id(&plan, plan_id, state)?;
         Ok(plan)
+    }
+
+    pub(super) async fn resolve_optional_query_plan(
+        &self,
+        plan: Option<spec::QueryPlan>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        match plan {
+            Some(x) => self.resolve_query_plan(x, state).await,
+            None => Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                // allows literal projection with no input
+                produce_one_row: true,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            })),
+        }
     }
 
     pub(super) async fn resolve_recursive_query_plan(
@@ -756,14 +771,7 @@ impl PlanResolver<'_> {
         expr: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = match input {
-            Some(x) => self.resolve_query_plan(x, state).await?,
-            None => LogicalPlan::EmptyRelation(plan::EmptyRelation {
-                // allows literal projection with no input
-                produce_one_row: true,
-                schema: DFSchemaRef::new(DFSchema::empty()),
-            }),
-        };
+        let input = self.resolve_optional_query_plan(input, state).await?;
         let schema = input.schema();
         let expr = self.resolve_named_expressions(expr, schema, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
@@ -2130,10 +2138,10 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_lateral_view(
         &self,
-        input: spec::QueryPlan,
+        input: Option<spec::QueryPlan>,
         expression: spec::Expr,
         table_alias: Option<spec::ObjectName>,
-        column_aliases: Vec<spec::Identifier>,
+        column_aliases: Option<Vec<spec::Identifier>>,
         outer: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
@@ -2161,12 +2169,16 @@ impl PlanResolver<'_> {
                 ))
             }
         };
-        let expression = spec::Expr::Alias {
-            expr: Box::new(expression),
-            name: column_aliases,
-            metadata: None,
+        let expression = if let Some(aliases) = column_aliases {
+            spec::Expr::Alias {
+                expr: Box::new(expression),
+                name: aliases,
+                metadata: None,
+            }
+        } else {
+            expression
         };
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self.resolve_optional_query_plan(input, state).await?;
         let schema = input.schema().clone();
         let expr = self
             .resolve_named_expression(expression, &schema, state)

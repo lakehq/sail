@@ -65,3 +65,31 @@ def test_lateral_view_outer(sail):
             LATERAL VIEW explode_outer(CAST(NULL AS array<int>)) AS v
     """)
     assert df.collect() == [Row(id=0, v=None)]
+
+
+def test_lateral_join(sail):
+    df = sail.sql("""
+        SELECT * FROM range(1), LATERAL explode(array(id, id + 1)) AS t(v)
+    """)
+    assert_frame_equal(
+        df.toPandas(),
+        pd.DataFrame({"id": [0, 0], "v": [0, 1]}, dtype="int64"),
+    )
+
+    df = sail.sql("""
+        SELECT * FROM range(1) JOIN LATERAL explode(array(id, id + 1)) AS t(v)
+    """)
+    assert_frame_equal(
+        df.toPandas(),
+        pd.DataFrame({"id": [0, 0], "v": [0, 1]}, dtype="int64"),
+    )
+
+
+def test_lateral_join_without_table(sail):
+    df = sail.sql("""
+        SELECT * FROM LATERAL explode(array(0, 1)) AS t(v)
+    """)
+    assert_frame_equal(
+        df.toPandas(),
+        pd.DataFrame({"v": [0, 1]}, dtype="int32"),
+    )
