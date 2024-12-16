@@ -1,6 +1,5 @@
 use sail_common::spec;
 use sqlparser::ast;
-use sqlparser::ast::{JoinOperator, PivotValueSource};
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::common::{
@@ -484,7 +483,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                 })
                 .collect();
             let values = match value_source {
-                PivotValueSource::List(expr) => expr
+                ast::PivotValueSource::List(expr) => expr
                     .into_iter()
                     .map(|e| {
                         let ast::ExprWithAlias { expr, alias } = e;
@@ -503,8 +502,8 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                         Ok(spec::PivotValue { values, alias })
                     })
                     .collect::<SqlResult<Vec<_>>>()?,
-                PivotValueSource::Any(_) => return Err(SqlError::unsupported("PIVOT ANY")),
-                PivotValueSource::Subquery(_) => {
+                ast::PivotValueSource::Any(_) => return Err(SqlError::unsupported("PIVOT ANY")),
+                ast::PivotValueSource::Subquery(_) => {
                     return Err(SqlError::unsupported("PIVOT subquery"))
                 }
             };
@@ -694,7 +693,7 @@ fn query_plan_with_lateral_table(
     if !joins.is_empty() {
         return Err(SqlError::unsupported("joins in lateral table"));
     }
-    query_plan_with_lateral_table_factor(plan, relation, false)
+    query_plan_with_lateral_table_factor(plan, relation, true)
 }
 
 fn query_plan_with_join(left: spec::QueryPlan, join: ast::Join) -> SqlResult<spec::QueryPlan> {
@@ -761,9 +760,9 @@ fn query_plan_with_lateral_join(
         return Err(SqlError::invalid("global lateral join"));
     }
     let outer = match join_operator {
-        JoinOperator::Inner(_) => false,
-        JoinOperator::LeftOuter(_) => true,
-        JoinOperator::CrossJoin => false,
+        ast::JoinOperator::Inner(_) => false,
+        ast::JoinOperator::LeftOuter(_) => true,
+        ast::JoinOperator::CrossJoin => true,
         _ => return Err(SqlError::invalid("lateral join type")),
     };
     query_plan_with_lateral_table_factor(Some(left), right, outer)
