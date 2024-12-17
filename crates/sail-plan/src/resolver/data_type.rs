@@ -180,10 +180,7 @@ impl PlanResolver<'_> {
                     *keys_sorted,
                 ))
             }
-            DataType::ConfiguredUtf8 {
-                length: _,
-                utf8_type: _,
-            } => {
+            DataType::ConfiguredUtf8 { utf8_type: _ } => {
                 // FIXME: Currently `length` and `utf8_type` is lost in translation.
                 //  This impacts accuracy if `spec::ConfiguredUtf8Type` is `VarChar` or `Char`.
                 Ok(self.arrow_string_type())

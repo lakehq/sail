@@ -117,19 +117,20 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         }
         ast::DataType::Char(n) | ast::DataType::Character(n) => {
             Ok(spec::DataType::ConfiguredUtf8 {
-                length: Some(from_ast_char_length(n)?),
-                utf8_type: Some(spec::ConfiguredUtf8Type::Char),
+                utf8_type: spec::Utf8Type::Char {
+                    length: from_ast_char_length(n)?,
+                },
             })
         }
         ast::DataType::Varchar(n)
         | ast::DataType::CharVarying(n)
         | ast::DataType::CharacterVarying(n) => Ok(spec::DataType::ConfiguredUtf8 {
-            length: Some(from_ast_char_length(n)?),
-            utf8_type: Some(spec::ConfiguredUtf8Type::VarChar),
+            utf8_type: spec::Utf8Type::VarChar {
+                length: from_ast_char_length(n)?,
+            },
         }),
         ast::DataType::String(_) => Ok(spec::DataType::ConfiguredUtf8 {
-            length: None,
-            utf8_type: None,
+            utf8_type: spec::Utf8Type::Configured,
         }),
         ast::DataType::Text => Ok(spec::DataType::LargeUtf8),
         ast::DataType::Timestamp(precision, tz_info) => {

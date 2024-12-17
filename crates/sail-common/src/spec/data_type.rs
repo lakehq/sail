@@ -196,19 +196,9 @@ pub enum DataType {
     },
     /// Resolves to either [`DataType::Utf8`] or [`DataType::LargeUtf8`],
     /// based on `config.arrow_use_large_var_types`.
-    /// Optional length parameter is currently unused but retained for potential future use.
-    /// Optional `ConfiguredUtf8Type` specifies if the type is a `varchar` or `char`.
-    // TODO: The [`sail-spark-connect`] crate uses `TryFrom` for mapping Spark types to Sail types,
-    //  whereas [`PlanResolver`] resolves `DataType` without `TryFrom`.
-    //  This makes [`PlanResolver::resolve_data_type`] more suitable here,
-    //  as it has access to `config` and can determine the type accordingly.
-    //  Refactor data type resolution in [`sail-spark-connect`] to avoid using `TryFrom`,
-    //  which would allow for removal of this variant.
     ConfiguredUtf8 {
-        length: Option<u32>,
-        utf8_type: Option<ConfiguredUtf8Type>,
+        utf8_type: Utf8Type,
     },
-    // TODO: Same TODO as `ConfiguredUtf8`.
     ConfiguredBinary,
 }
 
@@ -548,55 +538,29 @@ pub enum TimeUnit {
     Nanosecond,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    TryFromPrimitive,
-)]
-#[serde(rename_all = "camelCase")]
-#[num_enum(error_type(name = CommonError, constructor = ConfiguredUtf8Type::invalid))]
-#[repr(i32)]
-/// TODO: Currently the behavior of each variant is not implemented.
+// TODO: Currently the behavior for VarChar and Char is not implemented.
 /// Reference: https://spark.apache.org/docs/3.5.3/sql-ref-datatypes.html#supported-data-types
-pub enum ConfiguredUtf8Type {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Utf8Type {
+    Configured,
     /// String which has a length limitation.
     /// Data writing will fail if the input string exceeds the length limitation.
     /// Note: this type can only be used in table schema, not functions/operator
-    VarChar = 0,
+    VarChar {
+        length: u32,
+    },
     /// A variant of Varchar(length) which is fixed length.
     /// Reading column of type Char(n) always returns string values of length n.
     /// Char type column comparison will pad the short one to the longer length.
-    Char = 1,
-}
-
-impl ConfiguredUtf8Type {
-    fn invalid(value: i32) -> CommonError {
-        CommonError::invalid(format!("configured utf8 type: {value}"))
-    }
-}
-
-impl Display for ConfiguredUtf8Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConfiguredUtf8Type::VarChar => write!(f, "VarChar"),
-            ConfiguredUtf8Type::Char => write!(f, "Char"),
-        }
-    }
+    Char {
+        length: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TimeZoneInfo {
-    // TODO: Refactor data type resolution in [`sail-spark-connect`] to avoid using `TryFrom`,
-    //  which would allow for removal of ConfiguredTimeZone.
     Configured,
     LocalTimeZone,
     NoTimeZone,
