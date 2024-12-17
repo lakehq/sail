@@ -30,8 +30,8 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    build_join_schema, col, expr, lit, when, AggregateUDF, BinaryExpr, DmlStatement, ExprSchemable,
-    LogicalPlanBuilder, Operator, ScalarUDF, TryCast, WriteOp,
+    build_join_schema, col, expr, ident, lit, when, AggregateUDF, BinaryExpr, DmlStatement,
+    ExprSchemable, LogicalPlanBuilder, Operator, ScalarUDF, TryCast, WriteOp,
 };
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
@@ -51,7 +51,10 @@ use crate::extension::logical::{
     ShowStringFormat, ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::extension::source::rename::RenameTableProvider;
-use crate::function::{get_built_in_table_function, is_built_in_generator_function};
+use crate::function::{
+    get_built_in_table_function, get_outer_built_in_generator_functions,
+    is_built_in_generator_function,
+};
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
@@ -357,10 +360,42 @@ impl PlanResolver<'_> {
                 self.resolve_query_with_ctes(*input, recursive, ctes, state)
                     .await?
             }
+            QueryNode::LateralView {
+                input,
+                expression,
+                table_alias,
+                column_aliases,
+                outer,
+            } => {
+                self.resolve_query_lateral_view(
+                    input.map(|x| *x),
+                    expression,
+                    table_alias,
+                    column_aliases,
+                    outer,
+                    state,
+                )
+                .await?
+            }
         };
         self.verify_query_plan(&plan, state)?;
         self.register_schema_with_plan_id(&plan, plan_id, state)?;
         Ok(plan)
+    }
+
+    pub(super) async fn resolve_optional_query_plan(
+        &self,
+        plan: Option<spec::QueryPlan>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        match plan {
+            Some(x) => self.resolve_query_plan(x, state).await,
+            None => Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+                // allows literal projection with no input
+                produce_one_row: true,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            })),
+        }
     }
 
     pub(super) async fn resolve_recursive_query_plan(
@@ -736,14 +771,7 @@ impl PlanResolver<'_> {
         expr: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = match input {
-            Some(x) => self.resolve_query_plan(x, state).await?,
-            None => LogicalPlan::EmptyRelation(plan::EmptyRelation {
-                // allows literal projection with no input
-                produce_one_row: true,
-                schema: DFSchemaRef::new(DFSchema::empty()),
-            }),
-        };
+        let input = self.resolve_optional_query_plan(input, state).await?;
         let schema = input.schema();
         let expr = self.resolve_named_expressions(expr, schema, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
@@ -1972,11 +2000,10 @@ impl PlanResolver<'_> {
         });
         let agg_name = agg.name_for_alias()?;
         let resolved_agg_name = state.register_field(&agg_name);
-        let agg_col =
-            Expr::Column(Column::new_unqualified(&agg_name)).alias(resolved_agg_name.clone());
+        let agg_col = ident(&agg_name).alias(resolved_agg_name.clone());
         let grouping = group_exprs
             .iter()
-            .map(|x| Ok(Expr::Column(Column::new_unqualified(x.name_for_alias()?))))
+            .map(|x| Ok(ident(x.name_for_alias()?)))
             .collect::<PlanResult<Vec<_>>>()?;
         let mut projections = grouping.clone();
         projections.push(agg_col);
@@ -1987,7 +2014,7 @@ impl PlanResolver<'_> {
         Ok(CoGroupMapData {
             plan,
             grouping,
-            mapper_input: Expr::Column(Column::new_unqualified(resolved_agg_name)),
+            mapper_input: ident(resolved_agg_name),
             mapper_input_type: agg_output_type,
             offsets,
         })
@@ -2107,6 +2134,80 @@ impl PlanResolver<'_> {
             state.insert_cte(reference, plan);
         }
         self.resolve_query_plan(input, state).await
+    }
+
+    async fn resolve_query_lateral_view(
+        &self,
+        input: Option<spec::QueryPlan>,
+        expression: spec::Expr,
+        table_alias: Option<spec::ObjectName>,
+        column_aliases: Option<Vec<spec::Identifier>>,
+        outer: bool,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let expression = match expression {
+            spec::Expr::UnresolvedFunction {
+                mut function_name,
+                arguments,
+                is_distinct,
+                is_user_defined_function,
+            } => {
+                if outer {
+                    function_name =
+                        get_outer_built_in_generator_functions(&function_name).to_string();
+                }
+                spec::Expr::UnresolvedFunction {
+                    function_name,
+                    arguments,
+                    is_distinct,
+                    is_user_defined_function,
+                }
+            }
+            _ => {
+                return Err(PlanError::invalid(
+                    "a generator function is expected for lateral view",
+                ))
+            }
+        };
+        let expression = if let Some(aliases) = column_aliases {
+            spec::Expr::Alias {
+                expr: Box::new(expression),
+                name: aliases,
+                metadata: None,
+            }
+        } else {
+            expression
+        };
+        let input = self.resolve_optional_query_plan(input, state).await?;
+        let schema = input.schema().clone();
+        let expr = self
+            .resolve_named_expression(expression, &schema, state)
+            .await?;
+        let (input, expr) = self.rewrite_wildcard(input, vec![expr], state)?;
+        let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
+        let expr = self.rewrite_multi_expr(expr)?;
+        let expr = self.rewrite_named_expressions(expr, state)?;
+        let expr = if let Some(table_alias) = table_alias {
+            let table_reference = self.resolve_table_reference(&table_alias)?;
+            expr.into_iter()
+                .map(|x| {
+                    let name = x.schema_name().to_string();
+                    x.alias_qualified(Some(table_reference.clone()), name)
+                })
+                .collect()
+        } else {
+            expr
+        };
+        let mut projections = schema
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
+        projections.extend(expr);
+        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+            projections,
+            Arc::new(input),
+        )?))
     }
 
     async fn resolve_query_common_inline_udtf(

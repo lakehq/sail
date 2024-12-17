@@ -1278,7 +1278,108 @@
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\nlateral view outer json_tuple(x, y) jtup q, z",
       "output": {
-        "failure": "not implemented: LATERAL VIEW clause in SELECT"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralView": {
+                  "input": {
+                    "lateralView": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expression": {
+                        "unresolvedFunction": {
+                          "functionName": "explode",
+                          "arguments": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "x"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "isDistinct": false,
+                          "isUserDefinedFunction": false
+                        }
+                      },
+                      "tableAlias": [
+                        "expl"
+                      ],
+                      "columnAliases": [],
+                      "outer": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expression": {
+                    "unresolvedFunction": {
+                      "functionName": "json_tuple",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "x"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "y"
+                            ],
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "tableAlias": [
+                    "jtup"
+                  ],
+                  "columnAliases": [
+                    "q",
+                    "z"
+                  ],
+                  "outer": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1768,13 +1869,142 @@
     {
       "input": "select * from t lateral view explode(x) expl as x",
       "output": {
-        "failure": "not implemented: LATERAL VIEW clause in SELECT"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralView": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expression": {
+                    "unresolvedFunction": {
+                      "functionName": "explode",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "x"
+                            ],
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "tableAlias": [
+                    "expl"
+                  ],
+                  "columnAliases": [
+                    "x"
+                  ],
+                  "outer": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t lateral view posexplode(x) posexpl as x, y",
       "output": {
-        "failure": "not implemented: LATERAL VIEW clause in SELECT"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralView": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expression": {
+                    "unresolvedFunction": {
+                      "functionName": "posexplode",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "x"
+                            ],
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  },
+                  "tableAlias": [
+                    "posexpl"
+                  ],
+                  "columnAliases": [
+                    "x",
+                    "y"
+                  ],
+                  "outer": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

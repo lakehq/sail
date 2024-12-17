@@ -1,14 +1,11 @@
 use sail_common::spec;
 use sqlparser::ast;
-use sqlparser::ast::PivotValueSource;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::common::{
     from_ast_expression, from_ast_ident, from_ast_object_name, from_ast_order_by,
 };
 use crate::literal::LiteralValue;
-use crate::operation::filter::query_plan_with_filter;
-use crate::operation::join::join_plan_from_tables;
 use crate::utils::normalize_ident;
 
 pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
@@ -128,9 +125,6 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
     if into.is_some() {
         return Err(SqlError::unsupported("INTO clause in SELECT"));
     }
-    if !lateral_views.is_empty() {
-        return Err(SqlError::todo("LATERAL VIEW clause in SELECT"));
-    }
     if prewhere.is_some() {
         return Err(SqlError::unsupported("PREWHERE clause in SELECT"));
     }
@@ -153,8 +147,9 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
         return Err(SqlError::unsupported("CONNECT BY clause in SELECT"));
     }
 
-    let plan = join_plan_from_tables(from)?;
+    let plan = from_ast_tables(from)?;
     let plan = query_plan_with_filter(plan, selection)?;
+    let plan = query_plan_with_lateral_views(plan, lateral_views)?;
 
     let projection = projection
         .into_iter()
@@ -341,66 +336,39 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
     }
 }
 
-pub fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
-    use sqlparser::ast::{JoinConstraint, JoinOperator};
+pub fn from_ast_tables(tables: Vec<ast::TableWithJoins>) -> SqlResult<spec::QueryPlan> {
+    let plan = tables
+        .into_iter()
+        .try_fold(
+            None,
+            |plan: Option<spec::QueryPlan>, table| -> SqlResult<Option<spec::QueryPlan>> {
+                let plan = if is_lateral_view(&table.relation) {
+                    query_plan_with_lateral_table(plan, table)?
+                } else {
+                    query_plan_with_table(plan, table)?
+                };
+                Ok(Some(plan))
+            },
+        )?
+        .unwrap_or_else(|| {
+            spec::QueryPlan::new(spec::QueryNode::Empty {
+                produce_one_row: true,
+            })
+        });
+    Ok(plan)
+}
 
+pub fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
     let ast::TableWithJoins { relation, joins } = table;
     let plan = from_ast_table_factor(relation)?;
     let plan = joins
         .into_iter()
         .try_fold(plan, |left, join| -> SqlResult<_> {
-            let ast::Join {
-                relation: right,
-                global,
-                join_operator,
-            } = join;
-            if global {
-                return Err(SqlError::unsupported("global join"));
+            if is_lateral_view(&join.relation) {
+                query_plan_with_lateral_join(left, join)
+            } else {
+                query_plan_with_join(left, join)
             }
-            let right = from_ast_table_factor(right)?;
-            let (join_type, constraint) = match join_operator {
-                JoinOperator::Inner(constraint) => (spec::JoinType::Inner, Some(constraint)),
-                JoinOperator::LeftOuter(constraint) => {
-                    (spec::JoinType::LeftOuter, Some(constraint))
-                }
-                JoinOperator::RightOuter(constraint) => {
-                    (spec::JoinType::RightOuter, Some(constraint))
-                }
-                JoinOperator::FullOuter(constraint) => {
-                    (spec::JoinType::FullOuter, Some(constraint))
-                }
-                JoinOperator::CrossJoin => (spec::JoinType::Cross, None),
-                JoinOperator::LeftSemi(constraint) => (spec::JoinType::LeftSemi, Some(constraint)),
-                JoinOperator::RightSemi(_) => return Err(SqlError::unsupported("RIGHT SEMI join")),
-                JoinOperator::LeftAnti(constraint) => (spec::JoinType::LeftAnti, Some(constraint)),
-                JoinOperator::RightAnti(_) => return Err(SqlError::unsupported("RIGHT ANTI join")),
-                JoinOperator::CrossApply | JoinOperator::OuterApply => {
-                    return Err(SqlError::unsupported("APPLY join"))
-                }
-                JoinOperator::AsOf { .. } => {
-                    return Err(SqlError::unsupported("AS OF join"));
-                }
-            };
-            let (join_condition, using_columns) = match constraint {
-                Some(JoinConstraint::On(expr)) => {
-                    let expr = from_ast_expression(expr)?;
-                    (Some(expr), vec![])
-                }
-                Some(JoinConstraint::Using(columns)) => {
-                    let columns = columns.into_iter().map(|c| c.to_string()).collect();
-                    (None, columns)
-                }
-                Some(JoinConstraint::Natural) => return Err(SqlError::unsupported("natural join")),
-                Some(JoinConstraint::None) | None => (None, vec![]),
-            };
-            Ok(spec::QueryPlan::new(spec::QueryNode::Join(spec::Join {
-                left: Box::new(left),
-                right: Box::new(right),
-                join_condition,
-                join_type,
-                using_columns: using_columns.into_iter().map(|c| c.into()).collect(),
-                join_data_type: None,
-            })))
         })?;
     Ok(plan)
 }
@@ -462,7 +430,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                     }),
                 })
             };
-            with_ast_table_alias(plan, alias)
+            query_plan_with_table_alias(plan, alias)
         }
         TableFactor::Derived {
             lateral,
@@ -473,10 +441,10 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                 return Err(SqlError::unsupported("LATERAL in derived table factor"));
             }
             let plan = from_ast_query(*subquery)?;
-            with_ast_table_alias(plan, alias)
+            query_plan_with_table_alias(plan, alias)
         }
         TableFactor::TableFunction { .. } => Err(SqlError::todo("table function in table factor")),
-        TableFactor::Function { .. } => Err(SqlError::todo("function in table factor")),
+        TableFactor::Function { .. } => Err(SqlError::invalid("function in table factor")),
         TableFactor::UNNEST { .. } => Err(SqlError::todo("UNNEST")),
         TableFactor::JsonTable { .. } => Err(SqlError::todo("JSON_TABLE")),
         TableFactor::NestedJoin { .. } => Err(SqlError::todo("nested join")),
@@ -515,7 +483,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                 })
                 .collect();
             let values = match value_source {
-                PivotValueSource::List(expr) => expr
+                ast::PivotValueSource::List(expr) => expr
                     .into_iter()
                     .map(|e| {
                         let ast::ExprWithAlias { expr, alias } = e;
@@ -534,8 +502,8 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                         Ok(spec::PivotValue { values, alias })
                     })
                     .collect::<SqlResult<Vec<_>>>()?,
-                PivotValueSource::Any(_) => return Err(SqlError::unsupported("PIVOT ANY")),
-                PivotValueSource::Subquery(_) => {
+                ast::PivotValueSource::Any(_) => return Err(SqlError::unsupported("PIVOT ANY")),
+                ast::PivotValueSource::Subquery(_) => {
                     return Err(SqlError::unsupported("PIVOT subquery"))
                 }
             };
@@ -546,7 +514,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                 columns,
                 values,
             }));
-            with_ast_table_alias(plan, alias)
+            query_plan_with_table_alias(plan, alias)
         }
         TableFactor::Unpivot {
             table,
@@ -574,25 +542,9 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
                 value_column_names: vec![value.value.into()],
                 include_nulls: false,
             }));
-            with_ast_table_alias(plan, alias)
+            query_plan_with_table_alias(plan, alias)
         }
         TableFactor::MatchRecognize { .. } => Err(SqlError::todo("MATCH_RECOGNIZE")),
-    }
-}
-
-fn with_ast_table_alias(
-    plan: spec::QueryPlan,
-    alias: Option<ast::TableAlias>,
-) -> SqlResult<spec::QueryPlan> {
-    match alias {
-        None => Ok(plan),
-        Some(ast::TableAlias { name, columns }) => {
-            Ok(spec::QueryPlan::new(spec::QueryNode::TableAlias {
-                input: Box::new(plan),
-                name: spec::Identifier::from(normalize_ident(&name)),
-                columns: columns.into_iter().map(|c| c.value.into()).collect(),
-            }))
-        }
     }
 }
 
@@ -681,4 +633,221 @@ pub fn from_ast_wildcard_options(
         rename_columns,
     };
     Ok(wildcard_options)
+}
+
+pub fn query_plan_with_filter(
+    plan: spec::QueryPlan,
+    selection: Option<ast::Expr>,
+) -> SqlResult<spec::QueryPlan> {
+    let plan = if let Some(selection) = selection {
+        let selection = from_ast_expression(selection)?;
+        spec::QueryPlan::new(spec::QueryNode::Filter {
+            input: Box::new(plan),
+            condition: selection,
+        })
+    } else {
+        plan
+    };
+    Ok(plan)
+}
+
+fn query_plan_with_table_alias(
+    plan: spec::QueryPlan,
+    alias: Option<ast::TableAlias>,
+) -> SqlResult<spec::QueryPlan> {
+    match alias {
+        None => Ok(plan),
+        Some(ast::TableAlias { name, columns }) => {
+            Ok(spec::QueryPlan::new(spec::QueryNode::TableAlias {
+                input: Box::new(plan),
+                name: spec::Identifier::from(normalize_ident(&name)),
+                columns: columns.into_iter().map(|c| c.value.into()).collect(),
+            }))
+        }
+    }
+}
+
+fn query_plan_with_table(
+    left: Option<spec::QueryPlan>,
+    table: ast::TableWithJoins,
+) -> SqlResult<spec::QueryPlan> {
+    let right = from_ast_table_with_joins(table)?;
+    match left {
+        Some(left) => Ok(spec::QueryPlan::new(spec::QueryNode::Join(spec::Join {
+            left: Box::new(left),
+            right: Box::new(right),
+            join_condition: None,
+            join_type: spec::JoinType::Cross,
+            using_columns: vec![],
+            join_data_type: None,
+        }))),
+        None => Ok(right),
+    }
+}
+
+fn query_plan_with_lateral_table(
+    plan: Option<spec::QueryPlan>,
+    table: ast::TableWithJoins,
+) -> SqlResult<spec::QueryPlan> {
+    let ast::TableWithJoins { relation, joins } = table;
+    if !joins.is_empty() {
+        return Err(SqlError::unsupported("joins in lateral table"));
+    }
+    query_plan_with_lateral_table_factor(plan, relation, true)
+}
+
+fn query_plan_with_join(left: spec::QueryPlan, join: ast::Join) -> SqlResult<spec::QueryPlan> {
+    use sqlparser::ast::{JoinConstraint, JoinOperator};
+
+    let ast::Join {
+        relation: right,
+        global,
+        join_operator,
+    } = join;
+    if global {
+        return Err(SqlError::unsupported("global join"));
+    }
+    let right = from_ast_table_factor(right)?;
+    let (join_type, constraint) = match join_operator {
+        JoinOperator::Inner(constraint) => (spec::JoinType::Inner, Some(constraint)),
+        JoinOperator::LeftOuter(constraint) => (spec::JoinType::LeftOuter, Some(constraint)),
+        JoinOperator::RightOuter(constraint) => (spec::JoinType::RightOuter, Some(constraint)),
+        JoinOperator::FullOuter(constraint) => (spec::JoinType::FullOuter, Some(constraint)),
+        JoinOperator::CrossJoin => (spec::JoinType::Cross, None),
+        JoinOperator::LeftSemi(constraint) => (spec::JoinType::LeftSemi, Some(constraint)),
+        JoinOperator::RightSemi(_) => return Err(SqlError::unsupported("RIGHT SEMI join")),
+        JoinOperator::LeftAnti(constraint) => (spec::JoinType::LeftAnti, Some(constraint)),
+        JoinOperator::RightAnti(_) => return Err(SqlError::unsupported("RIGHT ANTI join")),
+        JoinOperator::CrossApply | JoinOperator::OuterApply => {
+            return Err(SqlError::unsupported("APPLY join"))
+        }
+        JoinOperator::AsOf { .. } => {
+            return Err(SqlError::unsupported("AS OF join"));
+        }
+    };
+    let (join_condition, using_columns) = match constraint {
+        Some(JoinConstraint::On(expr)) => {
+            let expr = from_ast_expression(expr)?;
+            (Some(expr), vec![])
+        }
+        Some(JoinConstraint::Using(columns)) => {
+            let columns = columns.into_iter().map(|c| c.to_string()).collect();
+            (None, columns)
+        }
+        Some(JoinConstraint::Natural) => return Err(SqlError::unsupported("natural join")),
+        Some(JoinConstraint::None) | None => (None, vec![]),
+    };
+    Ok(spec::QueryPlan::new(spec::QueryNode::Join(spec::Join {
+        left: Box::new(left),
+        right: Box::new(right),
+        join_condition,
+        join_type,
+        using_columns: using_columns.into_iter().map(|c| c.into()).collect(),
+        join_data_type: None,
+    })))
+}
+
+fn query_plan_with_lateral_join(
+    left: spec::QueryPlan,
+    join: ast::Join,
+) -> SqlResult<spec::QueryPlan> {
+    let ast::Join {
+        relation: right,
+        global,
+        join_operator,
+    } = join;
+    if global {
+        return Err(SqlError::invalid("global lateral join"));
+    }
+    let outer = match join_operator {
+        ast::JoinOperator::Inner(_) => false,
+        ast::JoinOperator::LeftOuter(_) => true,
+        ast::JoinOperator::CrossJoin => true,
+        _ => return Err(SqlError::invalid("lateral join type")),
+    };
+    query_plan_with_lateral_table_factor(Some(left), right, outer)
+}
+
+fn query_plan_with_lateral_table_factor(
+    input: Option<spec::QueryPlan>,
+    factor: ast::TableFactor,
+    outer: bool,
+) -> SqlResult<spec::QueryPlan> {
+    let ast::TableFactor::Function {
+        lateral: _,
+        name,
+        args,
+        alias,
+    } = factor
+    else {
+        return Err(SqlError::invalid(
+            "expected function for lateral table factor",
+        ));
+    };
+    let expression = ast::Expr::Function(ast::Function {
+        name,
+        parameters: ast::FunctionArguments::None,
+        args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+            duplicate_treatment: None,
+            args,
+            clauses: vec![],
+        }),
+        filter: None,
+        null_treatment: None,
+        over: None,
+        within_group: vec![],
+    });
+    let (table_alias, column_aliases) = if let Some(alias) = alias {
+        let ast::TableAlias { name, columns } = alias;
+        (
+            Some(from_ast_object_name(ast::ObjectName(vec![name]))?),
+            Some(
+                columns
+                    .iter()
+                    .map(|x| from_ast_ident(x, true))
+                    .collect::<SqlResult<_>>()?,
+            ),
+        )
+    } else {
+        (None, None)
+    };
+    Ok(spec::QueryPlan::new(spec::QueryNode::LateralView {
+        input: input.map(Box::new),
+        expression: from_ast_expression(expression)?,
+        table_alias,
+        column_aliases,
+        outer,
+    }))
+}
+
+fn query_plan_with_lateral_views(
+    plan: spec::QueryPlan,
+    lateral_views: Vec<ast::LateralView>,
+) -> SqlResult<spec::QueryPlan> {
+    lateral_views
+        .into_iter()
+        .try_fold(plan, |plan, lateral_view| -> SqlResult<_> {
+            let ast::LateralView {
+                lateral_view,
+                lateral_view_name,
+                lateral_col_alias,
+                outer,
+            } = lateral_view;
+            Ok(spec::QueryPlan::new(spec::QueryNode::LateralView {
+                input: Some(Box::new(plan)),
+                expression: from_ast_expression(lateral_view)?,
+                table_alias: Some(from_ast_object_name(lateral_view_name)?),
+                column_aliases: Some(
+                    lateral_col_alias
+                        .iter()
+                        .map(|x| from_ast_ident(x, true))
+                        .collect::<SqlResult<_>>()?,
+                ),
+                outer,
+            }))
+        })
+}
+
+fn is_lateral_view(table_factor: &ast::TableFactor) -> bool {
+    matches!(table_factor, ast::TableFactor::Function { .. })
 }

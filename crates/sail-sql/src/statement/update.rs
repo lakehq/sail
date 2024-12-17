@@ -5,8 +5,7 @@ use crate::error::{SqlError, SqlResult};
 use crate::expression::common::{
     from_ast_expression, from_ast_ident, from_ast_object_name_normalized,
 };
-use crate::operation::filter::query_plan_with_filter;
-use crate::operation::join::join_plan_from_tables;
+use crate::query::{from_ast_tables, query_plan_with_filter};
 
 pub(crate) fn update_statement_to_plan(update: ast::Statement) -> SqlResult<spec::Plan> {
     let (table, assignments, from, selection, returning) = match update {
@@ -59,7 +58,7 @@ pub(crate) fn update_statement_to_plan(update: ast::Statement) -> SqlResult<spec
     let mut input_tables = vec![table];
     input_tables.extend(from);
 
-    let plan = join_plan_from_tables(input_tables)?;
+    let plan = from_ast_tables(input_tables)?;
     let plan = query_plan_with_filter(plan, selection)?;
 
     let node = spec::CommandNode::Update {
