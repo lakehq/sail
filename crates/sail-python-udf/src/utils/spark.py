@@ -409,7 +409,9 @@ class PySparkTableUdf:
         fields = [schema.field(i) for i in range(len(schema.names))]
         self._output_converter = StructConverter(pa.struct(fields))
 
-    def __call__(self, args: list[pa.Array]) -> pa.RecordBatch:
+    def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
+        [args] = list(args)
+        args = args.to_struct_array().flatten()
         outputs = []
         if len(args) > 0:
             inputs = tuple(x.to_pylist() for x in args)
@@ -419,7 +421,7 @@ class PySparkTableUdf:
         else:
             for out in self._udf(None, ((),)):
                 outputs.extend(out)
-        return pa.RecordBatch.from_struct_array(self._output_converter.from_pyspark(outputs))
+        yield pa.RecordBatch.from_struct_array(self._output_converter.from_pyspark(outputs))
 
 
 class PySparkArrowTableUdf:
@@ -429,7 +431,9 @@ class PySparkArrowTableUdf:
     ):
         self._udf = udf
 
-    def __call__(self, args: list[pa.Array]) -> pa.RecordBatch:
+    def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
+        [args] = list(args)
+        args = args.to_struct_array().flatten()
         inputs = tuple(_array_to_pandas(x) for x in args)
         [(output, _output_type)] = list(self._udf(None, (inputs,)))
-        return pa.RecordBatch.from_pandas(output)
+        yield pa.RecordBatch.from_pandas(output)

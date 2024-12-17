@@ -1,15 +1,21 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Fields, Schema};
 use datafusion_common::{plan_err, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::{expr, AggregateUDF, Expr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{
+    expr, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, Projection, ScalarUDF,
+};
 use sail_common::spec;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
+use sail_python_udf::cereal::pyspark_udtf::PySparkUdtfPayload;
 use sail_python_udf::udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
+use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::logical::MapPartitionsNode;
+use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 pub(super) struct PythonUdf {
@@ -186,5 +192,90 @@ impl PlanResolver<'_> {
                 }))
             }
         }
+    }
+
+    pub(super) fn resolve_python_udtf_plan(
+        &self,
+        function: PythonUdtf,
+        name: &str,
+        input: LogicalPlan,
+        arguments: Vec<Expr>,
+        argument_names: Vec<String>,
+        deterministic: bool,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let num_arguments = arguments.len();
+        let projections = {
+            let mut out = input
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect::<Vec<_>>();
+            out.extend(arguments);
+            out
+        };
+        let input_field_names = state.get_field_names(input.schema().inner())?;
+        let input_names = {
+            let mut out = input_field_names.clone();
+            out.extend(argument_names);
+            out
+        };
+        let (output_schema, function_output_names) = match &function.return_type {
+            DataType::Struct(fields) => {
+                let mut output_fields = input.schema().fields().iter().cloned().collect::<Vec<_>>();
+                output_fields.extend_from_slice(fields.iter().as_ref());
+                (
+                    Arc::new(Schema::new(Fields::from(output_fields))),
+                    fields
+                        .iter()
+                        .map(|f| state.register_field(f.name()))
+                        .collect::<Vec<_>>(),
+                )
+            }
+            _ => return Err(PlanError::invalid("UDTF output type must be struct")),
+        };
+        let output_names = {
+            let mut out = input_field_names;
+            out.extend(function_output_names);
+            out
+        };
+        let payload = PySparkUdtfPayload::build(
+            &function.python_version,
+            &function.command,
+            function.eval_type,
+            num_arguments,
+            &DataType::Struct(output_schema.fields.clone()),
+            &self.config.spark_udf_config,
+        )?;
+        let kind = match function.eval_type {
+            spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
+            spec::PySparkUdfType::ArrowTable => PySparkUdtfKind::ArrowTable,
+            _ => {
+                return Err(PlanError::invalid(format!(
+                    "PySpark UDTF type: {:?}",
+                    function.eval_type,
+                )))
+            }
+        };
+        let udtf = PySparkUDTF::new(
+            kind,
+            get_udf_name(name, &function.command),
+            payload,
+            num_arguments,
+            output_schema,
+            deterministic,
+        );
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(MapPartitionsNode::try_new(
+                Arc::new(LogicalPlan::Projection(Projection::try_new(
+                    projections,
+                    Arc::new(input),
+                )?)),
+                input_names,
+                output_names,
+                Arc::new(udtf),
+            )?),
+        }))
     }
 }

@@ -4,11 +4,11 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::Result;
 use pyo3::Python;
-use sail_common::udf::MapIterUDF;
+use sail_common::udf::StreamUDF;
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::error::PyUdfResult;
-use crate::stream::PyOutputStream;
+use crate::stream::PyMapStream;
 use crate::utils::spark::PySpark;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -72,7 +72,7 @@ impl PartialOrd for PySparkMapIterUDF {
     }
 }
 
-impl MapIterUDF for PySparkMapIterUDF {
+impl StreamUDF for PySparkMapIterUDF {
     fn name(&self) -> &str {
         &self.name
     }
@@ -92,7 +92,7 @@ impl MapIterUDF for PySparkMapIterUDF {
             };
             Ok(udf.unbind())
         })?;
-        Ok(Box::pin(PyOutputStream::new(
+        Ok(Box::pin(PyMapStream::new(
             input,
             function,
             self.output_schema.clone(),

@@ -10,7 +10,6 @@ use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
 use datafusion::datasource::file_format::{format_as_file_type, FileFormat, FileFormatFactory};
-use datafusion::datasource::function::TableFunction;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
@@ -25,6 +24,7 @@ use datafusion_expr::builder::project;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{ScalarFunction, Sort};
 use datafusion_expr::expr_rewriter::normalize_col;
+use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
@@ -40,15 +40,14 @@ use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
-use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use sail_python_udf::udf::{get_udf_name, ColumnMatch};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
-    CatalogCommand, CatalogCommandNode, CatalogTableFunction, MapPartitionsNode, RangeNode,
-    ShowStringFormat, ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
+    CatalogCommand, CatalogCommandNode, MapPartitionsNode, RangeNode, ShowStringFormat,
+    ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::extension::source::rename::RenameTableProvider;
 use crate::function::{
@@ -56,6 +55,7 @@ use crate::function::{
     is_built_in_generator_function,
 };
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
@@ -383,19 +383,12 @@ impl PlanResolver<'_> {
         Ok(plan)
     }
 
-    pub(super) async fn resolve_optional_query_plan(
-        &self,
-        plan: Option<spec::QueryPlan>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        match plan {
-            Some(x) => self.resolve_query_plan(x, state).await,
-            None => Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
-                // allows literal projection with no input
-                produce_one_row: true,
-                schema: DFSchemaRef::new(DFSchema::empty()),
-            })),
-        }
+    pub(super) fn resolve_empty_query_plan(&self) -> PlanResult<LogicalPlan> {
+        Ok(LogicalPlan::EmptyRelation(plan::EmptyRelation {
+            // allows literal projection with no input
+            produce_one_row: true,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        }))
     }
 
     pub(super) async fn resolve_recursive_query_plan(
@@ -686,35 +679,67 @@ impl PlanResolver<'_> {
             }
         };
         if is_built_in_generator_function(function_name) {
-            let f = spec::Expr::UnresolvedFunction {
+            let expr = spec::Expr::UnresolvedFunction {
                 function_name: function_name.to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
             };
-            self.resolve_query_project(None, vec![f], state).await
+            self.resolve_query_project(None, vec![expr], state).await
         } else {
-            let schema = Arc::new(DFSchema::empty());
-            let arguments = self.resolve_expressions(arguments, &schema, state).await?;
-            let table_function = if let Ok(f) = self.ctx.table_function(function_name) {
-                f
-            } else if let Ok(f) = get_built_in_table_function(function_name) {
-                f
+            let udf = self.ctx.udf(function_name).ok();
+            if let Some(f) = udf
+                .as_ref()
+                .and_then(|x| x.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>())
+            {
+                if f.eval_type().is_table_function() {
+                    let udtf = PythonUdtf {
+                        python_version: f.python_version().to_string(),
+                        eval_type: f.eval_type(),
+                        command: f.command().to_vec(),
+                        return_type: f.output_type().clone(),
+                    };
+                    let input = self.resolve_empty_query_plan()?;
+                    let (argument_names, arguments) = self
+                        .resolve_expressions_and_names(arguments, input.schema(), state)
+                        .await?;
+                    self.resolve_python_udtf_plan(
+                        udtf,
+                        function_name,
+                        input,
+                        arguments,
+                        argument_names,
+                        f.deterministic(),
+                        state,
+                    )
+                } else {
+                    Err(PlanError::invalid(format!(
+                        "user-defined function is not a table function: {function_name}"
+                    )))
+                }
             } else {
-                return Err(PlanError::unsupported(format!(
-                    "unknown table function: {function_name}"
-                )));
-            };
-            let table_provider = table_function.create_table_provider(&arguments)?;
-            let names = state.register_fields(&table_provider.schema());
-            let table_provider = RenameTableProvider::try_new(table_provider, names)?;
-            Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-                function_name,
-                provider_as_source(Arc::new(table_provider)),
-                None,
-                vec![],
-                None,
-            )?))
+                let schema = Arc::new(DFSchema::empty());
+                let arguments = self.resolve_expressions(arguments, &schema, state).await?;
+                let table_function = if let Ok(f) = self.ctx.table_function(function_name) {
+                    f
+                } else if let Ok(f) = get_built_in_table_function(function_name) {
+                    f
+                } else {
+                    return Err(PlanError::unsupported(format!(
+                        "unknown table function: {function_name}"
+                    )));
+                };
+                let table_provider = table_function.create_table_provider(&arguments)?;
+                let names = state.register_fields(&table_provider.schema());
+                let table_provider = RenameTableProvider::try_new(table_provider, names)?;
+                Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                    function_name,
+                    provider_as_source(Arc::new(table_provider)),
+                    None,
+                    vec![],
+                    None,
+                )?))
+            }
         }
     }
 
@@ -771,7 +796,10 @@ impl PlanResolver<'_> {
         expr: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_optional_query_plan(input, state).await?;
+        let input = match input {
+            Some(x) => self.resolve_query_plan(x, state).await?,
+            None => self.resolve_empty_query_plan()?,
+        };
         let schema = input.schema();
         let expr = self.resolve_named_expressions(expr, schema, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
@@ -2178,7 +2206,10 @@ impl PlanResolver<'_> {
         } else {
             expression
         };
-        let input = self.resolve_optional_query_plan(input, state).await?;
+        let input = match input {
+            Some(x) => self.resolve_query_plan(x, state).await?,
+            None => self.resolve_empty_query_plan()?,
+        };
         let schema = input.schema().clone();
         let expr = self
             .resolve_named_expression(expression, &schema, state)
@@ -2222,27 +2253,19 @@ impl PlanResolver<'_> {
             function,
         } = udtf;
         let function = self.resolve_python_udtf(function)?;
-        let schema = Arc::new(DFSchema::empty());
-        let arguments = self.resolve_expressions(arguments, &schema, state).await?;
-        let udtf = PySparkUDTF::try_new(
-            function.python_version,
-            function.eval_type,
-            function.command,
-            function.return_type,
-            self.config.spark_udf_config.clone(),
+        let input = self.resolve_empty_query_plan()?;
+        let (argument_names, arguments) = self
+            .resolve_expressions_and_names(arguments, input.schema(), state)
+            .await?;
+        self.resolve_python_udtf_plan(
+            function,
+            &function_name,
+            input,
+            arguments,
+            argument_names,
             deterministic,
-        )?;
-        let table_function = TableFunction::new(function_name.clone(), Arc::new(udtf));
-        let table_provider = table_function.create_table_provider(&arguments)?;
-        let names = state.register_fields(&table_provider.schema());
-        let table_provider = RenameTableProvider::try_new(table_provider, names)?;
-        Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-            function_name,
-            provider_as_source(Arc::new(table_provider)),
-            None,
-            vec![],
-            None,
-        )?))
+            state,
+        )
     }
 
     async fn resolve_command_show_string(
@@ -2760,8 +2783,6 @@ impl PlanResolver<'_> {
         self.resolve_catalog_command(command)
     }
 
-    // TODO: consolidate duplicated UDF/UDTF code
-
     fn resolve_catalog_register_function(
         &self,
         function: spec::CommonInlineUserDefinedFunction,
@@ -2772,11 +2793,10 @@ impl PlanResolver<'_> {
             arguments: _,
             function,
         } = function;
-        let function_name: &str = function_name.as_str();
 
         let function = self.resolve_python_udf(function)?;
-        let python_udf = PySparkUnresolvedUDF::new(
-            function_name.to_owned(),
+        let udf = PySparkUnresolvedUDF::new(
+            function_name,
             function.python_version,
             function.eval_type,
             function.command,
@@ -2785,7 +2805,7 @@ impl PlanResolver<'_> {
         );
 
         let command = CatalogCommand::RegisterFunction {
-            udf: ScalarUDF::from(python_udf),
+            udf: ScalarUDF::from(udf),
         };
         self.resolve_catalog_command(command)
     }
@@ -2802,17 +2822,18 @@ impl PlanResolver<'_> {
         } = function;
 
         let function = self.resolve_python_udtf(function)?;
-        let udtf = PySparkUDTF::try_new(
+        let udtf = PySparkUnresolvedUDF::new(
+            function_name,
             function.python_version,
             function.eval_type,
             function.command,
             function.return_type,
-            self.config.spark_udf_config.clone(),
             deterministic,
-        )?;
-        let command = CatalogCommand::RegisterTableFunction {
-            name: function_name,
-            udtf: CatalogTableFunction::PySparkUDTF(udtf),
+        );
+        // PySpark UDTF is registered as a scalar UDF since it will be used as a stream UDF
+        // in the `MapPartitions` plan.
+        let command = CatalogCommand::RegisterFunction {
+            udf: ScalarUDF::from(udtf),
         };
         self.resolve_catalog_command(command)
     }
