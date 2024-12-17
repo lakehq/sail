@@ -242,12 +242,8 @@
                       "name": "arrAy",
                       "dataType": {
                         "list": {
-                          "field": {
-                            "name": "item",
-                            "dataType": "float64",
-                            "nullable": true,
-                            "metadata": []
-                          }
+                          "dataType": "float64",
+                          "nullable": true
                         }
                       },
                       "nullable": true,
@@ -257,17 +253,13 @@
                       "name": "anotherArray",
                       "dataType": {
                         "list": {
-                          "field": {
-                            "name": "item",
-                            "dataType": {
-                              "configuredUtf8": {
-                                "length": 9,
-                                "utf8Type": "char"
-                              }
-                            },
-                            "nullable": true,
-                            "metadata": []
-                          }
+                          "dataType": {
+                            "configuredUtf8": {
+                              "length": 9,
+                              "utf8Type": "char"
+                            }
+                          },
+                          "nullable": true
                         }
                       },
                       "nullable": true,

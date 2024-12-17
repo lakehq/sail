@@ -199,20 +199,22 @@ impl PlanFormatter for DefaultPlanFormatter {
                     )),
                 }
             }
-            DataType::List { field }
-            | DataType::FixedSizeList { field, length: _ }
-            | DataType::LargeList { field } => {
-                let spec::Field {
-                    name: _,
-                    data_type,
-                    nullable: _,
-                    metadata: _,
-                } = field.as_ref();
-                Ok(format!(
-                    "array<{}>",
-                    self.data_type_to_simple_string(data_type)?
-                ))
+            DataType::List {
+                data_type,
+                nullable: _,
             }
+            | DataType::FixedSizeList {
+                data_type,
+                nullable: _,
+                length: _,
+            }
+            | DataType::LargeList {
+                data_type,
+                nullable: _,
+            } => Ok(format!(
+                "array<{}>",
+                self.data_type_to_simple_string(data_type)?
+            )),
             DataType::Struct { fields } => {
                 let fields = fields
                     .iter()
@@ -545,8 +547,6 @@ fn format_decimal<T: Display>(value: &T, scale: i8, f: &mut Formatter<'_>) -> st
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use datafusion::arrow::datatypes::i256;
     use sail_common::spec::Literal;
 
@@ -733,12 +733,8 @@ mod tests {
                         spec::Field {
                             name: "foo".to_string(),
                             data_type: spec::DataType::List {
-                                field: Arc::new(spec::Field {
-                                    name: "item".to_string(),
-                                    data_type: spec::DataType::Int64,
-                                    nullable: true,
-                                    metadata: vec![],
-                                })
+                                data_type: Box::new(spec::DataType::Int64),
+                                nullable: true,
                             },
                             nullable: false,
                             metadata: vec![],

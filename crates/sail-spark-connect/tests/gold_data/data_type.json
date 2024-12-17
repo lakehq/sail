@@ -66,12 +66,8 @@
                 "name": "arrAy",
                 "dataType": {
                   "list": {
-                    "field": {
-                      "name": "item",
-                      "dataType": "float64",
-                      "nullable": true,
-                      "metadata": []
-                    }
+                    "dataType": "float64",
+                    "nullable": true
                   }
                 },
                 "nullable": true,
@@ -81,17 +77,13 @@
                 "name": "anotherArray",
                 "dataType": {
                   "list": {
-                    "field": {
-                      "name": "item",
-                      "dataType": {
-                        "configuredUtf8": {
-                          "length": 9,
-                          "utf8Type": "char"
-                        }
-                      },
-                      "nullable": true,
-                      "metadata": []
-                    }
+                    "dataType": {
+                      "configuredUtf8": {
+                        "length": 9,
+                        "utf8Type": "char"
+                      }
+                    },
+                    "nullable": true
                   }
                 },
                 "nullable": true,
@@ -107,19 +99,15 @@
       "output": {
         "success": {
           "list": {
-            "field": {
-              "name": "item",
-              "dataType": {
-                "map": {
-                  "keyType": "int32",
-                  "valueType": "int8",
-                  "valueTypeNullable": true,
-                  "keysSorted": false
-                }
-              },
-              "nullable": true,
-              "metadata": []
-            }
+            "dataType": {
+              "map": {
+                "keyType": "int32",
+                "valueType": "int8",
+                "valueTypeNullable": true,
+                "keysSorted": false
+              }
+            },
+            "nullable": true
           }
         }
       }
@@ -254,12 +242,8 @@
             "keyType": "int32",
             "valueType": {
               "list": {
-                "field": {
-                  "name": "item",
-                  "dataType": "float64",
-                  "nullable": true,
-                  "metadata": []
-                }
+                "dataType": "float64",
+                "nullable": true
               }
             },
             "valueTypeNullable": true,
@@ -362,12 +346,8 @@
       "output": {
         "success": {
           "list": {
-            "field": {
-              "name": "item",
-              "dataType": "float64",
-              "nullable": true,
-              "metadata": []
-            }
+            "dataType": "float64",
+            "nullable": true
           }
         }
       }
@@ -377,23 +357,19 @@
       "output": {
         "success": {
           "list": {
-            "field": {
-              "name": "item",
-              "dataType": {
-                "struct": {
-                  "fields": [
-                    {
-                      "name": "tinYint",
-                      "dataType": "int8",
-                      "nullable": true,
-                      "metadata": []
-                    }
-                  ]
-                }
-              },
-              "nullable": true,
-              "metadata": []
-            }
+            "dataType": {
+              "struct": {
+                "fields": [
+                  {
+                    "name": "tinYint",
+                    "dataType": "int8",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              }
+            },
+            "nullable": true
           }
         }
       }

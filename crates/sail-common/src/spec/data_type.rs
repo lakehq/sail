@@ -129,19 +129,22 @@ pub enum DataType {
     /// A single List array can store up to [`i32::MAX`] elements in total.
     /// Corresponds to [`datafusion::arrow::datatypes::DataType::List`].
     List {
-        field: FieldRef,
+        data_type: Box<DataType>,
+        nullable: bool,
     },
     /// A list of some logical data type with fixed length.
     /// Corresponds to [`datafusion::arrow::datatypes::DataType::FixedSizeList`].
     FixedSizeList {
-        field: FieldRef,
+        data_type: Box<DataType>,
+        nullable: bool,
         length: i32,
     },
     /// A list of some logical data type with variable length and 64-bit offsets.
     /// A single LargeList array can store up to [`i64::MAX`] elements in total.
     /// Corresponds to [`datafusion::arrow::datatypes::DataType::LargeList`].
     LargeList {
-        field: FieldRef,
+        data_type: Box<DataType>,
+        nullable: bool,
     },
     /// A nested datatype that contains a number of sub-fields.
     /// Corresponds to [`datafusion::arrow::datatypes::DataType::Struct`].

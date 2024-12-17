@@ -82,16 +82,48 @@ impl PlanResolver<'_> {
             DataType::Utf8 => Ok(adt::DataType::Utf8),
             DataType::LargeUtf8 => Ok(adt::DataType::LargeUtf8),
             DataType::Utf8View => Ok(adt::DataType::Utf8View),
-            DataType::List { field } => {
-                Ok(adt::DataType::List(Arc::new(self.resolve_field(field)?)))
+            DataType::List {
+                data_type,
+                nullable,
+            } => {
+                let field = spec::Field {
+                    name: "item".to_string(),
+                    data_type: data_type.as_ref().clone(),
+                    nullable: *nullable,
+                    metadata: vec![],
+                };
+                Ok(adt::DataType::List(Arc::new(self.resolve_field(&field)?)))
             }
-            DataType::FixedSizeList { field, length } => Ok(adt::DataType::FixedSizeList(
-                Arc::new(self.resolve_field(field)?),
-                *length,
-            )),
-            DataType::LargeList { field } => Ok(adt::DataType::LargeList(Arc::new(
-                self.resolve_field(field)?,
-            ))),
+            DataType::FixedSizeList {
+                data_type,
+                nullable,
+                length,
+            } => {
+                let field = spec::Field {
+                    name: "item".to_string(),
+                    data_type: data_type.as_ref().clone(),
+                    nullable: *nullable,
+                    metadata: vec![],
+                };
+                Ok(adt::DataType::FixedSizeList(
+                    Arc::new(self.resolve_field(&field)?),
+                    *length,
+                ))
+            }
+            DataType::LargeList {
+                data_type,
+                nullable,
+            } => {
+                let field = spec::Field {
+                    name: "item".to_string(),
+                    data_type: data_type.as_ref().clone(),
+                    nullable: *nullable,
+                    metadata: vec![],
+                };
+                Ok(adt::DataType::LargeList(Arc::new(
+                    self.resolve_field(&field)?,
+                )))
+            }
             DataType::Struct { fields } => Ok(adt::DataType::Struct(self.resolve_fields(fields)?)),
             DataType::Union {
                 union_fields,
@@ -213,16 +245,28 @@ impl PlanResolver<'_> {
             adt::DataType::Utf8 => Ok(DataType::Utf8),
             adt::DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
             adt::DataType::Utf8View => Ok(DataType::Utf8View),
-            adt::DataType::List(field) => Ok(DataType::List {
-                field: Arc::new(Self::unresolve_field(field)?),
-            }),
-            adt::DataType::FixedSizeList(field, i32) => Ok(DataType::FixedSizeList {
-                field: Arc::new(Self::unresolve_field(field)?),
-                length: *i32,
-            }),
-            adt::DataType::LargeList(field) => Ok(DataType::LargeList {
-                field: Arc::new(Self::unresolve_field(field)?),
-            }),
+            adt::DataType::List(field) => {
+                let field = Self::unresolve_field(field)?;
+                Ok(DataType::List {
+                    data_type: Box::new(field.data_type),
+                    nullable: field.nullable,
+                })
+            }
+            adt::DataType::FixedSizeList(field, i32) => {
+                let field = Self::unresolve_field(field)?;
+                Ok(DataType::FixedSizeList {
+                    data_type: Box::new(field.data_type),
+                    nullable: field.nullable,
+                    length: *i32,
+                })
+            }
+            adt::DataType::LargeList(field) => {
+                let field = Self::unresolve_field(field)?;
+                Ok(DataType::LargeList {
+                    data_type: Box::new(field.data_type),
+                    nullable: field.nullable,
+                })
+            }
             adt::DataType::Struct(fields) => Ok(DataType::Struct {
                 fields: Self::unresolve_fields(fields)?,
             }),

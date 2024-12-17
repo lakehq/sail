@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use datafusion::arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
 use sqlparser::ast;
@@ -230,14 +228,9 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
             match def {
                 ArrayElemTypeDef::AngleBracket(inner) => {
                     let inner = from_ast_data_type(inner)?;
-                    let field = spec::Field {
-                        name: "item".to_string(),
-                        data_type: inner,
-                        nullable: true,
-                        metadata: vec![],
-                    };
                     Ok(spec::DataType::List {
-                        field: Arc::new(field),
+                        data_type: Box::new(inner),
+                        nullable: true,
                     })
                 }
                 ArrayElemTypeDef::SquareBracket(_, _)

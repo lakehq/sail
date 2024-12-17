@@ -189,14 +189,9 @@ impl TryFrom<DataType> for spec::DataType {
                     type_variation_reference: _,
                 } = *array;
                 let element_type = element_type.required("array element type")?;
-                let field = spec::Field {
-                    name: "item".to_string(),
-                    data_type: spec::DataType::try_from(*element_type)?,
-                    nullable: contains_null,
-                    metadata: vec![],
-                };
                 Ok(spec::DataType::List {
-                    field: Arc::new(field),
+                    data_type: Box::new(spec::DataType::try_from(*element_type)?),
+                    nullable: contains_null,
                 })
             }
             Kind::Struct(sdt::Struct {
@@ -395,18 +390,12 @@ impl TryFrom<spec::DataType> for DataType {
                     "TryFrom spec::DataType::Duration(Second | Millisecond | Nanosecond) to Spark Kind",
                 ))
             }
-            spec::DataType::List { field }
-            | spec::DataType::FixedSizeList{ field, length: _ }
-            | spec::DataType::LargeList { field } => {
-                let spec::Field {
-                    name: _,
-                    data_type,
-                    nullable,
-                    metadata: _,
-                } = field.as_ref();
+            spec::DataType::List { data_type, nullable }
+            | spec::DataType::FixedSizeList{  data_type, nullable, length: _ }
+            | spec::DataType::LargeList {  data_type, nullable } => {
                 Ok(Kind::Array(Box::new(sdt::Array {
-                    element_type: Some(Box::new(data_type.clone().try_into()?)),
-                    contains_null: *nullable,
+                    element_type: Some(Box::new((*data_type).try_into()?)),
+                    contains_null: nullable,
                     type_variation_reference: 0,
                 })))
             }
