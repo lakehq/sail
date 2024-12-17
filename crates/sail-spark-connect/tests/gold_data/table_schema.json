@@ -33,8 +33,7 @@
               "name": "!@#$%.^&*()",
               "dataType": {
                 "configuredUtf8": {
-                  "length": null,
-                  "utf8Type": null
+                  "utf8Type": "configured"
                 }
               },
               "nullable": true,
@@ -227,12 +226,15 @@
                           },
                           "valueType": {
                             "configuredUtf8": {
-                              "length": 10,
-                              "utf8Type": "varChar"
+                              "utf8Type": {
+                                "varChar": {
+                                  "length": 10
+                                }
+                              }
                             }
                           },
                           "valueTypeNullable": true,
-                          "keysAreSorted": false
+                          "keysSorted": false
                         }
                       },
                       "nullable": true,
@@ -242,12 +244,8 @@
                       "name": "arrAy",
                       "dataType": {
                         "list": {
-                          "field": {
-                            "name": "item",
-                            "dataType": "float64",
-                            "nullable": true,
-                            "metadata": []
-                          }
+                          "dataType": "float64",
+                          "nullable": true
                         }
                       },
                       "nullable": true,
@@ -257,17 +255,16 @@
                       "name": "anotherArray",
                       "dataType": {
                         "list": {
-                          "field": {
-                            "name": "item",
-                            "dataType": {
-                              "configuredUtf8": {
-                                "length": 9,
-                                "utf8Type": "char"
+                          "dataType": {
+                            "configuredUtf8": {
+                              "utf8Type": {
+                                "char": {
+                                  "length": 9
+                                }
                               }
-                            },
-                            "nullable": true,
-                            "metadata": []
-                          }
+                            }
+                          },
+                          "nullable": true
                         }
                       },
                       "nullable": true,

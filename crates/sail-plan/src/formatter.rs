@@ -71,31 +71,25 @@ impl PlanFormatter for DefaultPlanFormatter {
             DataType::UInt16 => Ok("unsigned smallint".to_string()),
             DataType::UInt32 => Ok("unsigned int".to_string()),
             DataType::UInt64 => Ok("unsigned bigint".to_string()),
-            DataType::Float16 => Ok("half-float".to_string()),
+            DataType::Float16 => Ok("half_float".to_string()),
             DataType::Float32 => Ok("float".to_string()),
             DataType::Float64 => Ok("double".to_string()),
             DataType::Decimal128 { precision, scale }
             | DataType::Decimal256 { precision, scale } => {
-                Ok(format!("decimal({},{})", precision, scale))
+                Ok(format!("decimal({precision},{scale})"))
             }
             DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
             | DataType::ConfiguredUtf8 {
-                length: None,
-                utf8_type: None,
+                utf8_type: spec::Utf8Type::Configured,
             } => Ok("string".to_string()),
-            DataType::ConfiguredUtf8 { length, utf8_type } => {
-                let length =
-                    length.ok_or(PlanError::invalid("Length required for Char and Varchar."))?;
-                let utf8_type = utf8_type.ok_or(PlanError::invalid(
-                    "Can only specify length for Char and Varchar.",
-                ))?;
-                match utf8_type {
-                    spec::ConfiguredUtf8Type::Char => Ok(format!("char({})", length)),
-                    spec::ConfiguredUtf8Type::VarChar => Ok(format!("varchar({})", length)),
-                }
-            }
+            DataType::ConfiguredUtf8 {
+                utf8_type: spec::Utf8Type::VarChar { length },
+            } => Ok(format!("varchar({length})")),
+            DataType::ConfiguredUtf8 {
+                utf8_type: spec::Utf8Type::Char { length },
+            } => Ok(format!("char({length})")),
             DataType::Date32 => Ok("date".to_string()),
             DataType::Date64 => Ok("date64".to_string()),
             DataType::Time32 { time_unit } => Ok(format!(
@@ -199,20 +193,22 @@ impl PlanFormatter for DefaultPlanFormatter {
                     )),
                 }
             }
-            DataType::List { field }
-            | DataType::FixedSizeList { field, length: _ }
-            | DataType::LargeList { field } => {
-                let spec::Field {
-                    name: _,
-                    data_type,
-                    nullable: _,
-                    metadata: _,
-                } = field.as_ref();
-                Ok(format!(
-                    "array<{}>",
-                    self.data_type_to_simple_string(data_type)?
-                ))
+            DataType::List {
+                data_type,
+                nullable: _,
             }
+            | DataType::FixedSizeList {
+                data_type,
+                nullable: _,
+                length: _,
+            }
+            | DataType::LargeList {
+                data_type,
+                nullable: _,
+            } => Ok(format!(
+                "array<{}>",
+                self.data_type_to_simple_string(data_type)?
+            )),
             DataType::Struct { fields } => {
                 let fields = fields
                     .iter()
@@ -230,7 +226,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 key_type,
                 value_type,
                 value_type_nullable: _,
-                keys_are_sorted: _,
+                keys_sorted: _,
             } => Ok(format!(
                 "map<{},{}>",
                 self.data_type_to_simple_string(key_type.as_ref())?,
@@ -265,7 +261,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 .iter()
                 .map(|x| self.literal_to_string(x))
                 .collect::<PlanResult<Vec<String>>>()?;
-            Ok(format!("{}({})", name, values.join(", ")))
+            Ok(format!("{name}({})", values.join(", ")))
         };
 
         match literal {
@@ -325,19 +321,18 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let milliseconds = (*microseconds % 1_000_000) / 1_000;
                 let microseconds = *microseconds % 1_000;
                 Ok(format!(
-                    "INTERVAL {} YEAR {} MONTH {} DAY {} HOUR {} MINUTE {} SECOND {} MILLISECOND {} MICROSECOND",
-                    years, months, days, hours, minutes, seconds, milliseconds, microseconds
+                    "INTERVAL {years} YEAR {months} MONTH {days} DAY {hours} HOUR {minutes} MINUTE {seconds} SECOND {milliseconds} MILLISECOND {microseconds} MICROSECOND"
                 ))
             }
             Literal::YearMonthInterval { months } => {
                 if *months < 0 {
                     let years = *months / -12;
                     let months = -(*months % -12);
-                    Ok(format!("INTERVAL '-{}-{}' YEAR TO MONTH", years, months))
+                    Ok(format!("INTERVAL '-{years}-{months}' YEAR TO MONTH"))
                 } else {
                     let years = *months / 12;
                     let months = *months % 12;
-                    Ok(format!("INTERVAL '{}-{}' YEAR TO MONTH", years, months))
+                    Ok(format!("INTERVAL '{years}-{months}' YEAR TO MONTH"))
                 }
             }
             Literal::DayTimeInterval { microseconds } => {
@@ -348,8 +343,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                     let seconds = (*microseconds % -60_000_000) / -1_000_000;
                     let microseconds = -(*microseconds % -1_000_000);
                     Ok(format!(
-                        "INTERVAL '-{} {:02}:{:02}:{:02}.{:06}' DAY TO SECOND",
-                        days, hours, minutes, seconds, microseconds
+                        "INTERVAL '-{days} {hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}' DAY TO SECOND"
                     ))
                 } else {
                     let days = *microseconds / 86_400_000_000;
@@ -358,8 +352,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                     let seconds = (*microseconds % 60_000_000) / 1_000_000;
                     let microseconds = *microseconds % 1_000_000;
                     Ok(format!(
-                        "INTERVAL '{} {:02}:{:02}:{:02}.{:06}' DAY TO SECOND",
-                        days, hours, minutes, seconds, microseconds
+                        "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}' DAY TO SECOND",
                     ))
                 }
             }
@@ -367,7 +360,7 @@ impl PlanFormatter for DefaultPlanFormatter {
             Literal::Map { keys, values, .. } => {
                 let k = literal_list_to_string("array", keys)?;
                 let v = literal_list_to_string("array", values)?;
-                Ok(format!("map({}, {})", k, v))
+                Ok(format!("map({k}, {v})"))
             }
             Literal::Struct {
                 struct_type,
@@ -400,13 +393,13 @@ impl PlanFormatter for DefaultPlanFormatter {
         is_distinct: bool,
     ) -> PlanResult<String> {
         match name.to_lowercase().as_str() {
-            "!" | "~" => Ok(format!("({} {})", name, arguments.one()?)),
+            "!" | "~" => Ok(format!("({name} {})", arguments.one()?)),
             "+" | "-" => {
                 if arguments.len() < 2 {
-                    Ok(format!("({} {})", name, arguments.one()?))
+                    Ok(format!("({name} {})", arguments.one()?))
                 } else {
                     let (left, right) = arguments.two()?;
-                    Ok(format!("({} {} {})", left, name, right))
+                    Ok(format!("({left} {name} {right})"))
                 }
             }
             "==" => {
@@ -415,18 +408,18 @@ impl PlanFormatter for DefaultPlanFormatter {
             }
             "&" | "^" | "|" | "*" | "/" | "%" | "!=" | "<" | "<=" | "<=>" | "=" | ">" | ">=" => {
                 let (left, right) = arguments.two()?;
-                Ok(format!("({} {} {})", left, name, right))
+                Ok(format!("({left} {name} {right})"))
             }
             "and" | "or" => {
                 let (left, right) = arguments.two()?;
-                Ok(format!("({} {} {})", left, name.to_uppercase(), right))
+                Ok(format!("({left} {} {right})", name.to_uppercase()))
             }
             "not" => Ok(format!("(NOT {})", arguments.one()?)),
             "isnull" => Ok(format!("({} IS NULL)", arguments.one()?)),
             "isnotnull" => Ok(format!("({} IS NOT NULL)", arguments.one()?)),
             "in" => {
                 let (value, list) = arguments.at_least_one()?;
-                Ok(format!("({} IN ({}))", value, list.join(", ")))
+                Ok(format!("({value} IN ({}))", list.join(", ")))
             }
             "case" | "when" => {
                 let mut result = String::from("CASE");
@@ -525,7 +518,7 @@ impl Display for Decimal256Display<'_> {
 }
 
 fn format_decimal<T: Display>(value: &T, scale: i8, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let s = format!("{}", value);
+    let s = format!("{value}");
     let start = if s.starts_with('-') {
         write!(f, "-")?;
         1
@@ -545,8 +538,6 @@ fn format_decimal<T: Display>(value: &T, scale: i8, f: &mut Formatter<'_>) -> st
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use datafusion::arrow::datatypes::i256;
     use sail_common::spec::Literal;
 
@@ -733,12 +724,8 @@ mod tests {
                         spec::Field {
                             name: "foo".to_string(),
                             data_type: spec::DataType::List {
-                                field: Arc::new(spec::Field {
-                                    name: "item".to_string(),
-                                    data_type: spec::DataType::Int64,
-                                    nullable: true,
-                                    metadata: vec![],
-                                })
+                                data_type: Box::new(spec::DataType::Int64),
+                                nullable: true,
                             },
                             nullable: false,
                             metadata: vec![],

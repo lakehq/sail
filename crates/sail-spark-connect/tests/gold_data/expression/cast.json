@@ -15,12 +15,8 @@
             },
             "castToType": {
               "list": {
-                "field": {
-                  "name": "item",
-                  "dataType": "int32",
-                  "nullable": true,
-                  "metadata": []
-                }
+                "dataType": "int32",
+                "nullable": true
               }
             }
           }

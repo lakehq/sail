@@ -322,8 +322,7 @@
                     "name": "b",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -377,8 +376,7 @@
                     "name": "part",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -434,8 +432,7 @@
                     "name": "part",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -507,8 +504,7 @@
                     "name": "part",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -564,8 +560,7 @@
                     "name": "part",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -628,8 +623,7 @@
                     "name": "part",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -692,8 +686,7 @@
                     "name": "part",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -772,8 +765,7 @@
                     "name": "part",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -836,8 +828,7 @@
                     "name": "part",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -897,8 +888,7 @@
                     "name": "part",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -990,8 +980,7 @@
                     "name": "part",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -1044,8 +1033,7 @@
                     "name": "b",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -1224,8 +1212,7 @@
                     "name": "b",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": false,
@@ -1285,8 +1272,7 @@
                     "name": "b",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": false,
@@ -1350,8 +1336,7 @@
                     "name": "b",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": false,
@@ -1411,8 +1396,7 @@
                     "name": "b",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": false,
@@ -1544,8 +1528,7 @@
                     "name": "b",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -1599,8 +1582,7 @@
                     "name": "b",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,
@@ -1654,8 +1636,7 @@
                     "name": "b",
                     "dataType": {
                       "configuredUtf8": {
-                        "length": null,
-                        "utf8Type": null
+                        "utf8Type": "configured"
                       }
                     },
                     "nullable": true,

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use datafusion::arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
 use sqlparser::ast;
@@ -119,19 +117,20 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         }
         ast::DataType::Char(n) | ast::DataType::Character(n) => {
             Ok(spec::DataType::ConfiguredUtf8 {
-                length: Some(from_ast_char_length(n)?),
-                utf8_type: Some(spec::ConfiguredUtf8Type::Char),
+                utf8_type: spec::Utf8Type::Char {
+                    length: from_ast_char_length(n)?,
+                },
             })
         }
         ast::DataType::Varchar(n)
         | ast::DataType::CharVarying(n)
         | ast::DataType::CharacterVarying(n) => Ok(spec::DataType::ConfiguredUtf8 {
-            length: Some(from_ast_char_length(n)?),
-            utf8_type: Some(spec::ConfiguredUtf8Type::VarChar),
+            utf8_type: spec::Utf8Type::VarChar {
+                length: from_ast_char_length(n)?,
+            },
         }),
         ast::DataType::String(_) => Ok(spec::DataType::ConfiguredUtf8 {
-            length: None,
-            utf8_type: None,
+            utf8_type: spec::Utf8Type::Configured,
         }),
         ast::DataType::Text => Ok(spec::DataType::LargeUtf8),
         ast::DataType::Timestamp(precision, tz_info) => {
@@ -230,14 +229,9 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
             match def {
                 ArrayElemTypeDef::AngleBracket(inner) => {
                     let inner = from_ast_data_type(inner)?;
-                    let field = spec::Field {
-                        name: "item".to_string(),
-                        data_type: inner,
-                        nullable: true,
-                        metadata: vec![],
-                    };
                     Ok(spec::DataType::List {
-                        field: Arc::new(field),
+                        data_type: Box::new(inner),
+                        nullable: true,
                     })
                 }
                 ArrayElemTypeDef::SquareBracket(_, _)
@@ -277,7 +271,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                 key_type: Box::new(key),
                 value_type: Box::new(value),
                 value_type_nullable: true,
-                keys_are_sorted: false,
+                keys_sorted: false,
             })
         }
         ast::DataType::Int2(_)
