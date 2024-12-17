@@ -20,3 +20,12 @@ pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, Function
         ("stack", F::unknown("stack")),
     ]
 }
+
+pub fn get_outer_built_in_generator_functions(name: &str) -> &str {
+    match name.to_lowercase().as_str() {
+        "explode" => "explode_outer",
+        "inline" => "inline_outer",
+        "posexplode" => "posexplode_outer",
+        _ => name,
+    }
+}

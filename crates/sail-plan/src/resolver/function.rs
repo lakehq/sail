@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{plan_err, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{expr, AggregateUDF, Expr, ExprSchemable, ScalarUDF};
 use sail_common::spec;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
@@ -38,8 +38,11 @@ impl PlanResolver<'_> {
                 command,
                 python_version,
             } => (output_type, eval_type, command, python_version),
-            _ => {
-                return Err(PlanError::invalid("UDF function type must be Python UDF"));
+            spec::FunctionDefinition::ScalarScalaUdf { .. } => {
+                return Err(PlanError::todo("Scala UDF is not supported yet"));
+            }
+            spec::FunctionDefinition::JavaUdf { class_name, .. } => {
+                return plan_err!("Can not load class {class_name}")?;
             }
         };
         let output_type = self.resolve_data_type(&output_type)?;
