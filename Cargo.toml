@@ -90,7 +90,6 @@ datafusion-functions-nested = "43.0.0"
 datafusion-functions-json = "0.43.0"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.22.0", features = ["auto-initialize", "serde"] }
-# Should be the equivalent of enabling the pyarrow feature in datafusion since we already have pyo3 in the workspace
 arrow-flight = { version = "53.1.0" }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
