@@ -277,7 +277,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
                 key_type: Box::new(key),
                 value_type: Box::new(value),
                 value_type_nullable: true,
-                keys_are_sorted: false,
+                keys_sorted: false,
             })
         }
         ast::DataType::Int2(_)

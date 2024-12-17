@@ -56,7 +56,7 @@
                       }
                     },
                     "valueTypeNullable": true,
-                    "keysAreSorted": false
+                    "keysSorted": false
                   }
                 },
                 "nullable": true,
@@ -114,7 +114,7 @@
                   "keyType": "int32",
                   "valueType": "int8",
                   "valueTypeNullable": true,
-                  "keysAreSorted": false
+                  "keysSorted": false
                 }
               },
               "nullable": true,
@@ -212,7 +212,7 @@
               }
             },
             "valueTypeNullable": true,
-            "keysAreSorted": false
+            "keysSorted": false
           }
         }
       }
@@ -241,7 +241,7 @@
               }
             },
             "valueTypeNullable": true,
-            "keysAreSorted": false
+            "keysSorted": false
           }
         }
       }
@@ -263,7 +263,7 @@
               }
             },
             "valueTypeNullable": true,
-            "keysAreSorted": false
+            "keysSorted": false
           }
         }
       }

@@ -123,7 +123,7 @@ impl PlanResolver<'_> {
                 key_type,
                 value_type,
                 value_type_nullable,
-                keys_are_sorted,
+                keys_sorted,
             } => {
                 let fields = spec::Fields::from(vec![
                     spec::Field {
@@ -145,7 +145,7 @@ impl PlanResolver<'_> {
                         adt::DataType::Struct(self.resolve_fields(&fields)?),
                         false,
                     )),
-                    *keys_are_sorted,
+                    *keys_sorted,
                 ))
             }
             DataType::ConfiguredUtf8 {
@@ -263,7 +263,7 @@ impl PlanResolver<'_> {
                     key_type: Box::new(fields[0].data_type.clone()),
                     value_type: Box::new(fields[1].data_type.clone()),
                     value_type_nullable: fields[1].nullable,
-                    keys_are_sorted: *keys_are_sorted,
+                    keys_sorted: *keys_are_sorted,
                 })
             }
             adt::DataType::ListView(_) => {

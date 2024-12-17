@@ -224,7 +224,7 @@ impl TryFrom<DataType> for spec::DataType {
                     key_type: Box::new(spec::DataType::try_from(*key_type)?),
                     value_type: Box::new(spec::DataType::try_from(*value_type)?),
                     value_type_nullable: value_contains_null,
-                    keys_are_sorted: false,
+                    keys_sorted: false,
                 })
             }
             Kind::Udt(udt) => {
@@ -421,7 +421,7 @@ impl TryFrom<spec::DataType> for DataType {
                 key_type,
                 value_type,
                 value_type_nullable,
-                keys_are_sorted: _,
+                keys_sorted: _,
             } => Ok(Kind::Map(Box::new(sdt::Map {
                 key_type: Some(Box::new((*key_type).try_into()?)),
                 value_type: Some(Box::new((*value_type).try_into()?)),

@@ -180,7 +180,7 @@ pub enum DataType {
         key_type: Box<DataType>,
         value_type: Box<DataType>,
         value_type_nullable: bool,
-        keys_are_sorted: bool,
+        keys_sorted: bool,
     },
     ///
     /// Everything below this line is not part of the Arrow specification.

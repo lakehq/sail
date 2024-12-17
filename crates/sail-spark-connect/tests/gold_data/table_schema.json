@@ -232,7 +232,7 @@
                             }
                           },
                           "valueTypeNullable": true,
-                          "keysAreSorted": false
+                          "keysSorted": false
                         }
                       },
                       "nullable": true,

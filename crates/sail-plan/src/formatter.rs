@@ -230,7 +230,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 key_type,
                 value_type,
                 value_type_nullable: _,
-                keys_are_sorted: _,
+                keys_sorted: _,
             } => Ok(format!(
                 "map<{},{}>",
                 self.data_type_to_simple_string(key_type.as_ref())?,
