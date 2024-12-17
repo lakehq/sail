@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::spec;
 
+/// See [`spec::DataType`] for details on datatypes
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Literal {
