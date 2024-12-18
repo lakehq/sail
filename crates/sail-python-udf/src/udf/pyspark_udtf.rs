@@ -37,6 +37,8 @@ pub struct PySparkUDTF {
     /// execution plan, followed by the columns of the UDTF output.
     output_schema: SchemaRef,
     deterministic: bool,
+    timezone: String,
+    safe_check: bool,
 }
 
 #[derive(PartialEq, PartialOrd)]
@@ -46,6 +48,8 @@ struct PySparkUDTFOrd<'a> {
     payload: &'a [u8],
     argument_types: &'a [DataType],
     deterministic: &'a bool,
+    timezone: &'a str,
+    safe_check: bool,
 }
 
 impl<'a> From<&'a PySparkUDTF> for PySparkUDTFOrd<'a> {
@@ -56,6 +60,8 @@ impl<'a> From<&'a PySparkUDTF> for PySparkUDTFOrd<'a> {
             payload: &udtf.payload,
             argument_types: &udtf.argument_types,
             deterministic: &udtf.deterministic,
+            timezone: &udtf.timezone,
+            safe_check: udtf.safe_check,
         }
     }
 }
@@ -74,6 +80,8 @@ impl PySparkUDTF {
         argument_types: Vec<DataType>,
         output_schema: SchemaRef,
         deterministic: bool,
+        timezone: String,
+        safe_check: bool,
     ) -> Self {
         Self {
             kind,
@@ -82,6 +90,8 @@ impl PySparkUDTF {
             argument_types,
             output_schema,
             deterministic,
+            timezone,
+            safe_check,
         }
     }
 }
@@ -108,7 +118,13 @@ impl StreamUDF for PySparkUDTF {
                 PySparkUdtfKind::Table => {
                     PySpark::table_udf(py, udtf, &self.argument_types, &self.output_schema)?
                 }
-                PySparkUdtfKind::ArrowTable => PySpark::arrow_table_udf(py, udtf)?,
+                PySparkUdtfKind::ArrowTable => PySpark::arrow_table_udf(
+                    py,
+                    udtf,
+                    &self.output_schema,
+                    &self.timezone,
+                    self.safe_check,
+                )?,
             };
             Ok(udtf.unbind())
         })?;

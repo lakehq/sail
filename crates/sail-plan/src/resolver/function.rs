@@ -276,6 +276,10 @@ impl PlanResolver<'_> {
             argument_types,
             output_schema,
             deterministic,
+            self.config.spark_udf_config.timezone.clone(),
+            self.config
+                .spark_udf_config
+                .pandas_convert_to_arrow_array_safely,
         );
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(MapPartitionsNode::try_new(

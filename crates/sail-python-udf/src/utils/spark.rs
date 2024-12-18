@@ -171,11 +171,17 @@ impl PySpark {
         )
     }
 
-    pub fn arrow_table_udf(py: Python, udf: PyObject) -> PyResult<Bound<PyAny>> {
+    pub fn arrow_table_udf<'py>(
+        py: Python<'py>,
+        udf: PyObject,
+        output_schema: &SchemaRef,
+        timezone: &str,
+        safe_check: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkArrowTableUdf"),
-            (udf,),
+            (udf, output_schema.try_to_py(py)?, timezone, safe_check),
         )
     }
 }

@@ -7,6 +7,7 @@ from typing import Any, Callable, Iterator, Union
 
 import pandas as pd
 import pyarrow as pa
+from pyspark.sql.pandas.serializers import ArrowStreamPandasUDTFSerializer
 from pyspark.sql.pandas.types import _create_converter_from_pandas, _create_converter_to_pandas, from_arrow_type
 from pyspark.sql.types import Row
 
@@ -42,8 +43,8 @@ else:
 
 class Converter:
     """
-    A converter that converts between Python data and Arrow data.
-    When matching Python data to the Arrow data type, invalid data is converted to null.
+    A converter that converts between PySpark data and Arrow data.
+    When matching PySpark data to the Arrow data type, invalid data is converted to null.
     This is the similar behavior in the Scala implementation of PySpark UDF [1].
 
     * [1] `org.apache.spark.sql.execution.python.EvaluatePython#makeFromJava`
@@ -98,6 +99,120 @@ def _get_converter(t: pa.DataType) -> Converter:
         return StructConverter(t)
     msg = f"unsupported data type: {t}"
     raise ValueError(msg)
+
+
+def _raise_for_row(data: Any):
+    if isinstance(data, Row):
+        # Simulate the exception when the JVM receives an invalid row for the data type.
+        msg = "net.razorvine.pickle.PickleException: expected zero arguments for construction of ClassDict (for pyspark.sql.types._create_row)."
+        raise TypeError(msg)
+
+
+class PrimitiveConverter(Converter):
+    def __init__(self, data_type: pa.DataType):
+        super().__init__(data_type)
+        self._spark_data_type = from_arrow_type(data_type)
+
+    def to_pyspark(self, array: pa.Array) -> list[Any]:
+        return [None if x is None else self._spark_data_type.fromInternal(x) for x in array.to_pylist()]
+
+    def from_pyspark(self, data: list[Any]) -> pa.Array:
+        return pa.array(
+            [None if x is None else self._from_python_primitive(self._spark_data_type.fromInternal(x)) for x in data],
+            type=self._data_type,
+        )
+
+    def _from_python_primitive(self, data: Any) -> Any:
+        raise NotImplementedError
+
+
+class NullConverter(PrimitiveConverter):
+    def _from_python_primitive(self, data: Any) -> Any:
+        _raise_for_row(data)
+        return None
+
+
+class BooleanConverter(PrimitiveConverter):
+    def _from_python_primitive(self, data: Any) -> Any:
+        _raise_for_row(data)
+        if isinstance(data, bool):
+            return data
+        return None
+
+
+class IntegerConverter(PrimitiveConverter):
+    def __init__(self, data_type: pa.DataType, ctype: Any):
+        super().__init__(data_type)
+        self._ctype = ctype
+
+    def _from_python_primitive(self, data: Any) -> Any:
+        _raise_for_row(data)
+        if isinstance(data, int):
+            return self._ctype(data).value
+        return None
+
+
+class FloatConverter(PrimitiveConverter):
+    def _from_python_primitive(self, data: Any) -> Any:
+        _raise_for_row(data)
+        if isinstance(data, float):
+            return data
+        return None
+
+
+class DecimalConverter(PrimitiveConverter):
+    def _from_python_primitive(self, data: Any) -> Any:
+        _raise_for_row(data)
+        if isinstance(data, decimal.Decimal):
+            return data
+        return None
+
+
+def _to_string(data: Any) -> str | None:
+    """Converts data to string where the behavior is similar to the Java `Object.toString()` method."""
+    _raise_for_row(data)
+    if data is None:
+        return None
+    if isinstance(data, str):
+        return data
+    if isinstance(data, bool):
+        return "true" if data else "false"
+    if isinstance(data, (list, tuple)):
+        items = ", ".join(_to_string(x) for x in data)
+        return f"[{items}]"
+    if isinstance(data, dict):
+        items = ", ".join(f"{_to_string(k)}={_to_string(v)}" for k, v in data.items())
+        return f"{{{items}}}"
+    return str(data)
+
+
+class StringConverter(Converter):
+    def to_pyspark(self, array: pa.Array) -> list[Any]:
+        return array.to_pylist()
+
+    def from_pyspark(self, data: list[Any]) -> pa.Array:
+        return pa.array([_to_string(x) for x in data], type=self._data_type)
+
+
+def _to_bytes(data: Any) -> bytes | None:
+    _raise_for_row(data)
+    if data is None:
+        return None
+    if isinstance(data, str):
+        return data.encode("utf-8")
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, bytearray):
+        return bytes(data)
+    return None
+
+
+class BinaryConverter(Converter):
+    def to_pyspark(self, array: pa.Array) -> list[Any]:
+        return [None if x is None else bytearray(x) for x in array.to_pylist()]
+
+    def from_pyspark(self, data: list[Any]) -> pa.Array:
+        return pa.array([_to_bytes(x) for x in data], type=self._data_type)
 
 
 class ArrayConverter(Converter):
@@ -216,120 +331,6 @@ class StructConverter(Converter):
         )
 
 
-def _raise_for_row(data: Any):
-    if isinstance(data, Row):
-        # Simulate the exception when the JVM receives an invalid row for the data type.
-        msg = "net.razorvine.pickle.PickleException: expected zero arguments for construction of ClassDict (for pyspark.sql.types._create_row)."
-        raise TypeError(msg)
-
-
-def _to_string(data: Any) -> str | None:
-    """Converts data to string where the behavior is similar to the Java `Object.toString()` method."""
-    _raise_for_row(data)
-    if data is None:
-        return None
-    if isinstance(data, str):
-        return data
-    if isinstance(data, bool):
-        return "true" if data else "false"
-    if isinstance(data, (list, tuple)):
-        items = ", ".join(_to_string(x) for x in data)
-        return f"[{items}]"
-    if isinstance(data, dict):
-        items = ", ".join(f"{_to_string(k)}={_to_string(v)}" for k, v in data.items())
-        return f"{{{items}}}"
-    return str(data)
-
-
-class StringConverter(Converter):
-    def to_pyspark(self, array: pa.Array) -> list[Any]:
-        return array.to_pylist()
-
-    def from_pyspark(self, data: list[Any]) -> pa.Array:
-        return pa.array([_to_string(x) for x in data], type=self._data_type)
-
-
-def _to_bytes(data: Any) -> bytes | None:
-    _raise_for_row(data)
-    if data is None:
-        return None
-    if isinstance(data, str):
-        return data.encode("utf-8")
-    if isinstance(data, bytes):
-        return data
-    if isinstance(data, bytearray):
-        return bytes(data)
-    return None
-
-
-class BinaryConverter(Converter):
-    def to_pyspark(self, array: pa.Array) -> list[Any]:
-        return [None if x is None else bytearray(x) for x in array.to_pylist()]
-
-    def from_pyspark(self, data: list[Any]) -> pa.Array:
-        return pa.array([_to_bytes(x) for x in data], type=self._data_type)
-
-
-class PrimitiveConverter(Converter):
-    def __init__(self, data_type: pa.DataType):
-        super().__init__(data_type)
-        self._spark_data_type = from_arrow_type(data_type)
-
-    def to_pyspark(self, array: pa.Array) -> list[Any]:
-        return [None if x is None else self._spark_data_type.fromInternal(x) for x in array.to_pylist()]
-
-    def from_pyspark(self, data: list[Any]) -> pa.Array:
-        return pa.array(
-            [None if x is None else self._from_python_primitive(self._spark_data_type.fromInternal(x)) for x in data],
-            type=self._data_type,
-        )
-
-    def _from_python_primitive(self, data: Any) -> Any:
-        raise NotImplementedError
-
-
-class NullConverter(PrimitiveConverter):
-    def _from_python_primitive(self, data: Any) -> Any:
-        _raise_for_row(data)
-        return None
-
-
-class BooleanConverter(PrimitiveConverter):
-    def _from_python_primitive(self, data: Any) -> Any:
-        _raise_for_row(data)
-        if isinstance(data, bool):
-            return data
-        return None
-
-
-class IntegerConverter(PrimitiveConverter):
-    def __init__(self, data_type: pa.DataType, ctype: Any):
-        super().__init__(data_type)
-        self._ctype = ctype
-
-    def _from_python_primitive(self, data: Any) -> Any:
-        _raise_for_row(data)
-        if isinstance(data, int):
-            return self._ctype(data).value
-        return None
-
-
-class FloatConverter(PrimitiveConverter):
-    def _from_python_primitive(self, data: Any) -> Any:
-        _raise_for_row(data)
-        if isinstance(data, float):
-            return data
-        return None
-
-
-class DecimalConverter(PrimitiveConverter):
-    def _from_python_primitive(self, data: Any) -> Any:
-        _raise_for_row(data)
-        if isinstance(data, decimal.Decimal):
-            return data
-        return None
-
-
 ARROW_TO_PANDAS_NULLABLE_TYPES = {
     pa.int8(): pd.Int8Dtype(),
     pa.int16(): pd.Int16Dtype(),
@@ -425,7 +426,7 @@ class PySparkGroupAggUdf:
         return pa.array(output, type=self._output_type, from_pandas=True)
 
 
-def _pandas_to_record_batch(df: pd.DataFrame, schema: pa.Schema, column_match_by_name: bool) -> pa.RecordBatch:  # noqa: FBT001
+def _pandas_to_record_batch(df: pd.DataFrame, schema: pa.Schema, *, column_match_by_name: bool) -> pa.RecordBatch:
     if len(df) > 0:
         if not column_match_by_name or all(not isinstance(x, str) for x in df.columns):
             df = df[df.columns[: len(schema.names)]]
@@ -453,7 +454,7 @@ class PySparkGroupMapUdf:
         for x, name in zip(inputs, self._input_names):
             x.name = name
         [[(output, _output_type)]] = list(self._udf(None, (inputs,)))
-        return _pandas_to_record_batch(output, self._output_schema, self._column_match_by_name)
+        return _pandas_to_record_batch(output, self._output_schema, column_match_by_name=self._column_match_by_name)
 
 
 class PySparkCoGroupMapUdf:
@@ -470,7 +471,7 @@ class PySparkCoGroupMapUdf:
     def __call__(self, left: pa.RecordBatch, right: pa.RecordBatch) -> pa.RecordBatch:
         args = (self._convert_input(left), self._convert_input(right))
         [[(output, _output_type)]] = list(self._udf(None, (args,)))
-        return _pandas_to_record_batch(output, self._output_schema, self._column_match_by_name)
+        return _pandas_to_record_batch(output, self._output_schema, column_match_by_name=self._column_match_by_name)
 
     @staticmethod
     def _convert_input(batch: pa.RecordBatch) -> list[pd.Series]:
@@ -497,7 +498,7 @@ class PySparkMapPandasIterUdf:
         return batch.to_pandas(split_blocks=True)
 
     def _convert_output(self, df: pd.DataFrame) -> pa.RecordBatch:
-        return _pandas_to_record_batch(df, self._output_schema, True)
+        return _pandas_to_record_batch(df, self._output_schema, column_match_by_name=True)
 
 
 class PySparkMapArrowIterUdf:
@@ -527,30 +528,37 @@ class PySparkTableUdf:
         )
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
-        [args] = list(args)
-        args = args.to_struct_array().flatten()
-        outputs = []
-        if len(args) > 0:
-            inputs = tuple(c.to_pyspark(a) for a, c in zip(args, self._input_converters))
-            for x in zip(*inputs):
-                for out in self._udf(None, (x,)):
+        for batch in args:
+            arrays = batch.to_struct_array().flatten()
+            outputs = []
+            if len(arrays) > 0:
+                inputs = tuple(c.to_pyspark(a) for a, c in zip(arrays, self._input_converters))
+                for x in zip(*inputs):
+                    for out in self._udf(None, (x,)):
+                        outputs.extend(out)
+            else:
+                for out in self._udf(None, ((),)):
                     outputs.extend(out)
-        else:
-            for out in self._udf(None, ((),)):
-                outputs.extend(out)
-        yield pa.RecordBatch.from_struct_array(self._output_converter.from_pyspark(outputs))
+            yield pa.RecordBatch.from_struct_array(self._output_converter.from_pyspark(outputs))
 
 
 class PySparkArrowTableUdf:
     def __init__(
         self,
         udf: Callable[..., Iterator[pa.RecordBatch]],
+        output_schema: pa.Schema,
+        timezone: str,
+        safe_check: bool,  # noqa: FBT001
     ):
         self._udf = udf
+        self._output_schema = output_schema
+        self._output_type = pa.struct([output_schema.field(i) for i in range(len(output_schema.names))])
+        self._serializer = ArrowStreamPandasUDTFSerializer(timezone=timezone, safecheck=safe_check)
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
-        [args] = list(args)
-        args = args.to_struct_array().flatten()
-        inputs = tuple(_array_to_pandas(x) for x in args)
-        [(output, _output_type)] = list(self._udf(None, (inputs,)))
-        yield pa.RecordBatch.from_pandas(output)
+        for batch in args:
+            arrays = batch.to_struct_array().flatten()
+            inputs = tuple(self._serializer.arrow_to_pandas(x) for x in arrays)
+            for output, _output_type in self._udf(None, (inputs,)):
+                array = self._serializer._create_struct_array(output, self._output_type)  # noqa: SLF001
+                yield pa.RecordBatch.from_struct_array(array)

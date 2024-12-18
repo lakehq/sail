@@ -9,6 +9,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
+use datafusion_common::arrow::array::RecordBatchOptions;
 use datafusion_common::{internal_datafusion_err, Result};
 use sail_common::udf::StreamUDF;
 use sail_common::utils::rename_physical_plan;
@@ -110,9 +111,10 @@ impl ExecutionPlan for MapPartitionsExec {
         let schema = self.schema().clone();
         let output = output.map(move |x| {
             x.and_then(|batch| {
-                Ok(RecordBatch::try_new(
+                Ok(RecordBatch::try_new_with_options(
                     schema.clone(),
                     batch.columns().to_vec(),
+                    &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
                 )?)
             })
         });
