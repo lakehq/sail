@@ -1,20 +1,19 @@
 from __future__ import annotations
 
+import ctypes
+import decimal
 import itertools
 from typing import Any, Callable, Iterator, Union
 
 import pandas as pd
 import pyarrow as pa
 from pyspark.sql.pandas.types import _create_converter_from_pandas, _create_converter_to_pandas, from_arrow_type
+from pyspark.sql.types import Row
 
-try:
+_PYARROW_HAS_VIEW_TYPES = all(hasattr(pa, x) for x in ("list_view", "large_list_view", "string_view", "binary_view"))
+
+if _PYARROW_HAS_VIEW_TYPES:
     _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType)
-    _PyArrowListType = Union[pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType]
-except AttributeError:
-    _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType)
-    _PyArrowListType = Union[pa.ListType, pa.LargeListType, pa.FixedSizeListType]
-
-try:
     _PYARROW_LIST_ARRAY_TYPES = (
         pa.ListArray,
         pa.LargeListArray,
@@ -22,21 +21,34 @@ try:
         pa.ListViewArray,
         pa.LargeListViewArray,
     )
-except AttributeError:
+    _PyArrowListType = Union[pa.ListType, pa.LargeListType, pa.FixedSizeListType, pa.ListViewType, pa.LargeListViewType]
+
+    def _pyarrow_is_string(t: pa.DataType) -> bool:
+        return pa.types.is_string(t) or pa.types.is_large_string(t) or pa.types.is_string_view(t)
+
+    def _pyarrow_is_binary(t: pa.DataType) -> bool:
+        return pa.types.is_binary(t) or pa.types.is_large_binary(t) or pa.types.is_binary_view(t)
+else:
+    _PYARROW_LIST_TYPES = (pa.ListType, pa.LargeListType, pa.FixedSizeListType)
     _PYARROW_LIST_ARRAY_TYPES = (pa.ListArray, pa.LargeListArray, pa.FixedSizeListArray)
+    _PyArrowListType = Union[pa.ListType, pa.LargeListType, pa.FixedSizeListType]
 
-try:
-    _PYARROW_STRING_TYPE_INSTANCES = (pa.string(), pa.large_string(), pa.string_view())
-except AttributeError:
-    _PYARROW_STRING_TYPE_INSTANCES = (pa.string(), pa.large_string())
+    def _pyarrow_is_string(t: pa.DataType) -> bool:
+        return pa.types.is_string(t) or pa.types.is_large_string(t)
 
-try:
-    _PYARROW_BINARY_TYPE_INSTANCES = (pa.binary(), pa.large_binary(), pa.binary_view())
-except AttributeError:
-    _PYARROW_BINARY_TYPE_INSTANCES = (pa.binary(), pa.large_binary())
+    def _pyarrow_is_binary(t: pa.DataType) -> bool:
+        return pa.types.is_binary(t) or pa.types.is_large_binary(t)
 
 
 class Converter:
+    """
+    A converter that converts between Python data and Arrow data.
+    When matching Python data to the Arrow data type, invalid data is converted to null.
+    This is the similar behavior in the Scala implementation of PySpark UDF [1].
+
+    * [1] `org.apache.spark.sql.execution.python.EvaluatePython#makeFromJava`
+    """
+
     def __init__(self, data_type: pa.DataType):
         self._data_type = data_type
 
@@ -47,19 +59,45 @@ class Converter:
         raise NotImplementedError
 
 
-def _get_converter(data_type: pa.DataType) -> Converter:
-    if isinstance(data_type, _PYARROW_LIST_TYPES):
-        return ArrayConverter(data_type)
-    elif isinstance(data_type, pa.MapType):  # noqa: RET505
-        return MapConverter(data_type)
-    elif isinstance(data_type, pa.StructType):
-        return StructConverter(data_type)
-    elif any(data_type.equals(x) for x in _PYARROW_STRING_TYPE_INSTANCES):
-        return StringConverter(data_type)
-    elif any(data_type.equals(x) for x in _PYARROW_BINARY_TYPE_INSTANCES):
-        return BinaryConverter(data_type)
-    else:
-        return PrimitiveConverter(data_type)
+def _get_converter(t: pa.DataType) -> Converter:
+    if pa.types.is_null(t):
+        return NullConverter(t)
+    if pa.types.is_boolean(t):
+        return BooleanConverter(t)
+    if pa.types.is_int8(t):
+        return IntegerConverter(t, ctypes.c_int8)
+    if pa.types.is_int16(t):
+        return IntegerConverter(t, ctypes.c_int16)
+    if pa.types.is_int32(t):
+        return IntegerConverter(t, ctypes.c_int32)
+    if pa.types.is_int64(t):
+        return IntegerConverter(t, ctypes.c_int64)
+    if pa.types.is_uint8(t):
+        return IntegerConverter(t, ctypes.c_uint8)
+    if pa.types.is_uint16(t):
+        return IntegerConverter(t, ctypes.c_uint16)
+    if pa.types.is_uint32(t):
+        return IntegerConverter(t, ctypes.c_uint32)
+    if pa.types.is_uint64(t):
+        return IntegerConverter(t, ctypes.c_uint64)
+    if pa.types.is_floating(t):
+        return FloatConverter(t)
+    if pa.types.is_decimal(t):
+        return DecimalConverter(t)
+    if pa.types.is_time(t) or pa.types.is_timestamp(t) or pa.types.is_date(t) or pa.types.is_duration(t):
+        return IntegerConverter(t, ctypes.c_int64)
+    if _pyarrow_is_string(t):
+        return StringConverter(t)
+    if _pyarrow_is_binary(t):
+        return BinaryConverter(t)
+    if isinstance(t, _PYARROW_LIST_TYPES):
+        return ArrayConverter(t)
+    if isinstance(t, pa.MapType):
+        return MapConverter(t)
+    if isinstance(t, pa.StructType):
+        return StructConverter(t)
+    msg = f"unsupported data type: {t}"
+    raise ValueError(msg)
 
 
 class ArrayConverter(Converter):
@@ -84,15 +122,17 @@ class ArrayConverter(Converter):
         return result
 
     def from_pyspark(self, data: list[Any]) -> pa.Array:
-        (values, offsets) = [], [0]
+        (values, offsets) = [], []
         end = 0
         for x in data:
-            if x is None:
+            _raise_for_row(x)
+            if x is None or not isinstance(x, (list, tuple)):
                 offsets.append(None)
             else:
+                offsets.append(end)
                 values.extend(x)
                 end += len(x)
-                offsets.append(end)
+        offsets.append(end)
         return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), self._value_converter.from_pyspark(values))
 
 
@@ -120,16 +160,18 @@ class MapConverter(Converter):
         return result
 
     def from_pyspark(self, data: list[Any]) -> pa.Array:
-        (keys, values, offsets) = [], [], [0]
+        (keys, values, offsets) = [], [], []
         end = 0
         for x in data:
-            if x is None:
+            _raise_for_row(x)
+            if x is None or not isinstance(x, dict):
                 offsets.append(None)
             else:
+                offsets.append(end)
                 keys.extend(x.keys())
                 values.extend(x.values())
                 end += len(x)
-                offsets.append(end)
+        offsets.append(end)
         return pa.MapArray.from_arrays(
             pa.array(offsets, type=pa.int32()),
             self._key_converter.from_pyspark(keys),
@@ -174,12 +216,50 @@ class StructConverter(Converter):
         )
 
 
+def _raise_for_row(data: Any):
+    if isinstance(data, Row):
+        # Simulate the exception when the JVM receives an invalid row for the data type.
+        msg = "net.razorvine.pickle.PickleException: expected zero arguments for construction of ClassDict (for pyspark.sql.types._create_row)."
+        raise TypeError(msg)
+
+
+def _to_string(data: Any) -> str | None:
+    """Converts data to string where the behavior is similar to the Java `Object.toString()` method."""
+    _raise_for_row(data)
+    if data is None:
+        return None
+    if isinstance(data, str):
+        return data
+    if isinstance(data, bool):
+        return "true" if data else "false"
+    if isinstance(data, (list, tuple)):
+        items = ", ".join(_to_string(x) for x in data)
+        return f"[{items}]"
+    if isinstance(data, dict):
+        items = ", ".join(f"{_to_string(k)}={_to_string(v)}" for k, v in data.items())
+        return f"{{{items}}}"
+    return str(data)
+
+
 class StringConverter(Converter):
     def to_pyspark(self, array: pa.Array) -> list[Any]:
         return array.to_pylist()
 
     def from_pyspark(self, data: list[Any]) -> pa.Array:
-        return pa.array([None if x is None else str(x) for x in data], type=self._data_type)
+        return pa.array([_to_string(x) for x in data], type=self._data_type)
+
+
+def _to_bytes(data: Any) -> bytes | None:
+    _raise_for_row(data)
+    if data is None:
+        return None
+    if isinstance(data, str):
+        return data.encode("utf-8")
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, bytearray):
+        return bytes(data)
+    return None
 
 
 class BinaryConverter(Converter):
@@ -187,18 +267,7 @@ class BinaryConverter(Converter):
         return [None if x is None else bytearray(x) for x in array.to_pylist()]
 
     def from_pyspark(self, data: list[Any]) -> pa.Array:
-        return pa.array([None if x is None else self._to_bytes(x) for x in data], type=self._data_type)
-
-    @staticmethod
-    def _to_bytes(data: Any) -> bytes | None:
-        if isinstance(data, str):
-            return data.encode("utf-8")
-        elif isinstance(data, bytes):  # noqa: RET505
-            return data
-        elif isinstance(data, bytearray):
-            return bytes(data)
-        else:
-            return None
+        return pa.array([_to_bytes(x) for x in data], type=self._data_type)
 
 
 class PrimitiveConverter(Converter):
@@ -211,8 +280,54 @@ class PrimitiveConverter(Converter):
 
     def from_pyspark(self, data: list[Any]) -> pa.Array:
         return pa.array(
-            [None if x is None else self._spark_data_type.fromInternal(x) for x in data], type=self._data_type
+            [None if x is None else self._from_python_primitive(self._spark_data_type.fromInternal(x)) for x in data],
+            type=self._data_type,
         )
+
+    def _from_python_primitive(self, data: Any) -> Any:
+        raise NotImplementedError
+
+
+class NullConverter(PrimitiveConverter):
+    def _from_python_primitive(self, data: Any) -> Any:
+        _raise_for_row(data)
+        return None
+
+
+class BooleanConverter(PrimitiveConverter):
+    def _from_python_primitive(self, data: Any) -> Any:
+        _raise_for_row(data)
+        if isinstance(data, bool):
+            return data
+        return None
+
+
+class IntegerConverter(PrimitiveConverter):
+    def __init__(self, data_type: pa.DataType, ctype: Any):
+        super().__init__(data_type)
+        self._ctype = ctype
+
+    def _from_python_primitive(self, data: Any) -> Any:
+        _raise_for_row(data)
+        if isinstance(data, int):
+            return self._ctype(data).value
+        return None
+
+
+class FloatConverter(PrimitiveConverter):
+    def _from_python_primitive(self, data: Any) -> Any:
+        _raise_for_row(data)
+        if isinstance(data, float):
+            return data
+        return None
+
+
+class DecimalConverter(PrimitiveConverter):
+    def _from_python_primitive(self, data: Any) -> Any:
+        _raise_for_row(data)
+        if isinstance(data, decimal.Decimal):
+            return data
+        return None
 
 
 ARROW_TO_PANDAS_NULLABLE_TYPES = {
@@ -317,8 +432,7 @@ def _pandas_to_record_batch(df: pd.DataFrame, schema: pa.Schema, column_match_by
             # An exception will be raised if the number of columns does not match the number of fields in the schema.
             df.columns = schema.names
         return pa.RecordBatch.from_pandas(df, schema=schema)
-    else:  # noqa: RET505
-        return pa.RecordBatch.from_pylist([], schema=schema)
+    return pa.RecordBatch.from_pylist([], schema=schema)
 
 
 class PySparkGroupMapUdf:
@@ -402,19 +516,22 @@ class PySparkTableUdf:
     def __init__(
         self,
         udf: Callable[..., Any],
-        schema: pa.Schema,
+        input_types: list[pa.DataType],
+        output_schema: pa.Schema,
     ):
         self._udf = udf
-        self._schema = schema
-        fields = [schema.field(i) for i in range(len(schema.names))]
-        self._output_converter = StructConverter(pa.struct(fields))
+        self._output_schema = output_schema
+        self._input_converters = [_get_converter(t) for t in input_types]
+        self._output_converter = StructConverter(
+            pa.struct([output_schema.field(i) for i in range(len(output_schema.names))])
+        )
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         [args] = list(args)
         args = args.to_struct_array().flatten()
         outputs = []
         if len(args) > 0:
-            inputs = tuple(x.to_pylist() for x in args)
+            inputs = tuple(c.to_pyspark(a) for a, c in zip(args, self._input_converters))
             for x in zip(*inputs):
                 for out in self._udf(None, (x,)):
                     outputs.extend(out)

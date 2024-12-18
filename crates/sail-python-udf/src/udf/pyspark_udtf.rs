@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
@@ -27,12 +27,12 @@ pub struct PySparkUDTF {
     kind: PySparkUdtfKind,
     name: String,
     payload: Vec<u8>,
-    /// The number of UDTF arguments.
+    /// The data types of UDTF arguments.
     /// The UDTF accepts input batch which contains columns of the input execution plan,
     /// followed by columns corresponding to the UDTF arguments.
     /// The output batch contains columns of the input execution plan, followed by columns
     /// corresponding to the UDTF output.
-    num_args: usize,
+    argument_types: Vec<DataType>,
     /// The output schema of the UDTF output stream, consisting of the columns of the input
     /// execution plan, followed by the columns of the UDTF output.
     output_schema: SchemaRef,
@@ -44,7 +44,7 @@ struct PySparkUDTFOrd<'a> {
     kind: PySparkUdtfKind,
     name: &'a str,
     payload: &'a [u8],
-    num_args: usize,
+    argument_types: &'a [DataType],
     deterministic: &'a bool,
 }
 
@@ -54,7 +54,7 @@ impl<'a> From<&'a PySparkUDTF> for PySparkUDTFOrd<'a> {
             kind: udtf.kind,
             name: &udtf.name,
             payload: &udtf.payload,
-            num_args: udtf.num_args,
+            argument_types: &udtf.argument_types,
             deterministic: &udtf.deterministic,
         }
     }
@@ -71,7 +71,7 @@ impl PySparkUDTF {
         kind: PySparkUdtfKind,
         name: String,
         payload: Vec<u8>,
-        num_args: usize,
+        argument_types: Vec<DataType>,
         output_schema: SchemaRef,
         deterministic: bool,
     ) -> Self {
@@ -79,7 +79,7 @@ impl PySparkUDTF {
             kind,
             name,
             payload,
-            num_args,
+            argument_types,
             output_schema,
             deterministic,
         }
@@ -105,7 +105,9 @@ impl StreamUDF for PySparkUDTF {
         let function = Python::with_gil(|py| -> PyUdfResult<_> {
             let udtf = PySparkUdtfPayload::load(py, &self.payload)?;
             let udtf = match self.kind {
-                PySparkUdtfKind::Table => PySpark::table_udf(py, udtf, &self.output_schema)?,
+                PySparkUdtfKind::Table => {
+                    PySpark::table_udf(py, udtf, &self.argument_types, &self.output_schema)?
+                }
                 PySparkUdtfKind::ArrowTable => PySpark::arrow_table_udf(py, udtf)?,
             };
             Ok(udtf.unbind())

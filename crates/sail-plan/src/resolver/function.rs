@@ -205,6 +205,11 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let num_arguments = arguments.len();
+        let input_schema = input.schema();
+        let argument_types = arguments
+            .iter()
+            .map(|arg| arg.get_type(input_schema))
+            .collect::<Result<Vec<_>, _>>()?;
         let projections = {
             let mut out = input
                 .schema()
@@ -215,7 +220,7 @@ impl PlanResolver<'_> {
             out.extend(arguments);
             out
         };
-        let input_field_names = state.get_field_names(input.schema().inner())?;
+        let input_field_names = state.get_field_names(input_schema.inner())?;
         let input_names = {
             let mut out = input_field_names.clone();
             out.extend(argument_names);
@@ -223,7 +228,7 @@ impl PlanResolver<'_> {
         };
         let (output_schema, function_output_names) = match &function.return_type {
             DataType::Struct(fields) => {
-                let mut output_fields = input.schema().fields().iter().cloned().collect::<Vec<_>>();
+                let mut output_fields = input_schema.fields().iter().cloned().collect::<Vec<_>>();
                 output_fields.extend_from_slice(fields.iter().as_ref());
                 (
                     Arc::new(Schema::new(Fields::from(output_fields))),
@@ -233,7 +238,13 @@ impl PlanResolver<'_> {
                         .collect::<Vec<_>>(),
                 )
             }
-            _ => return Err(PlanError::invalid("UDTF output type must be struct")),
+            _ => {
+                // The PySpark unit test expects the exact error message here.
+                return Err(PlanError::invalid( format!(
+                    "Invalid Python user-defined table function return type. Expect a struct type, but got {}.",
+                    function.return_type
+                )));
+            }
         };
         let output_names = {
             let mut out = input_field_names;
@@ -260,9 +271,9 @@ impl PlanResolver<'_> {
         };
         let udtf = PySparkUDTF::new(
             kind,
-            get_udf_name(name, &function.command),
+            get_udf_name(name, &payload),
             payload,
-            num_arguments,
+            argument_types,
             output_schema,
             deterministic,
         );

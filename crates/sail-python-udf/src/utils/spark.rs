@@ -157,12 +157,17 @@ impl PySpark {
     pub fn table_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
-        schema: &SchemaRef,
+        input_types: &[DataType],
+        output_schema: &SchemaRef,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkTableUdf"),
-            (udf, schema.try_to_py(py)?),
+            (
+                udf,
+                input_types.try_to_py(py)?,
+                output_schema.try_to_py(py)?,
+            ),
         )
     }
 
