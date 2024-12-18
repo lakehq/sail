@@ -143,8 +143,8 @@ pub enum Literal {
         values: Arc<Vec<Literal>>,
     },
     FixedSizeList {
-        data_type: spec::DataType,
         size: i32,
+        data_type: spec::DataType,
         values: Arc<Vec<Literal>>,
     },
     LargeList {
