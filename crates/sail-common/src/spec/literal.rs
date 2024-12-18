@@ -139,20 +139,20 @@ pub enum Literal {
         value: Option<String>,
     },
     List {
-        data_type: spec::DataType,
+        data_type: Box<spec::DataType>,
         values: Arc<Vec<Literal>>,
     },
     FixedSizeList {
         size: i32,
-        data_type: spec::DataType,
+        data_type: Box<spec::DataType>,
         values: Arc<Vec<Literal>>,
     },
     LargeList {
-        data_type: spec::DataType,
+        data_type: Box<spec::DataType>,
         values: Arc<Vec<Literal>>,
     },
     Struct {
-        data_type: spec::DataType,
+        data_type: Box<spec::DataType>,
         values: Arc<Vec<Literal>>,
     },
     Union {
