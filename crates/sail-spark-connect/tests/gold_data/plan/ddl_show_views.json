@@ -3,43 +3,43 @@
     {
       "input": "SHOW VIEWS",
       "output": {
-        "failure": "not supported: Unsupported statement: SHOW VIEWS"
+        "failure": "not implemented: SQL show views"
       }
     },
     {
       "input": "SHOW VIEWS '*test*'",
       "output": {
-        "failure": "not supported: Unsupported statement: SHOW VIEWS"
+        "failure": "not implemented: SQL show views"
       }
     },
     {
       "input": "SHOW VIEWS FROM testcat.ns1.ns2.tbl",
       "output": {
-        "failure": "not supported: Unsupported statement: SHOW VIEWS FROM testcat ns1 ns2 tbl"
+        "failure": "not implemented: SQL show views"
       }
     },
     {
       "input": "SHOW VIEWS IN ns1 '*test*'",
       "output": {
-        "failure": "not supported: Unsupported statement: SHOW VIEWS IN ns1"
+        "failure": "not implemented: SQL show views"
       }
     },
     {
       "input": "SHOW VIEWS IN ns1 LIKE '*test*'",
       "output": {
-        "failure": "not supported: Unsupported statement: SHOW VIEWS IN ns1 LIKE"
+        "failure": "not implemented: SQL show views"
       }
     },
     {
       "input": "SHOW VIEWS IN testcat.ns1.ns2.tbl",
       "output": {
-        "failure": "not supported: Unsupported statement: SHOW VIEWS IN testcat ns1 ns2 tbl"
+        "failure": "not implemented: SQL show views"
       }
     },
     {
       "input": "SHOW VIEWS LIKE '*test*'",
       "output": {
-        "failure": "not supported: Unsupported statement: SHOW VIEWS LIKE"
+        "failure": "not implemented: SQL show views"
       }
     }
   ]

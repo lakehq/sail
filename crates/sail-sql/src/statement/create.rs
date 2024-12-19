@@ -221,7 +221,7 @@ pub(crate) fn parse_create_statement(parser: &mut Parser) -> SqlResult<Statement
     }
 
     let query: Option<Box<ast::Query>> = if parser.parse_keyword(Keyword::AS) {
-        Some(parser.parse_boxed_query()?)
+        Some(parser.parse_query()?)
     } else {
         None
     };
@@ -282,6 +282,7 @@ pub(crate) fn calc_inline_constraints_from_columns(
                     index_type_display: ast::KeyOrIndexDisplay::None,
                     index_type: None,
                     index_options: vec![],
+                    nulls_distinct: ast::NullsDistinctOption::None,
                 }),
                 ast::ColumnOption::Unique {
                     is_primary: true,
@@ -326,7 +327,10 @@ pub(crate) fn calc_inline_constraints_from_columns(
                 | ast::ColumnOption::Identity(_)
                 | ast::ColumnOption::Ephemeral(_)
                 | ast::ColumnOption::Alias(_)
-                | ast::ColumnOption::OnUpdate(_) => {}
+                | ast::ColumnOption::OnUpdate(_)
+                | ast::ColumnOption::OnConflict(_)
+                | ast::ColumnOption::Policy(_)
+                | ast::ColumnOption::Tags(_) => {}
             }
         }
     }

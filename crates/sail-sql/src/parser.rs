@@ -36,6 +36,7 @@ impl SparkDialect {
         parser.expect_token(&Token::RParen)?;
         Ok(ast::Expr::Function(ast::Function {
             name: ast::ObjectName(vec![ast::Ident::new("current_user")]),
+            uses_odbc_syntax: false,
             parameters: ast::FunctionArguments::None,
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
@@ -78,6 +79,7 @@ impl SparkDialect {
         parser.expect_token(&Token::RParen)?;
         Ok(ast::Expr::Function(ast::Function {
             name: ast::ObjectName(vec![ast::Ident::new("struct")]),
+            uses_odbc_syntax: false,
             parameters: ast::FunctionArguments::None,
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
@@ -99,13 +101,14 @@ impl SparkDialect {
             .is_some()
         {
             parser.prev_token();
-            ast::Expr::Subquery(parser.parse_boxed_query()?)
+            ast::Expr::Subquery(parser.parse_query()?)
         } else {
             parser.parse_expr()?
         };
         parser.expect_token(&Token::RParen)?;
         Ok(ast::Expr::Function(ast::Function {
             name: ast::ObjectName(vec![ast::Ident::new("table")]),
+            uses_odbc_syntax: false,
             parameters: ast::FunctionArguments::None,
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
