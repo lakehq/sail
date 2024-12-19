@@ -63,5 +63,8 @@ pub(crate) fn parse_explain_statement(parser: &mut Parser) -> SqlResult<Statemen
     //      Spark's documentation for each ExplainMode:
     //          https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
     let query = parser.parse_query()?;
-    Ok(Statement::Explain { mode, query })
+    Ok(Statement::Explain {
+        mode,
+        query: *query,
+    })
 }

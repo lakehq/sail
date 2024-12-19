@@ -761,7 +761,7 @@
     {
       "input": "a !< b",
       "output": {
-        "failure": "not supported: unary operator: PGPostfixFactorial"
+        "failure": "invalid argument: sql parser error: No infix parser for token ExclamationMark at Line: 1, Column: 3"
       }
     },
     {
@@ -797,7 +797,7 @@
     {
       "input": "a !> b",
       "output": {
-        "failure": "not supported: unary operator: PGPostfixFactorial"
+        "failure": "invalid argument: sql parser error: No infix parser for token ExclamationMark at Line: 1, Column: 3"
       }
     },
     {

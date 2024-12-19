@@ -1,6 +1,6 @@
 use sail_common::spec;
 use sqlparser::parser::Parser;
-use sqlparser::tokenizer::{Token, TokenWithLocation, Word};
+use sqlparser::tokenizer::{Token, TokenWithSpan, Word};
 use sqlparser::{ast, keywords};
 
 use crate::error::{SqlError, SqlResult};
@@ -126,7 +126,7 @@ pub fn parse_normalized_identifier(parser: &mut Parser) -> SqlResult<spec::Ident
     let next_token = parser.next_token();
     let ast_ident = match next_token.token {
         Token::Word(word) => {
-            let mut ident = word.to_ident();
+            let mut ident = word.to_ident(next_token.span);
             maybe_append_number_identifier(parser, &mut ident);
             Ok(ident)
         }
@@ -163,7 +163,7 @@ fn maybe_append_number_identifier(parser: &mut Parser, ident: &mut ast::Ident) {
         let token = parser
             .next_token_no_skip()
             .cloned()
-            .unwrap_or(TokenWithLocation::wrap(Token::EOF));
+            .unwrap_or(TokenWithSpan::wrap(Token::EOF));
         match token.token {
             Token::Number(next_number, Some(next_postfix)) => {
                 ident.value.push_str(&next_number);

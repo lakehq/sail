@@ -352,14 +352,14 @@
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(300M) s",
       "exception": "\nTABLESAMPLE(byteLengthLiteral) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(300M) s\n-------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: 300M at Line: 1, Column: 38"
+        "failure": "invalid argument: extra tokens after statement: s"
       }
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s",
       "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON function) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s\n-------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: 3 at Line: 1, Column: 45"
+        "failure": "invalid argument: extra tokens after statement: s"
       }
     },
     {
@@ -1544,7 +1544,7 @@
       "input": "select * from my_tvf(arg1 => table v1)",
       "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_FUNCTION_IDENTIFIER_ARGUMENT_MISSING_PARENTHESES] Invalid SQL syntax: Syntax error: call to table-valued function is invalid because parentheses are missing around the provided TABLE argument `v1`; please surround this with parentheses and try again.(line 1, pos 29)\n\n== SQL ==\nselect * from my_tvf(arg1 => table v1)\n-----------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: (, found: v1 at Line: 1, Column: 36"
+        "failure": "invalid argument: sql parser error: Expected: ), found: => at Line: 1, Column: 27"
       }
     },
     {
@@ -2064,33 +2064,33 @@
     {
       "input": "select * from t tablesample(100 rows)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: 100 at Line: 1, Column: 29"
+        "failure": "not supported: table sample"
       }
     },
     {
       "input": "select * from t tablesample(43 percent) as x",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: 43 at Line: 1, Column: 29"
+        "failure": "invalid argument: extra tokens after statement: as"
       }
     },
     {
       "input": "select * from t tablesample(bucket 11 out of 10) as x",
       "exception": "\nSampling fraction (1.1) must be on interval [0, 1].(line 1, pos 16)\n\n== SQL ==\nselect * from t tablesample(bucket 11 out of 10) as x\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: 11 at Line: 1, Column: 36"
+        "failure": "invalid argument: extra tokens after statement: as"
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10 on x) as x",
       "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON colname) is not supported.(line 1, pos 28)\n\n== SQL ==\nselect * from t tablesample(bucket 4 out of 10 on x) as x\n----------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: 4 at Line: 1, Column: 36"
+        "failure": "invalid argument: extra tokens after statement: as"
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10) as x",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: 4 at Line: 1, Column: 36"
+        "failure": "invalid argument: extra tokens after statement: as"
       }
     },
     {
@@ -2416,13 +2416,13 @@
     {
       "input": "select a, b from db.c where x !< 1",
       "output": {
-        "failure": "not supported: unary operator: PGPostfixFactorial"
+        "failure": "invalid argument: sql parser error: No infix parser for token ExclamationMark at Line: 1, Column: 31"
       }
     },
     {
       "input": "select a, b from db.c where x !> 1",
       "output": {
-        "failure": "not supported: unary operator: PGPostfixFactorial"
+        "failure": "invalid argument: sql parser error: No infix parser for token ExclamationMark at Line: 1, Column: 31"
       }
     },
     {
