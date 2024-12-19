@@ -48,31 +48,19 @@ pub enum Literal {
     },
     TimestampSecond {
         seconds: Option<i64>,
-        timezone: Option<Arc<str>>,
+        timezone_info: spec::TimeZoneInfo,
     },
     TimestampMillisecond {
         milliseconds: Option<i64>,
-        timezone: Option<Arc<str>>,
+        timezone_info: spec::TimeZoneInfo,
     },
     TimestampMicrosecond {
         microseconds: Option<i64>,
-        timezone: Option<Arc<str>>,
+        timezone_info: spec::TimeZoneInfo,
     },
     TimestampNanosecond {
         nanoseconds: Option<i64>,
-        timezone: Option<Arc<str>>,
-    },
-    TimestampNtzSecond {
-        seconds: Option<i64>,
-    },
-    TimestampNtzMillisecond {
-        milliseconds: Option<i64>,
-    },
-    TimestampNtzMicrosecond {
-        microseconds: Option<i64>,
-    },
-    TimestampNtzNanosecond {
-        nanoseconds: Option<i64>,
+        timezone_info: spec::TimeZoneInfo,
     },
     Date32 {
         days: Option<i32>,
@@ -158,10 +146,12 @@ pub enum Literal {
     Union {
         union_fields: spec::UnionFields,
         union_mode: spec::UnionMode,
+        value: Option<(i8, Box<Literal>)>,
     },
     Dictionary {
         key_type: Box<spec::DataType>,
         value_type: Box<spec::DataType>,
+        value: Box<Literal>,
     },
     Decimal128 {
         precision: u8,
