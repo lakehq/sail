@@ -12,7 +12,7 @@ impl TryFrom<Literal> for spec::Literal {
         let Literal { literal_type } = literal;
         let literal_type = literal_type.required("literal type")?;
         let literal = match literal_type {
-            LiteralType::Null(_) => spec::Literal::Null,
+            LiteralType::Null(data_type) => spec::Literal::Null,
             LiteralType::Binary(x) => spec::Literal::Binary(x),
             LiteralType::Boolean(x) => spec::Literal::Boolean(x),
             LiteralType::Byte(x) => spec::Literal::Byte(x as i8),
