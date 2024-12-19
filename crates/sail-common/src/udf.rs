@@ -10,7 +10,7 @@ use crate::impl_dyn_object_traits;
 use crate::object::DynObject;
 
 /// Trait for implementing UDF to map input stream to output stream.
-pub trait MapIterUDF: DynObject + Debug + Send + Sync {
+pub trait StreamUDF: DynObject + Debug + Send + Sync {
     /// The name of the UDF.
     fn name(&self) -> &str;
 
@@ -21,4 +21,4 @@ pub trait MapIterUDF: DynObject + Debug + Send + Sync {
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream>;
 }
 
-impl_dyn_object_traits!(MapIterUDF);
+impl_dyn_object_traits!(StreamUDF);

@@ -34,7 +34,7 @@ impl PyInputStreamState {
 }
 
 #[pyclass]
-pub struct PyInputStream {
+struct PyInputStream {
     state: Arc<tokio::sync::Mutex<PyInputStreamState>>,
     handle: Handle,
 }
@@ -81,7 +81,7 @@ impl PyInputStream {
     }
 }
 
-enum PyOutputStreamState {
+enum PyMapStreamState {
     Running {
         signal: oneshot::Sender<()>,
         python_task: std::thread::JoinHandle<()>,
@@ -89,12 +89,12 @@ enum PyOutputStreamState {
     Stopped,
 }
 
-pub struct PyOutputStream {
+pub struct PyMapStream {
     inner: SendableRecordBatchStream,
-    state: PyOutputStreamState,
+    state: PyMapStreamState,
 }
 
-impl PyOutputStream {
+impl PyMapStream {
     const OUTPUT_CHANNEL_BUFFER: usize = 16;
 
     pub fn new(
@@ -122,7 +122,7 @@ impl PyOutputStream {
                 output_schema,
                 ReceiverStream::new(output_rx),
             )),
-            state: PyOutputStreamState::Running {
+            state: PyMapStreamState::Running {
                 signal: signal_tx,
                 python_task,
             },
@@ -165,11 +165,11 @@ impl PyOutputStream {
     }
 }
 
-impl Drop for PyOutputStream {
+impl Drop for PyMapStream {
     fn drop(&mut self) {
-        let state = std::mem::replace(&mut self.state, PyOutputStreamState::Stopped);
+        let state = std::mem::replace(&mut self.state, PyMapStreamState::Stopped);
         match state {
-            PyOutputStreamState::Running {
+            PyMapStreamState::Running {
                 signal,
                 python_task,
             } => {
@@ -180,12 +180,12 @@ impl Drop for PyOutputStream {
                 // so we have to wait for it to finish.
                 let _ = python_task.join();
             }
-            PyOutputStreamState::Stopped => {}
+            PyMapStreamState::Stopped => {}
         }
     }
 }
 
-impl Stream for PyOutputStream {
+impl Stream for PyMapStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -193,7 +193,7 @@ impl Stream for PyOutputStream {
     }
 }
 
-impl RecordBatchStream for PyOutputStream {
+impl RecordBatchStream for PyMapStream {
     fn schema(&self) -> SchemaRef {
         self.inner.schema()
     }

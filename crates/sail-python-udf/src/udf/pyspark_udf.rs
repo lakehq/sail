@@ -45,7 +45,6 @@ impl PySparkUDF {
         Self {
             signature: Signature::exact(
                 input_types.clone(),
-                // TODO: Check if this is correct. There is also `Volatility::Stable`
                 match deterministic {
                     true => Volatility::Immutable,
                     false => Volatility::Volatile,

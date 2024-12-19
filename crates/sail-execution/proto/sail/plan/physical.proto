@@ -44,9 +44,9 @@ message ExtendedScalarUdf {
   }
 }
 
-message ExtendedMapIterUdf {
-  oneof MapIterUdfKind {
-    PySparkMapIterUdf py_spark = 1;
+message ExtendedStreamUdf {
+  oneof StreamUdfKind {
+    PySparkMapIterUdf py_spark_map_iter = 1;
   }
 }
 
@@ -190,7 +190,7 @@ message SchemaPivotExecNode {
 message MapPartitionsExecNode {
   bytes input = 1;
   repeated string input_names = 2;
-  ExtendedMapIterUdf udf = 3;
+  ExtendedStreamUdf udf = 3;
   bytes schema = 4;
 }
 

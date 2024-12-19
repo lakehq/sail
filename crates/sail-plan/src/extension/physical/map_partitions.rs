@@ -9,8 +9,9 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
+use datafusion_common::arrow::array::RecordBatchOptions;
 use datafusion_common::{internal_datafusion_err, Result};
-use sail_common::udf::MapIterUDF;
+use sail_common::udf::StreamUDF;
 use sail_common::utils::rename_physical_plan;
 use tokio_stream::StreamExt;
 
@@ -20,7 +21,7 @@ use crate::utils::ItemTaker;
 pub struct MapPartitionsExec {
     input: Arc<dyn ExecutionPlan>,
     input_names: Vec<String>,
-    udf: Arc<dyn MapIterUDF>,
+    udf: Arc<dyn StreamUDF>,
     properties: PlanProperties,
 }
 
@@ -28,7 +29,7 @@ impl MapPartitionsExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         input_names: Vec<String>,
-        udf: Arc<dyn MapIterUDF>,
+        udf: Arc<dyn StreamUDF>,
         schema: SchemaRef,
     ) -> Self {
         // The plan output schema can be different from the output schema of the UDF
@@ -54,7 +55,7 @@ impl MapPartitionsExec {
         &self.input_names
     }
 
-    pub fn udf(&self) -> &Arc<dyn MapIterUDF> {
+    pub fn udf(&self) -> &Arc<dyn StreamUDF> {
         &self.udf
     }
 }
@@ -110,9 +111,10 @@ impl ExecutionPlan for MapPartitionsExec {
         let schema = self.schema().clone();
         let output = output.map(move |x| {
             x.and_then(|batch| {
-                Ok(RecordBatch::try_new(
+                Ok(RecordBatch::try_new_with_options(
                     schema.clone(),
                     batch.columns().to_vec(),
+                    &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
                 )?)
             })
         });
