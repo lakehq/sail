@@ -81,6 +81,7 @@ fn from_ast_unary_operator(op: ast::UnaryOperator) -> SqlResult<String> {
         | UnaryOperator::PGPostfixFactorial
         | UnaryOperator::PGPrefixFactorial
         | UnaryOperator::PGAbs => Err(SqlError::unsupported(format!("unary operator: {:?}", op))),
+        UnaryOperator::BangNot => Ok("!".to_string()),
     }
 }
 
@@ -157,7 +158,9 @@ fn from_ast_function_arg(arg: ast::FunctionArg) -> SqlResult<spec::Expr> {
 
     match arg {
         // TODO: Support named argument names.
-        FunctionArg::Unnamed(arg) | FunctionArg::Named { arg, .. } => {
+        FunctionArg::Unnamed(arg)
+        | FunctionArg::Named { arg, .. }
+        | FunctionArg::ExprNamed { arg, .. } => {
             let arg = match arg {
                 FunctionArgExpr::Expr(e) => from_ast_expression(e)?,
                 FunctionArgExpr::QualifiedWildcard(name) => spec::Expr::UnresolvedStar {
@@ -247,6 +250,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         Expr::Identifier(ast::Ident {
             value,
             quote_style: _,
+            span: _,
         }) => Ok(spec::Expr::UnresolvedAttribute {
             name: spec::ObjectName::new_unqualified(value.into()),
             plan_id: None,
@@ -299,10 +303,14 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         }
         Expr::Like {
             negated,
+            any,
             expr,
             pattern,
             escape_char,
         } => {
+            if any {
+                return Err(SqlError::unsupported("LIKE ANY expression"));
+            }
             let mut args = vec![from_ast_expression(*expr)?, from_ast_expression(*pattern)?];
             if let Some(escape_char) = escape_char {
                 args.push(LiteralValue(escape_char).try_into()?);
@@ -315,10 +323,14 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         }
         Expr::ILike {
             negated,
+            any,
             expr,
             pattern,
             escape_char,
         } => {
+            if any {
+                return Err(SqlError::unsupported("ILIKE ANY expression"));
+            }
             let mut args = vec![from_ast_expression(*expr)?, from_ast_expression(*pattern)?];
             if let Some(escape_char) = escape_char {
                 args.push(LiteralValue(escape_char).try_into()?);
@@ -452,6 +464,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         }
         Expr::Function(ast::Function {
             name,
+            uses_odbc_syntax,
             parameters,
             args,
             filter,
@@ -461,6 +474,9 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         }) => {
             use ast::FunctionArguments;
 
+            if uses_odbc_syntax {
+                return Err(SqlError::unsupported("ODBC function syntax"));
+            }
             if !matches!(parameters, FunctionArguments::None) {
                 return Err(SqlError::unsupported("function parameters"));
             }
@@ -574,11 +590,11 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             }))
         }
         Expr::Interval(interval) => from_ast_interval(interval),
-        Expr::Wildcard => Ok(spec::Expr::UnresolvedStar {
+        Expr::Wildcard(_token) => Ok(spec::Expr::UnresolvedStar {
             target: None,
             wildcard_options: Default::default(),
         }),
-        Expr::QualifiedWildcard(name) => Ok(spec::Expr::UnresolvedStar {
+        Expr::QualifiedWildcard(name, _token) => Ok(spec::Expr::UnresolvedStar {
             target: Some(from_ast_object_name(name)?),
             wildcard_options: Default::default(),
         }),
@@ -770,6 +786,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             left,
             compare_op,
             right,
+            is_some: _,
         } => {
             match compare_op {
                 ast::BinaryOperator::Eq => {
@@ -842,7 +859,8 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         | Expr::MatchAgainst { .. }
         | Expr::Dictionary(_)
         | Expr::OuterJoin(_)
-        | Expr::Prior(_) => Err(SqlError::unsupported(format!("expression: {expr:?}"))),
+        | Expr::Prior(_)
+        | Expr::Method(_) => Err(SqlError::unsupported(format!("expression: {expr:?}"))),
     }
 }
 
@@ -892,7 +910,9 @@ pub fn parse_wildcard_expression(sql: &str) -> SqlResult<spec::Expr> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let expr = parser.parse_wildcard_expr()?;
     let expr = match expr {
-        x @ ast::Expr::Wildcard | x @ ast::Expr::QualifiedWildcard(_) => from_ast_expression(x)?,
+        x @ ast::Expr::Wildcard(_) | x @ ast::Expr::QualifiedWildcard(_, _) => {
+            from_ast_expression(x)?
+        }
         x => match parser.parse_optional_alias(RESERVED_FOR_COLUMN_ALIAS)? {
             Some(ast::Ident { value, .. }) => spec::Expr::Alias {
                 expr: Box::new(from_ast_expression(x)?),
@@ -910,7 +930,7 @@ pub fn parse_qualified_wildcard(sql: &str) -> SqlResult<spec::ObjectName> {
     let mut parser = Parser::new(&SparkDialect {}).try_with_sql(sql)?;
     let expr = parser.parse_wildcard_expr()?;
     let name: Vec<String> = match expr {
-        ast::Expr::QualifiedWildcard(name) => name.0.into_iter().map(|x| x.value).collect(),
+        ast::Expr::QualifiedWildcard(name, _token) => name.0.into_iter().map(|x| x.value).collect(),
         _ => {
             return Err(SqlError::invalid(format!(
                 "invalid qualified wildcard: {sql}",

@@ -132,184 +132,19 @@
     {
       "input": "select * from t anti join u as uu on a = b",
       "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "join": {
-                  "left": {
-                    "tableAlias": {
-                      "input": {
-                        "read": {
-                          "namedTable": {
-                            "name": [
-                              "t"
-                            ],
-                            "options": []
-                          },
-                          "isStreaming": false
-                        },
-                        "planId": null,
-                        "sourceInfo": null
-                      },
-                      "name": "anti",
-                      "columns": []
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "right": {
-                    "tableAlias": {
-                      "input": {
-                        "read": {
-                          "namedTable": {
-                            "name": [
-                              "u"
-                            ],
-                            "options": []
-                          },
-                          "isStreaming": false
-                        },
-                        "planId": null,
-                        "sourceInfo": null
-                      },
-                      "name": "uu",
-                      "columns": []
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
-                          }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
-                    }
-                  },
-                  "joinType": "inner",
-                  "usingColumns": [],
-                  "joinDataType": null
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "not supported: ANTI join"
       }
     },
     {
       "input": "select * from t anti join u using(a, b)",
       "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "join": {
-                  "left": {
-                    "tableAlias": {
-                      "input": {
-                        "read": {
-                          "namedTable": {
-                            "name": [
-                              "t"
-                            ],
-                            "options": []
-                          },
-                          "isStreaming": false
-                        },
-                        "planId": null,
-                        "sourceInfo": null
-                      },
-                      "name": "anti",
-                      "columns": []
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "right": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "u"
-                        ],
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "joinCondition": null,
-                  "joinType": "inner",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
-                  "joinDataType": null
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "not supported: ANTI join"
       }
     },
     {
       "input": "select * from t as tt anti join u",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: anti"
+        "failure": "not supported: ANTI join"
       }
     },
     {
@@ -1096,7 +931,7 @@
     {
       "input": "select * from t as tt semi join u",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: semi"
+        "failure": "not supported: SEMI join"
       }
     },
     {
@@ -2748,178 +2583,13 @@
     {
       "input": "select * from t semi join u as uu on a = b",
       "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "join": {
-                  "left": {
-                    "tableAlias": {
-                      "input": {
-                        "read": {
-                          "namedTable": {
-                            "name": [
-                              "t"
-                            ],
-                            "options": []
-                          },
-                          "isStreaming": false
-                        },
-                        "planId": null,
-                        "sourceInfo": null
-                      },
-                      "name": "semi",
-                      "columns": []
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "right": {
-                    "tableAlias": {
-                      "input": {
-                        "read": {
-                          "namedTable": {
-                            "name": [
-                              "u"
-                            ],
-                            "options": []
-                          },
-                          "isStreaming": false
-                        },
-                        "planId": null,
-                        "sourceInfo": null
-                      },
-                      "name": "uu",
-                      "columns": []
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
-                          }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
-                    }
-                  },
-                  "joinType": "inner",
-                  "usingColumns": [],
-                  "joinDataType": null
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "not supported: SEMI join"
       }
     },
     {
       "input": "select * from t semi join u using(a, b)",
       "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "join": {
-                  "left": {
-                    "tableAlias": {
-                      "input": {
-                        "read": {
-                          "namedTable": {
-                            "name": [
-                              "t"
-                            ],
-                            "options": []
-                          },
-                          "isStreaming": false
-                        },
-                        "planId": null,
-                        "sourceInfo": null
-                      },
-                      "name": "semi",
-                      "columns": []
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "right": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "u"
-                        ],
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "joinCondition": null,
-                  "joinType": "inner",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
-                  "joinDataType": null
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "not supported: SEMI join"
       }
     },
     {

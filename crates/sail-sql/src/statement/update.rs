@@ -15,7 +15,13 @@ pub(crate) fn update_statement_to_plan(update: ast::Statement) -> SqlResult<spec
             from,
             selection,
             returning,
-        } => (table, assignments, from, selection, returning),
+            or,
+        } => {
+            if or.is_some() {
+                return Err(SqlError::unsupported("UPDATE OR"));
+            }
+            (table, assignments, from, selection, returning)
+        }
         _ => return Err(SqlError::invalid("Expected an UPDATE statement")),
     };
 

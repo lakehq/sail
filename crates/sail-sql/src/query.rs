@@ -100,8 +100,10 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
     use ast::{Distinct, GroupByExpr, SelectItem};
 
     let ast::Select {
+        select_token: _,
         distinct,
         top,
+        top_before_distinct: _,
         projection,
         into,
         from,
@@ -385,6 +387,8 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
             version,
             with_ordinality,
             partitions,
+            json_path,
+            sample,
         } => {
             if !with_hints.is_empty() {
                 return Err(SqlError::unsupported("table hints"));
@@ -397,6 +401,12 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
             }
             if !partitions.is_empty() {
                 return Err(SqlError::unsupported("table partitions"));
+            }
+            if json_path.is_some() {
+                return Err(SqlError::unsupported("table JSON path"));
+            }
+            if sample.is_some() {
+                return Err(SqlError::unsupported("table sample"));
             }
 
             let plan = if let Some(ast::TableFunctionArgs { args, settings }) = args {
@@ -545,6 +555,7 @@ fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> 
             query_plan_with_table_alias(plan, alias)
         }
         TableFactor::MatchRecognize { .. } => Err(SqlError::todo("MATCH_RECOGNIZE")),
+        TableFactor::OpenJsonTable { .. } => Err(SqlError::unsupported("OPENJSON")),
     }
 }
 
@@ -661,7 +672,16 @@ fn query_plan_with_table_alias(
             Ok(spec::QueryPlan::new(spec::QueryNode::TableAlias {
                 input: Box::new(plan),
                 name: spec::Identifier::from(normalize_ident(&name)),
-                columns: columns.into_iter().map(|c| c.value.into()).collect(),
+                columns: columns
+                    .into_iter()
+                    .map(|c| {
+                        let ast::TableAliasColumnDef { name, data_type } = c;
+                        if data_type.is_some() {
+                            return Err(SqlError::unsupported("data type in table alias column"));
+                        }
+                        Ok(name.value.into())
+                    })
+                    .collect::<SqlResult<Vec<_>>>()?,
             }))
         }
     }
@@ -714,8 +734,10 @@ fn query_plan_with_join(left: spec::QueryPlan, join: ast::Join) -> SqlResult<spe
         JoinOperator::RightOuter(constraint) => (spec::JoinType::RightOuter, Some(constraint)),
         JoinOperator::FullOuter(constraint) => (spec::JoinType::FullOuter, Some(constraint)),
         JoinOperator::CrossJoin => (spec::JoinType::Cross, None),
+        JoinOperator::Semi(_) => return Err(SqlError::unsupported("SEMI join")),
         JoinOperator::LeftSemi(constraint) => (spec::JoinType::LeftSemi, Some(constraint)),
         JoinOperator::RightSemi(_) => return Err(SqlError::unsupported("RIGHT SEMI join")),
+        JoinOperator::Anti(_) => return Err(SqlError::unsupported("ANTI join")),
         JoinOperator::LeftAnti(constraint) => (spec::JoinType::LeftAnti, Some(constraint)),
         JoinOperator::RightAnti(_) => return Err(SqlError::unsupported("RIGHT ANTI join")),
         JoinOperator::CrossApply | JoinOperator::OuterApply => {
@@ -786,6 +808,7 @@ fn query_plan_with_lateral_table_factor(
     };
     let expression = ast::Expr::Function(ast::Function {
         name,
+        uses_odbc_syntax: false,
         parameters: ast::FunctionArguments::None,
         args: ast::FunctionArguments::List(ast::FunctionArgumentList {
             duplicate_treatment: None,
@@ -804,7 +827,13 @@ fn query_plan_with_lateral_table_factor(
             Some(
                 columns
                     .iter()
-                    .map(|x| from_ast_ident(x, true))
+                    .map(|x| {
+                        let ast::TableAliasColumnDef { name, data_type } = x;
+                        if data_type.is_some() {
+                            return Err(SqlError::invalid("data type in column alias"));
+                        }
+                        from_ast_ident(name, true)
+                    })
                     .collect::<SqlResult<_>>()?,
             ),
         )

@@ -15,7 +15,11 @@ use crate::expression::common::from_ast_expression;
 /// TODO: Make sure this gets called everywhere in sail-sql
 ///     because sail-plan spec expects the raw identifier.
 pub fn normalize_ident(id: &ast::Ident) -> String {
-    let ast::Ident { value, quote_style } = id.to_owned();
+    let ast::Ident {
+        value,
+        quote_style,
+        span: _,
+    } = id.to_owned();
     match quote_style {
         Some(_) => value,
         None => value.to_ascii_lowercase(),

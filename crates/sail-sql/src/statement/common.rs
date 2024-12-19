@@ -81,6 +81,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         Statement::Insert(insert) => insert_statement_to_plan(insert),
         Statement::Call(ast::Function {
             name: _,
+            uses_odbc_syntax: _,
             parameters: _,
             args: _,
             filter: _,
@@ -160,7 +161,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::CreateFunction {
+        Statement::CreateFunction(ast::CreateFunction {
             or_replace: _,
             temporary: _,
             if_not_exists: _,
@@ -176,7 +177,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             determinism_specifier: _,
             options: _,
             remote_connection: _,
-        } => Err(SqlError::todo("SQL create function")),
+        }) => Err(SqlError::todo("SQL create function")),
         Statement::CreateIndex(ast::CreateIndex {
             name: _,
             table_name: _,
@@ -288,6 +289,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
                     return Err(SqlError::unsupported("SQL drop sequence"))
                 }
                 (ObjectType::Stage, _) => return Err(SqlError::unsupported("SQL drop stage")),
+                (ObjectType::Type, _) => return Err(SqlError::unsupported("SQL drop type")),
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -366,40 +368,24 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
                 "Only `SHOW CREATE TABLE ...` is supported.",
             )),
         },
+        Statement::ShowDatabases { .. } => Err(SqlError::todo("SQL show databases")),
+        Statement::ShowViews { .. } => Err(SqlError::todo("SQL show views")),
+        Statement::ShowSchemas { .. } => Err(SqlError::todo("SQL show schemas")),
         Statement::ShowTables {
+            terse: _,
+            history: _,
             extended: _,
             full: _,
-            db_name,
-            filter,
-        } => {
-            if db_name.is_some() {
-                return Err(SqlError::unsupported(
-                    "SHOW TABLES with db_name not supported.",
-                ));
-            }
-            if filter.is_some() {
-                return Err(SqlError::unsupported(
-                    "SHOW TABLES with WHERE, LIKE, or ILIKE not supported.",
-                ));
-            }
-            parse_sql_statement("SELECT * FROM information_schema.tables;")
-        }
+            external: _,
+            // TODO: show options
+            show_options: _,
+        } => parse_sql_statement("SELECT * FROM information_schema.tables;"),
         Statement::ShowColumns {
             extended: _,
             full: _,
-            table_name,
-            filter,
-        } => {
-            if filter.is_some() {
-                return Err(SqlError::unsupported(
-                    "SHOW COLUMNS with WHERE, LIKE, or ILIKE not supported.",
-                ));
-            }
-            let where_clause =
-                object_name_to_qualifier(&to_datafusion_ast_object_name(&table_name), true);
-            let query = format!("SELECT * FROM information_schema.columns WHERE {where_clause};");
-            parse_sql_statement(&query)
-        }
+            // TODO: show options
+            show_options: _,
+        } => parse_sql_statement("SELECT * FROM information_schema.columns;"),
         Statement::DropFunction {
             if_exists,
             func_desc,
@@ -488,7 +474,14 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         | Statement::LockTables { .. }
         | Statement::UnlockTables
         | Statement::OptimizeTable { .. }
-        | Statement::Unload { .. } => Err(SqlError::unsupported(format!(
+        | Statement::Unload { .. }
+        | Statement::LISTEN { .. }
+        | Statement::UNLISTEN { .. }
+        | Statement::NOTIFY { .. }
+        | Statement::LoadData { .. }
+        | Statement::CreatePolicy { .. }
+        | Statement::AlterPolicy { .. }
+        | Statement::DropPolicy { .. } => Err(SqlError::unsupported(format!(
             "Unsupported statement: {}",
             statement
         ))),
@@ -526,6 +519,7 @@ pub(crate) fn from_ast_table_constraint(
             columns,
             index_options: _,
             characteristics: _,
+            nulls_distinct: _,
         } => Ok(spec::TableConstraint::Unique {
             name: name.map(|x| spec::Identifier::from(normalize_ident(&x))),
             columns: columns
