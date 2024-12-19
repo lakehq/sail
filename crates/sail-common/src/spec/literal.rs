@@ -150,7 +150,7 @@ pub enum Literal {
     Dictionary {
         key_type: spec::DataType,
         value_type: spec::DataType,
-        value: Box<Literal>,
+        value: Option<Box<Literal>>,
     },
     Decimal128 {
         precision: u8,
