@@ -1,7 +1,6 @@
 use datafusion::arrow::datatypes::i256;
 use half::f16;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::sync::Arc;
 
 use crate::spec;
 
@@ -127,21 +126,21 @@ pub enum Literal {
         value: Option<String>,
     },
     List {
-        data_type: Box<spec::DataType>,
-        values: Arc<Vec<Literal>>,
+        data_type: spec::DataType,
+        values: Option<Vec<Literal>>,
     },
     FixedSizeList {
         size: i32,
-        data_type: Box<spec::DataType>,
-        values: Arc<Vec<Literal>>,
+        data_type: spec::DataType,
+        values: Option<Vec<Literal>>,
     },
     LargeList {
-        data_type: Box<spec::DataType>,
-        values: Arc<Vec<Literal>>,
+        data_type: spec::DataType,
+        values: Option<Vec<Literal>>,
     },
     Struct {
-        data_type: Box<spec::DataType>,
-        values: Arc<Vec<Literal>>,
+        data_type: spec::DataType,
+        values: Option<Vec<Literal>>,
     },
     Union {
         union_fields: spec::UnionFields,
@@ -149,8 +148,8 @@ pub enum Literal {
         value: Option<(i8, Box<Literal>)>,
     },
     Dictionary {
-        key_type: Box<spec::DataType>,
-        value_type: Box<spec::DataType>,
+        key_type: spec::DataType,
+        value_type: spec::DataType,
         value: Box<Literal>,
     },
     Decimal128 {
@@ -168,10 +167,10 @@ pub enum Literal {
         value: Option<i256>,
     },
     Map {
-        key_type: Box<spec::DataType>,
-        value_type: Box<spec::DataType>,
-        keys: Arc<Vec<Literal>>,
-        values: Arc<Vec<Literal>>,
+        key_type: spec::DataType,
+        value_type: spec::DataType,
+        keys: Option<Vec<Literal>>,
+        values: Option<Vec<Literal>>,
     },
 }
 
