@@ -8,7 +8,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion_common::utils::array_into_list_array_nullable;
+use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{internal_err, plan_err, ExprSchema, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, TypeSignature, Volatility};
@@ -136,7 +136,11 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             let length = arrays.iter().map(|a| a.len()).sum();
             // By default Int32
             let array = new_null_array(&DataType::Int32, length);
-            Ok(Arc::new(array_into_list_array_nullable(array)))
+            Ok(Arc::new(
+                SingleRowListArrayBuilder::new(array)
+                    .with_nullable(true)
+                    .build_list_array(),
+            ))
         }
         DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
         _ => array_array::<i32>(arrays, data_type),

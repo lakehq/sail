@@ -82,15 +82,16 @@ md-5 = "0.10.6"
 # The versions of the following dependencies are managed manually.
 ######
 
-datafusion = { version = "43.0.0", features = ["serde", "pyarrow", "avro"] }
-datafusion-common = { version = "43.0.0", features = ["object_store", "pyarrow", "avro"] }
-datafusion-expr = "43.0.0"
-datafusion-proto = "43.0.0"
-datafusion-functions-nested = "43.0.0"
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9", features = ["serde", "pyarrow", "avro"] }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9", features = ["object_store", "pyarrow", "avro"] }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
+datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
+datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-functions-json = "0.43.0"
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.22.0", features = ["auto-initialize", "serde"] }
-arrow-flight = { version = "53.1.0" }
+arrow-flight = { version = "53.3.0" }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
@@ -108,15 +109,19 @@ datafusion = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9"
 datafusion-catalog = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-common-runtime = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
+datafusion-doc = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
+# datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" } # Not used in the crate graph
 datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-functions-aggregate-common = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
+datafusion-functions-table = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-functions-window = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-functions-window-common = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
+datafusion-macros = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }
 datafusion-physical-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "5d563d9" }

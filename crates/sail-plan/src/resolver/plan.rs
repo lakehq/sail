@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes as adt;
+use datafusion::catalog::TableFunction;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
 use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
@@ -10,7 +11,6 @@ use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
 use datafusion::datasource::file_format::{format_as_file_type, FileFormat, FileFormatFactory};
-use datafusion::datasource::function::TableFunction;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
