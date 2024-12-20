@@ -158,6 +158,7 @@ impl PySpark {
         py: Python<'py>,
         udf: PyObject,
         input_types: &[DataType],
+        passthrough_columns: usize,
         output_schema: &SchemaRef,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
@@ -166,6 +167,7 @@ impl PySpark {
             (
                 udf,
                 input_types.try_to_py(py)?,
+                passthrough_columns,
                 output_schema.try_to_py(py)?,
             ),
         )
@@ -174,6 +176,8 @@ impl PySpark {
     pub fn arrow_table_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
+        input_names: &[String],
+        passthrough_columns: usize,
         output_schema: &SchemaRef,
         timezone: &str,
         safe_check: bool,
@@ -181,7 +185,14 @@ impl PySpark {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkArrowTableUdf"),
-            (udf, output_schema.try_to_py(py)?, timezone, safe_check),
+            (
+                udf,
+                input_names.to_vec(),
+                passthrough_columns,
+                output_schema.try_to_py(py)?,
+                timezone,
+                safe_check,
+            ),
         )
     }
 }

@@ -138,7 +138,8 @@ message PySparkMapIterUdf {
   PySparkMapIterKind kind = 1;
   string name = 2;
   bytes payload = 3;
-  bytes output_schema = 4;
+  repeated string input_names = 4;
+  bytes output_schema = 5;
 }
 
 enum ColumnMatch {
@@ -189,9 +190,8 @@ message SchemaPivotExecNode {
 
 message MapPartitionsExecNode {
   bytes input = 1;
-  repeated string input_names = 2;
-  ExtendedStreamUdf udf = 3;
-  bytes schema = 4;
+  ExtendedStreamUdf udf = 2;
+  bytes schema = 3;
 }
 
 message LexOrdering {

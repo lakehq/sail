@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Fields, Schema};
-use datafusion_common::{plan_err, DFSchemaRef, DataFusionError, Result};
+use datafusion::arrow::datatypes::DataType;
+use datafusion_common::{plan_err, DFSchemaRef, DataFusionError, Result, TableReference};
 use datafusion_expr::{
     expr, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, Projection, ScalarUDF,
 };
 use sail_common::spec;
+use sail_common::udf::StreamUDF;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::cereal::pyspark_udtf::PySparkUdtfPayload;
 use sail_python_udf::udf::get_udf_name;
@@ -15,8 +16,11 @@ use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::logical::MapPartitionsNode;
+use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
+use crate::resolver::tree::table_input::TableInputRewriter;
 use crate::resolver::PlanResolver;
+use crate::utils::ItemTaker;
 
 pub(super) struct PythonUdf {
     pub python_version: String,
@@ -194,69 +198,24 @@ impl PlanResolver<'_> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn resolve_python_udtf_plan(
         &self,
         function: PythonUdtf,
         name: &str,
-        input: LogicalPlan,
-        arguments: Vec<Expr>,
-        argument_names: Vec<String>,
+        plan: LogicalPlan,
+        arguments: Vec<NamedExpr>,
+        function_output_names: Option<Vec<String>>,
+        function_output_qualifier: Option<TableReference>,
         deterministic: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let num_arguments = arguments.len();
-        let input_schema = input.schema();
-        let argument_types = arguments
-            .iter()
-            .map(|arg| arg.get_type(input_schema))
-            .collect::<Result<Vec<_>, _>>()?;
-        let projections = {
-            let mut out = input
-                .schema()
-                .columns()
-                .into_iter()
-                .map(Expr::Column)
-                .collect::<Vec<_>>();
-            out.extend(arguments);
-            out
-        };
-        let input_field_names = state.get_field_names(input_schema.inner())?;
-        let input_names = {
-            let mut out = input_field_names.clone();
-            out.extend(argument_names);
-            out
-        };
-        let (output_schema, function_output_names) = match &function.return_type {
-            DataType::Struct(fields) => {
-                let mut output_fields = input_schema.fields().iter().cloned().collect::<Vec<_>>();
-                output_fields.extend_from_slice(fields.iter().as_ref());
-                (
-                    Arc::new(Schema::new(Fields::from(output_fields))),
-                    fields
-                        .iter()
-                        .map(|f| state.register_field(f.name()))
-                        .collect::<Vec<_>>(),
-                )
-            }
-            _ => {
-                // The PySpark unit test expects the exact error message here.
-                return Err(PlanError::invalid( format!(
-                    "Invalid Python user-defined table function return type. Expect a struct type, but got {}.",
-                    function.return_type
-                )));
-            }
-        };
-        let output_names = {
-            let mut out = input_field_names;
-            out.extend(function_output_names);
-            out
-        };
         let payload = PySparkUdtfPayload::build(
             &function.python_version,
             &function.command,
             function.eval_type,
-            num_arguments,
-            &DataType::Struct(output_schema.fields.clone()),
+            arguments.len(),
+            &function.return_type,
             &self.config.spark_udf_config,
         )?;
         let kind = match function.eval_type {
@@ -269,26 +228,63 @@ impl PlanResolver<'_> {
                 )))
             }
         };
-        let udtf = PySparkUDTF::new(
+        // Determine the number of passthrough columns before rewriting the plan
+        // for `TABLE (...)` arguments.
+        let passthrough_columns = plan.schema().fields().len();
+        let projections = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .map(|col| {
+                Ok(NamedExpr::new(
+                    vec![state.get_field_name(col.name())?.clone()],
+                    Expr::Column(col),
+                ))
+            })
+            .chain(arguments.into_iter().map(Ok))
+            .collect::<PlanResult<Vec<_>>>()?;
+        let (plan, projections) =
+            self.rewrite_projection::<TableInputRewriter>(plan, projections, state)?;
+        let input_names = projections
+            .iter()
+            .map(|e| e.name.clone().one())
+            .collect::<Result<_>>()?;
+        let projections = self.rewrite_named_expressions(projections, state)?;
+        let input_types = projections
+            .iter()
+            .map(|e| e.get_type(plan.schema()))
+            .collect::<Result<Vec<_>>>()?;
+        let udtf = PySparkUDTF::try_new(
             kind,
             get_udf_name(name, &payload),
             payload,
-            argument_types,
-            output_schema,
+            input_names,
+            input_types,
+            passthrough_columns,
+            function.return_type,
+            function_output_names,
             deterministic,
-            self.config.spark_udf_config.timezone.clone(),
-            self.config
-                .spark_udf_config
-                .pandas_convert_to_arrow_array_safely,
-        );
+            (&self.config.spark_udf_config).into(),
+        )?;
+        let output_names = state.register_fields(&udtf.output_schema());
+        let output_qualifiers = (0..output_names.len())
+            .map(|i| {
+                if i < passthrough_columns {
+                    let (qualifier, _) = plan.schema().qualified_field(i);
+                    qualifier.cloned()
+                } else {
+                    function_output_qualifier.clone()
+                }
+            })
+            .collect();
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(MapPartitionsNode::try_new(
                 Arc::new(LogicalPlan::Projection(Projection::try_new(
                     projections,
-                    Arc::new(input),
+                    Arc::new(plan),
                 )?)),
-                input_names,
                 output_names,
+                output_qualifiers,
                 Arc::new(udtf),
             )?),
         }))

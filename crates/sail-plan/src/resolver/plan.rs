@@ -700,15 +700,16 @@ impl PlanResolver<'_> {
                         return_type: f.output_type().clone(),
                     };
                     let input = self.resolve_empty_query_plan()?;
-                    let (argument_names, arguments) = self
-                        .resolve_expressions_and_names(arguments, input.schema(), state)
+                    let arguments = self
+                        .resolve_named_expressions(arguments, input.schema(), state)
                         .await?;
                     self.resolve_python_udtf_plan(
                         udtf,
                         function_name,
                         input,
                         arguments,
-                        argument_names,
+                        None,
+                        None,
                         f.deterministic(),
                         state,
                     )
@@ -1668,6 +1669,7 @@ impl PlanResolver<'_> {
             }
         };
         let output_names = state.register_fields(&output_schema);
+        let output_qualifiers = vec![None; output_names.len()];
         let payload = PySparkUdfPayload::build(
             &function.python_version,
             &function.command,
@@ -1689,13 +1691,14 @@ impl PlanResolver<'_> {
             kind,
             get_udf_name(&function_name, &payload),
             payload,
+            input_names,
             output_schema,
         );
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(MapPartitionsNode::try_new(
                 Arc::new(input),
-                input_names,
                 output_names,
+                output_qualifiers,
                 Arc::new(func),
             )?),
         }))
@@ -2173,29 +2176,67 @@ impl PlanResolver<'_> {
         outer: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let expression = match expression {
-            spec::Expr::UnresolvedFunction {
-                mut function_name,
-                arguments,
-                is_distinct,
-                is_user_defined_function,
-            } => {
-                if outer {
-                    function_name =
-                        get_outer_built_in_generator_functions(&function_name).to_string();
+        let spec::Expr::UnresolvedFunction {
+            function_name,
+            arguments,
+            is_distinct,
+            is_user_defined_function,
+        } = expression
+        else {
+            return Err(PlanError::invalid(
+                "a generator function is expected for lateral view",
+            ));
+        };
+        let input = match input {
+            Some(x) => self.resolve_query_plan(x, state).await?,
+            None => self.resolve_empty_query_plan()?,
+        };
+        let schema = input.schema().clone();
+
+        if let Ok(f) = self.ctx.udf(&function_name) {
+            if let Some(f) = f.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+                if !f.eval_type().is_table_function() {
+                    return Err(PlanError::invalid(format!(
+                        "not a table function for UDTF lateral view: {function_name}"
+                    )));
                 }
-                spec::Expr::UnresolvedFunction {
-                    function_name,
+                let udtf = PythonUdtf {
+                    python_version: f.python_version().to_string(),
+                    eval_type: f.eval_type(),
+                    command: f.command().to_vec(),
+                    return_type: f.output_type().clone(),
+                };
+                let arguments = self
+                    .resolve_named_expressions(arguments, input.schema(), state)
+                    .await?;
+                let output_names =
+                    column_aliases.map(|aliases| aliases.into_iter().map(|x| x.into()).collect());
+                let output_qualifier = table_alias
+                    .map(|alias| self.resolve_table_reference(&alias))
+                    .transpose()?;
+                return self.resolve_python_udtf_plan(
+                    udtf,
+                    &function_name,
+                    input,
                     arguments,
-                    is_distinct,
-                    is_user_defined_function,
-                }
+                    output_names,
+                    output_qualifier,
+                    f.deterministic(),
+                    state,
+                );
             }
-            _ => {
-                return Err(PlanError::invalid(
-                    "a generator function is expected for lateral view",
-                ))
-            }
+        }
+
+        let function_name = if outer {
+            get_outer_built_in_generator_functions(&function_name).to_string()
+        } else {
+            function_name
+        };
+        let expression = spec::Expr::UnresolvedFunction {
+            function_name,
+            arguments,
+            is_distinct,
+            is_user_defined_function,
         };
         let expression = if let Some(aliases) = column_aliases {
             spec::Expr::Alias {
@@ -2206,11 +2247,6 @@ impl PlanResolver<'_> {
         } else {
             expression
         };
-        let input = match input {
-            Some(x) => self.resolve_query_plan(x, state).await?,
-            None => self.resolve_empty_query_plan()?,
-        };
-        let schema = input.schema().clone();
         let expr = self
             .resolve_named_expression(expression, &schema, state)
             .await?;
@@ -2229,12 +2265,12 @@ impl PlanResolver<'_> {
         } else {
             expr
         };
-        let mut projections = schema
+        let projections = schema
             .columns()
             .into_iter()
             .map(Expr::Column)
+            .chain(expr.into_iter())
             .collect::<Vec<_>>();
-        projections.extend(expr);
         Ok(LogicalPlan::Projection(plan::Projection::try_new(
             projections,
             Arc::new(input),
@@ -2254,15 +2290,16 @@ impl PlanResolver<'_> {
         } = udtf;
         let function = self.resolve_python_udtf(function)?;
         let input = self.resolve_empty_query_plan()?;
-        let (argument_names, arguments) = self
-            .resolve_expressions_and_names(arguments, input.schema(), state)
+        let arguments = self
+            .resolve_named_expressions(arguments, input.schema(), state)
             .await?;
         self.resolve_python_udtf_plan(
             function,
             &function_name,
             input,
             arguments,
-            argument_names,
+            None,
+            None,
             deterministic,
             state,
         )
@@ -3485,7 +3522,7 @@ impl PlanResolver<'_> {
         Ok((input, projected))
     }
 
-    fn rewrite_projection<'s, T>(
+    pub(super) fn rewrite_projection<'s, T>(
         &self,
         input: LogicalPlan,
         expr: Vec<NamedExpr>,
@@ -3554,7 +3591,7 @@ impl PlanResolver<'_> {
         Ok(out)
     }
 
-    fn rewrite_named_expressions(
+    pub(super) fn rewrite_named_expressions(
         &self,
         expr: Vec<NamedExpr>,
         state: &mut PlanResolverState,
@@ -3574,14 +3611,6 @@ impl PlanResolver<'_> {
                         "one name expected for expression, got: {names}"
                     )));
                 };
-                if let Expr::Column(Column {
-                    name: column_name, ..
-                }) = &expr
-                {
-                    if state.get_field_name(column_name).ok() == Some(&name) {
-                        return Ok(expr);
-                    }
-                }
                 Ok(expr.alias(state.register_field(name)))
             })
             .collect()

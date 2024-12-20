@@ -3,7 +3,7 @@ from __future__ import annotations
 import ctypes
 import decimal
 import itertools
-from typing import Any, Callable, Iterator, Union
+from typing import Any, Callable, Iterator, Sequence, Union
 
 import pandas as pd
 import pyarrow as pa
@@ -41,6 +41,16 @@ else:
         return pa.types.is_binary(t) or pa.types.is_large_binary(t)
 
 
+try:
+    from itertools import batched
+except ImportError:
+
+    def batched(iterable, n):
+        it = iter(iterable)
+        while chunk := tuple(itertools.islice(it, n)):
+            yield chunk
+
+
 class Converter:
     """
     A converter that converts between PySpark data and Arrow data.
@@ -53,10 +63,10 @@ class Converter:
     def __init__(self, data_type: pa.DataType):
         self._data_type = data_type
 
-    def to_pyspark(self, data: pa.Array) -> list[Any]:
+    def to_pyspark(self, data: pa.Array) -> Sequence[Any]:
         raise NotImplementedError
 
-    def from_pyspark(self, data: list[Any]) -> pa.Array:
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         raise NotImplementedError
 
 
@@ -113,10 +123,10 @@ class PrimitiveConverter(Converter):
         super().__init__(data_type)
         self._spark_data_type = from_arrow_type(data_type)
 
-    def to_pyspark(self, array: pa.Array) -> list[Any]:
+    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         return [None if x is None else self._spark_data_type.fromInternal(x) for x in array.to_pylist()]
 
-    def from_pyspark(self, data: list[Any]) -> pa.Array:
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         return pa.array(
             [None if x is None else self._from_python_primitive(self._spark_data_type.fromInternal(x)) for x in data],
             type=self._data_type,
@@ -187,10 +197,10 @@ def _to_string(data: Any) -> str | None:
 
 
 class StringConverter(Converter):
-    def to_pyspark(self, array: pa.Array) -> list[Any]:
+    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         return array.to_pylist()
 
-    def from_pyspark(self, data: list[Any]) -> pa.Array:
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         return pa.array([_to_string(x) for x in data], type=self._data_type)
 
 
@@ -208,10 +218,10 @@ def _to_bytes(data: Any) -> bytes | None:
 
 
 class BinaryConverter(Converter):
-    def to_pyspark(self, array: pa.Array) -> list[Any]:
+    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         return [None if x is None else bytearray(x) for x in array.to_pylist()]
 
-    def from_pyspark(self, data: list[Any]) -> pa.Array:
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         return pa.array([_to_bytes(x) for x in data], type=self._data_type)
 
 
@@ -220,7 +230,7 @@ class ArrayConverter(Converter):
         super().__init__(data_type)
         self._value_converter = _get_converter(data_type.value_type)
 
-    def to_pyspark(self, array: pa.Array) -> list[Any]:
+    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         if not isinstance(array, _PYARROW_LIST_ARRAY_TYPES):
             msg = f"invalid data type for array: {type(array)}"
             raise TypeError(msg)
@@ -236,7 +246,7 @@ class ArrayConverter(Converter):
                 result.append(values[start:end])
         return result
 
-    def from_pyspark(self, data: list[Any]) -> pa.Array:
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         (values, offsets) = [], []
         end = 0
         for x in data:
@@ -257,7 +267,7 @@ class MapConverter(Converter):
         self._key_converter = _get_converter(data_type.key_type)
         self._value_converter = _get_converter(data_type.item_type)
 
-    def to_pyspark(self, array: pa.Array) -> list[Any]:
+    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         if not isinstance(array, pa.MapArray):
             msg = f"invalid data type for map: {type(array)}"
             raise TypeError(msg)
@@ -274,7 +284,7 @@ class MapConverter(Converter):
                 result.append(dict(zip(keys[start:end], values[start:end])))
         return result
 
-    def from_pyspark(self, data: list[Any]) -> pa.Array:
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         (keys, values, offsets) = [], [], []
         end = 0
         for x in data:
@@ -304,14 +314,14 @@ class StructConverter(Converter):
         self._field_converters = [_get_converter(f.type) for f in self._fields]
         self._spark_data_type = from_arrow_type(data_type)
 
-    def to_pyspark(self, array: pa.Array) -> list[Any]:
+    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         if not isinstance(array, pa.StructArray):
             msg = f"invalid data type for struct: {type(array)}"
             raise TypeError(msg)
         columns = [c.to_pyspark(col) for col, c in zip(array.flatten(), self._field_converters)]
         return [self._spark_data_type.fromInternal(x) for x in zip(*columns)]
 
-    def from_pyspark(self, data: list[Any]) -> pa.Array:
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
         n = len(self._fields)
         columns = [[] for _ in range(n)]
         mask = []
@@ -518,9 +528,13 @@ class PySparkTableUdf:
         self,
         udf: Callable[..., Any],
         input_types: list[pa.DataType],
+        passthrough_columns: int,
         output_schema: pa.Schema,
+        batch_size: int = 1024,
     ):
         self._udf = udf
+        self._passthrough_columns = passthrough_columns
+        self._batch_size = batch_size
         self._output_schema = output_schema
         self._input_converters = [_get_converter(t) for t in input_types]
         self._output_converter = StructConverter(
@@ -528,37 +542,94 @@ class PySparkTableUdf:
         )
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
+        for output in batched(self._iter_output_rows(args), self._batch_size):
+            yield pa.RecordBatch.from_struct_array(self._output_converter.from_pyspark(output))
+
+    def _iter_input_rows(self, args: Iterator[pa.RecordBatch]) -> Iterator[tuple]:
         for batch in args:
             arrays = batch.to_struct_array().flatten()
-            outputs = []
             if len(arrays) > 0:
                 inputs = tuple(c.to_pyspark(a) for a, c in zip(arrays, self._input_converters))
-                for x in zip(*inputs):
-                    for out in self._udf(None, (x,)):
-                        outputs.extend(out)
+                yield from zip(*inputs)
             else:
-                for out in self._udf(None, ((),)):
-                    outputs.extend(out)
-            yield pa.RecordBatch.from_struct_array(self._output_converter.from_pyspark(outputs))
+                yield ()
+
+    def _iter_output_rows(self, args: Iterator[pa.RecordBatch]) -> Iterator[list]:
+        (rows1, rows2) = itertools.tee(self._iter_input_rows(args))
+        inputs = (x[self._passthrough_columns :] for x in rows2)
+        outputs = self._udf(None, inputs)
+        empty = tuple([None] * len(self._output_schema.names))
+        last = tuple([None] * len(self._input_converters))
+        for row, it in itertools.zip_longest(rows1, outputs):
+            if row is None:
+                row = last  # noqa: PLW2901
+            passthrough = row[: self._passthrough_columns]
+            for out in it:
+                if out is None:
+                    yield passthrough + empty
+                else:
+                    yield passthrough + tuple(out)
+            last = row
 
 
 class PySparkArrowTableUdf:
     def __init__(
         self,
         udf: Callable[..., Iterator[pa.RecordBatch]],
+        input_names: Sequence[str],
+        passthrough_columns: int,
         output_schema: pa.Schema,
         timezone: str,
         safe_check: bool,  # noqa: FBT001
     ):
         self._udf = udf
+        self._input_names = input_names
+        self._passthrough_columns = passthrough_columns
         self._output_schema = output_schema
         self._output_type = pa.struct([output_schema.field(i) for i in range(len(output_schema.names))])
         self._serializer = ArrowStreamPandasUDTFSerializer(timezone=timezone, safecheck=safe_check)
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
+        for output in self._iter_output(args):
+            array = self._serializer._create_struct_array(output, self._output_type)  # noqa: SLF001
+            yield pa.RecordBatch.from_struct_array(array)
+
+    def _iter_input(self, args: Iterator[pa.RecordBatch]) -> Iterator[tuple[pd.Series]]:
         for batch in args:
             arrays = batch.to_struct_array().flatten()
-            inputs = tuple(self._serializer.arrow_to_pandas(x) for x in arrays)
-            for output, _output_type in self._udf(None, (inputs,)):
-                array = self._serializer._create_struct_array(output, self._output_type)  # noqa: SLF001
-                yield pa.RecordBatch.from_struct_array(array)
+            yield tuple(self._serializer.arrow_to_pandas(x) for x in arrays)
+
+    def _iter_output(self, args: Iterator[pa.RecordBatch]) -> Iterator[pd.DataFrame]:
+        (batches1, batches2) = itertools.tee(self._iter_input(args))
+        inputs = (x[self._passthrough_columns :] for x in batches2)
+        outputs = self._udf(None, inputs)
+        last = None
+        for passthrough, (out, _) in itertools.zip_longest(self._iter_passthrough_rows(batches1), outputs):
+            if out is None or len(out) == 0:
+                continue
+            df = pd.DataFrame(index=out.index)
+            if passthrough is None:
+                passthrough = last  # noqa: PLW2901
+            if passthrough is not None:
+                for v, name in zip(passthrough, self._input_names):
+                    df[name] = [v] * len(out)
+            else:
+                for name in self._input_names:
+                    df[name] = [None] * len(out)
+            for col in out:
+                df[col] = out[col]
+            yield df
+            last = passthrough
+
+    def _iter_passthrough_rows(self, batches: Iterator[tuple[pd.Series]]) -> Iterator[tuple]:
+        if self._passthrough_columns > 0:
+            for batch in batches:
+                yield from zip(*batch[: self._passthrough_columns])
+        else:
+            for batch in batches:
+                if len(batch) > 0:
+                    first, *_ = batch
+                    for _ in range(len(first)):
+                        yield ()
+                else:
+                    yield ()

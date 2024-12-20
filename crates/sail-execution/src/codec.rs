@@ -161,19 +161,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )))
             }
-            NodeKind::MapPartitions(gen::MapPartitionsExecNode {
-                input,
-                input_names,
-                udf,
-                schema,
-            }) => {
+            NodeKind::MapPartitions(gen::MapPartitionsExecNode { input, udf, schema }) => {
                 let Some(udf) = udf else {
                     return plan_err!("no UDF found for MapPartitionsExec");
                 };
                 let schema = self.try_decode_schema(&schema)?;
                 Ok(Arc::new(MapPartitionsExec::new(
                     self.try_decode_plan(&input, registry)?,
-                    input_names,
                     self.try_decode_stream_udf(udf)?,
                     Arc::new(schema),
                 )))
@@ -400,7 +394,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let schema = self.try_encode_schema(map_partitions.schema().as_ref())?;
             NodeKind::MapPartitions(gen::MapPartitionsExecNode {
                 input: self.try_encode_plan(map_partitions.input().clone())?,
-                input_names: map_partitions.input_names().to_vec(),
                 udf: Some(udf),
                 schema,
             })
@@ -960,6 +953,7 @@ impl RemoteExecutionCodec {
                 kind,
                 name,
                 payload,
+                input_names,
                 output_schema,
             }) => {
                 let kind = self.try_decode_pyspark_map_iter_kind(kind)?;
@@ -968,6 +962,7 @@ impl RemoteExecutionCodec {
                     kind,
                     name,
                     payload,
+                    input_names,
                     Arc::new(output_schema),
                 ))
             }
@@ -984,6 +979,7 @@ impl RemoteExecutionCodec {
                     kind,
                     name: func.name().to_string(),
                     payload: func.payload().to_vec(),
+                    input_names: func.input_names().to_vec(),
                     output_schema,
                 })
             } else {
