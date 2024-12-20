@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Function concat does not implement invoke but called"
+        "success": "ok"
       }
     },
     {
@@ -111,7 +111,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Function array_concat does not implement invoke but called"
+        "success": "ok"
       }
     },
     {
@@ -133,7 +133,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Function reverse does not implement invoke but called"
+        "success": "ok"
       }
     },
     {

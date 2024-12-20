@@ -437,7 +437,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Function concat does not implement invoke but called"
+        "success": "ok"
       }
     },
     {
