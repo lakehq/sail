@@ -207,7 +207,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         } => {
             // TODO: Parse Spark Syntax:
             //  https://spark.apache.org/docs/latest/sql-ref-syntax-ddl-create-view.html
-            let columns: Vec<spec::Identifier> = columns
+            let columns = columns
                 .into_iter()
                 .map(|view_column_def| {
                     if let Some(options) = view_column_def.options {
@@ -221,6 +221,11 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
                     }
                 })
                 .collect::<SqlResult<Vec<_>>>()?;
+            let columns = if columns.is_empty() {
+                None
+            } else {
+                Some(columns)
+            };
             let query = from_ast_query(*query)?;
             let name = from_ast_object_name(name)?;
 
@@ -234,7 +239,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
                 view: name,
                 definition: spec::ViewDefinition {
                     input: Box::new(query),
-                    columns: Some(columns),
+                    columns,
                     replace: or_replace,
                     kind,
                     definition: statement_sql,

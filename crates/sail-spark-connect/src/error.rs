@@ -7,8 +7,9 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use log::error;
 use prost::{DecodeError, UnknownEnumValue};
-use pyo3::prelude::PyTracebackMethods;
-use pyo3::{PyErr, Python};
+use pyo3::prelude::PyAnyMethods;
+use pyo3::types::PyModule;
+use pyo3::{intern, PyErr, PyResult, Python};
 use sail_common::error::CommonError;
 use sail_execution::error::ExecutionError;
 use sail_plan::error::PlanError;
@@ -284,12 +285,17 @@ impl From<SparkError> for Status {
             ))
             | SparkError::DataFusionError(DataFusionError::External(e)) => {
                 if let Some(e) = extract_py_err(e.as_ref()) {
-                    let traceback =
-                        Python::with_gil(|py| e.traceback_bound(py).map(|t| t.format()));
+                    let info = Python::with_gil(|py| -> PyResult<Vec<String>> {
+                        let traceback = PyModule::import_bound(py, intern!(py, "traceback"))?;
+                        let format_exception =
+                            traceback.getattr(intern!(py, "format_exception"))?;
+                        format_exception.call1((e,))?.extract()
+                    });
                     // The message must end with a newline character
                     // since the PySpark unit tests expect it.
-                    let message = if let Some(Ok(traceback)) = traceback {
-                        format!("{traceback}\n{e}\n")
+                    let message = if let Ok(info) = info {
+                        // Each line string already ends with a newline character.
+                        info.join("")
                     } else {
                         format!("{e}\n")
                     };

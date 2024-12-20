@@ -24,6 +24,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::drop_struct_field::DropStructField;
+use crate::extension::function::table_input::TableInput;
 use crate::extension::function::update_struct_field::UpdateStructField;
 use crate::function::common::{AggFunctionContext, FunctionContext};
 use crate::function::{
@@ -323,6 +324,14 @@ impl PlanResolver<'_> {
             Expr::Literal(literal) => self.resolve_expression_literal(literal),
             Expr::UnresolvedAttribute { name, plan_id } => {
                 self.resolve_expression_attribute(name, plan_id, schema, state)
+            }
+            Expr::UnresolvedFunction {
+                function_name,
+                arguments,
+                ..
+            } if function_name.to_lowercase() == "table" => {
+                self.resolve_expression_table_function(arguments, state)
+                    .await
             }
             Expr::UnresolvedFunction {
                 function_name,
@@ -668,6 +677,36 @@ impl PlanResolver<'_> {
                 .collect::<Vec<_>>()
         };
         Ok(candidates)
+    }
+
+    async fn resolve_expression_table_function(
+        &self,
+        arguments: Vec<spec::Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let query = match arguments.one() {
+            Ok(spec::Expr::ScalarSubquery { subquery }) => *subquery,
+            Ok(spec::Expr::UnresolvedAttribute {
+                name,
+                plan_id: None,
+            }) => spec::QueryPlan::new(spec::QueryNode::Read {
+                read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                    name,
+                    options: vec![],
+                }),
+                is_streaming: false,
+            }),
+            _ => {
+                return Err(PlanError::invalid(
+                    "expected a query or a table reference for table input",
+                ));
+            }
+        };
+        let plan = self.resolve_query_plan(query, state).await?;
+        Ok(NamedExpr::new(
+            vec!["table".to_string()],
+            ScalarUDF::from(TableInput::new(Arc::new(plan))).call(vec![]),
+        ))
     }
 
     async fn resolve_expression_function(

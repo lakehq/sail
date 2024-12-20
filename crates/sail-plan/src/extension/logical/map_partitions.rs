@@ -2,9 +2,9 @@ use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion_common::{DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use sail_common::udf::MapIterUDF;
+use sail_common::udf::StreamUDF;
 use sail_common::utils::rename_schema;
 
 use crate::utils::ItemTaker;
@@ -13,34 +13,29 @@ use crate::utils::ItemTaker;
 #[derive(Clone, Debug, Eq, Hash)]
 pub(crate) struct MapPartitionsNode {
     input: Arc<LogicalPlan>,
-    input_names: Vec<String>,
-    output_names: Vec<String>,
-    udf: Arc<dyn MapIterUDF>,
+    udf: Arc<dyn StreamUDF>,
     schema: DFSchemaRef,
 }
 
 impl MapPartitionsNode {
     pub fn try_new(
         input: Arc<LogicalPlan>,
-        input_names: Vec<String>,
         output_names: Vec<String>,
-        udf: Arc<dyn MapIterUDF>,
+        output_qualifiers: Vec<Option<TableReference>>,
+        udf: Arc<dyn StreamUDF>,
     ) -> Result<Self> {
         let schema = rename_schema(&udf.output_schema(), &output_names)?;
         Ok(Self {
             input,
-            input_names,
-            output_names,
             udf,
-            schema: Arc::new(schema.try_into()?),
+            schema: Arc::new(DFSchema::from_field_specific_qualified_schema(
+                output_qualifiers,
+                &schema,
+            )?),
         })
     }
 
-    pub fn input_names(&self) -> &[String] {
-        &self.input_names
-    }
-
-    pub fn udf(&self) -> &Arc<dyn MapIterUDF> {
+    pub fn udf(&self) -> &Arc<dyn StreamUDF> {
         &self.udf
     }
 }
@@ -50,8 +45,6 @@ impl PartialEq for MapPartitionsNode {
         // We have to manually implement `PartialEq` instead of deriving it
         // due to `Arc<dyn ...>`.
         self.input == other.input
-            && self.input_names == other.input_names
-            && self.output_names == other.output_names
             && self.udf.as_ref() == other.udf.as_ref()
             && self.schema == other.schema
     }
@@ -60,17 +53,13 @@ impl PartialEq for MapPartitionsNode {
 #[derive(PartialEq, PartialOrd)]
 struct MapPartitionsNodeOrd<'a> {
     input: &'a Arc<LogicalPlan>,
-    input_names: &'a Vec<String>,
-    output_names: &'a Vec<String>,
-    udf: &'a Arc<dyn MapIterUDF>,
+    udf: &'a Arc<dyn StreamUDF>,
 }
 
 impl<'a> From<&'a MapPartitionsNode> for MapPartitionsNodeOrd<'a> {
     fn from(node: &'a MapPartitionsNode) -> Self {
         Self {
             input: &node.input,
-            input_names: &node.input_names,
-            output_names: &node.output_names,
             udf: &node.udf,
         }
     }
@@ -84,7 +73,7 @@ impl PartialOrd for MapPartitionsNode {
 
 impl UserDefinedLogicalNodeCore for MapPartitionsNode {
     fn name(&self) -> &str {
-        "MapPartition"
+        "MapPartitions"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -100,7 +89,7 @@ impl UserDefinedLogicalNodeCore for MapPartitionsNode {
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "MapPartition")
+        write!(f, "MapPartitions")
     }
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {

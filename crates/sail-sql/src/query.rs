@@ -822,8 +822,10 @@ fn query_plan_with_lateral_table_factor(
     });
     let (table_alias, column_aliases) = if let Some(alias) = alias {
         let ast::TableAlias { name, columns } = alias;
-        (
-            Some(from_ast_object_name(ast::ObjectName(vec![name]))?),
+        let table_alias = Some(from_ast_object_name(ast::ObjectName(vec![name]))?);
+        let column_aliases = if columns.is_empty() {
+            None
+        } else {
             Some(
                 columns
                     .iter()
@@ -835,8 +837,9 @@ fn query_plan_with_lateral_table_factor(
                         from_ast_ident(name, true)
                     })
                     .collect::<SqlResult<_>>()?,
-            ),
-        )
+            )
+        };
+        (table_alias, column_aliases)
     } else {
         (None, None)
     };
@@ -862,16 +865,22 @@ fn query_plan_with_lateral_views(
                 lateral_col_alias,
                 outer,
             } = lateral_view;
-            Ok(spec::QueryPlan::new(spec::QueryNode::LateralView {
-                input: Some(Box::new(plan)),
-                expression: from_ast_expression(lateral_view)?,
-                table_alias: Some(from_ast_object_name(lateral_view_name)?),
-                column_aliases: Some(
+            let table_alias = Some(from_ast_object_name(lateral_view_name)?);
+            let column_aliases = if lateral_col_alias.is_empty() {
+                None
+            } else {
+                Some(
                     lateral_col_alias
                         .iter()
                         .map(|x| from_ast_ident(x, true))
                         .collect::<SqlResult<_>>()?,
-                ),
+                )
+            };
+            Ok(spec::QueryPlan::new(spec::QueryNode::LateralView {
+                input: Some(Box::new(plan)),
+                expression: from_ast_expression(lateral_view)?,
+                table_alias,
+                column_aliases,
                 outer,
             }))
         })

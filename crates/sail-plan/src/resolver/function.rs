@@ -1,16 +1,26 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{plan_err, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::{expr, AggregateUDF, Expr, ExprSchemable, ScalarUDF};
+use datafusion_common::{plan_err, DFSchemaRef, DataFusionError, Result, TableReference};
+use datafusion_expr::{
+    expr, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, Projection, ScalarUDF,
+};
 use sail_common::spec;
+use sail_common::udf::StreamUDF;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
+use sail_python_udf::cereal::pyspark_udtf::PySparkUdtfPayload;
 use sail_python_udf::udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
+use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::logical::MapPartitionsNode;
+use crate::resolver::expression::NamedExpr;
+use crate::resolver::state::PlanResolverState;
+use crate::resolver::tree::table_input::TableInputRewriter;
 use crate::resolver::PlanResolver;
+use crate::utils::ItemTaker;
 
 pub(super) struct PythonUdf {
     pub python_version: String,
@@ -186,5 +196,97 @@ impl PlanResolver<'_> {
                 }))
             }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn resolve_python_udtf_plan(
+        &self,
+        function: PythonUdtf,
+        name: &str,
+        plan: LogicalPlan,
+        arguments: Vec<NamedExpr>,
+        function_output_names: Option<Vec<String>>,
+        function_output_qualifier: Option<TableReference>,
+        deterministic: bool,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let payload = PySparkUdtfPayload::build(
+            &function.python_version,
+            &function.command,
+            function.eval_type,
+            arguments.len(),
+            &function.return_type,
+            &self.config.spark_udf_config,
+        )?;
+        let kind = match function.eval_type {
+            spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
+            spec::PySparkUdfType::ArrowTable => PySparkUdtfKind::ArrowTable,
+            _ => {
+                return Err(PlanError::invalid(format!(
+                    "PySpark UDTF type: {:?}",
+                    function.eval_type,
+                )))
+            }
+        };
+        // Determine the number of passthrough columns before rewriting the plan
+        // for `TABLE (...)` arguments.
+        let passthrough_columns = plan.schema().fields().len();
+        let projections = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .map(|col| {
+                Ok(NamedExpr::new(
+                    vec![state.get_field_name(col.name())?.clone()],
+                    Expr::Column(col),
+                ))
+            })
+            .chain(arguments.into_iter().map(Ok))
+            .collect::<PlanResult<Vec<_>>>()?;
+        let (plan, projections) =
+            self.rewrite_projection::<TableInputRewriter>(plan, projections, state)?;
+        let input_names = projections
+            .iter()
+            .map(|e| e.name.clone().one())
+            .collect::<Result<_>>()?;
+        let projections = self.rewrite_named_expressions(projections, state)?;
+        let input_types = projections
+            .iter()
+            .map(|e| e.get_type(plan.schema()))
+            .collect::<Result<Vec<_>>>()?;
+        let udtf = PySparkUDTF::try_new(
+            kind,
+            get_udf_name(name, &payload),
+            payload,
+            input_names,
+            input_types,
+            passthrough_columns,
+            function.return_type,
+            function_output_names,
+            deterministic,
+            (&self.config.spark_udf_config).into(),
+        )?;
+        let output_names = state.register_fields(&udtf.output_schema());
+        let output_qualifiers = (0..output_names.len())
+            .map(|i| {
+                if i < passthrough_columns {
+                    let (qualifier, _) = plan.schema().qualified_field(i);
+                    qualifier.cloned()
+                } else {
+                    function_output_qualifier.clone()
+                }
+            })
+            .collect();
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(MapPartitionsNode::try_new(
+                Arc::new(LogicalPlan::Projection(Projection::try_new(
+                    projections,
+                    Arc::new(plan),
+                )?)),
+                output_names,
+                output_qualifiers,
+                Arc::new(udtf),
+            )?),
+        }))
     }
 }
