@@ -130,7 +130,7 @@ impl ScalarUDFImpl for SparkAESEncrypt {
         Ok(DataType::Binary)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
         if args.len() < 2 || args.len() > 6 {
             return exec_err!(
                 "Spark `aes_encrypt` function requires 2 to 6 arguments, got {}",
@@ -579,7 +579,7 @@ impl ScalarUDFImpl for SparkAESDecrypt {
         Ok(DataType::Binary)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
         if args.len() < 2 || args.len() > 5 {
             return exec_err!(
                 "Spark `aes_decrypt` function requires 2 to 5 arguments, got {}",
@@ -958,9 +958,8 @@ impl ScalarUDFImpl for SparkTryAESEncrypt {
         Ok(DataType::Binary)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        #[allow(deprecated)] // TODO use invoke_batch
-        let result = SparkAESEncrypt::new().invoke(args);
+    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
+        let result = SparkAESEncrypt::new().invoke_batch(args, number_rows);
         match result {
             Ok(result) => Ok(result),
             Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),
@@ -1004,9 +1003,8 @@ impl ScalarUDFImpl for SparkTryAESDecrypt {
         Ok(DataType::Binary)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        #[allow(deprecated)] // TODO use invoke_batch
-        let result = SparkAESDecrypt::new().invoke(args);
+    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
+        let result = SparkAESDecrypt::new().invoke_batch(args, number_rows);
         match result {
             Ok(result) => Ok(result),
             Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),
