@@ -130,7 +130,7 @@ pub enum Literal {
         values: Option<Vec<Literal>>,
     },
     FixedSizeList {
-        size: i32,
+        length: i32,
         data_type: spec::DataType,
         values: Option<Vec<Literal>>,
     },
