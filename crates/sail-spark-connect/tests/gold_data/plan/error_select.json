@@ -67,7 +67,7 @@
       "input": "SELECT cast(1 as badtype)",
       "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"BADTYPE\".(line 1, pos 17)\n\n== SQL ==\nSELECT cast(1 as badtype)\n-----------------^^^\n",
       "output": {
-        "failure": "not supported: SQL type Custom(ObjectName([Ident { value: \"badtype\", quote_style: None }]), [])"
+        "failure": "not supported: SQL type Custom(ObjectName([Ident { value: \"badtype\", quote_style: None, span: Span(Location(1,18)..Location(1,25)) }]), [])"
       }
     }
   ]

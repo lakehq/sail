@@ -26,7 +26,17 @@
                     "column_def": {
                       "name": {
                         "value": "b",
-                        "quote_style": null
+                        "quote_style": null,
+                        "span": {
+                          "start": {
+                            "line": 1,
+                            "column": 31
+                          },
+                          "end": {
+                            "line": 1,
+                            "column": 32
+                          }
+                        }
                       },
                       "data_type": {
                         "String": null
@@ -97,7 +107,17 @@
                     "column_def": {
                       "name": {
                         "value": "b",
-                        "quote_style": null
+                        "quote_style": null,
+                        "span": {
+                          "start": {
+                            "line": 1,
+                            "column": 31
+                          },
+                          "end": {
+                            "line": 1,
+                            "column": 32
+                          }
+                        }
                       },
                       "data_type": {
                         "String": null
@@ -298,7 +318,17 @@
                     "column_def": {
                       "name": {
                         "value": "x",
-                        "quote_style": null
+                        "quote_style": null,
+                        "span": {
+                          "start": {
+                            "line": 1,
+                            "column": 27
+                          },
+                          "end": {
+                            "line": 1,
+                            "column": 28
+                          }
+                        }
                       },
                       "data_type": {
                         "Int": null
@@ -386,7 +416,17 @@
                     "column_def": {
                       "name": {
                         "value": "x",
-                        "quote_style": null
+                        "quote_style": null,
+                        "span": {
+                          "start": {
+                            "line": 1,
+                            "column": 35
+                          },
+                          "end": {
+                            "line": 1,
+                            "column": 36
+                          }
+                        }
                       },
                       "data_type": {
                         "Int": null
@@ -424,7 +464,17 @@
                     "column_def": {
                       "name": {
                         "value": "x",
-                        "quote_style": null
+                        "quote_style": null,
+                        "span": {
+                          "start": {
+                            "line": 1,
+                            "column": 35
+                          },
+                          "end": {
+                            "line": 1,
+                            "column": 36
+                          }
+                        }
                       },
                       "data_type": {
                         "Int": null
@@ -435,7 +485,17 @@
                     "column_position": {
                       "After": {
                         "value": "y",
-                        "quote_style": null
+                        "quote_style": null,
+                        "span": {
+                          "start": {
+                            "line": 1,
+                            "column": 47
+                          },
+                          "end": {
+                            "line": 1,
+                            "column": 48
+                          }
+                        }
                       }
                     }
                   }
@@ -467,7 +527,17 @@
                     "column_def": {
                       "name": {
                         "value": "x",
-                        "quote_style": null
+                        "quote_style": null,
+                        "span": {
+                          "start": {
+                            "line": 1,
+                            "column": 35
+                          },
+                          "end": {
+                            "line": 1,
+                            "column": 36
+                          }
+                        }
                       },
                       "data_type": {
                         "Int": null
@@ -512,7 +582,17 @@
                     "column_def": {
                       "name": {
                         "value": "x",
-                        "quote_style": null
+                        "quote_style": null,
+                        "span": {
+                          "start": {
+                            "line": 1,
+                            "column": 35
+                          },
+                          "end": {
+                            "line": 1,
+                            "column": 36
+                          }
+                        }
                       },
                       "data_type": {
                         "Int": null
@@ -550,7 +630,17 @@
                     "column_def": {
                       "name": {
                         "value": "x",
-                        "quote_style": null
+                        "quote_style": null,
+                        "span": {
+                          "start": {
+                            "line": 1,
+                            "column": 35
+                          },
+                          "end": {
+                            "line": 1,
+                            "column": 36
+                          }
+                        }
                       },
                       "data_type": {
                         "Int": null
@@ -826,7 +916,17 @@
                         "KeyValue": {
                           "key": {
                             "value": "test",
-                            "quote_style": "'"
+                            "quote_style": "'",
+                            "span": {
+                              "start": {
+                                "line": 0,
+                                "column": 0
+                              },
+                              "end": {
+                                "line": 0,
+                                "column": 0
+                              }
+                            }
                           },
                           "value": {
                             "Value": {
@@ -839,7 +939,17 @@
                         "KeyValue": {
                           "key": {
                             "value": "comment",
-                            "quote_style": "'"
+                            "quote_style": "'",
+                            "span": {
+                              "start": {
+                                "line": 0,
+                                "column": 0
+                              },
+                              "end": {
+                                "line": 0,
+                                "column": 0
+                              }
+                            }
                           },
                           "value": {
                             "Value": {

@@ -67,16 +67,24 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
     match sql_type {
         ast::DataType::Null | ast::DataType::Void => Ok(spec::DataType::Null),
         ast::DataType::Boolean | ast::DataType::Bool => Ok(spec::DataType::Boolean),
-        ast::DataType::TinyInt(_) => Ok(spec::DataType::Int8),
-        ast::DataType::SmallInt(_) | ast::DataType::Int16 => Ok(spec::DataType::Int16),
+        ast::DataType::TinyInt(_) | ast::DataType::Byte(_) | ast::DataType::Int8(_) => {
+            Ok(spec::DataType::Int8)
+        }
+        ast::DataType::SmallInt(_) | ast::DataType::Short(_) | ast::DataType::Int16 => {
+            Ok(spec::DataType::Int16)
+        }
         ast::DataType::Int(_) | ast::DataType::Integer(_) | ast::DataType::Int32 => {
             Ok(spec::DataType::Int32)
         }
         ast::DataType::BigInt(_) | ast::DataType::Long(_) | ast::DataType::Int64 => {
             Ok(spec::DataType::Int64)
         }
-        ast::DataType::UnsignedTinyInt(_) | ast::DataType::UInt8 => Ok(spec::DataType::UInt8),
-        ast::DataType::UnsignedSmallInt(_) | ast::DataType::UInt16 => Ok(spec::DataType::UInt16),
+        ast::DataType::UnsignedTinyInt(_)
+        | ast::DataType::UnsignedByte(_)
+        | ast::DataType::UInt8 => Ok(spec::DataType::UInt8),
+        ast::DataType::UnsignedSmallInt(_)
+        | ast::DataType::UnsignedShort(_)
+        | ast::DataType::UInt16 => Ok(spec::DataType::UInt16),
         ast::DataType::UnsignedInt(_)
         | ast::DataType::UnsignedInteger(_)
         | ast::DataType::UInt32 => Ok(spec::DataType::UInt32),
@@ -276,7 +284,6 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         }
         ast::DataType::Int2(_)
         | ast::DataType::Int4(_)
-        | ast::DataType::Int8(_)
         | ast::DataType::Int128
         | ast::DataType::Int256
         | ast::DataType::MediumInt(_)
@@ -293,13 +300,21 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         | ast::DataType::Blob(_)
         | ast::DataType::Datetime(_)
         | ast::DataType::Regclass
-        | ast::DataType::Enum(_)
+        | ast::DataType::Enum(_, _)
         | ast::DataType::Set(_)
         | ast::DataType::CharacterLargeObject(_)
         | ast::DataType::CharLargeObject(_)
         | ast::DataType::Time(_, _)
         | ast::DataType::BigNumeric(_)
         | ast::DataType::BigDecimal(_)
+        | ast::DataType::TinyBlob
+        | ast::DataType::MediumBlob
+        | ast::DataType::LongBlob
+        | ast::DataType::TinyText
+        | ast::DataType::MediumText
+        | ast::DataType::LongText
+        | ast::DataType::Bit(_)
+        | ast::DataType::BitVarying(_)
         | ast::DataType::Clob(_)
         | ast::DataType::Bytes(_)
         | ast::DataType::JSONB
@@ -314,8 +329,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         | ast::DataType::Union(_)
         | ast::DataType::Nullable(_)
         | ast::DataType::Trigger
-        | ast::DataType::LowCardinality(_) => {
-            Err(SqlError::unsupported(format!("SQL type {sql_type:?}")))
-        }
+        | ast::DataType::LowCardinality(_)
+        | ast::DataType::AnyType => Err(SqlError::unsupported(format!("SQL type {sql_type:?}"))),
     }
 }

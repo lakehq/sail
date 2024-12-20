@@ -393,15 +393,7 @@
     {
       "input": "9.e+1BD",
       "output": {
-        "success": {
-          "literal": {
-            "decimal128": {
-              "value": 90,
-              "precision": 2,
-              "scale": 0
-            }
-          }
-        }
+        "failure": "invalid argument: extra tokens after wildcard expression: ."
       }
     },
     {

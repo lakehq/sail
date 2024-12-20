@@ -657,7 +657,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a value, found: - at Line: 1, Column: 21"
+        "failure": "error in DataFusion: Error during planning: one value expected: [Literal(Decimal128(Some(31411),5,4)), Negative(Literal(Int32(3)))]"
       }
     },
     {
@@ -1097,7 +1097,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a value, found: - at Line: 1, Column: 22"
+        "failure": "error in DataFusion: Error during planning: one value expected: [Literal(Decimal128(Some(31411),5,4)), Negative(Literal(Int32(3)))]"
       }
     },
     {
