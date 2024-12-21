@@ -164,7 +164,7 @@ impl TryFrom<Literal> for spec::Literal {
                 timezone_info: spec::TimeZoneInfo::NoTimeZone,
             },
             LiteralType::CalendarInterval(x) => {
-                let nanoseconds = x.microseconds * 1000;
+                let nanoseconds = x.microseconds * 1_000;
                 spec::Literal::IntervalMonthDayNano {
                     months: Some(x.months),
                     days: Some(x.days),
