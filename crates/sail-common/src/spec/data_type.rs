@@ -564,5 +564,5 @@ pub enum TimeZoneInfo {
     Configured,
     LocalTimeZone,
     NoTimeZone,
-    TimeZone { timezone: Arc<str> },
+    TimeZone { timezone: Option<Arc<str>> },
 }

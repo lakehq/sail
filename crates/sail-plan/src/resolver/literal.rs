@@ -43,7 +43,9 @@ impl PlanResolver<'_> {
                 timezone,
             } => {
                 let timezone_info = match timezone {
-                    Some(timezone) => spec::TimeZoneInfo::TimeZone { timezone },
+                    Some(timezone) => spec::TimeZoneInfo::TimeZone {
+                        timezone: Some(timezone),
+                    },
                     None => spec::TimeZoneInfo::Configured,
                 };
                 Ok(ScalarValue::TimestampMicrosecond(

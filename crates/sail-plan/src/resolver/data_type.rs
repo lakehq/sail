@@ -495,13 +495,16 @@ impl PlanResolver<'_> {
                 Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
             }
             spec::TimeZoneInfo::NoTimeZone => Ok(None),
-            spec::TimeZoneInfo::TimeZone { timezone } => {
-                if timezone.is_empty() {
-                    Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
-                } else {
-                    Ok(Some(Arc::clone(timezone)))
+            spec::TimeZoneInfo::TimeZone { timezone } => match timezone {
+                None => Ok(Some(Arc::<str>::from(self.config.timezone.as_str()))),
+                Some(timezone) => {
+                    if timezone.is_empty() {
+                        Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
+                    } else {
+                        Ok(Some(Arc::clone(timezone)))
+                    }
                 }
-            }
+            },
         }
     }
 
@@ -509,7 +512,7 @@ impl PlanResolver<'_> {
         match timezone {
             None => Ok(spec::TimeZoneInfo::NoTimeZone),
             Some(timezone) => Ok(spec::TimeZoneInfo::TimeZone {
-                timezone: Arc::clone(timezone),
+                timezone: Some(Arc::clone(timezone)),
             }),
         }
     }
