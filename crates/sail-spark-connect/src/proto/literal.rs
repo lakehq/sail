@@ -118,21 +118,21 @@ impl TryFrom<Literal> for spec::Literal {
                         spec::DataType::List { data_type, nullable } => Ok(spec::Literal::List { data_type: *data_type, values: None }),
                         spec::DataType::FixedSizeList { data_type, nullable, length } => Ok(spec::Literal::FixedSizeList { length, data_type: *data_type, values: None }),
                         spec::DataType::LargeList { data_type, nullable } => Ok(spec::Literal::LargeList { data_type: *data_type, values: None }),
-                        spec::DataType::Struct { fields } => spec::Literal::Struct { value: None },
-                        spec::DataType::Union { .. } => spec::Literal::Boolean { value: None },
-                        spec::DataType::Dictionary { .. } => spec::Literal::Boolean { value: None },
+                        spec::DataType::Struct { fields } => Ok(spec::Literal::Struct { data_type: spec::DataType::Struct { fields }, values: None }),
+                        spec::DataType::Union { union_fields, union_mode } => Ok(spec::Literal::Union { union_fields, union_mode, value: None }),
+                        spec::DataType::Dictionary { key_type, value_type } => Ok(spec::Literal::Dictionary { key_type: *key_type, value_type: *value_type, value: None }),
                         spec::DataType::Decimal128 { precision, scale } => Ok(spec::Literal::Decimal128 { precision, scale, value: None }),
                         spec::DataType::Decimal256 { precision, scale } => Ok(spec::Literal::Decimal256 { precision, scale, value: None }),
                         spec::DataType::Map { key_type, value_type, value_type_nullable: _, keys_sorted: _ } => Ok(spec::Literal::Map { key_type: *key_type, value_type: *value_type, keys: None, values: None }),
-                        spec::DataType::UserDefined { .. } => spec::Literal::Boolean { value: None },
-                        spec::DataType::ConfiguredUtf8 { .. } => spec::Literal::Boolean { value: None },
-                        spec::DataType::ConfiguredBinary => spec::Literal::Boolean { value: None },
-                    }
+                        spec::DataType::ConfiguredUtf8 { .. } => Ok(spec::Literal::Utf8 { value: None }), // [CHECK HERE] DataType::ConfiguredUtf8 should be removed
+                        spec::DataType::ConfiguredBinary => Ok(spec::Literal::Binary { value: None }),  // [CHECK HERE] DataType::ConfiguredBinary should be removed
+                        spec::DataType::UserDefined { .. } => Err(SparkError::todo("TryFrom Spark Literal to Sail Literal UserDefined")),
+                    }?
                 } else {
-                    Ok(spec::Literal::Null)
+                    Ok(spec::Literal::Null)?
                 }
             }
-            LiteralType::Binary(x) => spec::Literal::Binary(x),
+            LiteralType::Binary(x) => spec::Literal::Binary { value: Some(x) },
             LiteralType::Boolean(x) => spec::Literal::Boolean(x),
             LiteralType::Byte(x) => spec::Literal::Byte(x as i8),
             LiteralType::Short(x) => spec::Literal::Short(x as i16),
