@@ -2,7 +2,6 @@ use sail_common::spec;
 use sail_sql::literal::parse_decimal_string;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::proto::data_type::SPARK_DECIMAL_USER_DEFAULT_SCALE;
 use crate::spark::connect::expression::literal::{Array, Decimal, LiteralType, Map, Struct};
 use crate::spark::connect::expression::Literal;
 
@@ -115,9 +114,9 @@ impl TryFrom<Literal> for spec::Literal {
                         spec::DataType::Utf8 => Ok(spec::Literal::Utf8 { value: None }),
                         spec::DataType::LargeUtf8 => Ok(spec::Literal::LargeUtf8 { value: None }),
                         spec::DataType::Utf8View => Ok(spec::Literal::Utf8View { value: None }),
-                        spec::DataType::List { data_type, nullable } => Ok(spec::Literal::List { data_type: *data_type, values: None }),
-                        spec::DataType::FixedSizeList { data_type, nullable, length } => Ok(spec::Literal::FixedSizeList { length, data_type: *data_type, values: None }),
-                        spec::DataType::LargeList { data_type, nullable } => Ok(spec::Literal::LargeList { data_type: *data_type, values: None }),
+                        spec::DataType::List { data_type, nullable: _ } => Ok(spec::Literal::List { data_type: *data_type, values: None }),
+                        spec::DataType::FixedSizeList { data_type, nullable: _, length } => Ok(spec::Literal::FixedSizeList { length, data_type: *data_type, values: None }),
+                        spec::DataType::LargeList { data_type, nullable: _ } => Ok(spec::Literal::LargeList { data_type: *data_type, values: None }),
                         spec::DataType::Struct { fields } => Ok(spec::Literal::Struct { data_type: spec::DataType::Struct { fields }, values: None }),
                         spec::DataType::Union { union_fields, union_mode } => Ok(spec::Literal::Union { union_fields, union_mode, value: None }),
                         spec::DataType::Dictionary { key_type, value_type } => Ok(spec::Literal::Dictionary { key_type: *key_type, value_type: *value_type, value: None }),
@@ -133,13 +132,17 @@ impl TryFrom<Literal> for spec::Literal {
                 }
             }
             LiteralType::Binary(x) => spec::Literal::Binary { value: Some(x) },
-            LiteralType::Boolean(x) => spec::Literal::Boolean(x),
-            LiteralType::Byte(x) => spec::Literal::Byte(x as i8),
-            LiteralType::Short(x) => spec::Literal::Short(x as i16),
-            LiteralType::Integer(x) => spec::Literal::Integer(x),
-            LiteralType::Long(x) => spec::Literal::Long(x),
-            LiteralType::Float(x) => spec::Literal::Float(x),
-            LiteralType::Double(x) => spec::Literal::Double(x),
+            LiteralType::Boolean(x) => spec::Literal::Boolean { value: Some(x) },
+            LiteralType::Byte(x) => spec::Literal::Int8 {
+                value: Some(x as i8),
+            },
+            LiteralType::Short(x) => spec::Literal::Int16 {
+                value: Some(x as i16),
+            },
+            LiteralType::Integer(x) => spec::Literal::Int32 { value: Some(x) },
+            LiteralType::Long(x) => spec::Literal::Int64 { value: Some(x) },
+            LiteralType::Float(x) => spec::Literal::Float32 { value: Some(x) },
+            LiteralType::Double(x) => spec::Literal::Float64 { value: Some(x) },
             LiteralType::Decimal(Decimal {
                 value,
                 precision,
@@ -148,41 +151,45 @@ impl TryFrom<Literal> for spec::Literal {
                 if precision.is_some() || scale.is_some() {
                     return Err(SparkError::todo("decimal literal with precision or scale"));
                 }
-                let decimal_literal = parse_decimal_string(value.as_str())?;
-                match decimal_literal {
-                    spec::DecimalLiteral::Decimal128(decimal128) => {
-                        spec::Literal::Decimal128(decimal128)
-                    }
-                    spec::DecimalLiteral::Decimal256(decimal256) => {
-                        spec::Literal::Decimal256(decimal256)
-                    }
+                parse_decimal_string(value.as_str())?
+            }
+            LiteralType::String(x) => spec::Literal::Utf8 { value: Some(x) },
+            LiteralType::Date(x) => spec::Literal::Date32 { days: Some(x) },
+            LiteralType::Timestamp(x) => spec::Literal::TimestampMicrosecond {
+                microseconds: Some(x),
+                timezone_info: spec::TimeZoneInfo::Configured,
+            },
+            LiteralType::TimestampNtz(x) => spec::Literal::TimestampMicrosecond {
+                microseconds: Some(x),
+                timezone_info: spec::TimeZoneInfo::NoTimeZone,
+            },
+            LiteralType::CalendarInterval(x) => {
+                let nanoseconds = x.microseconds * 1000;
+                spec::Literal::IntervalMonthDayNano {
+                    months: Some(x.months),
+                    days: Some(x.days),
+                    nanoseconds: Some(nanoseconds),
                 }
             }
-            LiteralType::String(x) => spec::Literal::String(x),
-            LiteralType::Date(x) => spec::Literal::Date { days: x },
-            LiteralType::Timestamp(x) => spec::Literal::TimestampMicrosecond {
-                microseconds: x,
-                timezone: None,
+            LiteralType::YearMonthInterval(x) => {
+                spec::Literal::IntervalYearMonth { months: Some(x) }
+            }
+            LiteralType::DayTimeInterval(x) => spec::Literal::DurationMicrosecond {
+                microseconds: Some(x),
             },
-            LiteralType::TimestampNtz(x) => spec::Literal::TimestampNtz { microseconds: x },
-            LiteralType::CalendarInterval(x) => spec::Literal::CalendarInterval {
-                months: x.months,
-                days: x.days,
-                microseconds: x.microseconds,
-            },
-            LiteralType::YearMonthInterval(x) => spec::Literal::YearMonthInterval { months: x },
-            LiteralType::DayTimeInterval(x) => spec::Literal::DayTimeInterval { microseconds: x },
             LiteralType::Array(Array {
                 element_type,
                 elements,
             }) => {
                 let element_type = element_type.required("element type")?;
-                spec::Literal::Array {
-                    element_type: element_type.try_into()?,
-                    elements: elements
-                        .into_iter()
-                        .map(|x| x.try_into())
-                        .collect::<SparkResult<_>>()?,
+                spec::Literal::List {
+                    data_type: element_type.try_into()?,
+                    values: Some(
+                        elements
+                            .into_iter()
+                            .map(|x| x.try_into())
+                            .collect::<SparkResult<_>>()?,
+                    ),
                 }
             }
             LiteralType::Map(Map {
@@ -196,14 +203,17 @@ impl TryFrom<Literal> for spec::Literal {
                 spec::Literal::Map {
                     key_type: key_type.try_into()?,
                     value_type: value_type.try_into()?,
-                    keys: keys
-                        .into_iter()
-                        .map(|x| x.try_into())
-                        .collect::<SparkResult<_>>()?,
-                    values: values
-                        .into_iter()
-                        .map(|x| x.try_into())
-                        .collect::<SparkResult<_>>()?,
+                    keys: Some(
+                        keys.into_iter()
+                            .map(|x| x.try_into())
+                            .collect::<SparkResult<_>>()?,
+                    ),
+                    values: Some(
+                        values
+                            .into_iter()
+                            .map(|x| x.try_into())
+                            .collect::<SparkResult<_>>()?,
+                    ),
                 }
             }
             LiteralType::Struct(Struct {
@@ -212,11 +222,13 @@ impl TryFrom<Literal> for spec::Literal {
             }) => {
                 let struct_type = struct_type.required("struct type")?;
                 spec::Literal::Struct {
-                    struct_type: struct_type.try_into()?,
-                    elements: elements
-                        .into_iter()
-                        .map(|x| x.try_into())
-                        .collect::<SparkResult<_>>()?,
+                    data_type: struct_type.try_into()?,
+                    values: Some(
+                        elements
+                            .into_iter()
+                            .map(|x| x.try_into())
+                            .collect::<SparkResult<_>>()?,
+                    ),
                 }
             }
         };

@@ -605,7 +605,7 @@ pub fn parse_decimal_256_string(s: &str) -> SqlResult<spec::Decimal256> {
     }
 }
 
-pub fn parse_decimal_string(s: &str) -> SqlResult<spec::DecimalLiteral> {
+pub fn parse_decimal_string(s: &str) -> SqlResult<spec::Literal> {
     let error = || SqlError::invalid(format!("decimal: {s}"));
     let captures = DECIMAL_REGEX
         .captures(s)
@@ -648,14 +648,18 @@ pub fn parse_decimal_string(s: &str) -> SqlResult<spec::DecimalLiteral> {
         Err(error())
     } else if precision > ARROW_DECIMAL128_MAX_PRECISION {
         let value: i256 = value.parse().map_err(|_| error())?;
-        Ok(spec::DecimalLiteral::Decimal256(spec::Decimal256::new(
-            value, precision, scale,
-        )))
+        Ok(spec::Literal::Decimal256 {
+            precision,
+            scale,
+            value: Some(value),
+        })
     } else {
         let value: i128 = value.parse().map_err(|_| error())?;
-        Ok(spec::DecimalLiteral::Decimal128(spec::Decimal128::new(
-            value, precision, scale,
-        )))
+        Ok(spec::Literal::Decimal128 {
+            precision,
+            scale,
+            value: Some(value),
+        })
     }
 }
 
