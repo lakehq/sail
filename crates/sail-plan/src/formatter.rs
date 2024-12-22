@@ -1,12 +1,13 @@
+use half::f16;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
-use sail_common::object::DynObject;
-use sail_common::{impl_dyn_object_traits, spec};
-
+use crate::config::TimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::utils::ItemTaker;
+use sail_common::object::DynObject;
+use sail_common::{impl_dyn_object_traits, spec};
 
 /// Utilities to format various data structures in the plan specification.
 pub trait PlanFormatter: DynObject + Debug + Send + Sync {
@@ -14,7 +15,12 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
     fn data_type_to_simple_string(&self, data_type: &spec::DataType) -> PlanResult<String>;
 
     /// Returns a human-readable string for the literal.
-    fn literal_to_string(&self, literal: &spec::Literal) -> PlanResult<String>;
+    fn literal_to_string(
+        &self,
+        literal: &spec::Literal,
+        config_timezone: &str,
+        config_timestamp_type: &TimestampType,
+    ) -> PlanResult<String>;
 
     /// Returns a human-readable string for the function call.
     fn function_to_string(
@@ -253,99 +259,244 @@ impl PlanFormatter for DefaultPlanFormatter {
         }
     }
 
-    fn literal_to_string(&self, literal: &spec::Literal) -> PlanResult<String> {
+    fn literal_to_string(
+        &self,
+        literal: &spec::Literal,
+        config_timezone: &str,
+        config_timestamp_type: &TimestampType,
+    ) -> PlanResult<String> {
         use spec::Literal;
 
         let literal_list_to_string = |name: &str, values: &Vec<Literal>| -> PlanResult<String> {
             let values = values
                 .iter()
-                .map(|x| self.literal_to_string(x))
+                .map(|x| self.literal_to_string(x, config_timezone, config_timestamp_type))
                 .collect::<PlanResult<Vec<String>>>()?;
             Ok(format!("{name}({})", values.join(", ")))
         };
 
         match literal {
             Literal::Null => Ok("NULL".to_string()),
-            Literal::Binary(x) => Ok(BinaryDisplay(x).to_string()),
-            Literal::Boolean(x) => Ok(format!("{x}")),
-            Literal::Byte(x) => Ok(format!("{x}")),
-            Literal::Short(x) => Ok(format!("{x}")),
-            Literal::Integer(x) => Ok(format!("{x}")),
-            Literal::Long(x) => Ok(format!("{x}")),
-            Literal::Float(x) => {
-                let mut buffer = ryu::Buffer::new();
-                Ok(buffer.format(*x).to_string())
-            }
-            Literal::Double(x) => {
-                let mut buffer = ryu::Buffer::new();
-                Ok(buffer.format(*x).to_string())
-            }
-            Literal::Decimal128(x) => Ok(Decimal128Display(x).to_string()),
-            Literal::Decimal256(x) => Ok(Decimal256Display(x).to_string()),
-            Literal::String(x) => Ok(x.clone()),
-            Literal::Date { days } => {
-                let date = chrono::NaiveDateTime::UNIX_EPOCH + chrono::Duration::days(*days as i64);
-                Ok(format!("DATE '{}'", date.format("%Y-%m-%d")))
-            }
+            Literal::Boolean { value } => match value {
+                Some(value) => Ok(format!("{value}")),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Int8 { value } => match value {
+                Some(value) => Ok(format!("{value}")),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Int16 { value } => match value {
+                Some(value) => Ok(format!("{value}")),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Int32 { value } => match value {
+                Some(value) => Ok(format!("{value}")),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Int64 { value } => match value {
+                Some(value) => Ok(format!("{value}")),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::UInt8 { value } => match value {
+                Some(value) => Ok(format!("{value}")),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::UInt16 { value } => match value {
+                Some(value) => Ok(format!("{value}")),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::UInt32 { value } => match value {
+                Some(value) => Ok(format!("{value}")),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::UInt64 { value } => match value {
+                Some(value) => Ok(format!("{value}")),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Float16 { value } => match value {
+                Some(value) => {
+                    let value = f16::to_f32(*value);
+                    let mut buffer = ryu::Buffer::new();
+                    Ok(buffer.format(value).to_string())
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Float32 { value } => match value {
+                Some(value) => {
+                    let mut buffer = ryu::Buffer::new();
+                    Ok(buffer.format(*value).to_string())
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Float64 { value } => match value {
+                Some(value) => {
+                    let mut buffer = ryu::Buffer::new();
+                    Ok(buffer.format(*value).to_string())
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::TimestampSecond {
+                seconds,
+                timezone_info,
+            } => match seconds {
+                Some(seconds) => {
+                    let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
+                        + chrono::Duration::seconds(*seconds))
+                    .and_utc();
+                    format_timestamp(
+                        utc_datetime,
+                        "%Y-%m-%d %H:%M:%S",
+                        timezone_info,
+                        config_timezone,
+                        config_timestamp_type,
+                    )
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::TimestampMillisecond {
+                milliseconds,
+                timezone_info,
+            } => match milliseconds {
+                Some(milliseconds) => {
+                    let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
+                        + chrono::Duration::milliseconds(*milliseconds))
+                    .and_utc();
+                    format_timestamp(
+                        utc_datetime,
+                        "%Y-%m-%d %H:%M:%S.%3f",
+                        timezone_info,
+                        config_timezone,
+                        config_timestamp_type,
+                    )
+                }
+                None => Ok("NULL".to_string()),
+            },
             Literal::TimestampMicrosecond {
                 microseconds,
-                timezone: _timezone,
-            } => {
-                // TODO: Integrate timezone
-                let date_time = chrono::NaiveDateTime::UNIX_EPOCH
-                    + chrono::Duration::microseconds(*microseconds);
-                Ok(format!(
-                    "TIMESTAMP '{}'",
-                    date_time.format("%Y-%m-%d %H:%M:%S.%6f")
-                ))
-            }
-            Literal::TimestampNtz { microseconds } => {
-                let date_time = chrono::NaiveDateTime::UNIX_EPOCH
-                    + chrono::Duration::microseconds(*microseconds);
-                Ok(format!(
-                    "TIMESTAMP_NTZ '{}'",
-                    date_time.format("%Y-%m-%d %H:%M:%S.%6f")
-                ))
-            }
-            Literal::CalendarInterval {
-                months,
-                days,
-                microseconds,
-            } => {
-                let years = *months / 12;
-                let months = *months % 12;
-                let days = *days;
-                let hours = *microseconds / 3_600_000_000;
-                let minutes = (*microseconds % 3_600_000_000) / 60_000_000;
-                let seconds = (*microseconds % 60_000_000) / 1_000_000;
-                let milliseconds = (*microseconds % 1_000_000) / 1_000;
-                let microseconds = *microseconds % 1_000;
-                Ok(format!(
-                    "INTERVAL {years} YEAR {months} MONTH {days} DAY {hours} HOUR {minutes} MINUTE {seconds} SECOND {milliseconds} MILLISECOND {microseconds} MICROSECOND"
-                ))
-            }
-            Literal::YearMonthInterval { months } => {
-                if *months < 0 {
-                    let years = *months / -12;
-                    let months = -(*months % -12);
-                    Ok(format!("INTERVAL '-{years}-{months}' YEAR TO MONTH"))
-                } else {
-                    let years = *months / 12;
-                    let months = *months % 12;
-                    Ok(format!("INTERVAL '{years}-{months}' YEAR TO MONTH"))
+                timezone_info,
+            } => match microseconds {
+                Some(microseconds) => {
+                    let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
+                        + chrono::Duration::microseconds(*microseconds))
+                    .and_utc();
+                    format_timestamp(
+                        utc_datetime,
+                        "%Y-%m-%d %H:%M:%S.%6f",
+                        timezone_info,
+                        config_timezone,
+                        config_timestamp_type,
+                    )
                 }
-            }
-            Literal::DayTimeInterval { microseconds } => {
-                if *microseconds < 0 {
-                    let days = *microseconds / -86_400_000_000;
-                    let hours = (*microseconds % -86_400_000_000) / -3_600_000_000;
-                    let minutes = (*microseconds % -3_600_000_000) / -60_000_000;
-                    let seconds = (*microseconds % -60_000_000) / -1_000_000;
-                    let microseconds = -(*microseconds % -1_000_000);
+                None => Ok("NULL".to_string()),
+            },
+            Literal::TimestampNanosecond {
+                nanoseconds,
+                timezone_info,
+            } => match nanoseconds {
+                Some(nanoseconds) => {
+                    let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
+                        + chrono::Duration::nanoseconds(*nanoseconds))
+                    .and_utc();
+                    format_timestamp(
+                        utc_datetime,
+                        "%Y-%m-%d %H:%M:%S.%9f",
+                        timezone_info,
+                        config_timezone,
+                        config_timestamp_type,
+                    )
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Date32 { days } => match days {
+                Some(days) => {
+                    let date =
+                        chrono::NaiveDateTime::UNIX_EPOCH + chrono::Duration::days(*days as i64);
+                    Ok(format!("DATE '{}'", date.format("%Y-%m-%d")))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Date64 { milliseconds } => match milliseconds {
+                Some(milliseconds) => {
+                    let date = chrono::NaiveDateTime::UNIX_EPOCH
+                        + chrono::Duration::milliseconds(*milliseconds);
+                    Ok(format!("DATE '{}'", date.format("%Y-%m-%d")))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Time32Second { seconds } => match seconds {
+                Some(seconds) => {
+                    let secs = *seconds as u32;
+                    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, 0)
+                        .ok_or_else(|| {
+                            PlanError::invalid("invalid Time32Second: literal to string")
+                        })?;
+                    Ok(format!("TIME '{}'", time.format("%H:%M:%S")))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Time32Millisecond { milliseconds } => match milliseconds {
+                Some(milliseconds) => {
+                    let secs = (*milliseconds / 1000) as u32;
+                    let nanos = ((*milliseconds % 1000) * 1_000_000) as u32;
+                    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
+                        .ok_or_else(|| {
+                        PlanError::invalid("invalid Time32Millisecond: literal to string")
+                    })?;
+                    Ok(format!("TIME '{}'", time.format("%H:%M:%S.%3f")))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Time64Microsecond { microseconds } => match microseconds {
+                Some(microseconds) => {
+                    let secs = (*microseconds / 1_000_000) as u32;
+                    let nanos = ((*microseconds % 1_000_000) * 1000) as u32;
+                    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
+                        .ok_or_else(|| {
+                        PlanError::invalid("invalid Time64Microsecond: literal to string")
+                    })?;
+                    Ok(format!("TIME '{}'", time.format("%H:%M:%S.%6f")))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Time64Nanosecond { nanoseconds } => match nanoseconds {
+                Some(nanoseconds) => {
+                    let secs = (*nanoseconds / 1_000_000_000) as u32;
+                    let nanos = (*nanoseconds % 1_000_000_000) as u32;
+                    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
+                        .ok_or_else(|| {
+                        PlanError::invalid("invalid Time64Nanosecond: literal to string")
+                    })?;
+                    Ok(format!("TIME '{}'", time.format("%H:%M:%S.%9f")))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::DurationSecond { seconds } => match seconds {
+                Some(seconds) => {
+                    let days = *seconds / 86_400;
+                    let hours = (*seconds % 86_400) / 3_600;
+                    let minutes = (*seconds % 3_600) / 60;
+                    let seconds = *seconds % 60;
                     Ok(format!(
-                        "INTERVAL '-{days} {hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}' DAY TO SECOND"
+                        "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}' DAY TO SECOND"
                     ))
-                } else {
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::DurationMillisecond { milliseconds } => match milliseconds {
+                Some(milliseconds) => {
+                    let days = *milliseconds / 86_400_000;
+                    let hours = (*milliseconds % 86_400_000) / 3_600_000;
+                    let minutes = (*milliseconds % 3_600_000) / 60_000;
+                    let seconds = (*milliseconds % 60_000) / 1_000;
+                    let milliseconds = *milliseconds % 1_000;
+                    Ok(format!(
+                        "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
+                    ))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::DurationMicrosecond { microseconds } => match microseconds {
+                Some(microseconds) => {
                     let days = *microseconds / 86_400_000_000;
                     let hours = (*microseconds % 86_400_000_000) / 3_600_000_000;
                     let minutes = (*microseconds % 3_600_000_000) / 60_000_000;
@@ -355,34 +506,180 @@ impl PlanFormatter for DefaultPlanFormatter {
                         "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}' DAY TO SECOND",
                     ))
                 }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::DurationNanosecond { nanoseconds } => match nanoseconds {
+                Some(nanoseconds) => {
+                    let days = *nanoseconds / 86_400_000_000_000;
+                    let hours = (*nanoseconds % 86_400_000_000_000) / 3_600_000_000_000;
+                    let minutes = (*nanoseconds % 3_600_000_000_000) / 60_000_000_000;
+                    let seconds = (*nanoseconds % 60_000_000_000) / 1_000_000_000;
+                    let nanoseconds = *nanoseconds % 1_000_000_000;
+                    Ok(format!(
+                        "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}.{nanoseconds:09}' DAY TO SECOND"
+                    ))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::IntervalYearMonth { months } => match months {
+                Some(months) => {
+                    let years = *months / 12;
+                    let months = *months % 12;
+                    Ok(format!("INTERVAL '{years}-{months}' YEAR TO MONTH"))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::IntervalDayTime { days, milliseconds } => match (days, milliseconds) {
+                (Some(days), Some(milliseconds)) => {
+                    let hours = (*milliseconds % 86_400_000) / 3_600_000;
+                    let minutes = (*milliseconds % 3_600_000) / 60_000;
+                    let seconds = (*milliseconds % 60_000) / 1_000;
+                    let milliseconds = *milliseconds % 1_000;
+                    Ok(format!(
+                        "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
+                    ))
+                }
+                _ => Ok("NULL".to_string()),
+            },
+            Literal::IntervalMonthDayNano {
+                months,
+                days,
+                nanoseconds,
+            } => match (months, days, nanoseconds) {
+                (Some(months), Some(days), Some(nanoseconds)) => {
+                    let years = *months / 12;
+                    let months = *months % 12;
+                    let days = *days;
+                    let hours = *nanoseconds / 3_600_000_000_000;
+                    let minutes = (*nanoseconds % 3_600_000_000_000) / 60_000_000_000;
+                    let seconds = (*nanoseconds % 60_000_000_000) / 1_000_000_000;
+                    let milliseconds = (*nanoseconds % 1_000_000_000) / 1_000_000;
+                    let microseconds = (*nanoseconds % 1_000_000) / 1_000;
+                    let nanoseconds = *nanoseconds % 1_000;
+                    Ok(format!(
+                        "INTERVAL {years} YEAR {months} MONTH {days} DAY {hours} HOUR {minutes} MINUTE {seconds} SECOND {milliseconds} MILLISECOND {microseconds} MICROSECOND {nanoseconds} NANOSECOND"
+                    ))
+                }
+                _ => Ok("NULL".to_string()),
+            },
+            Literal::Binary { value }
+            | Literal::FixedSizeBinary { size: _, value }
+            | Literal::LargeBinary { value }
+            | Literal::BinaryView { value } => match value {
+                Some(value) => Ok(BinaryDisplay(value).to_string()),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Utf8 { value }
+            | Literal::LargeUtf8 { value }
+            | Literal::Utf8View { value } => match value {
+                Some(value) => Ok(value.clone()),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::List {
+                data_type: _,
+                values,
             }
-            Literal::Array { elements, .. } => literal_list_to_string("array", elements),
-            Literal::Map { keys, values, .. } => {
-                let k = literal_list_to_string("array", keys)?;
-                let v = literal_list_to_string("array", values)?;
-                Ok(format!("map({k}, {v})"))
+            | Literal::FixedSizeList {
+                length: _,
+                data_type: _,
+                values,
             }
-            Literal::Struct {
-                struct_type,
-                elements,
-            } => {
-                let fields = match struct_type {
-                    spec::DataType::Struct { fields } => fields,
-                    _ => return Err(PlanError::invalid("struct type")),
-                };
-                let fields = fields
-                    .iter()
-                    .zip(elements.iter())
-                    .map(|(field, value)| {
-                        Ok(format!(
-                            "{} AS {}",
-                            self.literal_to_string(value)?,
-                            field.name
-                        ))
-                    })
-                    .collect::<PlanResult<Vec<String>>>()?;
-                Ok(format!("struct({})", fields.join(", ")))
-            }
+            | Literal::LargeList {
+                data_type: _,
+                values,
+            } => match values {
+                Some(values) => literal_list_to_string("array", values),
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Struct { data_type, values } => match values {
+                Some(values) => {
+                    let fields = match data_type {
+                        spec::DataType::Struct { fields } => fields,
+                        other => {
+                            return Err(PlanError::invalid(format!(
+                                "literal to string: expected Struct type, got {other:?}"
+                            )))
+                        }
+                    };
+                    let fields = fields
+                        .iter()
+                        .zip(values.iter())
+                        .map(|(field, value)| {
+                            Ok(format!(
+                                "{} AS {}",
+                                self.literal_to_string(
+                                    value,
+                                    config_timezone,
+                                    config_timestamp_type
+                                )?,
+                                field.name
+                            ))
+                        })
+                        .collect::<PlanResult<Vec<String>>>()?;
+                    Ok(format!("struct({})", fields.join(", ")))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Union {
+                union_fields: _,
+                union_mode: _,
+                value,
+            } => match value {
+                Some((id, value)) => {
+                    let value =
+                        self.literal_to_string(value, config_timezone, config_timestamp_type)?;
+                    Ok(format!("{id}:{value}"))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Dictionary {
+                key_type: _,
+                value_type: _,
+                value,
+            } => match value {
+                Some(value) => {
+                    let value =
+                        self.literal_to_string(value, config_timezone, config_timestamp_type)?;
+                    Ok(format!("dictionary({value})"))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Decimal128 {
+                precision: _,
+                scale,
+                value,
+            } => match value {
+                Some(value) => {
+                    let value = format!("{value}");
+                    Ok(format_decimal(value.as_str(), *scale))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Decimal256 {
+                precision: _,
+                scale,
+                value,
+            } => match value {
+                Some(value) => {
+                    let value = format!("{value}");
+                    Ok(format_decimal(value.as_str(), *scale))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            Literal::Map {
+                key_type: _,
+                value_type: _,
+                keys,
+                values,
+                ..
+            } => match (keys, values) {
+                (Some(keys), Some(values)) => {
+                    let k = literal_list_to_string("array", keys)?;
+                    let v = literal_list_to_string("array", values)?;
+                    Ok(format!("map({k}, {v})"))
+                }
+                _ => Ok("NULL".to_string()),
+            },
         }
     }
 
@@ -503,205 +800,289 @@ impl Display for BinaryDisplay<'_> {
     }
 }
 
-struct Decimal128Display<'a>(pub &'a spec::Decimal128);
-impl Display for Decimal128Display<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        format_decimal(&self.0.value, self.0.scale, f)
-    }
-}
-
-struct Decimal256Display<'a>(pub &'a spec::Decimal256);
-impl Display for Decimal256Display<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        format_decimal(&self.0.value, self.0.scale, f)
-    }
-}
-
-fn format_decimal<T: Display>(value: &T, scale: i8, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let s = format!("{value}");
-    let start = if s.starts_with('-') {
-        write!(f, "-")?;
+fn format_decimal(value: &str, scale: i8) -> String {
+    let mut result = String::new();
+    let start = if value.starts_with('-') {
+        result.push('-');
         1
     } else {
         0
     };
     let scale = if scale > 0 { scale as usize } else { 0 };
     if scale == 0 {
-        write!(f, "{}", &s[start..])
-    } else if start + scale < s.len() {
-        let d = s.len() - scale;
-        write!(f, "{}.{}", &s[start..d], &s[d..])
+        result.push_str(&value[start..]);
+    } else if start + scale < value.len() {
+        let d = value.len() - scale;
+        result.push_str(&format!("{}.{}", &value[start..d], &value[d..]));
     } else {
-        write!(f, "0.{:0>width$}", &s[start..], width = scale)
+        result.push_str(&format!("0.{:0>width$}", &value[start..], width = scale));
     }
+    result
+}
+
+fn format_timestamp(
+    utc_datetime: chrono::DateTime<chrono::Utc>,
+    format: &str,
+    timezone_info: &spec::TimeZoneInfo,
+    config_timezone: &str,
+    config_timestamp_type: &TimestampType,
+) -> PlanResult<String> {
+    let format_with_tz = |tz_str: &str| -> Result<String, PlanError> {
+        let tz: chrono_tz::Tz = tz_str
+            .parse()
+            .map_err(|e| PlanError::invalid(format!("invalid time zone: {e}")))?;
+        Ok(utc_datetime.with_timezone(&tz).format(format).to_string())
+    };
+
+    let formatted_time = match timezone_info {
+        spec::TimeZoneInfo::Configured => match config_timestamp_type {
+            TimestampType::TimestampLtz => format_with_tz(config_timezone)?,
+            TimestampType::TimestampNtz => utc_datetime.format(format).to_string(),
+        },
+        spec::TimeZoneInfo::LocalTimeZone => format_with_tz(config_timezone)?,
+        spec::TimeZoneInfo::NoTimeZone => utc_datetime.format(format).to_string(),
+        spec::TimeZoneInfo::TimeZone { timezone } => match timezone {
+            Some(tz) => format_with_tz(tz)?,
+            None => utc_datetime.format(format).to_string(),
+        },
+    };
+
+    let prefix = match timezone_info {
+        spec::TimeZoneInfo::Configured => match config_timestamp_type {
+            TimestampType::TimestampLtz => "TIMESTAMP",
+            TimestampType::TimestampNtz => "TIMESTAMP_NTZ",
+        },
+        spec::TimeZoneInfo::LocalTimeZone => "TIMESTAMP",
+        spec::TimeZoneInfo::NoTimeZone => "TIMESTAMP_NTZ",
+        spec::TimeZoneInfo::TimeZone { timezone: _ } => "TIMESTAMP",
+    };
+
+    Ok(format!("{prefix} '{formatted_time}'"))
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::config::PlanConfig;
     use datafusion::arrow::datatypes::i256;
     use sail_common::spec::Literal;
 
-    use super::*;
-
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {
+        let plan_config = PlanConfig::default();
+        let config_timezone = plan_config.timezone.as_str();
+        let config_timestamp_type = plan_config.timestamp_type;
         let formatter = DefaultPlanFormatter;
-        let to_string = |literal| formatter.literal_to_string(&literal);
+        let to_string = |literal| {
+            formatter.literal_to_string(&literal, config_timezone, &config_timestamp_type)
+        };
 
         assert_eq!(to_string(Literal::Null)?, "NULL");
         assert_eq!(
-            to_string(Literal::Binary(vec![16, 0x20, 0xff]))?,
+            to_string(Literal::Binary {
+                value: Some(vec![16, 0x20, 0xff])
+            })?,
             "X'1020FF'",
         );
-        assert_eq!(to_string(Literal::Boolean(true))?, "true");
-        assert_eq!(to_string(Literal::Byte(10))?, "10");
-        assert_eq!(to_string(Literal::Short(-20))?, "-20");
-        assert_eq!(to_string(Literal::Integer(30))?, "30");
-        assert_eq!(to_string(Literal::Long(-40))?, "-40");
-        assert_eq!(to_string(Literal::Float(1.0))?, "1.0");
-        assert_eq!(to_string(Literal::Double(-0.1))?, "-0.1");
+        assert_eq!(to_string(Literal::Boolean { value: Some(true) })?, "true");
+        assert_eq!(to_string(Literal::Int8 { value: Some(10) })?, "10");
+        assert_eq!(to_string(Literal::Int16 { value: Some(-20) })?, "-20");
+        assert_eq!(to_string(Literal::Int32 { value: Some(30) })?, "30");
+        assert_eq!(to_string(Literal::Int64 { value: Some(-40) })?, "-40");
+        assert_eq!(to_string(Literal::Float32 { value: Some(1.0) })?, "1.0");
+        assert_eq!(to_string(Literal::Float64 { value: Some(-0.1) })?, "-0.1");
         assert_eq!(
-            to_string(Literal::Decimal128(spec::Decimal128 {
-                value: 123,
+            to_string(Literal::Decimal128 {
                 precision: 3,
                 scale: 0,
-            }))?,
+                value: Some(123)
+            })?,
             "123",
         );
         assert_eq!(
-            to_string(Literal::Decimal128(spec::Decimal128 {
-                value: -123,
+            to_string(Literal::Decimal128 {
                 precision: 3,
                 scale: 0,
-            }))?,
+                value: Some(-123)
+            })?,
             "-123",
         );
         assert_eq!(
-            to_string(Literal::Decimal128(spec::Decimal128 {
-                value: 123,
+            to_string(Literal::Decimal128 {
                 precision: 3,
                 scale: 2,
-            }))?,
+                value: Some(123)
+            })?,
             "1.23",
         );
         assert_eq!(
-            to_string(Literal::Decimal128(spec::Decimal128 {
-                value: 123,
+            to_string(Literal::Decimal128 {
                 precision: 3,
                 scale: 5,
-            }))?,
+                value: Some(123)
+            })?,
             "0.00123",
         );
         assert_eq!(
-            to_string(Literal::Decimal128(spec::Decimal128 {
-                value: 12300,
+            to_string(Literal::Decimal128 {
                 precision: 3,
                 scale: -2,
-            }))?,
+                value: Some(12300)
+            })?,
             "12300",
         );
         assert_eq!(
-            to_string(Literal::Decimal256(spec::Decimal256 {
-                value: i256::from(123),
+            to_string(Literal::Decimal256 {
                 precision: 3,
                 scale: 0,
-            }))?,
+                value: Some(i256::from(123))
+            })?,
             "123",
         );
         assert_eq!(
-            to_string(Literal::Decimal256(spec::Decimal256 {
-                value: i256::from(-123),
+            to_string(Literal::Decimal256 {
                 precision: 3,
                 scale: 0,
-            }))?,
+                value: Some(i256::from(-123))
+            })?,
             "-123",
         );
         assert_eq!(
-            to_string(Literal::Decimal256(spec::Decimal256 {
-                value: i256::from(123),
+            to_string(Literal::Decimal256 {
                 precision: 3,
                 scale: 2,
-            }))?,
+                value: Some(i256::from(123))
+            })?,
             "1.23",
         );
         assert_eq!(
-            to_string(Literal::Decimal256(spec::Decimal256 {
-                value: i256::from(123),
+            to_string(Literal::Decimal256 {
                 precision: 3,
                 scale: 5,
-            }))?,
+                value: Some(i256::from(123))
+            })?,
             "0.00123",
         );
         assert_eq!(
-            to_string(Literal::Decimal256(spec::Decimal256 {
-                value: i256::from(12300),
+            to_string(Literal::Decimal256 {
                 precision: 3,
                 scale: -2,
-            }))?,
+                value: Some(i256::from(12300))
+            })?,
             "12300",
         );
         assert_eq!(
-            to_string(Literal::Decimal256(spec::Decimal256 {
-                value: i256::from_string("120000000000000000000000000000000000000000").unwrap(),
+            to_string(Literal::Decimal256 {
                 precision: 42,
                 scale: 5,
-            }))?,
+                value: i256::from_string("120000000000000000000000000000000000000000"),
+            })?,
             "1200000000000000000000000000000000000.00000",
         );
-        assert_eq!(to_string(Literal::String("abc".to_string()))?, "abc");
-        assert_eq!(to_string(Literal::Date { days: 10 })?, "DATE '1970-01-11'");
-        assert_eq!(to_string(Literal::Date { days: -5 })?, "DATE '1969-12-27'");
+        assert_eq!(
+            to_string(Literal::Utf8 {
+                value: Some("abc".to_string())
+            })?,
+            "abc"
+        );
+        assert_eq!(
+            to_string(Literal::LargeUtf8 {
+                value: Some("abc".to_string())
+            })?,
+            "abc"
+        );
+        assert_eq!(
+            to_string(Literal::Utf8View {
+                value: Some("abc".to_string())
+            })?,
+            "abc"
+        );
+        assert_eq!(
+            to_string(Literal::Date32 { days: Some(10) })?,
+            "DATE '1970-01-11'"
+        );
+        assert_eq!(
+            to_string(Literal::Date32 { days: Some(-5) })?,
+            "DATE '1969-12-27'"
+        );
         assert_eq!(
             to_string(Literal::TimestampMicrosecond {
-                microseconds: 123_000_000,
-                timezone: None,
+                microseconds: Some(123_000_000),
+                timezone_info: spec::TimeZoneInfo::TimeZone { timezone: None }
             })?,
             "TIMESTAMP '1970-01-01 00:02:03.000000'",
         );
         assert_eq!(
-            to_string(Literal::TimestampNtz { microseconds: -1 })?,
+            to_string(Literal::TimestampMicrosecond {
+                microseconds: Some(-1),
+                timezone_info: spec::TimeZoneInfo::NoTimeZone
+            })?,
             "TIMESTAMP_NTZ '1969-12-31 23:59:59.999999'",
         );
         assert_eq!(
-            to_string(Literal::CalendarInterval {
-                months: 15,
-                days: -20,
-                microseconds: 123_456_789,
+            to_string(Literal::IntervalMonthDayNano {
+                months: Some(15),
+                days: Some(-20),
+                nanoseconds: Some(123_456_789_000),
             })?,
-            "INTERVAL 1 YEAR 3 MONTH -20 DAY 0 HOUR 2 MINUTE 3 SECOND 456 MILLISECOND 789 MICROSECOND",
+            "INTERVAL 1 YEAR 3 MONTH -20 DAY 0 HOUR 2 MINUTE 3 SECOND 456 MILLISECOND 789 MICROSECOND 0 NANOSECOND",
         );
         assert_eq!(
-            to_string(Literal::CalendarInterval {
-                months: -15,
-                days: 10,
-                microseconds: -1001,
+            to_string(Literal::IntervalMonthDayNano {
+                months: Some( -15),
+                days: Some(10),
+                nanoseconds: Some(-1_001_000),
             })?,
-            "INTERVAL -1 YEAR -3 MONTH 10 DAY 0 HOUR 0 MINUTE 0 SECOND -1 MILLISECOND -1 MICROSECOND",
+            "INTERVAL -1 YEAR -3 MONTH 10 DAY 0 HOUR 0 MINUTE 0 SECOND -1 MILLISECOND -1 MICROSECOND 0 NANOSECOND",
         );
         assert_eq!(
-            to_string(Literal::YearMonthInterval { months: 15 })?,
+            to_string(Literal::IntervalYearMonth { months: Some(15) })?,
             "INTERVAL '1-3' YEAR TO MONTH",
         );
         assert_eq!(
-            to_string(Literal::YearMonthInterval { months: -15 })?,
+            to_string(Literal::IntervalYearMonth { months: Some(-15) })?,
             "INTERVAL '-1-3' YEAR TO MONTH",
         );
         assert_eq!(
-            to_string(Literal::DayTimeInterval {
-                microseconds: 123_456_789,
+            to_string(Literal::DurationMicrosecond {
+                microseconds: Some(123_456_789),
             })?,
             "INTERVAL '0 00:02:03.456789' DAY TO SECOND",
         );
         assert_eq!(
-            to_string(Literal::DayTimeInterval {
-                microseconds: -123_456_789,
+            to_string(Literal::DurationMicrosecond {
+                microseconds: Some(-123_456_789),
             })?,
             "INTERVAL '-0 00:02:03.456789' DAY TO SECOND",
         );
         assert_eq!(
-            to_string(Literal::Array {
-                elements: vec![Literal::Integer(1), Literal::Integer(-2)],
-                element_type: spec::DataType::Int32,
+            to_string(Literal::List {
+                data_type: spec::DataType::Int32,
+                values: Some(vec![
+                    Literal::Int32 { value: Some(1) },
+                    Literal::Int32 { value: Some(-2) }
+                ]),
+            })?,
+            "array(1, -2)",
+        );
+        assert_eq!(
+            to_string(Literal::LargeList {
+                data_type: spec::DataType::Int32,
+                values: Some(vec![
+                    Literal::Int32 { value: Some(1) },
+                    Literal::Int32 { value: Some(-2) }
+                ]),
+            })?,
+            "array(1, -2)",
+        );
+        assert_eq!(
+            to_string(Literal::FixedSizeList {
+                length: 2,
+                data_type: spec::DataType::Int32,
+                values: Some(vec![
+                    Literal::Int32 { value: Some(1) },
+                    Literal::Int32 { value: Some(-2) }
+                ]),
             })?,
             "array(1, -2)",
         );
@@ -709,17 +1090,24 @@ mod tests {
             to_string(Literal::Map {
                 key_type: spec::DataType::Utf8,
                 value_type: spec::DataType::Float64,
-                keys: vec![
-                    Literal::String("a".to_string()),
-                    Literal::String("b".to_string()),
-                ],
-                values: vec![Literal::Double(1.0), Literal::Double(2.0)],
+                keys: Some(vec![
+                    Literal::Utf8 {
+                        value: Some("a".to_string())
+                    },
+                    Literal::Utf8 {
+                        value: Some("b".to_string())
+                    },
+                ]),
+                values: Some(vec![
+                    Literal::Float64 { value: Some(1.0) },
+                    Literal::Float64 { value: Some(2.0) }
+                ]),
             })?,
             "map(array(a, b), array(1.0, 2.0))",
         );
         assert_eq!(
             to_string(Literal::Struct {
-                struct_type: spec::DataType::Struct {
+                data_type: spec::DataType::Struct {
                     fields: spec::Fields::from(vec![
                         spec::Field {
                             name: "foo".to_string(),
@@ -745,13 +1133,13 @@ mod tests {
                         },
                     ])
                 },
-                elements: vec![
-                    Literal::Array {
-                        elements: vec![Literal::Long(1), Literal::Null],
-                        element_type: spec::DataType::Int64,
+                values: Some(vec![
+                    Literal::List {
+                        data_type: spec::DataType::Int64,
+                        values: Some(vec![Literal::Int64 { value: Some(1) }, Literal::Null]),
                     },
                     Literal::Struct {
-                        struct_type: spec::DataType::Struct {
+                        data_type: spec::DataType::Struct {
                             fields: spec::Fields::from(vec![spec::Field {
                                 name: "baz".to_string(),
                                 data_type: spec::DataType::Utf8,
@@ -759,9 +1147,11 @@ mod tests {
                                 metadata: vec![],
                             }])
                         },
-                        elements: vec![Literal::String("hello".to_string())],
+                        values: Some(vec![Literal::Utf8 {
+                            value: Some("hello".to_string())
+                        }]),
                     },
-                ],
+                ])
             })?,
             "struct(array(1, NULL) AS foo, struct(hello AS baz) AS bar)",
         );
