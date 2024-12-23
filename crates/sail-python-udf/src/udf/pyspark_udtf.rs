@@ -178,6 +178,42 @@ impl PySparkUDTF {
             options,
         })
     }
+
+    pub fn kind(&self) -> PySparkUdtfKind {
+        self.kind
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    pub fn input_names(&self) -> &[String] {
+        &self.input_names
+    }
+
+    pub fn input_types(&self) -> &[DataType] {
+        &self.input_types
+    }
+
+    pub fn passthrough_columns(&self) -> usize {
+        self.passthrough_columns
+    }
+
+    pub fn function_return_type(&self) -> &DataType {
+        &self.function_return_type
+    }
+
+    pub fn function_output_names(&self) -> Option<&[String]> {
+        self.function_output_names.as_deref()
+    }
+
+    pub fn deterministic(&self) -> bool {
+        self.deterministic
+    }
+
+    pub fn options(&self) -> &PySparkUdtfOptions {
+        &self.options
+    }
 }
 
 impl TableFunctionImpl for PySparkUDTF {

@@ -604,7 +604,7 @@ class PySparkArrowTableUdf:
         inputs = (x[self._passthrough_columns :] for x in batches2)
         outputs = self._udf(None, inputs)
         last = None
-        for passthrough, (out, _) in itertools.zip_longest(self._iter_passthrough_rows(batches1), outputs):
+        for passthrough, (out, _) in itertools.zip_longest(self._iter_passthrough(batches1), outputs):
             if out is None or len(out) == 0:
                 continue
             df = pd.DataFrame(index=out.index)
@@ -621,7 +621,7 @@ class PySparkArrowTableUdf:
             yield df
             last = passthrough
 
-    def _iter_passthrough_rows(self, batches: Iterator[tuple[pd.Series]]) -> Iterator[tuple]:
+    def _iter_passthrough(self, batches: Iterator[tuple[pd.Series]]) -> Iterator[tuple]:
         if self._passthrough_columns > 0:
             for batch in batches:
                 yield from zip(*batch[: self._passthrough_columns])

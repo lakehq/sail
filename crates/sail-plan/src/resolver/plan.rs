@@ -3611,6 +3611,14 @@ impl PlanResolver<'_> {
                         "one name expected for expression, got: {names}"
                     )));
                 };
+                if let Expr::Column(Column {
+                    name: column_name, ..
+                }) = &expr
+                {
+                    if state.get_field_name(column_name).ok() == Some(&name) {
+                        return Ok(expr);
+                    }
+                }
                 Ok(expr.alias(state.register_field(name)))
             })
             .collect()

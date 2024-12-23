@@ -70,12 +70,6 @@ impl ExecutionPlan for MapPartitionsExec {
         &self.properties
     }
 
-    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        // `MapPartitionsExec` does not expect the physical plan optimizer to
-        // change the partitioning of the child plan.
-        vec![false]
-    }
-
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }

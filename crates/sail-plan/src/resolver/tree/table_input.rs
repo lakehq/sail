@@ -10,6 +10,7 @@ use crate::extension::function::table_input::TableInput;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
 
+/// Rewrites table input expression as cross join in UDTF lateral view.
 pub(crate) struct TableInputRewriter<'s> {
     plan: LogicalPlan,
     state: &'s mut PlanResolverState,
@@ -47,6 +48,8 @@ impl TreeNodeRewriter for TableInputRewriter<'_> {
             .into_iter()
             .map(Expr::Column)
             .collect();
+        // The table input is replaced with a struct expression in the projection of
+        // the cross join plan.
         let expr = ScalarUDF::from(StructFunction::new(field_names)).call(columns);
         self.plan = LogicalPlanBuilder::new(plan)
             .cross_join(table.plan().as_ref().clone())?

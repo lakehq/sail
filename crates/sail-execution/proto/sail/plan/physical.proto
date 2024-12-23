@@ -47,6 +47,7 @@ message ExtendedScalarUdf {
 message ExtendedStreamUdf {
   oneof StreamUdfKind {
     PySparkMapIterUdf py_spark_map_iter = 1;
+    PySparkUdtf py_spark_udtf = 2;
   }
 }
 
@@ -142,6 +143,19 @@ message PySparkMapIterUdf {
   bytes output_schema = 5;
 }
 
+message PySparkUdtf {
+  PySparkUdtfKind kind = 1;
+  string name = 2;
+  bytes payload = 3;
+  repeated string input_names = 4;
+  repeated bytes input_types = 5;
+  uint64 passthrough_columns = 6;
+  bytes function_return_type = 7;
+  repeated string function_output_names = 8;
+  bool deterministic = 9;
+  PySparkUdtfOptions options = 10;
+}
+
 enum ColumnMatch {
   COLUMN_MATCH_BY_POSITION = 0;
   COLUMN_MATCH_BY_NAME = 1;
@@ -157,6 +171,16 @@ enum PySparkUdfKind {
 enum PySparkMapIterKind {
   PY_SPARK_MAP_ITER_KIND_PANDAS = 0;
   PY_SPARK_MAP_ITER_KIND_ARROW = 1;
+}
+
+enum PySparkUdtfKind {
+  PY_SPARK_UDTF_KIND_TABLE = 0;
+  PY_SPARK_UDTF_KIND_ARROW_TABLE = 1;
+}
+
+message PySparkUdtfOptions {
+  string timezone = 1;
+  bool arrow_cast_safe_check = 2;
 }
 
 message RangeExecNode {

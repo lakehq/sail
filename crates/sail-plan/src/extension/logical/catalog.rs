@@ -72,6 +72,7 @@ impl CatalogCommandNode {
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub(crate) enum CatalogTableFunction {
     // We do not support any kind of table functions yet.
+    // PySpark UDTF is registered as a scalar UDF.
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
