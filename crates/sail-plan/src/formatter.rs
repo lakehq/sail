@@ -1,13 +1,14 @@
-use half::f16;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
+use half::f16;
+use sail_common::object::DynObject;
+use sail_common::{impl_dyn_object_traits, spec};
+
 use crate::config::TimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::utils::ItemTaker;
-use sail_common::object::DynObject;
-use sail_common::{impl_dyn_object_traits, spec};
 
 /// Utilities to format various data structures in the plan specification.
 pub trait PlanFormatter: DynObject + Debug + Send + Sync {
@@ -473,11 +474,18 @@ impl PlanFormatter for DefaultPlanFormatter {
             Literal::DurationSecond { seconds } => match seconds {
                 Some(seconds) => {
                     let days = *seconds / 86_400;
-                    let hours = (*seconds % 86_400) / 3_600;
-                    let minutes = (*seconds % 3_600) / 60;
-                    let seconds = *seconds % 60;
+                    let prepend = if days < 0 {
+                        ""
+                    } else if days == 0 && *seconds < 0 {
+                        "-"
+                    } else {
+                        ""
+                    };
+                    let hours = ((*seconds % 86_400) / 3_600).abs();
+                    let minutes = ((*seconds % 3_600) / 60).abs();
+                    let seconds = (*seconds % 60).abs();
                     Ok(format!(
-                        "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}' DAY TO SECOND"
+                        "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}' DAY TO SECOND"
                     ))
                 }
                 None => Ok("NULL".to_string()),
@@ -485,12 +493,19 @@ impl PlanFormatter for DefaultPlanFormatter {
             Literal::DurationMillisecond { milliseconds } => match milliseconds {
                 Some(milliseconds) => {
                     let days = *milliseconds / 86_400_000;
-                    let hours = (*milliseconds % 86_400_000) / 3_600_000;
-                    let minutes = (*milliseconds % 3_600_000) / 60_000;
-                    let seconds = (*milliseconds % 60_000) / 1_000;
-                    let milliseconds = *milliseconds % 1_000;
+                    let prepend = if days < 0 {
+                        ""
+                    } else if days == 0 && *milliseconds < 0 {
+                        "-"
+                    } else {
+                        ""
+                    };
+                    let hours = ((*milliseconds % 86_400_000) / 3_600_000).abs();
+                    let minutes = ((*milliseconds % 3_600_000) / 60_000).abs();
+                    let seconds = ((*milliseconds % 60_000) / 1_000).abs();
+                    let milliseconds = (*milliseconds % 1_000).abs();
                     Ok(format!(
-                        "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
+                        "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
                     ))
                 }
                 None => Ok("NULL".to_string()),
@@ -498,12 +513,19 @@ impl PlanFormatter for DefaultPlanFormatter {
             Literal::DurationMicrosecond { microseconds } => match microseconds {
                 Some(microseconds) => {
                     let days = *microseconds / 86_400_000_000;
-                    let hours = (*microseconds % 86_400_000_000) / 3_600_000_000;
-                    let minutes = (*microseconds % 3_600_000_000) / 60_000_000;
-                    let seconds = (*microseconds % 60_000_000) / 1_000_000;
-                    let microseconds = *microseconds % 1_000_000;
+                    let prepend = if days < 0 {
+                        ""
+                    } else if days == 0 && *microseconds < 0 {
+                        "-"
+                    } else {
+                        ""
+                    };
+                    let hours = ((*microseconds % 86_400_000_000) / 3_600_000_000).abs();
+                    let minutes = ((*microseconds % 3_600_000_000) / 60_000_000).abs();
+                    let seconds = ((*microseconds % 60_000_000) / 1_000_000).abs();
+                    let microseconds = (*microseconds % 1_000_000).abs();
                     Ok(format!(
-                        "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}' DAY TO SECOND",
+                        "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}' DAY TO SECOND",
                     ))
                 }
                 None => Ok("NULL".to_string()),
@@ -511,12 +533,19 @@ impl PlanFormatter for DefaultPlanFormatter {
             Literal::DurationNanosecond { nanoseconds } => match nanoseconds {
                 Some(nanoseconds) => {
                     let days = *nanoseconds / 86_400_000_000_000;
-                    let hours = (*nanoseconds % 86_400_000_000_000) / 3_600_000_000_000;
-                    let minutes = (*nanoseconds % 3_600_000_000_000) / 60_000_000_000;
-                    let seconds = (*nanoseconds % 60_000_000_000) / 1_000_000_000;
-                    let nanoseconds = *nanoseconds % 1_000_000_000;
+                    let prepend = if days < 0 {
+                        ""
+                    } else if days == 0 && *nanoseconds < 0 {
+                        "-"
+                    } else {
+                        ""
+                    };
+                    let hours = ((*nanoseconds % 86_400_000_000_000) / 3_600_000_000_000).abs();
+                    let minutes = ((*nanoseconds % 3_600_000_000_000) / 60_000_000_000).abs();
+                    let seconds = ((*nanoseconds % 60_000_000_000) / 1_000_000_000).abs();
+                    let nanoseconds = (*nanoseconds % 1_000_000_000).abs();
                     Ok(format!(
-                        "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}.{nanoseconds:09}' DAY TO SECOND"
+                        "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}.{nanoseconds:09}' DAY TO SECOND"
                     ))
                 }
                 None => Ok("NULL".to_string()),
@@ -524,19 +553,35 @@ impl PlanFormatter for DefaultPlanFormatter {
             Literal::IntervalYearMonth { months } => match months {
                 Some(months) => {
                     let years = *months / 12;
-                    let months = *months % 12;
-                    Ok(format!("INTERVAL '{years}-{months}' YEAR TO MONTH"))
+                    let prepend = if years < 0 {
+                        ""
+                    } else if years == 0 && *months < 0 {
+                        "-"
+                    } else {
+                        ""
+                    };
+                    let months = (*months % 12).abs();
+                    Ok(format!(
+                        "INTERVAL '{prepend}{years}-{months}' YEAR TO MONTH"
+                    ))
                 }
                 None => Ok("NULL".to_string()),
             },
             Literal::IntervalDayTime { days, milliseconds } => match (days, milliseconds) {
                 (Some(days), Some(milliseconds)) => {
-                    let hours = (*milliseconds % 86_400_000) / 3_600_000;
-                    let minutes = (*milliseconds % 3_600_000) / 60_000;
-                    let seconds = (*milliseconds % 60_000) / 1_000;
-                    let milliseconds = *milliseconds % 1_000;
+                    let prepend = if *days < 0 {
+                        ""
+                    } else if *days == 0 && *milliseconds < 0 {
+                        "-"
+                    } else {
+                        ""
+                    };
+                    let hours = ((*milliseconds % 86_400_000) / 3_600_000).abs();
+                    let minutes = ((*milliseconds % 3_600_000) / 60_000).abs();
+                    let seconds = ((*milliseconds % 60_000) / 1_000).abs();
+                    let milliseconds = (*milliseconds % 1_000).abs();
                     Ok(format!(
-                        "INTERVAL '{days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
+                        "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
                     ))
                 }
                 _ => Ok("NULL".to_string()),
@@ -862,10 +907,11 @@ fn format_timestamp(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::PlanConfig;
     use datafusion::arrow::datatypes::i256;
     use sail_common::spec::Literal;
+
+    use super::*;
+    use crate::config::PlanConfig;
 
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {

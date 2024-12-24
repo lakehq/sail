@@ -196,7 +196,9 @@
                   "alias": {
                     "expr": {
                       "literal": {
-                        "integer": 1
+                        "int32": {
+                          "value": 1
+                        }
                       }
                     },
                     "name": [

@@ -751,7 +751,9 @@
                       },
                       "condition": {
                         "literal": {
-                          "boolean": true
+                          "boolean": {
+                            "value": true
+                          }
                         }
                       }
                     },

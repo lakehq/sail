@@ -354,7 +354,7 @@ impl TryFrom<&str> for LiteralValue<Vec<u8>> {
 
     /// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L285-L306>
     fn try_from(value: &str) -> SqlResult<Self> {
-        if !BINARY_REGEX.is_match(&value) {
+        if !BINARY_REGEX.is_match(value) {
             return Err(SqlError::invalid(format!("hex string: {value}")));
         }
 

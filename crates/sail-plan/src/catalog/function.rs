@@ -31,8 +31,10 @@ impl<'a> CatalogManager<'a> {
     ) -> Result<()> {
         let _function: Arc<dyn TableFunctionImpl> = match udtf {};
         #[allow(unreachable_code)]
-        self.ctx.register_udtf(_name.as_str(), _function);
-        Ok(())
+        {
+            self.ctx.register_udtf(_name.as_str(), _function);
+            Ok(())
+        }
     }
 
     pub(crate) async fn drop_function(

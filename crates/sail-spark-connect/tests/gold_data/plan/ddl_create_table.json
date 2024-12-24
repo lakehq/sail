@@ -1226,7 +1226,9 @@
                   "b",
                   {
                     "literal": {
-                      "string": "123"
+                      "utf8": {
+                        "value": "123"
+                      }
                     }
                   }
                 ]
@@ -1286,7 +1288,9 @@
                   "b",
                   {
                     "literal": {
-                      "string": "abc"
+                      "utf8": {
+                        "value": "abc"
+                      }
                     }
                   }
                 ]
@@ -1350,7 +1354,9 @@
                   "b",
                   {
                     "literal": {
-                      "string": "abc"
+                      "utf8": {
+                        "value": "abc"
+                      }
                     }
                   }
                 ]
@@ -1410,7 +1416,9 @@
                   "b",
                   {
                     "literal": {
-                      "string": "abc"
+                      "utf8": {
+                        "value": "abc"
+                      }
                     }
                   }
                 ]

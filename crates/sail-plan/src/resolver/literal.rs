@@ -1,5 +1,5 @@
-use crate::error::{PlanError, PlanResult};
-use crate::resolver::PlanResolver;
+use std::sync::Arc;
+
 use datafusion::arrow::array::{
     new_empty_array, new_null_array, ArrayData, AsArray, FixedSizeListArray, LargeListArray,
     MapArray, StructArray,
@@ -10,7 +10,9 @@ use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::utils::{array_into_fixed_size_list_array, array_into_large_list_array};
 use datafusion_common::ScalarValue;
 use sail_common::spec::{self, Literal};
-use std::sync::Arc;
+
+use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub fn resolve_literal(&self, literal: Literal) -> PlanResult<ScalarValue> {
@@ -141,7 +143,7 @@ impl PlanResolver<'_> {
                         .into_iter()
                         .map(|literal| self.resolve_literal(literal))
                         .collect::<PlanResult<Vec<_>>>()?;
-                    let scalars = if scalars.len() == 0 {
+                    let scalars = if scalars.is_empty() {
                         new_empty_array(&data_type)
                     } else {
                         ScalarValue::iter_to_array(scalars.into_iter()).map_err(|e| {
@@ -170,7 +172,7 @@ impl PlanResolver<'_> {
                         .into_iter()
                         .map(|literal| self.resolve_literal(literal))
                         .collect::<PlanResult<Vec<_>>>()?;
-                    let scalars = if scalars.len() == 0 {
+                    let scalars = if scalars.is_empty() {
                         new_empty_array(&data_type)
                     } else {
                         ScalarValue::iter_to_array(scalars.into_iter()).map_err(|e| {
@@ -215,7 +217,7 @@ impl PlanResolver<'_> {
                 value,
             } => {
                 let (type_ids, fields): (Vec<_>, Vec<_>) = union_fields
-                    .into_iter()
+                    .iter()
                     .map(|(index, field)| Ok((index, self.resolve_field(field)?)))
                     .collect::<PlanResult<Vec<_>>>()?
                     .into_iter()

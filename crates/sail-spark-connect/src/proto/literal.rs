@@ -128,7 +128,7 @@ impl TryFrom<Literal> for spec::Literal {
                         spec::DataType::UserDefined { .. } => Err(SparkError::todo("TryFrom Spark Literal to Sail Literal UserDefined")),
                     }?
                 } else {
-                    Ok(spec::Literal::Null)?
+                    spec::Literal::Null
                 }
             }
             LiteralType::Binary(x) => spec::Literal::Binary { value: Some(x) },

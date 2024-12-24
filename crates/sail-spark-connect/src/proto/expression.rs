@@ -455,9 +455,9 @@ mod tests {
                 |sql: String| {
                     let expr = parse_wildcard_expression(&sql)?;
                     if sql.len() > 128 {
-                        Ok(spec::Expr::Literal(spec::Literal::String(
-                            "Result omitted for long expression.".to_string(),
-                        )))
+                        Ok(spec::Expr::Literal(spec::Literal::Utf8 {
+                            value: Some("Result omitted for long expression.".to_string()),
+                        }))
                     } else {
                         Ok(expr)
                     }
