@@ -748,8 +748,10 @@ pub enum JoinType {
     FullOuter,
     LeftOuter,
     RightOuter,
-    LeftAnti,
     LeftSemi,
+    RightSemi,
+    LeftAnti,
+    RightAnti,
     Cross,
 }
 
