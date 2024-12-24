@@ -349,11 +349,11 @@ impl TryFrom<LiteralValue<Signed<ast::Interval>>> for spec::Literal {
     }
 }
 
-impl TryFrom<String> for LiteralValue<Vec<u8>> {
+impl TryFrom<&str> for LiteralValue<Vec<u8>> {
     type Error = SqlError;
 
     /// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L285-L306>
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         if !BINARY_REGEX.is_match(&value) {
             return Err(SqlError::invalid(format!("hex string: {value}")));
         }
@@ -384,10 +384,10 @@ impl TryFrom<String> for LiteralValue<Vec<u8>> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<i8> {
+impl TryFrom<&str> for LiteralValue<i8> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let value = value
             .parse::<i8>()
             .map_err(|_| SqlError::invalid(format!("tinyint: {:?}", value)))?;
@@ -395,10 +395,10 @@ impl TryFrom<String> for LiteralValue<i8> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<i16> {
+impl TryFrom<&str> for LiteralValue<i16> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let value = value
             .parse::<i16>()
             .map_err(|_| SqlError::invalid(format!("smallint: {:?}", value)))?;
@@ -428,10 +428,10 @@ impl TryFrom<&str> for LiteralValue<i64> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<f32> {
+impl TryFrom<&str> for LiteralValue<f32> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let n = value
             .parse::<f32>()
             .map_err(|_| SqlError::invalid(format!("float: {:?}", value)))?;
@@ -445,10 +445,10 @@ impl TryFrom<String> for LiteralValue<f32> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<f64> {
+impl TryFrom<&str> for LiteralValue<f64> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let n = value
             .parse::<f64>()
             .map_err(|_| SqlError::invalid(format!("double: {:?}", value)))?;

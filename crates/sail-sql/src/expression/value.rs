@@ -10,11 +10,11 @@ pub(crate) fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
     match value {
         Value::Number(value, postfix) => match postfix.as_deref() {
             Some("Y") | Some("y") => {
-                let value = LiteralValue::<i8>::try_from(value)?;
+                let value = LiteralValue::<i8>::try_from(value.as_str())?;
                 spec::Expr::try_from(value)
             }
             Some("S") | Some("s") => {
-                let value = LiteralValue::<i16>::try_from(value)?;
+                let value = LiteralValue::<i16>::try_from(value.as_str())?;
                 spec::Expr::try_from(value)
             }
             Some("L") | Some("l") => {
@@ -22,11 +22,11 @@ pub(crate) fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
                 spec::Expr::try_from(value)
             }
             Some("F") | Some("f") => {
-                let value = LiteralValue::<f32>::try_from(value)?;
+                let value = LiteralValue::<f32>::try_from(value.as_str())?;
                 spec::Expr::try_from(value)
             }
             Some("D") | Some("d") => {
-                let value = LiteralValue::<f64>::try_from(value)?;
+                let value = LiteralValue::<f64>::try_from(value.as_str())?;
                 spec::Expr::try_from(value)
             }
             Some(x) if x.to_uppercase() == "BD" => {
@@ -57,7 +57,7 @@ pub(crate) fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
             ))),
         },
         Value::HexStringLiteral(value) => {
-            let value: LiteralValue<Vec<u8>> = value.try_into()?;
+            let value: LiteralValue<Vec<u8>> = value.as_str().try_into()?;
             spec::Expr::try_from(value)
         }
         Value::SingleQuotedString(value)
