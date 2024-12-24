@@ -52,7 +52,7 @@ impl ScalarUDFImpl for SparkWeekOfYear {
         Ok(DataType::UInt32)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!("Spark `weekofyear` function requires 1 argument, got 0");
         }
@@ -70,10 +70,9 @@ impl ScalarUDFImpl for SparkWeekOfYear {
                     None,
                 )?
                 .cast_to(&DataType::Int64, None),
-            #[allow(deprecated)] // TODO use invoke_batch
             DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
                 ToTimestampNanosFunc::new()
-                    .invoke(args)?
+                    .invoke_batch(args, number_rows)?
                     .cast_to(
                         &DataType::Timestamp(TimeUnit::Nanosecond, Some(self.timezone.clone())),
                         None,

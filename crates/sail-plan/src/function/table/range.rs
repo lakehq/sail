@@ -4,8 +4,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::datasource::function::TableFunctionImpl;
+use datafusion::catalog::{Session, TableFunctionImpl, TableProvider};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{logical_plan, Expr, LogicalPlan, TableType, UserDefinedLogicalNodeCore};
