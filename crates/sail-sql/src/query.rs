@@ -734,12 +734,14 @@ fn query_plan_with_join(left: spec::QueryPlan, join: ast::Join) -> SqlResult<spe
         JoinOperator::RightOuter(constraint) => (spec::JoinType::RightOuter, Some(constraint)),
         JoinOperator::FullOuter(constraint) => (spec::JoinType::FullOuter, Some(constraint)),
         JoinOperator::CrossJoin => (spec::JoinType::Cross, None),
-        JoinOperator::Semi(_) => return Err(SqlError::unsupported("SEMI join")),
-        JoinOperator::LeftSemi(constraint) => (spec::JoinType::LeftSemi, Some(constraint)),
-        JoinOperator::RightSemi(_) => return Err(SqlError::unsupported("RIGHT SEMI join")),
-        JoinOperator::Anti(_) => return Err(SqlError::unsupported("ANTI join")),
-        JoinOperator::LeftAnti(constraint) => (spec::JoinType::LeftAnti, Some(constraint)),
-        JoinOperator::RightAnti(_) => return Err(SqlError::unsupported("RIGHT ANTI join")),
+        JoinOperator::Semi(constraint) | JoinOperator::LeftSemi(constraint) => {
+            (spec::JoinType::LeftSemi, Some(constraint))
+        }
+        JoinOperator::RightSemi(constraint) => (spec::JoinType::RightSemi, Some(constraint)),
+        JoinOperator::Anti(constraint) | JoinOperator::LeftAnti(constraint) => {
+            (spec::JoinType::LeftAnti, Some(constraint))
+        }
+        JoinOperator::RightAnti(constraint) => (spec::JoinType::RightAnti, Some(constraint)),
         JoinOperator::CrossApply | JoinOperator::OuterApply => {
             return Err(SqlError::unsupported("APPLY join"))
         }

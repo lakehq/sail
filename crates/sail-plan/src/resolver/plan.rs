@@ -862,7 +862,9 @@ impl PlanResolver<'_> {
             JoinType::RightOuter => (plan::JoinType::Right, false),
             JoinType::FullOuter => (plan::JoinType::Full, false),
             JoinType::LeftSemi => (plan::JoinType::LeftSemi, false),
+            JoinType::RightSemi => (plan::JoinType::RightSemi, false),
             JoinType::LeftAnti => (plan::JoinType::LeftAnti, false),
+            JoinType::RightAnti => (plan::JoinType::RightAnti, false),
             // use inner join type to build the schema for cross join
             JoinType::Cross => (plan::JoinType::Inner, true),
         };
