@@ -1,7 +1,8 @@
 use std::any::Any;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::Result;
+use datafusion_common::internal_err;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use sail_common::spec;
 
@@ -26,13 +27,10 @@ impl PySparkUnresolvedUDF {
         deterministic: bool,
     ) -> Self {
         Self {
-            signature: Signature::variadic_any(
-                // TODO: Check if this is correct. There is also `Volatility::Stable`
-                match deterministic {
-                    true => Volatility::Immutable,
-                    false => Volatility::Volatile,
-                },
-            ),
+            signature: Signature::variadic_any(match deterministic {
+                true => Volatility::Immutable,
+                false => Volatility::Volatile,
+            }),
             name,
             python_version,
             eval_type,
@@ -81,9 +79,6 @@ impl ScalarUDFImpl for PySparkUnresolvedUDF {
     }
 
     fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        Err(DataFusionError::Internal(format!(
-            "{} Unresolved UDF cannot be invoked",
-            self.name()
-        )))
+        internal_err!("unresolved UDF {} cannot be invoked", self.name())
     }
 }
