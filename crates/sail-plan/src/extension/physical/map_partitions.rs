@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
@@ -10,8 +9,8 @@ use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{internal_datafusion_err, Result};
-use sail_common::udf::MapIterUDF;
-use sail_common::utils::rename_physical_plan;
+use sail_common::udf::StreamUDF;
+use sail_common::utils::record_batch_with_schema;
 use tokio_stream::StreamExt;
 
 use crate::utils::ItemTaker;
@@ -19,18 +18,12 @@ use crate::utils::ItemTaker;
 #[derive(Debug, Clone)]
 pub struct MapPartitionsExec {
     input: Arc<dyn ExecutionPlan>,
-    input_names: Vec<String>,
-    udf: Arc<dyn MapIterUDF>,
+    udf: Arc<dyn StreamUDF>,
     properties: PlanProperties,
 }
 
 impl MapPartitionsExec {
-    pub fn new(
-        input: Arc<dyn ExecutionPlan>,
-        input_names: Vec<String>,
-        udf: Arc<dyn MapIterUDF>,
-        schema: SchemaRef,
-    ) -> Self {
+    pub fn new(input: Arc<dyn ExecutionPlan>, udf: Arc<dyn StreamUDF>, schema: SchemaRef) -> Self {
         // The plan output schema can be different from the output schema of the UDF
         // due to field renaming.
         let properties = PlanProperties::new(
@@ -40,7 +33,6 @@ impl MapPartitionsExec {
         );
         Self {
             input,
-            input_names,
             udf,
             properties,
         }
@@ -50,11 +42,7 @@ impl MapPartitionsExec {
         &self.input
     }
 
-    pub fn input_names(&self) -> &[String] {
-        &self.input_names
-    }
-
-    pub fn udf(&self) -> &Arc<dyn MapIterUDF> {
+    pub fn udf(&self) -> &Arc<dyn StreamUDF> {
         &self.udf
     }
 }
@@ -104,18 +92,11 @@ impl ExecutionPlan for MapPartitionsExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = rename_physical_plan(self.input.clone(), &self.input_names)?;
-        let stream = input.execute(partition, context)?;
+        let stream = self.input.execute(partition, context)?;
         let output = self.udf.invoke(stream)?;
-        let schema = self.schema().clone();
-        let output = output.map(move |x| {
-            x.and_then(|batch| {
-                Ok(RecordBatch::try_new(
-                    schema.clone(),
-                    batch.columns().to_vec(),
-                )?)
-            })
-        });
+        let schema = self.schema();
+        let output =
+            output.map(move |x| x.and_then(|batch| record_batch_with_schema(batch, &schema)));
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             output,

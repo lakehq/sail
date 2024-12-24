@@ -26,14 +26,15 @@ impl<'a> CatalogManager<'a> {
 
     pub(crate) fn register_table_function(
         &self,
-        name: String,
+        _name: String,
         udtf: CatalogTableFunction,
     ) -> Result<()> {
-        let f: Arc<dyn TableFunctionImpl> = match udtf {
-            CatalogTableFunction::PySparkUDTF(x) => Arc::new(x),
-        };
-        self.ctx.register_udtf(name.as_str(), f);
-        Ok(())
+        let _function: Arc<dyn TableFunctionImpl> = match udtf {};
+        #[allow(unreachable_code)]
+        {
+            self.ctx.register_udtf(_name.as_str(), _function);
+            Ok(())
+        }
     }
 
     pub(crate) async fn drop_function(
