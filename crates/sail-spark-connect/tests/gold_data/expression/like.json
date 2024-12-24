@@ -21,12 +21,16 @@
                   "arguments": [
                     {
                       "literal": {
-                        "string": "Foo%"
+                        "utf8": {
+                          "value": "Foo%"
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "string": "b%"
+                        "utf8": {
+                          "value": "b%"
+                        }
                       }
                     }
                   ],
@@ -106,12 +110,16 @@
                   "arguments": [
                     {
                       "literal": {
-                        "string": "FOO%"
+                        "utf8": {
+                          "value": "FOO%"
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "string": "b%"
+                        "utf8": {
+                          "value": "b%"
+                        }
                       }
                     }
                   ],
@@ -174,7 +182,9 @@
               },
               {
                 "literal": {
-                  "string": "pattern%"
+                  "utf8": {
+                    "value": "pattern%"
+                  }
                 }
               }
             ],
@@ -201,12 +211,16 @@
               },
               {
                 "literal": {
-                  "string": "pattern%"
+                  "utf8": {
+                    "value": "pattern%"
+                  }
                 }
               },
               {
                 "literal": {
-                  "string": "\""
+                  "utf8": {
+                    "value": "\""
+                  }
                 }
               }
             ],
@@ -234,12 +248,16 @@
               },
               {
                 "literal": {
-                  "string": "pattern%"
+                  "utf8": {
+                    "value": "pattern%"
+                  }
                 }
               },
               {
                 "literal": {
-                  "string": "##"
+                  "utf8": {
+                    "value": "##"
+                  }
                 }
               }
             ],
@@ -266,12 +284,16 @@
               },
               {
                 "literal": {
-                  "string": "pattern%"
+                  "utf8": {
+                    "value": "pattern%"
+                  }
                 }
               },
               {
                 "literal": {
-                  "string": "#"
+                  "utf8": {
+                    "value": "#"
+                  }
                 }
               }
             ],
@@ -299,12 +321,16 @@
               },
               {
                 "literal": {
-                  "string": "pattern%"
+                  "utf8": {
+                    "value": "pattern%"
+                  }
                 }
               },
               {
                 "literal": {
-                  "string": ""
+                  "utf8": {
+                    "value": ""
+                  }
                 }
               }
             ],
@@ -335,12 +361,16 @@
                   "arguments": [
                     {
                       "literal": {
-                        "string": "foo%"
+                        "utf8": {
+                          "value": "foo%"
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "string": "b%"
+                        "utf8": {
+                          "value": "b%"
+                        }
                       }
                     }
                   ],
@@ -420,12 +450,16 @@
                   "arguments": [
                     {
                       "literal": {
-                        "string": "foo%"
+                        "utf8": {
+                          "value": "foo%"
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "string": "b%"
+                        "utf8": {
+                          "value": "b%"
+                        }
                       }
                     }
                   ],
@@ -496,12 +530,16 @@
                         "arguments": [
                           {
                             "literal": {
-                              "string": "foo%"
+                              "utf8": {
+                                "value": "foo%"
+                              }
                             }
                           },
                           {
                             "literal": {
-                              "string": "B%"
+                              "utf8": {
+                                "value": "B%"
+                              }
                             }
                           }
                         ],
@@ -552,12 +590,16 @@
                         "arguments": [
                           {
                             "literal": {
-                              "string": "foo%"
+                              "utf8": {
+                                "value": "foo%"
+                              }
                             }
                           },
                           {
                             "literal": {
-                              "string": "B%"
+                              "utf8": {
+                                "value": "B%"
+                              }
                             }
                           }
                         ],
@@ -598,7 +640,9 @@
                     },
                     {
                       "literal": {
-                        "string": "pattern%"
+                        "utf8": {
+                          "value": "pattern%"
+                        }
                       }
                     }
                   ],
@@ -634,12 +678,16 @@
                     },
                     {
                       "literal": {
-                        "string": "pattern%"
+                        "utf8": {
+                          "value": "pattern%"
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "string": "\""
+                        "utf8": {
+                          "value": "\""
+                        }
                       }
                     }
                   ],
@@ -676,12 +724,16 @@
                     },
                     {
                       "literal": {
-                        "string": "pattern%"
+                        "utf8": {
+                          "value": "pattern%"
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "string": "\"/"
+                        "utf8": {
+                          "value": "\"/"
+                        }
                       }
                     }
                   ],
@@ -717,12 +769,16 @@
                     },
                     {
                       "literal": {
-                        "string": "pattern%"
+                        "utf8": {
+                          "value": "pattern%"
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "string": "#"
+                        "utf8": {
+                          "value": "#"
+                        }
                       }
                     }
                   ],
@@ -759,12 +815,16 @@
                     },
                     {
                       "literal": {
-                        "string": "pattern%"
+                        "utf8": {
+                          "value": "pattern%"
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "string": ""
+                        "utf8": {
+                          "value": ""
+                        }
                       }
                     }
                   ],
@@ -804,12 +864,16 @@
                         "arguments": [
                           {
                             "literal": {
-                              "string": "foo%"
+                              "utf8": {
+                                "value": "foo%"
+                              }
                             }
                           },
                           {
                             "literal": {
-                              "string": "b%"
+                              "utf8": {
+                                "value": "b%"
+                              }
                             }
                           }
                         ],
@@ -860,12 +924,16 @@
                         "arguments": [
                           {
                             "literal": {
-                              "string": "foo%"
+                              "utf8": {
+                                "value": "foo%"
+                              }
                             }
                           },
                           {
                             "literal": {
-                              "string": "b%"
+                              "utf8": {
+                                "value": "b%"
+                              }
                             }
                           }
                         ],
@@ -906,7 +974,9 @@
                     },
                     {
                       "literal": {
-                        "string": "pattern%"
+                        "utf8": {
+                          "value": "pattern%"
+                        }
                       }
                     }
                   ],
@@ -938,7 +1008,9 @@
               },
               {
                 "literal": {
-                  "string": "^\\x20[\\x20-\\x23]+$"
+                  "utf8": {
+                    "value": "^\\x20[\\x20-\\x23]+$"
+                  }
                 }
               }
             ],
@@ -965,7 +1037,9 @@
               },
               {
                 "literal": {
-                  "string": "pattern%"
+                  "utf8": {
+                    "value": "pattern%"
+                  }
                 }
               }
             ],
@@ -992,7 +1066,9 @@
               },
               {
                 "literal": {
-                  "string": "pattern\\\\"
+                  "utf8": {
+                    "value": "pattern\\\\"
+                  }
                 }
               }
             ],
@@ -1019,7 +1095,9 @@
               },
               {
                 "literal": {
-                  "string": "pattern\\t\\n"
+                  "utf8": {
+                    "value": "pattern\\t\\n"
+                  }
                 }
               }
             ],
@@ -1054,12 +1132,16 @@
                         "arguments": [
                           {
                             "literal": {
-                              "string": "foO%"
+                              "utf8": {
+                                "value": "foO%"
+                              }
                             }
                           },
                           {
                             "literal": {
-                              "string": "b%"
+                              "utf8": {
+                                "value": "b%"
+                              }
                             }
                           }
                         ],
@@ -1110,12 +1192,16 @@
                         "arguments": [
                           {
                             "literal": {
-                              "string": "FOO%"
+                              "utf8": {
+                                "value": "FOO%"
+                              }
                             }
                           },
                           {
                             "literal": {
-                              "string": "B%"
+                              "utf8": {
+                                "value": "B%"
+                              }
                             }
                           }
                         ],
@@ -1160,12 +1246,16 @@
                         "arguments": [
                           {
                             "literal": {
-                              "string": "foo%"
+                              "utf8": {
+                                "value": "foo%"
+                              }
                             }
                           },
                           {
                             "literal": {
-                              "string": "b%"
+                              "utf8": {
+                                "value": "b%"
+                              }
                             }
                           }
                         ],
@@ -1216,12 +1306,16 @@
                         "arguments": [
                           {
                             "literal": {
-                              "string": "foo%"
+                              "utf8": {
+                                "value": "foo%"
+                              }
                             }
                           },
                           {
                             "literal": {
-                              "string": "b%"
+                              "utf8": {
+                                "value": "b%"
+                              }
                             }
                           }
                         ],

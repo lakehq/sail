@@ -504,8 +504,10 @@ pub(crate) fn from_ast_sql_options(
                 _ => return Err(SqlError::unsupported("SQL option")),
             };
             let value = match from_ast_expression(value)? {
-                spec::Expr::Literal(spec::Literal::String(s)) => s,
-                x => return Err(SqlError::invalid(format!("SQL option value: {:?}", x))),
+                spec::Expr::Literal(spec::Literal::Utf8 { value: Some(value) })
+                | spec::Expr::Literal(spec::Literal::LargeUtf8 { value: Some(value) })
+                | spec::Expr::Literal(spec::Literal::Utf8View { value: Some(value) }) => value,
+                x => return Err(SqlError::invalid(format!("SQL option value: {x:?}"))),
             };
             Ok((name.value, value))
         })

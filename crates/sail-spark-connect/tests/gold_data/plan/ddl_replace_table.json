@@ -1032,7 +1032,9 @@
                   "b",
                   {
                     "literal": {
-                      "string": "abc"
+                      "utf8": {
+                        "value": "abc"
+                      }
                     }
                   }
                 ]

@@ -830,7 +830,7 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                     spec::DataType::Timestamp {
                         time_unit: spec::TimeUnit::Microsecond,
                         timezone_info: spec::TimeZoneInfo::TimeZone {
-                            timezone: timezone.into(),
+                            timezone: Some(timezone.into()),
                         },
                     }
                 }

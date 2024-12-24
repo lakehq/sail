@@ -379,7 +379,9 @@
                         "arguments": [
                           {
                             "literal": {
-                              "integer": 10
+                              "int32": {
+                                "value": 10
+                              }
                             }
                           }
                         ],
@@ -434,7 +436,9 @@
                         "arguments": [
                           {
                             "literal": {
-                              "integer": 7
+                              "int32": {
+                                "value": 7
+                              }
                             }
                           }
                         ],
@@ -651,22 +655,30 @@
                     "arguments": [
                       {
                         "literal": {
-                          "string": "Spark SQL"
+                          "utf8": {
+                            "value": "Spark SQL"
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "string": "ANSI "
+                          "utf8": {
+                            "value": "ANSI "
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 7
+                          "int32": {
+                            "value": 7
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 0
+                          "int32": {
+                            "value": 0
+                          }
                         }
                       }
                     ],
@@ -702,17 +714,23 @@
                     "arguments": [
                       {
                         "literal": {
-                          "string": "Spark SQL"
+                          "utf8": {
+                            "value": "Spark SQL"
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "string": "CORE"
+                          "utf8": {
+                            "value": "CORE"
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 7
+                          "int32": {
+                            "value": 7
+                          }
                         }
                       }
                     ],
@@ -748,17 +766,23 @@
                     "arguments": [
                       {
                         "literal": {
-                          "string": "Spark SQL"
+                          "utf8": {
+                            "value": "Spark SQL"
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "string": "_"
+                          "utf8": {
+                            "value": "_"
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 6
+                          "int32": {
+                            "value": 6
+                          }
                         }
                       }
                     ],
@@ -794,22 +818,30 @@
                     "arguments": [
                       {
                         "literal": {
-                          "string": "Spark SQL"
+                          "utf8": {
+                            "value": "Spark SQL"
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "string": "tructured"
+                          "utf8": {
+                            "value": "tructured"
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 2
+                          "int32": {
+                            "value": 2
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 4
+                          "int32": {
+                            "value": 4
+                          }
                         }
                       }
                     ],
@@ -852,12 +884,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "string": "yxTomxx"
+                          "utf8": {
+                            "value": "yxTomxx"
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "string": "xyz"
+                          "utf8": {
+                            "value": "xyz"
+                          }
                         }
                       }
                     ],
@@ -893,12 +929,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "string": "@ $ % & ()abc "
+                          "utf8": {
+                            "value": "@ $ % & ()abc "
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "string": "@$%&( )abc"
+                          "utf8": {
+                            "value": "@$%&( )abc"
+                          }
                         }
                       }
                     ],
@@ -940,12 +980,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "string": "[ ccccbcc "
+                          "utf8": {
+                            "value": "[ ccccbcc "
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "string": "c []"
+                          "utf8": {
+                            "value": "c []"
+                          }
                         }
                       }
                     ],
@@ -987,12 +1031,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "string": "bc...,,,&&&ccc"
+                          "utf8": {
+                            "value": "bc...,,,&&&ccc"
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "string": "c&^,."
+                          "utf8": {
+                            "value": "c&^,."
+                          }
                         }
                       }
                     ],
@@ -1472,7 +1520,9 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 2
+                          "int32": {
+                            "value": 2
+                          }
                         }
                       }
                     ],
@@ -1601,7 +1651,9 @@
                                     "expressions": [
                                       {
                                         "literal": {
-                                          "integer": 1
+                                          "int32": {
+                                            "value": 1
+                                          }
                                         }
                                       }
                                     ]
@@ -1660,7 +1712,9 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 2
+                          "int32": {
+                            "value": 2
+                          }
                         }
                       }
                     ],
@@ -1710,7 +1764,9 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 2
+                          "int32": {
+                            "value": 2
+                          }
                         }
                       }
                     ],
@@ -2217,7 +2273,9 @@
               "expressions": [
                 {
                   "literal": {
-                    "integer": 1
+                    "int32": {
+                      "value": 1
+                    }
                   }
                 }
               ]
@@ -2244,7 +2302,9 @@
               "expressions": [
                 {
                   "literal": {
-                    "integer": 1
+                    "int32": {
+                      "value": 1
+                    }
                   }
                 }
               ]
@@ -2397,7 +2457,9 @@
                     },
                     {
                       "literal": {
-                        "integer": 1
+                        "int32": {
+                          "value": 1
+                        }
                       }
                     }
                   ],
@@ -2461,7 +2523,9 @@
                         },
                         {
                           "literal": {
-                            "integer": 1
+                            "int32": {
+                              "value": 1
+                            }
                           }
                         }
                       ],

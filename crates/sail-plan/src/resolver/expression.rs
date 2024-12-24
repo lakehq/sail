@@ -116,8 +116,8 @@ impl PlanResolver<'_> {
             spec::Expr::Literal(literal) if resolve_literals => {
                 let num_fields = schema.fields().len();
                 let position = match literal {
-                    spec::Literal::Integer(value) => *value as usize,
-                    spec::Literal::Long(value) => *value as usize,
+                    spec::Literal::Int32 { value: Some(value) } => *value as usize,
+                    spec::Literal::Int64 { value: Some(value) } => *value as usize,
                     _ => {
                         return Ok(expr::Sort {
                             expr: self.resolve_expression(*child, schema, state).await?,
@@ -586,7 +586,11 @@ impl PlanResolver<'_> {
     }
 
     fn resolve_expression_literal(&self, literal: spec::Literal) -> PlanResult<NamedExpr> {
-        let name = self.config.plan_formatter.literal_to_string(&literal)?;
+        let name = self.config.plan_formatter.literal_to_string(
+            &literal,
+            self.config.timezone.as_str(),
+            &self.config.timestamp_type,
+        )?;
         let literal = self.resolve_literal(literal)?;
         Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
     }
@@ -1103,7 +1107,11 @@ impl PlanResolver<'_> {
                 return Err(PlanError::invalid("extraction must be a literal"));
             }
         };
-        let extraction_name = self.config.plan_formatter.literal_to_string(&extraction)?;
+        let extraction_name = self.config.plan_formatter.literal_to_string(
+            &extraction,
+            self.config.timezone.as_str(),
+            &self.config.timestamp_type,
+        )?;
         let extraction = self.resolve_literal(extraction)?;
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
@@ -1694,7 +1702,9 @@ mod tests {
                 &resolver,
                 spec::Expr::UnresolvedFunction {
                     function_name: "not".to_string(),
-                    arguments: vec![spec::Expr::Literal(spec::Literal::Boolean(true))],
+                    arguments: vec![spec::Expr::Literal(spec::Literal::Boolean {
+                        value: Some(true)
+                    })],
                     is_distinct: false,
                     is_user_defined_function: false,
                 }
@@ -1721,12 +1731,14 @@ mod tests {
                                 spec::Expr::Alias {
                                     // The resolver assigns a name "1" for the literal,
                                     // and is then overridden by the explicitly specified name.
-                                    expr: Box::new(spec::Expr::Literal(spec::Literal::Integer(1))),
+                                    expr: Box::new(spec::Expr::Literal(spec::Literal::Int32 {
+                                        value: Some(1)
+                                    })),
                                     name: vec!["a".to_string().into()],
                                     metadata: None,
                                 },
                                 // The resolver assigns a name "2" for the literal.
-                                spec::Expr::Literal(spec::Literal::Integer(2)),
+                                spec::Expr::Literal(spec::Literal::Int32 { value: Some(2) }),
                             ],
                             is_distinct: false,
                             is_user_defined_function: false,
