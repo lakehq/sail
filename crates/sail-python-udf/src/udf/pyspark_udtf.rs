@@ -1,113 +1,95 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::datatypes as adt;
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
-use datafusion::arrow::pyarrow::*;
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::Session;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::function::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
-use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::DataFusionError;
-use datafusion_expr::expr::Alias;
-use datafusion_expr::{Expr, TableType};
-use pyo3::prelude::PyAnyMethods;
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion_common::{exec_err, plan_err};
+use datafusion_expr::Expr;
 use pyo3::Python;
-use sail_common::spec;
-use sail_common::utils::cast_record_batch;
+use sail_common::udf::StreamUDF;
 
 use crate::cereal::pyspark_udtf::PySparkUdtfPayload;
 use crate::config::SparkUdfConfig;
-use crate::conversion::TryToPy;
-use crate::error::{PyUdfError, PyUdfResult};
+use crate::error::PyUdfResult;
+use crate::stream::PyMapStream;
 use crate::utils::spark::PySpark;
 
-#[derive(Debug, Clone)]
-pub struct PySparkUserDefinedTable {
-    return_schema: SchemaRef,
-    batches: Vec<RecordBatch>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+pub enum PySparkUdtfKind {
+    Table,
+    ArrowTable,
 }
 
-impl PySparkUserDefinedTable {
-    pub fn try_new(return_schema: SchemaRef, batches: Vec<RecordBatch>) -> Result<Self> {
-        let batches = batches
-            .into_iter()
-            .map(|batch| cast_record_batch(batch, return_schema.clone()))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self {
-            return_schema,
-            batches,
-        })
-    }
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct PySparkUdtfOptions {
+    pub timezone: String,
+    pub arrow_cast_safe_check: bool,
 }
 
-#[async_trait]
-impl TableProvider for PySparkUserDefinedTable {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        self.return_schema.clone()
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::Base
-    }
-
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // TODO: Implement Stream
-        let exec = MemoryExec::try_new(
-            &[self.batches.clone()],
-            TableProvider::schema(self),
-            projection.cloned(),
-        )?;
-        Ok(Arc::new(exec))
+impl From<&SparkUdfConfig> for PySparkUdtfOptions {
+    fn from(config: &SparkUdfConfig) -> Self {
+        Self {
+            timezone: config.timezone.clone(),
+            arrow_cast_safe_check: config.pandas_convert_to_arrow_array_safely,
+        }
     }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct PySparkUDTF {
-    python_version: String,
-    eval_type: spec::PySparkUdfType,
-    command: Vec<u8>,
-    return_type: DataType,
-    return_schema: SchemaRef,
-    spark_udf_config: SparkUdfConfig,
-    #[allow(dead_code)]
+    kind: PySparkUdtfKind,
+    name: String,
+    payload: Vec<u8>,
+    /// The names of columns in the input batch.
+    input_names: Vec<String>,
+    /// The data types of columns in the input batch.
+    input_types: Vec<DataType>,
+    /// The number of passthrough columns in the input batch.
+    /// This is also the start position of the UDTF arguments in the input batch.
+    /// The input batch contains the passthrough columns, followed by the UDTF arguments.
+    passthrough_columns: usize,
+    /// The UDTF return type. This can only be a struct type.
+    function_return_type: DataType,
+    /// The optional names to override the field names in the UDTF return type.
+    function_output_names: Option<Vec<String>>,
     deterministic: bool,
+    options: PySparkUdtfOptions,
+    /// The output schema of the UDTF output stream.
+    /// The output batch contains the passthrough non-argument columns from the input batch,
+    /// followed by the columns of the UDTF output.
+    output_schema: SchemaRef,
 }
 
 #[derive(PartialEq, PartialOrd)]
 struct PySparkUDTFOrd<'a> {
-    python_version: &'a str,
-    eval_type: spec::PySparkUdfType,
-    command: &'a [u8],
-    return_type: &'a DataType,
-    spark_udf_config: &'a SparkUdfConfig,
+    kind: PySparkUdtfKind,
+    name: &'a str,
+    payload: &'a [u8],
+    input_names: &'a [String],
+    input_types: &'a [DataType],
+    passthrough_columns: usize,
+    function_return_type: &'a DataType,
+    function_output_names: &'a Option<Vec<String>>,
     deterministic: &'a bool,
+    options: &'a PySparkUdtfOptions,
 }
 
 impl<'a> From<&'a PySparkUDTF> for PySparkUDTFOrd<'a> {
     fn from(udtf: &'a PySparkUDTF) -> Self {
         Self {
-            python_version: &udtf.python_version,
-            eval_type: udtf.eval_type,
-            command: &udtf.command,
-            return_type: &udtf.return_type,
-            spark_udf_config: &udtf.spark_udf_config,
+            kind: udtf.kind,
+            name: &udtf.name,
+            payload: &udtf.payload,
+            input_names: &udtf.input_names,
+            input_types: &udtf.input_types,
+            passthrough_columns: udtf.passthrough_columns,
+            function_return_type: &udtf.function_return_type,
+            function_output_names: &udtf.function_output_names,
             deterministic: &udtf.deterministic,
+            options: &udtf.options,
         }
     }
 }
@@ -119,106 +101,163 @@ impl PartialOrd for PySparkUDTF {
 }
 
 impl PySparkUDTF {
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
-        python_version: String,
-        eval_type: spec::PySparkUdfType,
-        command: Vec<u8>,
-        return_type: DataType,
-        spark_udf_config: SparkUdfConfig,
+        kind: PySparkUdtfKind,
+        name: String,
+        payload: Vec<u8>,
+        input_names: Vec<String>,
+        input_types: Vec<DataType>,
+        passthrough_columns: usize,
+        function_return_type: DataType,
+        function_output_names: Option<Vec<String>>,
         deterministic: bool,
-    ) -> PyUdfResult<Self> {
-        let return_schema: SchemaRef = match return_type {
-            DataType::Struct(ref fields) => {
-                Arc::new(adt::Schema::new(fields.clone()))
-            },
+        options: PySparkUdtfOptions,
+    ) -> Result<Self> {
+        if input_names.len() != input_types.len() {
+            return plan_err!(
+                "The number of input names ({}) does not match the number of input types ({}).",
+                input_names.len(),
+                input_types.len()
+            );
+        }
+        if input_names.len() < passthrough_columns {
+            return plan_err!(
+                "The number of input columns ({}) is less than the number of passthrough columns ({}).",
+                input_names.len(),
+                passthrough_columns
+            );
+        }
+        let function_return_fields = match &function_return_type {
+            DataType::Struct(fields) => fields.to_vec(),
             _ => {
-                return Err(PyUdfError::invalid(format!(
-                    "Invalid Python user-defined table function return type. Expect a struct type, but got {}",
-                    return_type
-                )))
+                // The PySpark unit test expects the exact error message here.
+                return plan_err!(
+                    "Invalid Python user-defined table function return type. Expect a struct type, but got {}.",
+                    &function_return_type
+                );
             }
         };
+        let function_return_fields = if let Some(names) = &function_output_names {
+            if names.len() != function_return_fields.len() {
+                return plan_err!(
+                    "The number of function output names ({}) does not match the number of function return fields ({}).",
+                    names.len(),
+                    function_return_fields.len()
+                );
+            }
+            function_return_fields
+                .into_iter()
+                .zip(names.iter())
+                .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
+                .collect()
+        } else {
+            function_return_fields
+        };
+        let output_fields = (0..passthrough_columns)
+            .map(|i| {
+                Arc::new(Field::new(
+                    input_names[i].clone(),
+                    input_types[i].clone(),
+                    true,
+                ))
+            })
+            .chain(function_return_fields)
+            .collect::<Vec<_>>();
         Ok(Self {
-            python_version,
-            eval_type,
-            command,
-            return_type,
-            return_schema,
-            spark_udf_config,
+            kind,
+            name,
+            payload,
+            input_names,
+            input_types,
+            passthrough_columns,
+            function_return_type,
+            function_output_names,
+            output_schema: Arc::new(Schema::new(output_fields)),
             deterministic,
+            options,
         })
+    }
+
+    pub fn kind(&self) -> PySparkUdtfKind {
+        self.kind
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    pub fn input_names(&self) -> &[String] {
+        &self.input_names
+    }
+
+    pub fn input_types(&self) -> &[DataType] {
+        &self.input_types
+    }
+
+    pub fn passthrough_columns(&self) -> usize {
+        self.passthrough_columns
+    }
+
+    pub fn function_return_type(&self) -> &DataType {
+        &self.function_return_type
+    }
+
+    pub fn function_output_names(&self) -> Option<&[String]> {
+        self.function_output_names.as_deref()
+    }
+
+    pub fn deterministic(&self) -> bool {
+        self.deterministic
+    }
+
+    pub fn options(&self) -> &PySparkUdtfOptions {
+        &self.options
     }
 }
 
 impl TableFunctionImpl for PySparkUDTF {
-    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        let inputs = exprs
-            .iter()
-            .map(|expr| {
-                // https://spark.apache.org/docs/latest/api/python/user_guide/sql/python_udtf.html
-                // args can either be scalar exprs or table args that represent entire input tables.
-                match expr {
-                    Expr::Literal(scalar_value) => {
-                        scalar_value.to_array().map_err(|err| {
-                            DataFusionError::Execution(format!(
-                                "Failed to convert scalar to array: {}",
-                                err
-                            ))
-                        })
-                    }
-                    Expr::Alias(Alias { ref expr, .. }) => {
-                        if let Expr::Literal(ref scalar_value) = **expr {
-                            scalar_value.to_array().map_err(|err| {
-                                DataFusionError::Execution(format!(
-                                    "Failed to convert scalar to array: {}",
-                                    err
-                                ))
-                            })
-                        } else {
-                            Err(DataFusionError::NotImplemented(format!(
-                                "Only literal expr are supported in Python UDTFs for now, got expr: {}",
-                                expr
-                            )))
-                        }
-                    }
-                    other => {
-                        // TODO: Support table args
-                        Err(DataFusionError::NotImplemented(format!(
-                            "Only literal expr are supported in Python UDTFs for now, got expr: {}, other: {}",
-                            expr, other
-                        )))
-                    }
-                }
-            })
-            .collect::<Result<Vec<ArrayRef>>>()?;
+    fn call(&self, _: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        exec_err!("Python UDTF should not be called as a table function")
+    }
+}
 
-        let payload = PySparkUdtfPayload::build(
-            &self.python_version,
-            &self.command,
-            self.eval_type,
-            exprs.len(),
-            &self.return_type,
-            &self.spark_udf_config,
-        )?;
-        let batch = Python::with_gil(|py| -> PyUdfResult<_> {
-            let udtf = PySparkUdtfPayload::load(py, &payload)?;
-            let udtf = match self.eval_type {
-                spec::PySparkUdfType::Table => PySpark::table_udf(py, udtf, &self.return_schema)?,
-                spec::PySparkUdfType::ArrowTable => PySpark::arrow_table_udf(py, udtf)?,
-                _ => {
-                    return Err(PyUdfError::invalid(format!(
-                        "Invalid PySpark UDTF type: {:?}",
-                        self.eval_type
-                    )))
-                }
+impl StreamUDF for PySparkUDTF {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn output_schema(&self) -> SchemaRef {
+        self.output_schema.clone()
+    }
+
+    fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
+        let function = Python::with_gil(|py| -> PyUdfResult<_> {
+            let udtf = PySparkUdtfPayload::load(py, &self.payload)?;
+            let udtf = match self.kind {
+                PySparkUdtfKind::Table => PySpark::table_udf(
+                    py,
+                    udtf,
+                    &self.input_types,
+                    self.passthrough_columns,
+                    &self.output_schema,
+                )?,
+                PySparkUdtfKind::ArrowTable => PySpark::arrow_table_udf(
+                    py,
+                    udtf,
+                    &self.input_names,
+                    self.passthrough_columns,
+                    &self.output_schema,
+                    &self.options.timezone,
+                    self.options.arrow_cast_safe_check,
+                )?,
             };
-            let batch = udtf.call1((inputs.try_to_py(py)?,))?;
-            Ok(RecordBatch::from_pyarrow_bound(&batch)?)
+            Ok(udtf.unbind())
         })?;
-
-        Ok(Arc::new(PySparkUserDefinedTable::try_new(
-            self.return_schema.clone(),
-            vec![batch],
-        )?))
+        Ok(Box::pin(PyMapStream::new(
+            input,
+            function,
+            self.output_schema.clone(),
+        )))
     }
 }

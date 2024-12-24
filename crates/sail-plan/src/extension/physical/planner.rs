@@ -48,7 +48,6 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             } else if let Some(node) = node.as_any().downcast_ref::<MapPartitionsNode>() {
                 Arc::new(MapPartitionsExec::new(
                     physical_inputs.one()?,
-                    node.input_names().to_vec(),
                     node.udf().clone(),
                     node.schema().inner().clone(),
                 ))

@@ -1318,7 +1318,7 @@
                       "tableAlias": [
                         "expl"
                       ],
-                      "columnAliases": [],
+                      "columnAliases": null,
                       "outer": false
                     },
                     "planId": null,

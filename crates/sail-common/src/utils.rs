@@ -1,17 +1,20 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
+use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{Expr, LogicalPlan, Projection};
+use futures::StreamExt;
 
 pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<RecordBatch> {
     let fields = schema.fields();
@@ -65,6 +68,14 @@ pub fn rename_schema(schema: &SchemaRef, names: &[String]) -> Result<SchemaRef> 
     Ok(Arc::new(Schema::new(fields)))
 }
 
+pub fn record_batch_with_schema(batch: RecordBatch, schema: &SchemaRef) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new_with_options(
+        schema.clone(),
+        batch.columns().to_vec(),
+        &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
+    )?)
+}
+
 pub fn rename_logical_plan(plan: LogicalPlan, names: &[String]) -> Result<LogicalPlan> {
     if plan.schema().fields().len() != names.len() {
         return exec_err!(
@@ -116,4 +127,19 @@ pub fn rename_physical_plan(
         })
         .collect();
     Ok(Arc::new(ProjectionExec::try_new(expr, plan)?))
+}
+
+pub fn rename_record_batch_stream(
+    stream: SendableRecordBatchStream,
+    names: &[String],
+) -> Result<SendableRecordBatchStream> {
+    let schema = rename_schema(&stream.schema(), names)?;
+    let stream = {
+        let schema = schema.clone();
+        stream.map(move |x| match x {
+            Ok(batch) => Ok(record_batch_with_schema(batch, &schema)?),
+            Err(e) => Err(e),
+        })
+    };
+    Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
 }

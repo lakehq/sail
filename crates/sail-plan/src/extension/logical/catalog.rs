@@ -13,7 +13,6 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{ScalarUDF, TableScan, UNNAMED_TABLE};
-use sail_python_udf::udf::pyspark_udtf::PySparkUDTF;
 use serde::Serialize;
 use serde_arrow::schema::{SchemaLike, TracingOptions};
 use serde_arrow::to_arrow;
@@ -72,7 +71,8 @@ impl CatalogCommandNode {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub(crate) enum CatalogTableFunction {
-    PySparkUDTF(PySparkUDTF),
+    // We do not support any kind of table functions yet.
+    // PySpark UDTF is registered as a scalar UDF.
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -163,6 +163,7 @@ pub(crate) enum CatalogCommand {
     RegisterFunction {
         udf: ScalarUDF,
     },
+    #[allow(unused)]
     RegisterTableFunction {
         name: String,
         // We have to be explicit about the UDTF types we support.

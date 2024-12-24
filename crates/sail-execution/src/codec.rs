@@ -35,7 +35,7 @@ use datafusion_proto::protobuf::{
 };
 use prost::bytes::BytesMut;
 use prost::Message;
-use sail_common::udf::MapIterUDF;
+use sail_common::udf::StreamUDF;
 use sail_common::utils::{read_record_batches, write_record_batches};
 use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
 use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
@@ -78,14 +78,15 @@ use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
+use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind, PySparkUdtfOptions};
 use sail_python_udf::udf::ColumnMatch;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
-use crate::plan::gen::extended_map_iter_udf::MapIterUdfKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
+use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::{
-    ExtendedAggregateUdf, ExtendedMapIterUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf,
+    ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
 use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::{LocalStreamStorage, TaskReadLocation, TaskWriteLocation};
@@ -161,20 +162,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )))
             }
-            NodeKind::MapPartitions(gen::MapPartitionsExecNode {
-                input,
-                input_names,
-                udf,
-                schema,
-            }) => {
+            NodeKind::MapPartitions(gen::MapPartitionsExecNode { input, udf, schema }) => {
                 let Some(udf) = udf else {
                     return plan_err!("no UDF found for MapPartitionsExec");
                 };
                 let schema = self.try_decode_schema(&schema)?;
                 Ok(Arc::new(MapPartitionsExec::new(
                     self.try_decode_plan(&input, registry)?,
-                    input_names,
-                    self.try_decode_map_iter_udf(udf)?,
+                    self.try_decode_stream_udf(udf)?,
                     Arc::new(schema),
                 )))
             }
@@ -396,11 +391,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
             })
         } else if let Some(map_partitions) = node.as_any().downcast_ref::<MapPartitionsExec>() {
-            let udf = self.try_encode_map_iter_udf(map_partitions.udf().as_ref())?;
+            let udf = self.try_encode_stream_udf(map_partitions.udf().as_ref())?;
             let schema = self.try_encode_schema(map_partitions.schema().as_ref())?;
             NodeKind::MapPartitions(gen::MapPartitionsExecNode {
                 input: self.try_encode_plan(map_partitions.input().clone())?,
-                input_names: map_partitions.input_names().to_vec(),
                 udf: Some(udf),
                 schema,
             })
@@ -949,17 +943,18 @@ impl RemoteExecutionCodec {
         Self { context }
     }
 
-    fn try_decode_map_iter_udf(&self, udf: ExtendedMapIterUdf) -> Result<Arc<dyn MapIterUDF>> {
-        let ExtendedMapIterUdf { map_iter_udf_kind } = udf;
-        let map_iter_udf_kind = match map_iter_udf_kind {
+    fn try_decode_stream_udf(&self, udf: ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
+        let ExtendedStreamUdf { stream_udf_kind } = udf;
+        let stream_udf_kind = match stream_udf_kind {
             Some(x) => x,
-            None => return plan_err!("ExtendedMapIterUdf: no UDF found"),
+            None => return plan_err!("ExtendedStreamUdf: no UDF found"),
         };
-        let udf: Arc<dyn MapIterUDF> = match map_iter_udf_kind {
-            MapIterUdfKind::PySpark(gen::PySparkMapIterUdf {
+        let udf: Arc<dyn StreamUDF> = match stream_udf_kind {
+            StreamUdfKind::PySparkMapIter(gen::PySparkMapIterUdf {
                 kind,
                 name,
                 payload,
+                input_names,
                 output_schema,
             }) => {
                 let kind = self.try_decode_pyspark_map_iter_kind(kind)?;
@@ -968,29 +963,104 @@ impl RemoteExecutionCodec {
                     kind,
                     name,
                     payload,
+                    input_names,
                     Arc::new(output_schema),
                 ))
+            }
+            StreamUdfKind::PySparkUdtf(gen::PySparkUdtf {
+                kind,
+                name,
+                payload,
+                input_names,
+                input_types,
+                passthrough_columns,
+                function_return_type,
+                function_output_names,
+                deterministic,
+                options,
+            }) => {
+                let kind = self.try_decode_pyspark_udtf_kind(kind)?;
+                let input_types = input_types
+                    .iter()
+                    .map(|x| self.try_decode_data_type(x))
+                    .collect::<Result<Vec<_>>>()?;
+                let function_return_type = self.try_decode_data_type(&function_return_type)?;
+                let function_output_names = if function_output_names.is_empty() {
+                    None
+                } else {
+                    Some(function_output_names)
+                };
+                let Some(options) = options else {
+                    return plan_err!("PySpark UDTF options not found");
+                };
+                let options = PySparkUdtfOptions {
+                    timezone: options.timezone,
+                    arrow_cast_safe_check: options.arrow_cast_safe_check,
+                };
+                Arc::new(PySparkUDTF::try_new(
+                    kind,
+                    name,
+                    payload,
+                    input_names,
+                    input_types,
+                    passthrough_columns as usize,
+                    function_return_type,
+                    function_output_names,
+                    deterministic,
+                    options,
+                )?)
             }
         };
         Ok(udf)
     }
 
-    fn try_encode_map_iter_udf(&self, udf: &dyn MapIterUDF) -> Result<ExtendedMapIterUdf> {
-        let map_iter_udf_kind =
-            if let Some(func) = udf.dyn_object_as_any().downcast_ref::<PySparkMapIterUDF>() {
-                let kind = self.try_encode_pyspark_map_iter_kind(func.kind())?;
-                let output_schema = self.try_encode_schema(func.output_schema().as_ref())?;
-                MapIterUdfKind::PySpark(gen::PySparkMapIterUdf {
-                    kind,
-                    name: func.name().to_string(),
-                    payload: func.payload().to_vec(),
-                    output_schema,
-                })
-            } else {
-                return plan_err!("unknown MapIterUDF type");
+    fn try_encode_stream_udf(&self, udf: &dyn StreamUDF) -> Result<ExtendedStreamUdf> {
+        let stream_udf_kind = if let Some(func) =
+            udf.dyn_object_as_any().downcast_ref::<PySparkMapIterUDF>()
+        {
+            let kind = self.try_encode_pyspark_map_iter_kind(func.kind())?;
+            let output_schema = self.try_encode_schema(func.output_schema().as_ref())?;
+            StreamUdfKind::PySparkMapIter(gen::PySparkMapIterUdf {
+                kind,
+                name: func.name().to_string(),
+                payload: func.payload().to_vec(),
+                input_names: func.input_names().to_vec(),
+                output_schema,
+            })
+        } else if let Some(func) = udf.dyn_object_as_any().downcast_ref::<PySparkUDTF>() {
+            let kind = self.try_encode_pyspark_udtf_kind(func.kind())?;
+            let input_types = func
+                .input_types()
+                .iter()
+                .map(|x| self.try_encode_data_type(x))
+                .collect::<Result<Vec<_>>>()?;
+            let function_return_type = self.try_encode_data_type(func.function_return_type())?;
+            let function_output_names = func
+                .function_output_names()
+                .as_ref()
+                .map(|x| x.to_vec())
+                .unwrap_or_default();
+            let options = gen::PySparkUdtfOptions {
+                timezone: func.options().timezone.to_string(),
+                arrow_cast_safe_check: func.options().arrow_cast_safe_check,
             };
-        Ok(ExtendedMapIterUdf {
-            map_iter_udf_kind: Some(map_iter_udf_kind),
+            StreamUdfKind::PySparkUdtf(gen::PySparkUdtf {
+                kind,
+                name: func.name().to_string(),
+                payload: func.payload().to_vec(),
+                input_names: func.input_names().to_vec(),
+                input_types,
+                passthrough_columns: func.passthrough_columns() as u64,
+                function_return_type,
+                function_output_names,
+                deterministic: func.deterministic(),
+                options: Some(options),
+            })
+        } else {
+            return plan_err!("unknown StreamUDF type");
+        };
+        Ok(ExtendedStreamUdf {
+            stream_udf_kind: Some(stream_udf_kind),
         })
     }
 
@@ -1119,6 +1189,24 @@ impl RemoteExecutionCodec {
         let kind = match kind {
             PySparkMapIterKind::Arrow => gen::PySparkMapIterKind::Arrow,
             PySparkMapIterKind::Pandas => gen::PySparkMapIterKind::Pandas,
+        };
+        Ok(kind as i32)
+    }
+
+    fn try_decode_pyspark_udtf_kind(&self, kind: i32) -> Result<PySparkUdtfKind> {
+        let kind = gen::PySparkUdtfKind::try_from(kind)
+            .map_err(|e| plan_datafusion_err!("failed to decode pyspark UDTF kind: {e}"))?;
+        let kind = match kind {
+            gen::PySparkUdtfKind::Table => PySparkUdtfKind::Table,
+            gen::PySparkUdtfKind::ArrowTable => PySparkUdtfKind::ArrowTable,
+        };
+        Ok(kind)
+    }
+
+    fn try_encode_pyspark_udtf_kind(&self, kind: PySparkUdtfKind) -> Result<i32> {
+        let kind = match kind {
+            PySparkUdtfKind::Table => gen::PySparkUdtfKind::Table,
+            PySparkUdtfKind::ArrowTable => gen::PySparkUdtfKind::ArrowTable,
         };
         Ok(kind as i32)
     }

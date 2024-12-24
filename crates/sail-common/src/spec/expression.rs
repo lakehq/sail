@@ -336,6 +336,10 @@ impl PySparkUdfType {
     fn invalid(v: i32) -> CommonError {
         CommonError::invalid(format!("invalid PySpark UDF type: {}", v))
     }
+
+    pub fn is_table_function(&self) -> bool {
+        matches!(self, PySparkUdfType::Table | PySparkUdfType::ArrowTable)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

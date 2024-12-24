@@ -52,7 +52,6 @@ impl PySparkCoGroupMapUDF {
         Ok(Self {
             signature: Signature::exact(
                 input_types,
-                // TODO: Check if this is correct. There is also `Volatility::Stable`
                 match deterministic {
                     true => Volatility::Immutable,
                     false => Volatility::Volatile,

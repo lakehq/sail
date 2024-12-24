@@ -1290,7 +1290,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::DropView {
                     view: parse_object_name(view_name.as_str())?,
                     kind: Some(spec::ViewKind::Temporary),
-                    if_exists: false,
+                    if_exists: true,
                 })
             }
             CatType::DropGlobalTempView(x) => {
@@ -1298,7 +1298,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::DropView {
                     view: parse_object_name(view_name.as_str())?,
                     kind: Some(spec::ViewKind::GlobalTemporary),
-                    if_exists: false,
+                    if_exists: true,
                 })
             }
             CatType::RecoverPartitions(x) => {

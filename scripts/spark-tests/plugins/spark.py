@@ -214,7 +214,7 @@ SKIPPED_SPARK_TESTS = [
         reason="SPARK-46130: Flaky with Python 3.12",
     ),
     TestMarker(
-        # This is fixed in Spark 3.5.2, so we can re-enable it when we upgrade.
+        # TODO: enable the test for Spark 3.5.2 or newer versions
         keywords=["test_parity_pandas_cogrouped_map.py", "test_apply_in_pandas_not_returning_pandas_dataframe"],
         reason="SPARK-45065: Not working with Pandas 2.x",
     ),
@@ -232,6 +232,11 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_parity_pandas_cogrouped_map.py", "test_with_local_data"],
         reason="Flaky test",
+    ),
+    TestMarker(
+        # TODO: enable the test for Spark 4.0.0-preview2 or newer versions
+        keywords=["test_parity_udtf.py", "test_udtf_with_array_input_type"],
+        reason="SPARK-48710: Not working with NumPy 2.x",
     ),
 ]
 
