@@ -406,10 +406,10 @@ impl TryFrom<String> for LiteralValue<i16> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<i32> {
+impl TryFrom<&str> for LiteralValue<i32> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let value = value
             .parse::<i32>()
             .map_err(|_| SqlError::invalid(format!("int: {:?}", value)))?;
@@ -417,10 +417,10 @@ impl TryFrom<String> for LiteralValue<i32> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<i64> {
+impl TryFrom<&str> for LiteralValue<i64> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let value = value
             .parse::<i64>()
             .map_err(|_| SqlError::invalid(format!("bigint: {:?}", value)))?;

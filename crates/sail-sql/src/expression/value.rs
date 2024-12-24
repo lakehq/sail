@@ -18,7 +18,7 @@ pub(crate) fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
                 spec::Expr::try_from(value)
             }
             Some("L") | Some("l") => {
-                let value = LiteralValue::<i64>::try_from(value)?;
+                let value = LiteralValue::<i64>::try_from(value.as_str())?;
                 spec::Expr::try_from(value)
             }
             Some("F") | Some("f") => {
@@ -39,9 +39,9 @@ pub(crate) fn from_ast_value(value: ast::Value) -> SqlResult<spec::Expr> {
                 }
             }
             None | Some("") => {
-                if let Ok(value) = LiteralValue::<i32>::try_from(value.clone()) {
+                if let Ok(value) = LiteralValue::<i32>::try_from(value.as_str()) {
                     spec::Expr::try_from(value)
-                } else if let Ok(value) = LiteralValue::<i64>::try_from(value.clone()) {
+                } else if let Ok(value) = LiteralValue::<i64>::try_from(value.as_str()) {
                     spec::Expr::try_from(value)
                 } else if let Ok(value) = parse_decimal_128_string(value.as_str()) {
                     Ok(spec::Expr::Literal(value))
