@@ -1,0 +1,13 @@
+[package]
+name = "sail-sql-parser"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+chumsky = { workspace = true }
+phf = { workspace = true }
+
+[build-dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+prettyplease = { workspace = true }
