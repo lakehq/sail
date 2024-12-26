@@ -1152,6 +1152,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "chumsky"
+version = "1.0.0-alpha.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7b80276986f86789dc56ca6542d53bba9cda3c66091ebbe7bd96fc1bdf20f1f"
+dependencies = [
+ "hashbrown 0.14.5",
+ "unicode-ident",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4785,6 +4795,17 @@ dependencies = [
  "serde_json",
  "sqlparser 0.53.0",
  "thiserror 2.0.9",
+]
+
+[[package]]
+name = "sail-sql-parser"
+version = "0.2.0"
+dependencies = [
+ "chumsky",
+ "phf",
+ "prettyplease",
+ "quote",
+ "syn 2.0.91",
 ]
 
 [[package]]
