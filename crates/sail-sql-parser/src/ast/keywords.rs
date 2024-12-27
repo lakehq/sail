@@ -1,12 +1,14 @@
 use crate::token::TokenSpan;
 
-macro_rules! define_keyword_type {
-    ($keyword:ident) => {
-        #[allow(unused)]
-        pub struct $keyword {
-            pub span: TokenSpan,
-        }
-    };
+macro_rules! keyword_types {
+    ([$(($_:expr, $identifier:ident),)* $(,)?]) => {
+        $(
+            #[allow(unused)]
+            pub struct $identifier {
+                pub span: TokenSpan,
+            }
+        )*
+    }
 }
 
-include!(concat!(env!("OUT_DIR"), "/keywords.ast.rs"));
+for_all_keywords!(keyword_types);

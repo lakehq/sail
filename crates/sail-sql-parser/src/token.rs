@@ -184,7 +184,26 @@ pub struct Location {
     pub column: usize,
 }
 
-include!(concat!(env!("OUT_DIR"), "/keywords.rs"));
+macro_rules! keyword_enum {
+    ([$(($_:expr, $identifier:ident),)* $(,)?]) => {
+        /// A SQL keyword.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[allow(unused)]
+        pub enum Keyword {
+            $($identifier,)*
+        }
+    };
+}
+
+for_all_keywords!(keyword_enum);
+
+macro_rules! keyword_map_value {
+    ($kw:ident) => {
+        Keyword::$kw
+    };
+}
+
+static KEYWORD_MAP: phf::Map<&'static str, Keyword> = keyword_map!(keyword_map_value);
 
 impl Keyword {
     pub fn from_str(value: &str) -> Option<Self> {
@@ -194,18 +213,26 @@ impl Keyword {
 
 #[cfg(test)]
 mod tests {
-    use super::KEYWORD_VALUES;
+    macro_rules! keyword_values {
+        ([$(($string:expr, $_:ident),)* $(,)?]) => {
+            static KEYWORD_VALUES: &[&str] = &[ $($string,)* ];
+        };
+    }
 
-    /// All keywords must be upper case.
+    for_all_keywords!(keyword_values);
+
+    /// All keywords must be upper case and contain only alphanumeric characters or underscores,
+    /// where the first character must be an alphabet or an underscore.
     #[test]
-    fn test_keywords_upper_case() {
+    fn test_keywords_format() {
         for k in KEYWORD_VALUES {
-            assert_eq!(k.to_uppercase().as_str(), *k);
+            assert!(k.chars().all(|c| matches!(c, 'A'..='Z' | '0'..='9' | '_')));
+            assert!(matches!(k.chars().next(), Some('A'..='Z' | '_')));
         }
     }
 
     #[test]
-    /// The keywords must be listed in ASCII order for easier maintenance.
+    /// The keywords must be listed in ASCII order.
     /// The keywords must be unique.
     fn test_keywords_order_and_uniqueness() {
         let mut keywords = KEYWORD_VALUES.to_vec();

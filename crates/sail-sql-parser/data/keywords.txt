@@ -1,3 +1,6 @@
+# This is the list of SQL keywords.
+# The keywords must be defined in ASCII order and must be unique.
+# A line starting with '#' is a comment.
 ADD
 AFTER
 ALL
