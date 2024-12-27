@@ -674,8 +674,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
-            "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
-            "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
+            // "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
+            // "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {

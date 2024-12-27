@@ -7,10 +7,9 @@ use datafusion::common::{exec_datafusion_err, internal_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::UnKnownColumn;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
-};
+use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::future::try_join_all;
 use futures::TryStreamExt;
 use log::warn;
@@ -47,7 +46,10 @@ impl ShuffleReadExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             partitioning,
-            ExecutionMode::Unbounded,
+            EmissionType::Both, // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+            Boundedness::Unbounded {
+                requires_infinite_memory: true, // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+            },
         );
         Self {
             stage,

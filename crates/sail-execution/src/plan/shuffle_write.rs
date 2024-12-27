@@ -8,11 +8,11 @@ use datafusion::common::{exec_datafusion_err, exec_err, plan_err, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::UnKnownColumn;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::repartition::BatchPartitioner;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use futures::future::try_join_all;
 use futures::StreamExt;
@@ -66,7 +66,10 @@ impl ShuffleWriteExec {
             // These output streams are written to locations managed by the worker,
             // while the return value of `.execute()` is always an empty stream.
             input_partitioning,
-            ExecutionMode::Unbounded,
+            plan.pipeline_behavior(), // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+            Boundedness::Unbounded {
+                requires_infinite_memory: true, // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+            },
         );
         let locations = vec![vec![]; input_partition_count];
         Self {

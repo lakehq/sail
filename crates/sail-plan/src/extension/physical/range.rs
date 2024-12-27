@@ -6,8 +6,9 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{DisplayAs, ExecutionMode, ExecutionPlan, PlanProperties};
+use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{exec_err, internal_err, Result};
 
 use crate::extension::logical::Range;
@@ -27,7 +28,8 @@ impl RangeExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::RoundRobinBatch(num_partitions),
-            ExecutionMode::Bounded,
+            EmissionType::Both, // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+            Boundedness::Bounded,
         );
         Self {
             range,

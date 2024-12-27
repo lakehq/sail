@@ -968,12 +968,12 @@ impl PlanResolver<'_> {
             let target: Vec<String> = target.into();
             expr::Expr::Wildcard {
                 qualifier: Some(target.join(".").into()),
-                options: wildcard_options,
+                options: Box::new(wildcard_options),
             }
         } else {
             expr::Expr::Wildcard {
                 qualifier: None,
-                options: wildcard_options,
+                options: Box::new(wildcard_options),
             }
         };
         Ok(NamedExpr::new(vec!["*".to_string()], expr))
