@@ -1,5 +1,5 @@
 use sail_common::spec;
-use sail_sql::literal::parse_decimal_string;
+use sail_sql::literal::{microseconds_to_interval, parse_decimal_string};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect::expression::literal::{Array, Decimal, LiteralType, Map, Struct};
@@ -174,9 +174,7 @@ impl TryFrom<Literal> for spec::Literal {
             LiteralType::YearMonthInterval(x) => {
                 spec::Literal::IntervalYearMonth { months: Some(x) }
             }
-            LiteralType::DayTimeInterval(x) => spec::Literal::DurationMicrosecond {
-                microseconds: Some(x),
-            },
+            LiteralType::DayTimeInterval(x) => microseconds_to_interval(x),
             LiteralType::Array(Array {
                 element_type,
                 elements,

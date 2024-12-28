@@ -791,9 +791,7 @@ fn parse_interval_day_time_string(
     } else {
         microseconds
     };
-    Ok(spec::Literal::DurationMicrosecond {
-        microseconds: Some(n),
-    })
+    Ok(microseconds_to_interval(n))
 }
 
 fn parse_multi_unit_interval(
@@ -909,9 +907,29 @@ fn parse_multi_unit_interval(
             } else {
                 microseconds
             };
-            Ok(spec::Literal::DurationMicrosecond {
-                microseconds: Some(n),
-            })
+            Ok(microseconds_to_interval(n))
+        }
+    }
+}
+
+pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
+    let total_days = microseconds / (24 * 60 * 60 * 1_000_000);
+    let remaining_micros = microseconds % (24 * 60 * 60 * 1_000_000);
+    if remaining_micros % 1000 == 0 {
+        spec::Literal::IntervalDayTime {
+            days: Some(total_days as i32),
+            milliseconds: Some((remaining_micros / 1000) as i32),
+        }
+    } else if microseconds % 1000 == 0 {
+        spec::Literal::IntervalDayTime {
+            days: Some(0),
+            milliseconds: Some((microseconds / 1000) as i32),
+        }
+    } else {
+        spec::Literal::IntervalMonthDayNano {
+            months: Some(0),
+            days: Some(total_days as i32),
+            nanoseconds: Some(remaining_micros * 1000),
         }
     }
 }

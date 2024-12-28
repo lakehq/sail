@@ -568,23 +568,27 @@ impl PlanFormatter for DefaultPlanFormatter {
                 None => Ok("NULL".to_string()),
             },
             Literal::IntervalDayTime { days, milliseconds } => match (days, milliseconds) {
-                (Some(days), Some(milliseconds)) => {
-                    let prepend = if *days < 0 {
+                (None, None) => Ok("NULL".to_string()),
+                (days, milliseconds) => {
+                    let days = days.unwrap_or(0);
+                    let milliseconds = milliseconds.unwrap_or(0);
+                    let total_days = days + (milliseconds / 86_400_000); // Add days from milliseconds
+                    let remaining_millis = milliseconds % 86_400_000; // Get remaining sub-day milliseconds
+                    let prepend = if total_days < 0 {
                         ""
-                    } else if *days == 0 && *milliseconds < 0 {
+                    } else if total_days == 0 && remaining_millis < 0 {
                         "-"
                     } else {
                         ""
                     };
-                    let hours = ((*milliseconds % 86_400_000) / 3_600_000).abs();
-                    let minutes = ((*milliseconds % 3_600_000) / 60_000).abs();
-                    let seconds = ((*milliseconds % 60_000) / 1_000).abs();
-                    let milliseconds = (*milliseconds % 1_000).abs();
+                    let hours = ((remaining_millis % 86_400_000) / 3_600_000).abs();
+                    let minutes = ((remaining_millis % 3_600_000) / 60_000).abs();
+                    let seconds = ((remaining_millis % 60_000) / 1_000).abs();
+                    let milliseconds = (remaining_millis % 1_000).abs();
                     Ok(format!(
-                        "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
+                        "INTERVAL '{prepend}{total_days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
                     ))
                 }
-                _ => Ok("NULL".to_string()),
             },
             Literal::IntervalMonthDayNano {
                 months,
@@ -1088,6 +1092,20 @@ mod tests {
         assert_eq!(
             to_string(Literal::IntervalYearMonth { months: Some(-15) })?,
             "INTERVAL '-1-3' YEAR TO MONTH",
+        );
+        assert_eq!(
+            to_string(Literal::IntervalDayTime {
+                days: Some(0),
+                milliseconds: Some(123_456_000),
+            })?,
+            "INTERVAL '1 10:17:36.000' DAY TO SECOND",
+        );
+        assert_eq!(
+            to_string(Literal::IntervalDayTime {
+                days: Some(0),
+                milliseconds: Some(-123_456_000),
+            })?,
+            "INTERVAL '-1 10:17:36.000' DAY TO SECOND",
         );
         assert_eq!(
             to_string(Literal::DurationMicrosecond {
