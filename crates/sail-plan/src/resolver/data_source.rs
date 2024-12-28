@@ -80,7 +80,7 @@ impl PlanResolver<'_> {
             return plan_err!("No files found in the specified paths: {urls}")?;
         }
         let schema = match schema {
-            Some(schema) => self.resolve_schema(schema)?,
+            Some(schema) => self.resolve_schema(schema, false)?,
             None => {
                 let mut schemas = vec![];
                 for (store, files) in file_groups.iter() {

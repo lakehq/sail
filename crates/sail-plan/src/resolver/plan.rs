@@ -1213,7 +1213,7 @@ impl PlanResolver<'_> {
             vec![]
         };
         let (schema, batches) = if let Some(schema) = schema {
-            let schema: adt::SchemaRef = Arc::new(self.resolve_schema(schema)?);
+            let schema: adt::SchemaRef = Arc::new(self.resolve_schema(schema, false)?);
             let batches = batches
                 .into_iter()
                 .map(|b| Ok(cast_record_batch(b, schema.clone())?))
@@ -1596,7 +1596,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-        let target_schema = self.resolve_schema(schema)?;
+        let target_schema = self.resolve_schema(schema, false)?;
         let input_names = state.get_field_names(input.schema().inner())?;
         let mut projected_exprs = Vec::new();
         for target_field in target_schema.fields() {
@@ -2557,7 +2557,7 @@ impl PlanResolver<'_> {
             let logical_plan = self.resolve_query_plan(*query, state).await?;
             (logical_plan.schema().clone(), Some(logical_plan))
         } else {
-            let fields = self.resolve_fields(&schema.fields)?;
+            let fields = self.resolve_fields(&schema.fields, false)?;
             let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
             (schema, None)
         };

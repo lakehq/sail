@@ -55,7 +55,7 @@ impl PlanResolver<'_> {
                 return plan_err!("Can not load class {class_name}")?;
             }
         };
-        let output_type = self.resolve_data_type(&output_type)?;
+        let output_type = self.resolve_data_type(&output_type, true)?;
         Ok(PythonUdf {
             python_version,
             eval_type,
@@ -76,7 +76,7 @@ impl PlanResolver<'_> {
                 python_version,
             } => (return_type, eval_type, command, python_version),
         };
-        let return_type = self.resolve_data_type(&return_type)?;
+        let return_type = self.resolve_data_type(&return_type, true)?;
         Ok(PythonUdtf {
             python_version,
             eval_type,

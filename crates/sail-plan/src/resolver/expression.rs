@@ -799,7 +799,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let data_type = self.resolve_data_type(&cast_to_type)?;
+        let data_type = self.resolve_data_type(&cast_to_type, false)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
         let expr = expr::Expr::Cast(expr::Cast {

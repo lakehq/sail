@@ -117,7 +117,7 @@ impl PlanResolver<'_> {
             Literal::LargeUtf8 { value } => Ok(ScalarValue::LargeUtf8(value)),
             Literal::Utf8View { value } => Ok(ScalarValue::Utf8View(value)),
             Literal::List { data_type, values } => {
-                let data_type = self.resolve_data_type(&data_type)?;
+                let data_type = self.resolve_data_type(&data_type, false)?;
                 if let Some(values) = values {
                     let scalars: Vec<ScalarValue> = values
                         .into_iter()
@@ -137,7 +137,7 @@ impl PlanResolver<'_> {
                 data_type,
                 values,
             } => {
-                let data_type = self.resolve_data_type(&data_type)?;
+                let data_type = self.resolve_data_type(&data_type, false)?;
                 if let Some(values) = values {
                     let scalars: Vec<ScalarValue> = values
                         .into_iter()
@@ -166,7 +166,7 @@ impl PlanResolver<'_> {
                 }
             }
             Literal::LargeList { data_type, values } => {
-                let data_type = self.resolve_data_type(&data_type)?;
+                let data_type = self.resolve_data_type(&data_type, false)?;
                 if let Some(values) = values {
                     let scalars: Vec<ScalarValue> = values
                         .into_iter()
@@ -194,7 +194,7 @@ impl PlanResolver<'_> {
                 }
             }
             Literal::Struct { data_type, values } => {
-                let data_type = self.resolve_data_type(&data_type)?;
+                let data_type = self.resolve_data_type(&data_type, false)?;
                 let fields = match &data_type {
                     datafusion::arrow::datatypes::DataType::Struct(fields) => fields.clone(),
                     _ => return Err(PlanError::invalid("expected struct type")),
@@ -218,7 +218,7 @@ impl PlanResolver<'_> {
             } => {
                 let (type_ids, fields): (Vec<_>, Vec<_>) = union_fields
                     .iter()
-                    .map(|(index, field)| Ok((index, self.resolve_field(field)?)))
+                    .map(|(index, field)| Ok((index, self.resolve_field(field, false)?)))
                     .collect::<PlanResult<Vec<_>>>()?
                     .into_iter()
                     .unzip();
@@ -240,7 +240,7 @@ impl PlanResolver<'_> {
                 value_type: _,
                 value,
             } => {
-                let key_type = self.resolve_data_type(&key_type)?;
+                let key_type = self.resolve_data_type(&key_type, false)?;
                 if let Some(value) = value {
                     let value = self.resolve_literal(*value)?;
                     Ok(ScalarValue::Dictionary(Box::new(key_type), Box::new(value)))
@@ -281,7 +281,7 @@ impl PlanResolver<'_> {
                         metadata: vec![],
                     },
                 ]);
-                let key_value_fields = self.resolve_fields(&fields)?;
+                let key_value_fields = self.resolve_fields(&fields, false)?;
                 let field = Arc::new(adt::Field::new(
                     "entries",
                     adt::DataType::Struct(key_value_fields.clone()),
