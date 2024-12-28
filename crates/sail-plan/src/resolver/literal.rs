@@ -12,10 +12,15 @@ use datafusion_common::ScalarValue;
 use sail_common::spec::{self, Literal};
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub fn resolve_literal(&self, literal: Literal) -> PlanResult<ScalarValue> {
+    pub(super) fn resolve_literal(
+        &self,
+        literal: Literal,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<ScalarValue> {
         match literal {
             Literal::Null => Ok(ScalarValue::Null),
             Literal::Boolean { value } => Ok(ScalarValue::Boolean(value)),
@@ -117,11 +122,11 @@ impl PlanResolver<'_> {
             Literal::LargeUtf8 { value } => Ok(ScalarValue::LargeUtf8(value)),
             Literal::Utf8View { value } => Ok(ScalarValue::Utf8View(value)),
             Literal::List { data_type, values } => {
-                let data_type = self.resolve_data_type(&data_type, false)?;
+                let data_type = self.resolve_data_type(&data_type, state)?;
                 if let Some(values) = values {
                     let scalars: Vec<ScalarValue> = values
                         .into_iter()
-                        .map(|literal| self.resolve_literal(literal))
+                        .map(|literal| self.resolve_literal(literal, state))
                         .collect::<PlanResult<Vec<_>>>()?;
                     Ok(ScalarValue::List(ScalarValue::new_list_from_iter(
                         scalars.into_iter(),
@@ -137,11 +142,11 @@ impl PlanResolver<'_> {
                 data_type,
                 values,
             } => {
-                let data_type = self.resolve_data_type(&data_type, false)?;
+                let data_type = self.resolve_data_type(&data_type, state)?;
                 if let Some(values) = values {
                     let scalars: Vec<ScalarValue> = values
                         .into_iter()
-                        .map(|literal| self.resolve_literal(literal))
+                        .map(|literal| self.resolve_literal(literal, state))
                         .collect::<PlanResult<Vec<_>>>()?;
                     let scalars = if scalars.is_empty() {
                         new_empty_array(&data_type)
@@ -166,11 +171,11 @@ impl PlanResolver<'_> {
                 }
             }
             Literal::LargeList { data_type, values } => {
-                let data_type = self.resolve_data_type(&data_type, false)?;
+                let data_type = self.resolve_data_type(&data_type, state)?;
                 if let Some(values) = values {
                     let scalars: Vec<ScalarValue> = values
                         .into_iter()
-                        .map(|literal| self.resolve_literal(literal))
+                        .map(|literal| self.resolve_literal(literal, state))
                         .collect::<PlanResult<Vec<_>>>()?;
                     let scalars = if scalars.is_empty() {
                         new_empty_array(&data_type)
@@ -194,7 +199,7 @@ impl PlanResolver<'_> {
                 }
             }
             Literal::Struct { data_type, values } => {
-                let data_type = self.resolve_data_type(&data_type, false)?;
+                let data_type = self.resolve_data_type(&data_type, state)?;
                 let fields = match &data_type {
                     datafusion::arrow::datatypes::DataType::Struct(fields) => fields.clone(),
                     _ => return Err(PlanError::invalid("expected struct type")),
@@ -203,7 +208,7 @@ impl PlanResolver<'_> {
                 if let Some(values) = values {
                     let mut builder: ScalarStructBuilder = ScalarStructBuilder::new();
                     for (literal, field) in values.into_iter().zip(fields.into_iter()) {
-                        let scalar = self.resolve_literal(literal)?;
+                        let scalar = self.resolve_literal(literal, state)?;
                         builder = builder.with_scalar(field, scalar);
                     }
                     Ok(builder.build()?)
@@ -218,7 +223,7 @@ impl PlanResolver<'_> {
             } => {
                 let (type_ids, fields): (Vec<_>, Vec<_>) = union_fields
                     .iter()
-                    .map(|(index, field)| Ok((index, self.resolve_field(field, false)?)))
+                    .map(|(index, field)| Ok((index, self.resolve_field(field, state)?)))
                     .collect::<PlanResult<Vec<_>>>()?
                     .into_iter()
                     .unzip();
@@ -228,7 +233,7 @@ impl PlanResolver<'_> {
                     spec::UnionMode::Dense => adt::UnionMode::Dense,
                 };
                 let value = if let Some((index, literal)) = value {
-                    let scalar = self.resolve_literal(*literal)?;
+                    let scalar = self.resolve_literal(*literal, state)?;
                     Some((index, Box::new(scalar)))
                 } else {
                     None
@@ -240,9 +245,9 @@ impl PlanResolver<'_> {
                 value_type: _,
                 value,
             } => {
-                let key_type = self.resolve_data_type(&key_type, false)?;
+                let key_type = self.resolve_data_type(&key_type, state)?;
                 if let Some(value) = value {
-                    let value = self.resolve_literal(*value)?;
+                    let value = self.resolve_literal(*value, state)?;
                     Ok(ScalarValue::Dictionary(Box::new(key_type), Box::new(value)))
                 } else {
                     Ok(ScalarValue::Dictionary(
@@ -281,7 +286,7 @@ impl PlanResolver<'_> {
                         metadata: vec![],
                     },
                 ]);
-                let key_value_fields = self.resolve_fields(&fields, false)?;
+                let key_value_fields = self.resolve_fields(&fields, state)?;
                 let field = Arc::new(adt::Field::new(
                     "entries",
                     adt::DataType::Struct(key_value_fields.clone()),
@@ -295,11 +300,11 @@ impl PlanResolver<'_> {
                     }
                     let keys: Vec<ScalarValue> = keys
                         .into_iter()
-                        .map(|literal| self.resolve_literal(literal))
+                        .map(|literal| self.resolve_literal(literal, state))
                         .collect::<PlanResult<Vec<_>>>()?;
                     let values: Vec<ScalarValue> = values
                         .into_iter()
-                        .map(|literal| self.resolve_literal(literal))
+                        .map(|literal| self.resolve_literal(literal, state))
                         .collect::<PlanResult<Vec<_>>>()?;
                     let keys = ScalarValue::iter_to_array(keys).map_err(|e| {
                         PlanError::internal(format!(

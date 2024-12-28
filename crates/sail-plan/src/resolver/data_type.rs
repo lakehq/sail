@@ -6,19 +6,24 @@ use sail_common::spec;
 
 use crate::config::TimestampType;
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    fn arrow_binary_type(&self, apply_large_var_config: bool) -> adt::DataType {
-        if apply_large_var_config && self.config.arrow_use_large_var_types {
+    pub(super) fn arrow_binary_type(&self, state: &mut PlanResolverState) -> adt::DataType {
+        if state.get_apply_arrow_use_large_var_types_config()
+            && self.config.arrow_use_large_var_types
+        {
             adt::DataType::LargeBinary
         } else {
             adt::DataType::Binary
         }
     }
 
-    fn arrow_string_type(&self, apply_large_var_config: bool) -> adt::DataType {
-        if apply_large_var_config && self.config.arrow_use_large_var_types {
+    pub(super) fn arrow_string_type(&self, state: &mut PlanResolverState) -> adt::DataType {
+        if state.get_apply_arrow_use_large_var_types_config()
+            && self.config.arrow_use_large_var_types
+        {
             adt::DataType::LargeUtf8
         } else {
             adt::DataType::Utf8
@@ -28,15 +33,10 @@ impl PlanResolver<'_> {
     /// References:
     ///   org.apache.spark.sql.util.ArrowUtils#toArrowType
     ///   org.apache.spark.sql.connect.common.DataTypeProtoConverter
-    pub fn resolve_data_type(
+    pub(super) fn resolve_data_type(
         &self,
         data_type: &spec::DataType,
-        apply_large_var_config: bool,
-        // TODO: It's unclear which `PySparkUdfType`s rely on the `arrow_use_large_var_types` config.
-        //  While searching through the Spark codebase provides insight into this config's usage,
-        //  the relationship remains unclear since we use Arrow for all UDFs.
-        //  For now, we're applying this config to all UDFs.
-        //  https://github.com/search?q=repo%3Aapache%2Fspark%20%22useLargeVarTypes%22&type=code
+        state: &mut PlanResolverState,
     ) -> PlanResult<adt::DataType> {
         use spec::DataType;
 
@@ -102,7 +102,7 @@ impl PlanResolver<'_> {
                     metadata: vec![],
                 };
                 Ok(adt::DataType::List(Arc::new(
-                    self.resolve_field(&field, apply_large_var_config)?,
+                    self.resolve_field(&field, state)?,
                 )))
             }
             DataType::FixedSizeList {
@@ -117,7 +117,7 @@ impl PlanResolver<'_> {
                     metadata: vec![],
                 };
                 Ok(adt::DataType::FixedSizeList(
-                    Arc::new(self.resolve_field(&field, apply_large_var_config)?),
+                    Arc::new(self.resolve_field(&field, state)?),
                     *length,
                 ))
             }
@@ -132,24 +132,19 @@ impl PlanResolver<'_> {
                     metadata: vec![],
                 };
                 Ok(adt::DataType::LargeList(Arc::new(
-                    self.resolve_field(&field, apply_large_var_config)?,
+                    self.resolve_field(&field, state)?,
                 )))
             }
-            DataType::Struct { fields } => Ok(adt::DataType::Struct(
-                self.resolve_fields(fields, apply_large_var_config)?,
-            )),
+            DataType::Struct { fields } => {
+                Ok(adt::DataType::Struct(self.resolve_fields(fields, state)?))
+            }
             DataType::Union {
                 union_fields,
                 union_mode,
             } => {
                 let union_fields = union_fields
                     .iter()
-                    .map(|(i, field)| {
-                        Ok((
-                            *i,
-                            Arc::new(self.resolve_field(field, apply_large_var_config)?),
-                        ))
-                    })
+                    .map(|(i, field)| Ok((*i, Arc::new(self.resolve_field(field, state)?))))
                     .collect::<PlanResult<_>>()?;
                 Ok(adt::DataType::Union(
                     union_fields,
@@ -160,8 +155,8 @@ impl PlanResolver<'_> {
                 key_type,
                 value_type,
             } => Ok(adt::DataType::Dictionary(
-                Box::new(self.resolve_data_type(key_type, apply_large_var_config)?),
-                Box::new(self.resolve_data_type(value_type, apply_large_var_config)?),
+                Box::new(self.resolve_data_type(key_type, state)?),
+                Box::new(self.resolve_data_type(value_type, state)?),
             )),
             DataType::Decimal128 { precision, scale } => {
                 Ok(adt::DataType::Decimal128(*precision, *scale))
@@ -192,9 +187,7 @@ impl PlanResolver<'_> {
                 Ok(adt::DataType::Map(
                     Arc::new(adt::Field::new(
                         "entries",
-                        adt::DataType::Struct(
-                            self.resolve_fields(&fields, apply_large_var_config)?,
-                        ),
+                        adt::DataType::Struct(self.resolve_fields(&fields, state)?),
                         false,
                     )),
                     *keys_sorted,
@@ -203,9 +196,9 @@ impl PlanResolver<'_> {
             DataType::ConfiguredUtf8 { utf8_type: _ } => {
                 // FIXME: Currently `length` and `utf8_type` is lost in translation.
                 //  This impacts accuracy if `spec::ConfiguredUtf8Type` is `VarChar` or `Char`.
-                Ok(self.arrow_string_type(apply_large_var_config))
+                Ok(self.arrow_string_type(state))
             }
-            DataType::ConfiguredBinary => Ok(self.arrow_binary_type(apply_large_var_config)),
+            DataType::ConfiguredBinary => Ok(self.arrow_binary_type(state)),
             DataType::UserDefined { .. } => Err(PlanError::unsupported(
                 "user defined data type should only exist in a field",
             )),
@@ -341,10 +334,10 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn resolve_field(
+    pub(super) fn resolve_field(
         &self,
         field: &spec::Field,
-        apply_large_var_config: bool,
+        state: &mut PlanResolverState,
     ) -> PlanResult<adt::Field> {
         let spec::Field {
             name,
@@ -379,12 +372,10 @@ impl PlanResolver<'_> {
             }
             x => x,
         };
-        Ok(adt::Field::new(
-            name,
-            self.resolve_data_type(data_type, apply_large_var_config)?,
-            *nullable,
+        Ok(
+            adt::Field::new(name, self.resolve_data_type(data_type, state)?, *nullable)
+                .with_metadata(metadata),
         )
-        .with_metadata(metadata))
     }
 
     pub fn unresolve_field(field: &adt::Field) -> PlanResult<spec::Field> {
@@ -417,14 +408,14 @@ impl PlanResolver<'_> {
         })
     }
 
-    pub fn resolve_fields(
+    pub(super) fn resolve_fields(
         &self,
         fields: &spec::Fields,
-        apply_large_var_config: bool,
+        state: &mut PlanResolverState,
     ) -> PlanResult<adt::Fields> {
         let fields = fields
             .into_iter()
-            .map(|f| self.resolve_field(f, apply_large_var_config))
+            .map(|f| self.resolve_field(f, state))
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(adt::Fields::from(fields))
     }
@@ -437,12 +428,12 @@ impl PlanResolver<'_> {
         Ok(spec::Fields::from(fields))
     }
 
-    pub fn resolve_schema(
+    pub(super) fn resolve_schema(
         &self,
         schema: spec::Schema,
-        apply_large_var_config: bool,
+        state: &mut PlanResolverState,
     ) -> PlanResult<adt::Schema> {
-        let fields = self.resolve_fields(&schema.fields, apply_large_var_config)?;
+        let fields = self.resolve_fields(&schema.fields, state)?;
         Ok(adt::Schema::new(fields))
     }
 

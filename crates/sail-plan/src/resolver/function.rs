@@ -40,7 +40,9 @@ impl PlanResolver<'_> {
     pub(super) fn resolve_python_udf(
         &self,
         function: spec::FunctionDefinition,
+        state: &mut PlanResolverState,
     ) -> PlanResult<PythonUdf> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let (output_type, eval_type, command, python_version) = match function {
             spec::FunctionDefinition::PythonUdf {
                 output_type,
@@ -55,7 +57,7 @@ impl PlanResolver<'_> {
                 return plan_err!("Can not load class {class_name}")?;
             }
         };
-        let output_type = self.resolve_data_type(&output_type, true)?;
+        let output_type = self.resolve_data_type(&output_type, state)?;
         Ok(PythonUdf {
             python_version,
             eval_type,
@@ -67,7 +69,9 @@ impl PlanResolver<'_> {
     pub(super) fn resolve_python_udtf(
         &self,
         function: spec::TableFunctionDefinition,
+        state: &mut PlanResolverState,
     ) -> PlanResult<PythonUdtf> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let (return_type, eval_type, command, python_version) = match function {
             spec::TableFunctionDefinition::PythonUdtf {
                 return_type,
@@ -76,7 +80,7 @@ impl PlanResolver<'_> {
                 python_version,
             } => (return_type, eval_type, command, python_version),
         };
-        let return_type = self.resolve_data_type(&return_type, true)?;
+        let return_type = self.resolve_data_type(&return_type, state)?;
         Ok(PythonUdtf {
             python_version,
             eval_type,
@@ -93,8 +97,11 @@ impl PlanResolver<'_> {
         argument_names: &[String],
         schema: &DFSchemaRef,
         deterministic: bool,
+        state: &mut PlanResolverState,
     ) -> PlanResult<Expr> {
         use spec::PySparkUdfType;
+
+        state.register_apply_arrow_use_large_var_types_config(true);
 
         let input_types: Vec<DataType> = arguments
             .iter()
@@ -210,6 +217,7 @@ impl PlanResolver<'_> {
         deterministic: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let payload = PySparkUdtfPayload::build(
             &function.python_version,
             &function.command,
