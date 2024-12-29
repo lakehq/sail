@@ -123,8 +123,8 @@ impl TryFrom<Literal> for spec::Literal {
                         spec::DataType::Decimal128 { precision, scale } => Ok(spec::Literal::Decimal128 { precision, scale, value: None }),
                         spec::DataType::Decimal256 { precision, scale } => Ok(spec::Literal::Decimal256 { precision, scale, value: None }),
                         spec::DataType::Map { key_type, value_type, value_type_nullable: _, keys_sorted: _ } => Ok(spec::Literal::Map { key_type: *key_type, value_type: *value_type, keys: None, values: None }),
-                        spec::DataType::ConfiguredUtf8 { .. } => Ok(spec::Literal::Utf8 { value: None }), // [CHECK HERE] DataType::ConfiguredUtf8 should be removed
-                        spec::DataType::ConfiguredBinary => Ok(spec::Literal::Binary { value: None }),  // [CHECK HERE] DataType::ConfiguredBinary should be removed
+                        spec::DataType::ConfiguredUtf8 { .. } => Ok(spec::Literal::Utf8 { value: None }),
+                        spec::DataType::ConfiguredBinary => Ok(spec::Literal::Binary { value: None }),
                         spec::DataType::UserDefined { .. } => Err(SparkError::todo("TryFrom Spark Literal to Sail Literal UserDefined")),
                     }?
                 } else {
