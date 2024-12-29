@@ -145,13 +145,65 @@ impl TryFrom<Literal> for spec::Literal {
             LiteralType::Double(x) => spec::Literal::Float64 { value: Some(x) },
             LiteralType::Decimal(Decimal {
                 value,
-                precision,
-                scale,
+                precision: provided_precision,
+                scale: provided_scale,
             }) => {
-                if precision.is_some() || scale.is_some() {
-                    return Err(SparkError::todo("decimal literal with precision or scale"));
+                let decimal = parse_decimal_string(value.as_str())?;
+                if provided_precision.is_none() && provided_scale.is_none() {
+                    decimal
+                } else {
+                    match decimal {
+                        spec::Literal::Decimal128 {
+                            precision,
+                            scale,
+                            value,
+                        } => {
+                            let computed_precision =
+                                if let Some(provided_precision) = provided_precision {
+                                    precision.max(provided_precision as u8)
+                                } else {
+                                    precision
+                                };
+                            let computed_scale = if let Some(provided_scale) = provided_scale {
+                                scale.max(provided_scale as i8)
+                            } else {
+                                scale
+                            };
+                            spec::Literal::Decimal128 {
+                                precision: computed_precision.max(computed_scale as u8),
+                                scale: computed_scale,
+                                value,
+                            }
+                        }
+                        spec::Literal::Decimal256 {
+                            precision,
+                            scale,
+                            value,
+                        } => {
+                            let computed_precision =
+                                if let Some(provided_precision) = provided_precision {
+                                    precision.max(provided_precision as u8)
+                                } else {
+                                    precision
+                                };
+                            let computed_scale = if let Some(provided_scale) = provided_scale {
+                                scale.max(provided_scale as i8)
+                            } else {
+                                scale
+                            };
+                            spec::Literal::Decimal256 {
+                                precision: computed_precision.max(computed_scale as u8),
+                                scale: computed_scale,
+                                value,
+                            }
+                        }
+                        other => {
+                            return Err(SparkError::invalid(format!(
+                                "Unexpected Literal type for Decimal: {other:?}"
+                            )))
+                        }
+                    }
                 }
-                parse_decimal_string(value.as_str())?
             }
             LiteralType::String(x) => spec::Literal::Utf8 { value: Some(x) },
             LiteralType::Date(x) => spec::Literal::Date32 { days: Some(x) },
