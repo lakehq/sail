@@ -702,7 +702,7 @@
                         "literal": {
                           "timestampMicrosecond": {
                             "microseconds": 1546427471000000,
-                            "timezoneInfo": "noTimeZone"
+                            "timezoneInfo": "configured"
                           }
                         }
                       }

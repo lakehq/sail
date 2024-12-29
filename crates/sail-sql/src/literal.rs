@@ -187,32 +187,37 @@ impl TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> for spec::L
         literal: LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>,
     ) -> SqlResult<spec::Literal> {
         let (dt, ref tz) = literal.0;
-        let (delta, ntz) = match tz {
-            TimeZoneVariant::FixedOffset(tz) => {
-                (TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?, false)
-            }
-            TimeZoneVariant::Named(tz) => {
-                (TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?, false)
-            }
-            TimeZoneVariant::Utc => (dt - chrono::NaiveDateTime::UNIX_EPOCH, false),
-            TimeZoneVariant::None => (dt - chrono::NaiveDateTime::UNIX_EPOCH, true),
+        let (delta, timezone_info) = match tz {
+            TimeZoneVariant::FixedOffset(tz) => (
+                TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?,
+                spec::TimeZoneInfo::TimeZone {
+                    timezone: Some("UTC".into()),
+                },
+            ),
+            TimeZoneVariant::Named(tz) => (
+                TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?,
+                spec::TimeZoneInfo::TimeZone {
+                    timezone: Some(tz.name().into()),
+                },
+            ),
+            TimeZoneVariant::Utc => (
+                dt - chrono::NaiveDateTime::UNIX_EPOCH,
+                spec::TimeZoneInfo::TimeZone {
+                    timezone: Some("UTC".into()),
+                },
+            ),
+            TimeZoneVariant::None => (
+                dt - chrono::NaiveDateTime::UNIX_EPOCH,
+                spec::TimeZoneInfo::Configured,
+            ),
         };
         let microseconds = delta
             .num_microseconds()
             .ok_or_else(|| SqlError::invalid(format!("datetime literal: {:?}", literal.0)))?;
-        if ntz {
-            Ok(spec::Literal::TimestampMicrosecond {
-                microseconds: Some(microseconds),
-                timezone_info: spec::TimeZoneInfo::NoTimeZone,
-            })
-        } else {
-            // [check here] look at fixme before merging in
-            Ok(spec::Literal::TimestampMicrosecond {
-                microseconds: Some(microseconds),
-                // FIXME: This is wrong but replicates the previous logic when there was no timezone
-                timezone_info: spec::TimeZoneInfo::TimeZone { timezone: None },
-            })
-        }
+        Ok(spec::Literal::TimestampMicrosecond {
+            microseconds: Some(microseconds),
+            timezone_info,
+        })
     }
 }
 
