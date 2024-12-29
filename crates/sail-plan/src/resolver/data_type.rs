@@ -59,7 +59,11 @@ impl PlanResolver<'_> {
                 timezone_info,
             } => Ok(adt::DataType::Timestamp(
                 Self::resolve_time_unit(time_unit)?,
-                self.resolve_timezone(timezone_info)?,
+                Self::resolve_timezone(
+                    timezone_info,
+                    self.config.timezone.as_str(),
+                    &self.config.timestamp_type,
+                )?,
             )),
             DataType::Date32 => Ok(adt::DataType::Date32),
             DataType::Date64 => Ok(adt::DataType::Date64),
@@ -508,23 +512,23 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn resolve_timezone(&self, timezone: &spec::TimeZoneInfo) -> PlanResult<Option<Arc<str>>> {
+    pub fn resolve_timezone(
+        timezone: &spec::TimeZoneInfo,
+        config_timezone: &str,
+        config_timestamp_type: &TimestampType,
+    ) -> PlanResult<Option<Arc<str>>> {
         match timezone {
-            spec::TimeZoneInfo::Configured => match self.config.timestamp_type {
-                TimestampType::TimestampLtz => {
-                    Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
-                }
+            spec::TimeZoneInfo::Configured => match config_timestamp_type {
+                TimestampType::TimestampLtz => Ok(Some(Arc::<str>::from(config_timezone))),
                 TimestampType::TimestampNtz => Ok(None),
             },
-            spec::TimeZoneInfo::LocalTimeZone => {
-                Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
-            }
+            spec::TimeZoneInfo::LocalTimeZone => Ok(Some(Arc::<str>::from(config_timezone))),
             spec::TimeZoneInfo::NoTimeZone => Ok(None),
             spec::TimeZoneInfo::TimeZone { timezone } => match timezone {
-                None => Ok(Some(Arc::<str>::from(self.config.timezone.as_str()))),
+                None => Ok(Some(Arc::<str>::from(config_timezone))),
                 Some(timezone) => {
                     if timezone.is_empty() {
-                        Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
+                        Ok(Some(Arc::<str>::from(config_timezone)))
                     } else {
                         Ok(Some(Arc::clone(timezone)))
                     }

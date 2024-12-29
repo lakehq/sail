@@ -8,6 +8,7 @@ use sail_common::{impl_dyn_object_traits, spec};
 
 use crate::config::TimestampType;
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 /// Utilities to format various data structures in the plan specification.
@@ -341,14 +342,25 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match seconds {
                 Some(seconds) => {
+                    let timezone = PlanResolver::resolve_timezone(
+                        timezone_info,
+                        config_timezone,
+                        config_timestamp_type,
+                    )?;
+                    let adjusted_seconds =
+                        PlanResolver::rebase_timestamp_seconds(Some(*seconds), &timezone)?
+                            .ok_or_else(|| {
+                                PlanError::invalid(format!(
+                            "invalid TimestampSecond: literal to string (seconds: {seconds})"
+                        ))
+                            })?;
                     let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::seconds(*seconds))
+                        + chrono::Duration::seconds(adjusted_seconds))
                     .and_utc();
                     format_timestamp(
                         utc_datetime,
                         "%Y-%m-%d %H:%M:%S",
                         timezone_info,
-                        config_timezone,
                         config_timestamp_type,
                     )
                 }
@@ -359,14 +371,24 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match milliseconds {
                 Some(milliseconds) => {
+                    let timezone = PlanResolver::resolve_timezone(
+                        timezone_info,
+                        config_timezone,
+                        config_timestamp_type,
+                    )?;
+                    let adjusted_milliseconds = PlanResolver::rebase_timestamp_milliseconds(
+                        Some(*milliseconds),
+                        &timezone,
+                    )?.ok_or_else(|| {
+                        PlanError::invalid(format!("invalid TimestampMillisecond: literal to string (milliseconds: {milliseconds})"))
+                    })?;
                     let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::milliseconds(*milliseconds))
+                        + chrono::Duration::milliseconds(adjusted_milliseconds))
                     .and_utc();
                     format_timestamp(
                         utc_datetime,
-                        "%Y-%m-%d %H:%M:%S.%3f",
+                        "%Y-%m-%d %H:%M:%S",
                         timezone_info,
-                        config_timezone,
                         config_timestamp_type,
                     )
                 }
@@ -377,14 +399,24 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match microseconds {
                 Some(microseconds) => {
+                    let timezone = PlanResolver::resolve_timezone(
+                        timezone_info,
+                        config_timezone,
+                        config_timestamp_type,
+                    )?;
+                    let adjusted_microseconds = PlanResolver::rebase_timestamp_microseconds(
+                        Some(*microseconds),
+                        &timezone,
+                    )?.ok_or_else(|| {
+                        PlanError::invalid(format!("invalid TimestampMicrosecond: literal to string (microseconds: {microseconds})"))
+                    })?;
                     let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::microseconds(*microseconds))
+                        + chrono::Duration::microseconds(adjusted_microseconds))
                     .and_utc();
                     format_timestamp(
                         utc_datetime,
-                        "%Y-%m-%d %H:%M:%S.%6f",
+                        "%Y-%m-%d %H:%M:%S",
                         timezone_info,
-                        config_timezone,
                         config_timestamp_type,
                     )
                 }
@@ -395,14 +427,24 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match nanoseconds {
                 Some(nanoseconds) => {
+                    let timezone = PlanResolver::resolve_timezone(
+                        timezone_info,
+                        config_timezone,
+                        config_timestamp_type,
+                    )?;
+                    let adjusted_nanoseconds = PlanResolver::rebase_timestamp_nanoseconds(
+                        Some(*nanoseconds),
+                        &timezone,
+                    )?.ok_or_else(|| {
+                        PlanError::invalid(format!("invalid TimestampNanosecond: literal to string (nanoseconds: {nanoseconds})"))
+                    })?;
                     let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::nanoseconds(*nanoseconds))
+                        + chrono::Duration::nanoseconds(adjusted_nanoseconds))
                     .and_utc();
                     format_timestamp(
                         utc_datetime,
-                        "%Y-%m-%d %H:%M:%S.%9f",
+                        "%Y-%m-%d %H:%M:%S",
                         timezone_info,
-                        config_timezone,
                         config_timestamp_type,
                     )
                 }
@@ -873,29 +915,9 @@ fn format_timestamp(
     utc_datetime: chrono::DateTime<chrono::Utc>,
     format: &str,
     timezone_info: &spec::TimeZoneInfo,
-    config_timezone: &str,
     config_timestamp_type: &TimestampType,
 ) -> PlanResult<String> {
-    let format_with_tz = |tz_str: &str| -> Result<String, PlanError> {
-        let tz: chrono_tz::Tz = tz_str
-            .parse()
-            .map_err(|e| PlanError::invalid(format!("invalid time zone: {e}")))?;
-        Ok(utc_datetime.with_timezone(&tz).format(format).to_string())
-    };
-
-    let formatted_time = match timezone_info {
-        spec::TimeZoneInfo::Configured => match config_timestamp_type {
-            TimestampType::TimestampLtz => format_with_tz(config_timezone)?,
-            TimestampType::TimestampNtz => utc_datetime.format(format).to_string(),
-        },
-        spec::TimeZoneInfo::LocalTimeZone => format_with_tz(config_timezone)?,
-        spec::TimeZoneInfo::NoTimeZone => utc_datetime.format(format).to_string(),
-        spec::TimeZoneInfo::TimeZone { timezone } => match timezone {
-            Some(tz) => format_with_tz(tz)?,
-            None => utc_datetime.format(format).to_string(),
-        },
-    };
-
+    let formatted_time = utc_datetime.format(format).to_string();
     let prefix = match timezone_info {
         spec::TimeZoneInfo::Configured => match config_timestamp_type {
             TimestampType::TimestampLtz => "TIMESTAMP",
@@ -905,7 +927,6 @@ fn format_timestamp(
         spec::TimeZoneInfo::NoTimeZone => "TIMESTAMP_NTZ",
         spec::TimeZoneInfo::TimeZone { timezone: _ } => "TIMESTAMP",
     };
-
     Ok(format!("{prefix} '{formatted_time}'"))
 }
 
@@ -1060,14 +1081,14 @@ mod tests {
                 microseconds: Some(123_000_000),
                 timezone_info: spec::TimeZoneInfo::TimeZone { timezone: None }
             })?,
-            "TIMESTAMP '1970-01-01 00:02:03.000000'",
+            "TIMESTAMP '1970-01-01 00:02:03'",
         );
         assert_eq!(
             to_string(Literal::TimestampMicrosecond {
                 microseconds: Some(-1),
                 timezone_info: spec::TimeZoneInfo::NoTimeZone
             })?,
-            "TIMESTAMP_NTZ '1969-12-31 23:59:59.999999'",
+            "TIMESTAMP_NTZ '1969-12-31 23:59:59'",
         );
         assert_eq!(
             to_string(Literal::IntervalMonthDayNano {
