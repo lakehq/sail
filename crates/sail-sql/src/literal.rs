@@ -709,11 +709,12 @@ impl TimeZoneVariant {
         Tz: chrono::TimeZone<Offset = O> + Debug,
         O: chrono::Offset,
     {
-        let dt = tz
+        let local_dt = tz
             .from_local_datetime(dt)
-            .single()
-            .ok_or_else(|| SqlError::invalid(format!("datetime: {:?} {:?}", dt, tz)))?;
-        Ok(dt - chrono::DateTime::UNIX_EPOCH.with_timezone(tz))
+            .earliest()
+            .ok_or_else(|| SqlError::invalid(format!("datetime: {dt:?} {tz:?}")))?;
+        let utc_dt = local_dt.with_timezone(&chrono::Utc);
+        Ok(utc_dt - chrono::DateTime::UNIX_EPOCH)
     }
 }
 
