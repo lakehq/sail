@@ -41,63 +41,47 @@ impl PlanResolver<'_> {
             Literal::TimestampSecond {
                 seconds,
                 timezone_info,
-            } => {
-                let timezone = Self::resolve_timezone(
+            } => Ok(ScalarValue::TimestampSecond(
+                seconds,
+                Self::resolve_timezone(
                     &timezone_info,
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
-                )?;
-                let adjusted_seconds = Self::rebase_timestamp_seconds(seconds, &timezone)?;
-                Ok(ScalarValue::TimestampSecond(adjusted_seconds, timezone))
-            }
+                )?,
+            )),
             Literal::TimestampMillisecond {
                 milliseconds,
                 timezone_info,
-            } => {
-                let timezone = Self::resolve_timezone(
+            } => Ok(ScalarValue::TimestampMillisecond(
+                milliseconds,
+                Self::resolve_timezone(
                     &timezone_info,
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
-                )?;
-                let adjusted_milliseconds =
-                    Self::rebase_timestamp_milliseconds(milliseconds, &timezone)?;
-                Ok(ScalarValue::TimestampMillisecond(
-                    adjusted_milliseconds,
-                    timezone,
-                ))
-            }
+                )?,
+            )),
             Literal::TimestampMicrosecond {
                 microseconds,
                 timezone_info,
-            } => {
-                let timezone = Self::resolve_timezone(
+            } => Ok(ScalarValue::TimestampMicrosecond(
+                microseconds,
+                Self::resolve_timezone(
                     &timezone_info,
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
-                )?;
-                let adjusted_microseconds =
-                    Self::rebase_timestamp_microseconds(microseconds, &timezone)?;
-                Ok(ScalarValue::TimestampMicrosecond(
-                    adjusted_microseconds,
-                    timezone,
-                ))
-            }
+                )?,
+            )),
             Literal::TimestampNanosecond {
                 nanoseconds,
                 timezone_info,
-            } => {
-                let timezone = Self::resolve_timezone(
+            } => Ok(ScalarValue::TimestampNanosecond(
+                nanoseconds,
+                Self::resolve_timezone(
                     &timezone_info,
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
-                )?;
-                let adjusted_nanoseconds =
-                    Self::rebase_timestamp_nanoseconds(nanoseconds, &timezone)?;
-                Ok(ScalarValue::TimestampNanosecond(
-                    adjusted_nanoseconds,
-                    timezone,
-                ))
-            }
+                )?,
+            )),
             Literal::Date32 { days } => Ok(ScalarValue::Date32(days)),
             Literal::Date64 { milliseconds } => Ok(ScalarValue::Date64(milliseconds)),
             Literal::Time32Second { seconds } => Ok(ScalarValue::Time32Second(seconds)),
