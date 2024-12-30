@@ -8,5 +8,10 @@ pub trait TreeParser<'a, D = ()>: Sized {
     /// This method receives opaque `data` of generic type `D`.
     /// This is useful for defining recursive parsers, where the method receives
     /// the declared parser(s) as the `data` and returns the defined parser.
+    ///
+    /// For easier whitespace handling, the parser can assume that the first token
+    /// of the input is part of the type's AST, but the parser should consume all
+    /// whitespace tokens **after** the AST. This contract must be respected by
+    /// all implementations of this trait.
     fn parser(data: D) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone;
 }

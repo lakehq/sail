@@ -12,18 +12,6 @@ impl<'a> Token<'a> {
             span: span.into(),
         }
     }
-
-    pub fn is_whitespace(&self) -> bool {
-        matches!(
-            self.value,
-            TokenValue::Space { .. }
-                | TokenValue::Tab { .. }
-                | TokenValue::LineFeed { .. }
-                | TokenValue::CarriageReturn { .. }
-                | TokenValue::SingleLineComment { .. }
-                | TokenValue::MultiLineComment { .. }
-        )
-    }
 }
 
 /// A SQL token value.
