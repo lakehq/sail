@@ -5,10 +5,15 @@ mod keywords {
     include!(concat!(env!("OUT_DIR"), "/keywords.rs"));
 }
 
-mod ast;
+pub mod ast;
 mod container;
 mod lexer;
-mod location;
+pub mod location;
 mod options;
-mod token;
-mod tree;
+mod parser;
+pub mod token;
+pub mod tree;
+
+pub use container::Sequence;
+pub use lexer::lexer;
+pub use options::SqlParserOptions;

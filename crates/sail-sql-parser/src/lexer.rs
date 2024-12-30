@@ -29,7 +29,7 @@ fn word<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
                 .repeated(),
         )
         .map_with(|(), e| {
-            let keyword = Keyword::from_str(e.slice());
+            let keyword = Keyword::get(e.slice());
             token!(
                 TokenValue::Word {
                     raw: e.slice(),
@@ -61,7 +61,7 @@ fn number<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
         .then(exponent)
         .to_slice()
         .then(suffix.to_slice())
-        .map_with(|(literal, suffix), e| token!(TokenValue::Number { literal, suffix }, e))
+        .map_with(|(value, suffix), e| token!(TokenValue::Number { value, suffix }, e))
 }
 
 fn single_line_comment<'a>() -> impl Parser<'a, &'a str, Token<'a>> {

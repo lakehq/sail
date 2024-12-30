@@ -22,7 +22,7 @@ where
             } => *k == keyword,
             _ => false,
         })
-        .then_ignore(whitespace())
+        .then_ignore(whitespace().repeated())
         .map(move |t| builder(t.span))
 }
 

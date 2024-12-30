@@ -24,7 +24,7 @@ pub enum TokenValue<'a> {
         keyword: Option<Keyword>,
     },
     /// A numeric literal with a suffix. The suffix can be empty.
-    Number { literal: &'a str, suffix: &'a str },
+    Number { value: &'a str, suffix: &'a str },
     /// A string of a specific style.
     /// The raw text includes the delimiters and the prefix (if any).
     /// No escape sequences are processed in the raw text.
@@ -208,7 +208,7 @@ macro_rules! keyword_map_value {
 static KEYWORD_MAP: phf::Map<&'static str, Keyword> = keyword_map!(keyword_map_value);
 
 impl Keyword {
-    pub fn from_str(value: &str) -> Option<Self> {
+    pub fn get(value: &str) -> Option<Self> {
         KEYWORD_MAP.get(value.to_uppercase().as_str()).cloned()
     }
 }

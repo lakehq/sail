@@ -28,7 +28,7 @@ where
         }
         Ok(span)
     })
-    .then_ignore(whitespace())
+    .then_ignore(whitespace().repeated())
     .map(builder)
 }
 

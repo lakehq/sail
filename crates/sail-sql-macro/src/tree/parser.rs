@@ -162,7 +162,7 @@ fn derive_choices(choices: Vec<TokenStream>) -> TokenStream {
             .collect()
     };
     if choices.len() > 1 {
-        quote! { choice((#(#choices),*)) }
+        quote! { chumsky::prelude::choice((#(#choices),*)) }
     } else {
         quote! { #(#choices),* }
     }
@@ -207,7 +207,7 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
             quote! { <'a, P> },
             quote! { <'a, P> },
             quote! { P },
-            quote! { where P: Parser<'a, &'a [Token<'a>], #t> + Clone},
+            quote! { where P: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t> + Clone},
         ),
         ParserDependency::Tuple(t) => {
             let params = (0..t.len())
@@ -216,7 +216,7 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
             let bounds = t
                 .iter()
                 .zip(params.iter())
-                .map(|(t, p)| quote! { #p: Parser<'a, &'a [Token<'a>], #t> + Clone })
+                .map(|(t, p)| quote! { #p: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t> + Clone })
                 .collect::<Vec<_>>();
             (
                 quote! { <'a, #(#params),*> },
@@ -227,10 +227,14 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
         }
         ParserDependency::None => (quote! { <'a> }, quote! { <'a> }, quote! { () }, quote! {}),
     };
+
     let trait_name = format_ident!("{TRAIT}");
+
     Ok(quote! {
-        impl #generics #trait_name #trait_generics for #name #where_clause {
-            fn parser(data: #data) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone {
+        impl #generics crate::tree::#trait_name #trait_generics for #name #where_clause {
+            fn parser(data: #data) -> impl chumsky::Parser<'a, &'a [crate::token::Token<'a>], Self> + Clone {
+                use chumsky::Parser;
+
                 #parser
             }
         }

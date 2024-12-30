@@ -16,5 +16,5 @@ pub fn whitespace<'a>() -> impl Parser<'a, &'a [Token<'a>], ()> + Clone {
                     | TokenValue::MultiLineComment { .. }
             )
         })
-        .repeated()
+        .ignored()
 }

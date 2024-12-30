@@ -18,18 +18,14 @@ impl<'a> TreeParser<'a> for IntegerValue {
         any()
             .try_map(|t: Token<'a>, _| match t {
                 Token {
-                    value:
-                        TokenValue::Number {
-                            literal,
-                            suffix: "",
-                        },
+                    value: TokenValue::Number { value, suffix: "" },
                     span,
                 } => {
-                    let value = literal.parse().map_err(|_| EmptyErr::default())?;
+                    let value = value.parse().map_err(|_| EmptyErr::default())?;
                     Ok(IntegerValue { span, value })
                 }
                 _ => Err(EmptyErr::default()),
             })
-            .then_ignore(whitespace())
+            .then_ignore(whitespace().repeated())
     }
 }
