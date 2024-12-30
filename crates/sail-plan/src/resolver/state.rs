@@ -20,6 +20,7 @@ pub(super) struct PlanResolverState {
     outer_query_schema: Option<DFSchemaRef>,
     /// The CTEs for the current query.
     ctes: HashMap<TableReference, Arc<LogicalPlan>>,
+    apply_arrow_use_large_var_types_config: bool,
 }
 
 impl Default for PlanResolverState {
@@ -36,6 +37,7 @@ impl PlanResolverState {
             attributes: HashMap::new(),
             outer_query_schema: None,
             ctes: HashMap::new(),
+            apply_arrow_use_large_var_types_config: false,
         }
     }
 
@@ -123,6 +125,22 @@ impl PlanResolverState {
 
     pub fn insert_cte(&mut self, table_ref: TableReference, plan: LogicalPlan) {
         self.ctes.insert(table_ref, Arc::new(plan));
+    }
+
+    // TODO:
+    //  1. It's unclear which `PySparkUdfType`s rely on the `arrow_use_large_var_types` config.
+    //     While searching through the Spark codebase provides insight into this config's usage,
+    //      the relationship remains unclear since we use Arrow for all UDFs.
+    //      For now, we're applying this config to all UDFs.
+    //      https://github.com/search?q=repo%3Aapache%2Fspark%20%22useLargeVarTypes%22&type=code
+    //  2. We are likely overly liberal in setting this flag to `true`.
+    //     Evaluate if we are unnecessarily setting this flag to `true` anywhere.
+    pub fn register_apply_arrow_use_large_var_types_config(&mut self, apply: bool) {
+        self.apply_arrow_use_large_var_types_config = apply;
+    }
+
+    pub fn get_apply_arrow_use_large_var_types_config(&self) -> bool {
+        self.apply_arrow_use_large_var_types_config
     }
 }
 

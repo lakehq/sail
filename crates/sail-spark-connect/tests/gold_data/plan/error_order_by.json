@@ -68,7 +68,9 @@
                             },
                             {
                               "literal": {
-                                "integer": 10
+                                "int32": {
+                                  "value": 10
+                                }
                               }
                             }
                           ],

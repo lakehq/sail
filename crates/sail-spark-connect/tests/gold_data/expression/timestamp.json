@@ -5,8 +5,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestampNtz": {
-              "microseconds": 1547499240000000
+            "timestampMicrosecond": {
+              "microseconds": 1547499240000000,
+              "timezoneInfo": "configured"
             }
           }
         }
@@ -19,7 +20,11 @@
           "literal": {
             "timestampMicrosecond": {
               "microseconds": 1547668200567000,
-              "timezone": null
+              "timezoneInfo": {
+                "timeZone": {
+                  "timezone": "UTC"
+                }
+              }
             }
           }
         }
@@ -30,8 +35,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestampNtz": {
-              "microseconds": 946688100000000
+            "timestampMicrosecond": {
+              "microseconds": 946688100000000,
+              "timezoneInfo": "configured"
             }
           }
         }
@@ -44,7 +50,11 @@
           "literal": {
             "timestampMicrosecond": {
               "microseconds": -3600000000,
-              "timezone": null
+              "timezoneInfo": {
+                "timeZone": {
+                  "timezone": "UTC"
+                }
+              }
             }
           }
         }
@@ -55,8 +65,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestampNtz": {
-              "microseconds": 1457729640000000
+            "timestampMicrosecond": {
+              "microseconds": 1457729640000000,
+              "timezoneInfo": "configured"
             }
           }
         }
@@ -67,8 +78,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestampNtz": {
-              "microseconds": 1457729640000000
+            "timestampMicrosecond": {
+              "microseconds": 1457729640000000,
+              "timezoneInfo": "configured"
             }
           }
         }
@@ -79,8 +91,9 @@
       "output": {
         "success": {
           "literal": {
-            "timestampNtz": {
-              "microseconds": 1457729640000000
+            "timestampMicrosecond": {
+              "microseconds": 1457729640000000,
+              "timezoneInfo": "configured"
             }
           }
         }

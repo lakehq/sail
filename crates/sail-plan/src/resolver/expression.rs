@@ -116,8 +116,8 @@ impl PlanResolver<'_> {
             spec::Expr::Literal(literal) if resolve_literals => {
                 let num_fields = schema.fields().len();
                 let position = match literal {
-                    spec::Literal::Integer(value) => *value as usize,
-                    spec::Literal::Long(value) => *value as usize,
+                    spec::Literal::Int32 { value: Some(value) } => *value as usize,
+                    spec::Literal::Int64 { value: Some(value) } => *value as usize,
                     _ => {
                         return Ok(expr::Sort {
                             expr: self.resolve_expression(*child, schema, state).await?,
@@ -170,6 +170,7 @@ impl PlanResolver<'_> {
         frame: spec::WindowFrame,
         order_by: &[expr::Sort],
         schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<window_frame::WindowFrame> {
         use spec::WindowFrameType;
         use window_frame::WindowFrameUnits;
@@ -187,8 +188,8 @@ impl PlanResolver<'_> {
         };
         let (start, end) = match units {
             WindowFrameUnits::Rows | WindowFrameUnits::Groups => (
-                self.resolve_window_boundary_offset(lower, WindowBoundaryKind::Lower)?,
-                self.resolve_window_boundary_offset(upper, WindowBoundaryKind::Upper)?,
+                self.resolve_window_boundary_offset(lower, WindowBoundaryKind::Lower, state)?,
+                self.resolve_window_boundary_offset(upper, WindowBoundaryKind::Upper, state)?,
             ),
             WindowFrameUnits::Range => (
                 self.resolve_window_boundary_value(
@@ -196,12 +197,14 @@ impl PlanResolver<'_> {
                     WindowBoundaryKind::Lower,
                     order_by,
                     schema,
+                    state,
                 )?,
                 self.resolve_window_boundary_value(
                     upper,
                     WindowBoundaryKind::Upper,
                     order_by,
                     schema,
+                    state,
                 )?,
             ),
         };
@@ -212,6 +215,7 @@ impl PlanResolver<'_> {
         &self,
         value: spec::WindowFrameBoundary,
         kind: WindowBoundaryKind,
+        state: &mut PlanResolverState,
     ) -> PlanResult<window_frame::WindowFrameBound> {
         let unbounded = || match kind {
             WindowBoundaryKind::Lower => {
@@ -234,7 +238,7 @@ impl PlanResolver<'_> {
                         ))
                     }
                 };
-                let value = self.resolve_literal(value)?;
+                let value = self.resolve_literal(value, state)?;
                 match value {
                     ScalarValue::UInt32(None)
                     | ScalarValue::Int32(None)
@@ -271,6 +275,7 @@ impl PlanResolver<'_> {
         kind: WindowBoundaryKind,
         order_by: &[expr::Sort],
         schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<window_frame::WindowFrameBound> {
         let unbounded = || match kind {
             WindowBoundaryKind::Lower => {
@@ -293,7 +298,7 @@ impl PlanResolver<'_> {
                         ))
                     }
                 };
-                let value = self.resolve_literal(value)?;
+                let value = self.resolve_literal(value, state)?;
                 if value.is_null() {
                     Ok(unbounded())
                 } else {
@@ -321,7 +326,7 @@ impl PlanResolver<'_> {
         use spec::Expr;
 
         match expr {
-            Expr::Literal(literal) => self.resolve_expression_literal(literal),
+            Expr::Literal(literal) => self.resolve_expression_literal(literal, state),
             Expr::UnresolvedAttribute { name, plan_id } => {
                 self.resolve_expression_attribute(name, plan_id, schema, state)
             }
@@ -585,9 +590,17 @@ impl PlanResolver<'_> {
         Ok((names, exprs))
     }
 
-    fn resolve_expression_literal(&self, literal: spec::Literal) -> PlanResult<NamedExpr> {
-        let name = self.config.plan_formatter.literal_to_string(&literal)?;
-        let literal = self.resolve_literal(literal)?;
+    fn resolve_expression_literal(
+        &self,
+        literal: spec::Literal,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let name = self.config.plan_formatter.literal_to_string(
+            &literal,
+            self.config.timezone.as_str(),
+            &self.config.timestamp_type,
+        )?;
+        let literal = self.resolve_literal(literal, state)?;
         Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
     }
 
@@ -717,6 +730,11 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
+            if let Some(_f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+                state.register_apply_arrow_use_large_var_types_config(true);
+            }
+        }
         let (argument_names, arguments) = self
             .resolve_expressions_and_names(arguments, schema, state)
             .await?;
@@ -738,6 +756,7 @@ impl PlanResolver<'_> {
                     &argument_names,
                     schema,
                     f.deterministic(),
+                    state,
                 )?
             } else {
                 expr::Expr::ScalarFunction(expr::ScalarFunction {
@@ -795,7 +814,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let data_type = self.resolve_data_type(&cast_to_type)?;
+        let data_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
         let expr = expr::Expr::Cast(expr::Cast {
@@ -871,6 +890,7 @@ impl PlanResolver<'_> {
                     )
                 }
                 spec::Expr::CommonInlineUserDefinedFunction(function) => {
+                    state.register_apply_arrow_use_large_var_types_config(true);
                     let spec::CommonInlineUserDefinedFunction {
                         function_name,
                         deterministic,
@@ -884,7 +904,7 @@ impl PlanResolver<'_> {
                         .iter()
                         .map(|arg| arg.get_type(schema))
                         .collect::<Result<Vec<DataType>, DataFusionError>>()?;
-                    let function = self.resolve_python_udf(function)?;
+                    let function = self.resolve_python_udf(function, state)?;
                     let payload = PySparkUdfPayload::build(
                         &function.python_version,
                         &function.command,
@@ -928,7 +948,7 @@ impl PlanResolver<'_> {
             .resolve_sort_orders(order_spec, false, schema, state)
             .await?;
         let window_frame = if let Some(frame) = frame_spec {
-            self.resolve_window_frame(frame, &order_by, schema)?
+            self.resolve_window_frame(frame, &order_by, schema, state)?
         } else {
             window_frame::WindowFrame::new(if order_by.is_empty() {
                 None
@@ -1103,8 +1123,12 @@ impl PlanResolver<'_> {
                 return Err(PlanError::invalid("extraction must be a literal"));
             }
         };
-        let extraction_name = self.config.plan_formatter.literal_to_string(&extraction)?;
-        let extraction = self.resolve_literal(extraction)?;
+        let extraction_name = self.config.plan_formatter.literal_to_string(
+            &extraction,
+            self.config.timezone.as_str(),
+            &self.config.timestamp_type,
+        )?;
+        let extraction = self.resolve_literal(extraction, state)?;
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
         let name = if let expr::Expr::Column(column) = &expr {
@@ -1131,17 +1155,17 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
             arguments,
             function,
         } = function;
-
         let (argument_names, arguments) = self
             .resolve_expressions_and_names(arguments, schema, state)
             .await?;
-        let function = self.resolve_python_udf(function)?;
+        let function = self.resolve_python_udf(function, state)?;
         let func = self.resolve_python_udf_expr(
             function,
             &function_name,
@@ -1149,6 +1173,7 @@ impl PlanResolver<'_> {
             &argument_names,
             schema,
             deterministic,
+            state,
         )?;
         let name = self.config.plan_formatter.function_to_string(
             &function_name,
@@ -1694,7 +1719,9 @@ mod tests {
                 &resolver,
                 spec::Expr::UnresolvedFunction {
                     function_name: "not".to_string(),
-                    arguments: vec![spec::Expr::Literal(spec::Literal::Boolean(true))],
+                    arguments: vec![spec::Expr::Literal(spec::Literal::Boolean {
+                        value: Some(true)
+                    })],
                     is_distinct: false,
                     is_user_defined_function: false,
                 }
@@ -1721,12 +1748,14 @@ mod tests {
                                 spec::Expr::Alias {
                                     // The resolver assigns a name "1" for the literal,
                                     // and is then overridden by the explicitly specified name.
-                                    expr: Box::new(spec::Expr::Literal(spec::Literal::Integer(1))),
+                                    expr: Box::new(spec::Expr::Literal(spec::Literal::Int32 {
+                                        value: Some(1)
+                                    })),
                                     name: vec!["a".to_string().into()],
                                     metadata: None,
                                 },
                                 // The resolver assigns a name "2" for the literal.
-                                spec::Expr::Literal(spec::Literal::Integer(2)),
+                                spec::Expr::Literal(spec::Literal::Int32 { value: Some(2) }),
                             ],
                             is_distinct: false,
                             is_user_defined_function: false,

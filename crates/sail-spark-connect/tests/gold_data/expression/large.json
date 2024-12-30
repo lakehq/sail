@@ -5,7 +5,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "Result omitted for long expression."
+            "utf8": {
+              "value": "Result omitted for long expression."
+            }
           }
         }
       }
@@ -15,7 +17,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "Result omitted for long expression."
+            "utf8": {
+              "value": "Result omitted for long expression."
+            }
           }
         }
       }

@@ -553,10 +553,10 @@ impl PlanResolver<'_> {
                 definition,
             } => self.resolve_catalog_create_database(database, definition),
             CommandNode::RegisterFunction(function) => {
-                self.resolve_catalog_register_function(function)
+                self.resolve_catalog_register_function(function, state)
             }
             CommandNode::RegisterTableFunction(function) => {
-                self.resolve_catalog_register_table_function(function)
+                self.resolve_catalog_register_table_function(function, state)
             }
             CommandNode::CreateView { view, definition } => {
                 self.resolve_catalog_create_view(view, definition, state)
@@ -661,6 +661,7 @@ impl PlanResolver<'_> {
         udtf: spec::ReadUdtf,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let spec::ReadUdtf {
             name,
             arguments,
@@ -775,7 +776,9 @@ impl PlanResolver<'_> {
                 }
             };
         let options = ListingOptions::new(format).with_file_extension(extension);
-        let schema = self.resolve_listing_schema(&urls, &options, schema).await?;
+        let schema = self
+            .resolve_listing_schema(&urls, &options, schema, state)
+            .await?;
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(options)
             .with_schema(Arc::new(schema));
@@ -1182,7 +1185,7 @@ impl PlanResolver<'_> {
         let input = if !positional.is_empty() {
             let params = positional
                 .into_iter()
-                .map(|arg| self.resolve_literal(arg))
+                .map(|arg| self.resolve_literal(arg, state))
                 .collect::<PlanResult<_>>()?;
             input.with_param_values(ParamValues::List(params))?
         } else {
@@ -1192,7 +1195,7 @@ impl PlanResolver<'_> {
             let params = named
                 .into_iter()
                 .map(|(name, arg)| -> PlanResult<(String, ScalarValue)> {
-                    Ok((name, self.resolve_literal(arg)?))
+                    Ok((name, self.resolve_literal(arg, state)?))
                 })
                 .collect::<PlanResult<_>>()?;
             Ok(input.with_param_values(ParamValues::Map(params))?)
@@ -1213,7 +1216,7 @@ impl PlanResolver<'_> {
             vec![]
         };
         let (schema, batches) = if let Some(schema) = schema {
-            let schema: adt::SchemaRef = Arc::new(self.resolve_schema(schema)?);
+            let schema: adt::SchemaRef = Arc::new(self.resolve_schema(schema, state)?);
             let batches = batches
                 .into_iter()
                 .map(|b| Ok(cast_record_batch(b, schema.clone())?))
@@ -1596,7 +1599,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-        let target_schema = self.resolve_schema(schema)?;
+        let target_schema = self.resolve_schema(schema, state)?;
         let input_names = state.get_field_names(input.schema().inner())?;
         let mut projected_exprs = Vec::new();
         for target_field in target_schema.fields() {
@@ -1649,6 +1652,7 @@ impl PlanResolver<'_> {
         _is_barrier: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic: _,
@@ -1659,7 +1663,7 @@ impl PlanResolver<'_> {
             .resolve_query_project(Some(input), arguments, state)
             .await?;
         let input_names = state.get_field_names(input.schema().inner())?;
-        let function = self.resolve_python_udf(function)?;
+        let function = self.resolve_python_udf(function, state)?;
         let output_schema = match function.output_type {
             adt::DataType::Struct(fields) => Arc::new(adt::Schema::new(fields)),
             _ => {
@@ -1727,6 +1731,7 @@ impl PlanResolver<'_> {
         map: spec::GroupMap,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let spec::GroupMap {
             input,
             grouping_expressions: grouping,
@@ -1775,7 +1780,7 @@ impl PlanResolver<'_> {
             arguments,
             function,
         } = function;
-        let function = self.resolve_python_udf(function)?;
+        let function = self.resolve_python_udf(function, state)?;
         let output_fields = match function.output_type {
             adt::DataType::Struct(fields) => fields,
             _ => {
@@ -1863,6 +1868,7 @@ impl PlanResolver<'_> {
         map: spec::CoGroupMap,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let spec::CoGroupMap {
             input: left,
             input_grouping_expressions: left_grouping,
@@ -1911,7 +1917,7 @@ impl PlanResolver<'_> {
             arguments: _, // no arguments are passed for co-group map
             function,
         } = function;
-        let function = self.resolve_python_udf(function)?;
+        let function = self.resolve_python_udf(function, state)?;
         let output_fields = match function.output_type {
             adt::DataType::Struct(fields) => fields,
             _ => {
@@ -2187,6 +2193,11 @@ impl PlanResolver<'_> {
                 "a generator function is expected for lateral view",
             ));
         };
+        if let Ok(f) = self.ctx.udf(&function_name) {
+            if let Some(_f) = f.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+                state.register_apply_arrow_use_large_var_types_config(true);
+            }
+        }
         let input = match input {
             Some(x) => self.resolve_query_plan(x, state).await?,
             None => self.resolve_empty_query_plan()?,
@@ -2282,13 +2293,14 @@ impl PlanResolver<'_> {
         udtf: spec::CommonInlineUserDefinedTableFunction,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let spec::CommonInlineUserDefinedTableFunction {
             function_name,
             deterministic,
             arguments,
             function,
         } = udtf;
-        let function = self.resolve_python_udtf(function)?;
+        let function = self.resolve_python_udtf(function, state)?;
         let input = self.resolve_empty_query_plan()?;
         let arguments = self
             .resolve_named_expressions(arguments, input.schema(), state)
@@ -2557,7 +2569,7 @@ impl PlanResolver<'_> {
             let logical_plan = self.resolve_query_plan(*query, state).await?;
             (logical_plan.schema().clone(), Some(logical_plan))
         } else {
-            let fields = self.resolve_fields(&schema.fields)?;
+            let fields = self.resolve_fields(&schema.fields, state)?;
             let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
             (schema, None)
         };
@@ -2823,7 +2835,9 @@ impl PlanResolver<'_> {
     fn resolve_catalog_register_function(
         &self,
         function: spec::CommonInlineUserDefinedFunction,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
@@ -2831,7 +2845,7 @@ impl PlanResolver<'_> {
             function,
         } = function;
 
-        let function = self.resolve_python_udf(function)?;
+        let function = self.resolve_python_udf(function, state)?;
         let udf = PySparkUnresolvedUDF::new(
             function_name,
             function.python_version,
@@ -2850,15 +2864,16 @@ impl PlanResolver<'_> {
     fn resolve_catalog_register_table_function(
         &self,
         function: spec::CommonInlineUserDefinedTableFunction,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        state.register_apply_arrow_use_large_var_types_config(true);
         let spec::CommonInlineUserDefinedTableFunction {
             function_name,
             deterministic,
             arguments: _,
             function,
         } = function;
-
-        let function = self.resolve_python_udtf(function)?;
+        let function = self.resolve_python_udtf(function, state)?;
         let udtf = PySparkUnresolvedUDF::new(
             function_name,
             function.python_version,
@@ -3196,8 +3211,8 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|r| {
                 Ok((
-                    lit(self.resolve_literal(r.old_value)?),
-                    lit(self.resolve_literal(r.new_value)?),
+                    lit(self.resolve_literal(r.old_value, state)?),
+                    lit(self.resolve_literal(r.new_value, state)?),
                 ))
             })
             .collect::<PlanResult<_>>()?;
