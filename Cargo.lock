@@ -4798,13 +4798,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-sql-macro"
+version = "0.2.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.91",
+]
+
+[[package]]
 name = "sail-sql-parser"
 version = "0.2.0"
 dependencies = [
  "chumsky",
+ "either",
+ "paste",
  "phf",
  "prettyplease",
  "quote",
+ "sail-sql-macro",
  "syn 2.0.91",
 ]
 

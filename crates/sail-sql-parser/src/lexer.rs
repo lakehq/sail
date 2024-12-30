@@ -1,9 +1,9 @@
 use chumsky::error::EmptyErr;
 use chumsky::prelude::{any, choice, custom, end, just, none_of, one_of, SimpleSpan};
-use chumsky::{select, ConfigParser, IterParser, Parser};
+use chumsky::{ConfigParser, IterParser, Parser};
 
 use crate::options::{QuoteEscape, SqlParserOptions};
-use crate::token::{Keyword, StringStyle, Token, TokenSpan, TokenValue};
+use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenSpan, TokenValue};
 
 macro_rules! token {
     ($value:expr, $extra:expr) => {
@@ -216,37 +216,11 @@ where
         .map_with(move |count, e| token!(token(count), e))
 }
 
-fn control_character<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
-    select! {
-        '!' = e => token!(TokenValue::ExclamationMark, e),
-        '#' = e => token!(TokenValue::NumberSign, e),
-        '$' = e => token!(TokenValue::Dollar, e),
-        '%' = e => token!(TokenValue::Percent, e),
-        '&' = e => token!(TokenValue::Ampersand, e),
-        '(' = e => token!(TokenValue::LeftParenthesis, e),
-        ')' = e => token!(TokenValue::RightParenthesis, e),
-        '*' = e => token!(TokenValue::Asterisk, e),
-        '+' = e => token!(TokenValue::Plus, e),
-        ',' = e => token!(TokenValue::Comma, e),
-        '-' = e => token!(TokenValue::Minus, e),
-        '.' = e => token!(TokenValue::Period, e),
-        '/' = e => token!(TokenValue::Slash, e),
-        ':' = e => token!(TokenValue::Colon, e),
-        ';' = e => token!(TokenValue::Semicolon, e),
-        '<' = e => token!(TokenValue::LessThan, e),
-        '=' = e => token!(TokenValue::Equals, e),
-        '>' = e => token!(TokenValue::GreaterThan, e),
-        '?' = e => token!(TokenValue::QuestionMark, e),
-        '@' = e => token!(TokenValue::At, e),
-        '[' = e => token!(TokenValue::LeftBracket, e),
-        '\\' = e => token!(TokenValue::Backslash, e),
-        ']' = e => token!(TokenValue::RightBracket, e),
-        '^' = e => token!(TokenValue::Caret, e),
-        '{' = e => token!(TokenValue::LeftBrace, e),
-        '|' = e => token!(TokenValue::VerticalBar, e),
-        '}' = e => token!(TokenValue::RightBrace, e),
-        '~' = e => token!(TokenValue::Tilde, e),
-    }
+fn punctuation<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+    any().try_map_with(|c: char, e| match Punctuation::from_char(c) {
+        Some(p) => Ok(token!(TokenValue::Punctuation(p), e)),
+        None => Err(EmptyErr::default()),
+    })
 }
 
 fn string<'a>(options: &SqlParserOptions) -> impl Parser<'a, &'a str, Token<'a>> {
@@ -298,7 +272,7 @@ pub fn lexer<'a>(options: &SqlParserOptions) -> impl Parser<'a, &'a str, Vec<Tok
         whitespace('\n', |count| TokenValue::LineFeed { count }),
         whitespace('\r', |count| TokenValue::CarriageReturn { count }),
         whitespace('\t', |count| TokenValue::Tab { count }),
-        control_character(),
+        punctuation(),
     ))
     .repeated()
     .collect()

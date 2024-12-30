@@ -6,6 +6,9 @@ mod keywords {
 }
 
 mod ast;
+mod container;
 mod lexer;
+mod location;
 mod options;
 mod token;
+mod tree;

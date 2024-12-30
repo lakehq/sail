@@ -12,6 +12,18 @@ impl<'a> Token<'a> {
             span: span.into(),
         }
     }
+
+    pub fn is_whitespace(&self) -> bool {
+        matches!(
+            self.value,
+            TokenValue::Space { .. }
+                | TokenValue::Tab { .. }
+                | TokenValue::LineFeed { .. }
+                | TokenValue::CarriageReturn { .. }
+                | TokenValue::SingleLineComment { .. }
+                | TokenValue::MultiLineComment { .. }
+        )
+    }
 }
 
 /// A SQL token value.
@@ -47,62 +59,8 @@ pub enum TokenValue<'a> {
     /// The start and end delimiters can be nested.
     /// The raw text includes the outermost delimiters.
     MultiLineComment { raw: &'a str },
-    /// The `!` character (ASCII 0x21).
-    ExclamationMark,
-    /// The `#` character (ASCII 0x23).
-    NumberSign,
-    /// The `$` character (ASCII 0x24).
-    Dollar,
-    /// The `%` character (ASCII 0x25).
-    Percent,
-    /// The `&` character (ASCII 0x26).
-    Ampersand,
-    /// The `(` character (ASCII 0x28).
-    LeftParenthesis,
-    /// The `)` character (ASCII 0x29).
-    RightParenthesis,
-    /// The `*` character (ASCII 0x2A).
-    Asterisk,
-    /// The `+` character (ASCII 0x2B).
-    Plus,
-    /// The `,` character (ASCII 0x2C).
-    Comma,
-    /// The `-` character (ASCII 0x2D).
-    Minus,
-    /// The `.` character (ASCII 0x2E).
-    Period,
-    /// The `/` character (ASCII 0x2F).
-    Slash,
-    /// The `:` character (ASCII 0x3A).
-    Colon,
-    /// The `;` character (ASCII 0x3B).
-    Semicolon,
-    /// The `<` character (ASCII 0x3C).
-    LessThan,
-    /// The `=` character (ASCII 0x3D).
-    Equals,
-    /// The `>` character (ASCII 0x3E).
-    GreaterThan,
-    /// The `?` character (ASCII 0x3F).
-    QuestionMark,
-    /// The `@` character (ASCII 0x40).
-    At,
-    /// The `[` character (ASCII 0x5B).
-    LeftBracket,
-    /// The `\` character (ASCII 0x5C).
-    Backslash,
-    /// The `]` character (ASCII 0x5D).
-    RightBracket,
-    /// The `^` character (ASCII 0x5E).
-    Caret,
-    /// The `{` character (ASCII 0x7B).
-    LeftBrace,
-    /// The `|` character (ASCII 0x7C).
-    VerticalBar,
-    /// The `}` character (ASCII 0x7D).
-    RightBrace,
-    /// The `~` character (ASCII 0x7E).
-    Tilde,
+    /// A punctuation character.
+    Punctuation(Punctuation),
 }
 
 /// A style of SQL string literal.
@@ -135,6 +93,71 @@ pub enum StringStyle {
     /// with an empty tag `$$`).
     DollarQuoted { tag: String },
 }
+
+macro_rules! for_all_punctuations {
+    ($callback:ident) => {
+        $callback!([
+            (0x21, '!', ExclamationMark),
+            (0x23, '#', NumberSign),
+            (0x24, '$', Dollar),
+            (0x25, '%', Percent),
+            (0x26, '&', Ampersand),
+            (0x28, '(', LeftParenthesis),
+            (0x29, ')', RightParenthesis),
+            (0x2A, '*', Asterisk),
+            (0x2B, '+', Plus),
+            (0x2C, ',', Comma),
+            (0x2D, '-', Minus),
+            (0x2E, '.', Period),
+            (0x2F, '/', Slash),
+            (0x3A, ':', Colon),
+            (0x3B, ';', Semicolon),
+            (0x3C, '<', LessThan),
+            (0x3D, '=', Equals),
+            (0x3E, '>', GreaterThan),
+            (0x3F, '?', QuestionMark),
+            (0x40, '@', At),
+            (0x5B, '[', LeftBracket),
+            (0x5C, '\\', Backslash),
+            (0x5D, ']', RightBracket),
+            (0x5E, '^', Caret),
+            (0x7B, '{', LeftBrace),
+            (0x7C, '|', VerticalBar),
+            (0x7D, '}', RightBrace),
+            (0x7E, '~', Tilde),
+        ]);
+    };
+}
+
+macro_rules! punctuation_enum {
+    ([$(($ascii:literal, $ch:literal, $p:ident)),* $(,)?]) => {
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub enum Punctuation {
+            $(
+                #[doc = concat!("The `", $ch, "` character (ASCII ", stringify!($ascii), ").")]
+                $p,
+            )*
+        }
+
+        impl Punctuation {
+            pub fn from_char(c: char) -> Option<Self> {
+                match c {
+                    $($ch => Some(Self::$p),)*
+                    _ => None,
+                }
+            }
+
+            #[allow(unused)]
+            pub fn to_char(&self) -> char {
+                match self {
+                    $(Self::$p => $ch,)*
+                }
+            }
+        }
+    };
+}
+
+for_all_punctuations!(punctuation_enum);
 
 /// A span in the source code.
 /// The offsets are measured in the number of characters from the beginning of the input,
@@ -175,15 +198,6 @@ impl TokenSpan {
     }
 }
 
-/// A location in the source code.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Location {
-    /// The line number, starting from 0.
-    pub line: usize,
-    /// The column number, starting from 0.
-    pub column: usize,
-}
-
 macro_rules! keyword_enum {
     ([$(($_:expr, $identifier:ident),)* $(,)?]) => {
         /// A SQL keyword.
@@ -221,6 +235,14 @@ mod tests {
 
     for_all_keywords!(keyword_values);
 
+    macro_rules! punctuation_values {
+        ([$(($ascii:literal, $ch:literal, $_:ident)),* $(,)?]) => {
+            static PUNCTUATION_VALUES: &[(u8, char)] = &[ $(($ascii, $ch),)* ];
+        };
+    }
+
+    for_all_punctuations!(punctuation_values);
+
     /// All keywords must be upper case and contain only alphanumeric characters or underscores,
     /// where the first character must be an alphabet or an underscore.
     #[test]
@@ -239,5 +261,27 @@ mod tests {
         keywords.sort_unstable();
         keywords.dedup();
         assert_eq!(keywords.as_slice(), KEYWORD_VALUES);
+    }
+
+    #[test]
+    /// The punctuation characters must match the ASCII values.
+    fn test_punctuation_values() {
+        for &(ascii, ch) in PUNCTUATION_VALUES {
+            assert_eq!(ascii, ch as u8);
+        }
+    }
+
+    #[test]
+    /// The punctuation characters must be listed in ASCII order.
+    /// The punctuation characters must be unique.
+    fn test_punctuation_order_and_uniqueness() {
+        let punctuations = PUNCTUATION_VALUES
+            .iter()
+            .map(|(_, ch)| *ch)
+            .collect::<Vec<_>>();
+        let mut copy = punctuations.clone();
+        copy.sort_unstable();
+        copy.dedup();
+        assert_eq!(copy, punctuations);
     }
 }

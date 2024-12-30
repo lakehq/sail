@@ -1,0 +1,12 @@
+[package]
+name = "sail-sql-macro"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+
+[lib]
+proc-macro = true

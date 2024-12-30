@@ -1,1 +1,9 @@
+mod data_type;
+mod either;
 mod keywords;
+mod operator;
+mod option;
+mod sequence;
+mod tuple;
+mod value;
+mod whitespace;
