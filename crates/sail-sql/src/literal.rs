@@ -908,9 +908,11 @@ fn parse_multi_unit_interval(
             let nanoseconds = microseconds * 1_000;
 
             Ok(spec::Literal::IntervalMonthDayNano {
-                months: Some(months),
-                days: Some(days),
-                nanoseconds: Some(nanoseconds),
+                value: Some(spec::IntervalMonthDayNano {
+                    months,
+                    days,
+                    nanoseconds,
+                }),
             })
         }
         (false, _) => {
@@ -930,19 +932,18 @@ pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
     let remaining_micros = microseconds % (24 * 60 * 60 * 1_000_000);
     if remaining_micros % 1000 == 0 {
         spec::Literal::IntervalDayTime {
-            days: Some(total_days as i32),
-            milliseconds: Some((remaining_micros / 1000) as i32),
-        }
-    } else if microseconds % 1000 == 0 {
-        spec::Literal::IntervalDayTime {
-            days: Some(0),
-            milliseconds: Some((microseconds / 1000) as i32),
+            value: Some(spec::IntervalDayTime {
+                days: total_days as i32,
+                milliseconds: (remaining_micros / 1000) as i32,
+            }),
         }
     } else {
         spec::Literal::IntervalMonthDayNano {
-            months: Some(0),
-            days: Some(total_days as i32),
-            nanoseconds: Some(remaining_micros * 1000),
+            value: Some(spec::IntervalMonthDayNano {
+                months: 0,
+                days: total_days as i32,
+                nanoseconds: remaining_micros * 1000,
+            }),
         }
     }
 }

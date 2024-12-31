@@ -96,13 +96,10 @@ pub enum Literal {
         months: Option<i32>,
     },
     IntervalDayTime {
-        days: Option<i32>,
-        milliseconds: Option<i32>,
+        value: Option<IntervalDayTime>,
     },
     IntervalMonthDayNano {
-        months: Option<i32>,
-        days: Option<i32>,
-        nanoseconds: Option<i64>,
+        value: Option<IntervalMonthDayNano>,
     },
     Binary {
         value: Option<Vec<u8>>,
@@ -173,6 +170,19 @@ pub enum Literal {
         keys: Option<Vec<Literal>>,
         values: Option<Vec<Literal>>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IntervalDayTime {
+    pub days: i32,
+    pub milliseconds: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IntervalMonthDayNano {
+    pub months: i32,
+    pub days: i32,
+    pub nanoseconds: i64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -274,15 +284,8 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
             end_field: _,
         } => match interval_unit {
             spec::IntervalUnit::YearMonth => Ok(Literal::IntervalYearMonth { months: None }),
-            spec::IntervalUnit::DayTime => Ok(Literal::IntervalDayTime {
-                days: None,
-                milliseconds: None,
-            }),
-            spec::IntervalUnit::MonthDayNano => Ok(Literal::IntervalMonthDayNano {
-                months: None,
-                days: None,
-                nanoseconds: None,
-            }),
+            spec::IntervalUnit::DayTime => Ok(Literal::IntervalDayTime { value: None }),
+            spec::IntervalUnit::MonthDayNano => Ok(Literal::IntervalMonthDayNano { value: None }),
         },
         spec::DataType::Binary => Ok(Literal::Binary { value: None }),
         spec::DataType::FixedSizeBinary { size } => {

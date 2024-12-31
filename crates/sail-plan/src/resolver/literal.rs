@@ -179,26 +179,22 @@ impl PlanResolver<'_> {
                 Ok(ScalarValue::DurationNanosecond(nanoseconds))
             }
             Literal::IntervalYearMonth { months } => Ok(ScalarValue::IntervalYearMonth(months)),
-            Literal::IntervalDayTime { days, milliseconds } => {
-                if days.is_some() || milliseconds.is_some() {
+            Literal::IntervalDayTime { value } => {
+                if let Some(value) = value {
                     Ok(ScalarValue::IntervalDayTime(Some(
-                        adt::IntervalDayTime::new(days.unwrap_or(0), milliseconds.unwrap_or(0)),
+                        adt::IntervalDayTime::new(value.days, value.milliseconds),
                     )))
                 } else {
                     Ok(ScalarValue::IntervalDayTime(None))
                 }
             }
-            Literal::IntervalMonthDayNano {
-                months,
-                days,
-                nanoseconds,
-            } => {
-                if months.is_some() || days.is_some() || nanoseconds.is_some() {
+            Literal::IntervalMonthDayNano { value } => {
+                if let Some(value) = value {
                     Ok(ScalarValue::IntervalMonthDayNano(Some(
                         adt::IntervalMonthDayNanoType::make_value(
-                            months.unwrap_or(0),
-                            days.unwrap_or(0),
-                            nanoseconds.unwrap_or(0),
+                            value.months,
+                            value.days,
+                            value.nanoseconds,
                         ),
                     )))
                 } else {

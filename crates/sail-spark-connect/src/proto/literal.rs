@@ -105,14 +105,13 @@ impl TryFrom<Literal> for spec::Literal {
                 microseconds: Some(x),
                 timezone_info: spec::TimeZoneInfo::NoTimeZone,
             },
-            LiteralType::CalendarInterval(x) => {
-                let nanoseconds = x.microseconds * 1_000;
-                spec::Literal::IntervalMonthDayNano {
-                    months: Some(x.months),
-                    days: Some(x.days),
-                    nanoseconds: Some(nanoseconds),
-                }
-            }
+            LiteralType::CalendarInterval(x) => spec::Literal::IntervalMonthDayNano {
+                value: Some(spec::IntervalMonthDayNano {
+                    months: x.months,
+                    days: x.days,
+                    nanoseconds: x.microseconds * 1_000,
+                }),
+            },
             LiteralType::YearMonthInterval(x) => {
                 spec::Literal::IntervalYearMonth { months: Some(x) }
             }
