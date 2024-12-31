@@ -3,7 +3,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use chrono::TimeZone;
 use chrono_tz::Tz;
 use half::f16;
 use sail_common::object::DynObject;
@@ -885,7 +884,7 @@ fn format_decimal(value: &str, scale: i8) -> String {
 }
 
 fn format_timestamp(
-    utc_datetime: chrono::DateTime<chrono::Utc>,
+    utc_datetime: chrono::DateTime<Tz>,
     format: &str,
     timezone_info: &spec::TimeZoneInfo,
     config_timestamp_type: &TimestampType,
@@ -906,29 +905,16 @@ fn format_timestamp(
 fn naive_datetime_to_utc_datetime(
     naive_datetime: chrono::NaiveDateTime,
     timezone: &Option<Arc<str>>,
-) -> PlanResult<chrono::DateTime<chrono::Utc>> {
+) -> PlanResult<chrono::DateTime<Tz>> {
     if let Some(timezone) = timezone {
         let tz: Tz = timezone.parse().map_err(|e| {
             PlanError::invalid(format!(
                 "Literal::TimestampMicrosecond: literal to string: {e:?}"
             ))
         })?;
-        match tz {
-            Tz::UTC => Ok(naive_datetime.and_utc()),
-            tz => {
-                let local_datetime = tz
-                    .from_local_datetime(&naive_datetime)
-                    .earliest()
-                    .ok_or_else(|| {
-                        PlanError::invalid(format!(
-                            "naive_datetime_to_utc_datetime: {naive_datetime:?} {tz:?}"
-                        ))
-                    })?;
-                Ok(local_datetime.with_timezone(&chrono::Utc))
-            }
-        }
+        Ok(naive_datetime.and_utc().with_timezone(&tz))
     } else {
-        Ok(naive_datetime.and_utc())
+        Ok(naive_datetime.and_utc().with_timezone(&Tz::UTC))
     }
 }
 
