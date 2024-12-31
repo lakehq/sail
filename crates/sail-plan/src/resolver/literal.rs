@@ -1,4 +1,4 @@
-use std::ops::Sub;
+use std::ops::Add;
 use std::sync::Arc;
 
 use chrono::{Offset, TimeDelta, TimeZone, Utc};
@@ -443,7 +443,7 @@ impl PlanResolver<'_> {
                 .fix()
                 .local_minus_utc() as i64;
             let adjusted_date_time =
-                utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+                utc_dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
                     PlanError::invalid(format!(
                         "Invalid offset seconds for Literal TimestampSecond: {offset_seconds}"
                     ))
@@ -475,7 +475,7 @@ impl PlanResolver<'_> {
                     .fix()
                     .local_minus_utc() as i64;
                 let adjusted_date_time =
-                    utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+                    utc_dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
                         PlanError::invalid(format!(
                         "Invalid offset seconds for Literal TimestampMillisecond: {offset_seconds}"
                     ))
@@ -507,7 +507,7 @@ impl PlanResolver<'_> {
                     .fix()
                     .local_minus_utc() as i64;
                 let adjusted_date_time =
-                    utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+                    utc_dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
                         PlanError::invalid(format!(
                         "Invalid offset seconds for Literal TimestampMicrosecond: {offset_seconds}"
                     ))
@@ -532,7 +532,7 @@ impl PlanResolver<'_> {
                     .fix()
                     .local_minus_utc() as i64;
                 let adjusted_date_time =
-                    utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+                    utc_dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
                         PlanError::invalid(format!(
                         "Invalid offset seconds for Literal TimestampNanosecond: {offset_seconds}"
                     ))
