@@ -701,8 +701,8 @@
                       {
                         "literal": {
                           "timestampMicrosecond": {
-                            "microseconds": 1546456271000000,
-                            "timezoneInfo": "configured"
+                            "microseconds": 1546427471000000,
+                            "timezoneInfo": "sQLConfigured"
                           }
                         }
                       }

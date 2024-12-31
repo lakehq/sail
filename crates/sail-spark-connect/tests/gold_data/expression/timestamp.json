@@ -6,8 +6,8 @@
         "success": {
           "literal": {
             "timestampMicrosecond": {
-              "microseconds": 1547528040000000,
-              "timezoneInfo": "configured"
+              "microseconds": 1547499240000000,
+              "timezoneInfo": "sQLConfigured"
             }
           }
         }
@@ -36,8 +36,8 @@
         "success": {
           "literal": {
             "timestampMicrosecond": {
-              "microseconds": 946716900000000,
-              "timezoneInfo": "configured"
+              "microseconds": 946688100000000,
+              "timezoneInfo": "sQLConfigured"
             }
           }
         }
@@ -66,8 +66,8 @@
         "success": {
           "literal": {
             "timestampMicrosecond": {
-              "microseconds": 1457758440000000,
-              "timezoneInfo": "configured"
+              "microseconds": 1457729640000000,
+              "timezoneInfo": "sQLConfigured"
             }
           }
         }
@@ -79,8 +79,8 @@
         "success": {
           "literal": {
             "timestampMicrosecond": {
-              "microseconds": 1457758440000000,
-              "timezoneInfo": "configured"
+              "microseconds": 1457729640000000,
+              "timezoneInfo": "sQLConfigured"
             }
           }
         }
@@ -92,8 +92,8 @@
         "success": {
           "literal": {
             "timestampMicrosecond": {
-              "microseconds": 1457758440000000,
-              "timezoneInfo": "configured"
+              "microseconds": 1457729640000000,
+              "timezoneInfo": "sQLConfigured"
             }
           }
         }

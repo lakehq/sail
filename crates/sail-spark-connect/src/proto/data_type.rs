@@ -340,7 +340,7 @@ impl TryFrom<spec::DataType> for DataType {
             } => Ok(Kind::TimestampNtz(sdt::TimestampNtz::default())),
             spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
-                timezone_info: spec::TimeZoneInfo::Configured,
+                timezone_info: spec::TimeZoneInfo::SQLConfigured,
             }
             | spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,

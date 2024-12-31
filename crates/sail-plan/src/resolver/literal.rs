@@ -14,6 +14,7 @@ use datafusion_common::utils::{array_into_fixed_size_list_array, array_into_larg
 use datafusion_common::ScalarValue;
 use sail_common::spec::{self, Literal};
 
+use crate::config::TimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -41,47 +42,120 @@ impl PlanResolver<'_> {
             Literal::TimestampSecond {
                 seconds,
                 timezone_info,
-            } => Ok(ScalarValue::TimestampSecond(
-                seconds,
-                Self::resolve_timezone(
+            } => {
+                let timezone = Self::resolve_timezone(
                     &timezone_info,
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
-                )?,
-            )),
+                )?;
+                let rebase = match timezone_info {
+                    spec::TimeZoneInfo::SQLConfigured => match self.config.timestamp_type {
+                        TimestampType::TimestampLtz => true,
+                        TimestampType::TimestampNtz => false,
+                    },
+                    spec::TimeZoneInfo::LocalTimeZone => false,
+                    spec::TimeZoneInfo::NoTimeZone => false,
+                    spec::TimeZoneInfo::TimeZone {
+                        timezone: _timezone,
+                    } => false,
+                };
+                let adjusted_seconds = if rebase {
+                    Self::rebase_timestamp_seconds(seconds, &timezone)?
+                } else {
+                    seconds
+                };
+                Ok(ScalarValue::TimestampSecond(adjusted_seconds, timezone))
+            }
             Literal::TimestampMillisecond {
                 milliseconds,
                 timezone_info,
-            } => Ok(ScalarValue::TimestampMillisecond(
-                milliseconds,
-                Self::resolve_timezone(
+            } => {
+                let timezone = Self::resolve_timezone(
                     &timezone_info,
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
-                )?,
-            )),
+                )?;
+                let rebase = match timezone_info {
+                    spec::TimeZoneInfo::SQLConfigured => match self.config.timestamp_type {
+                        TimestampType::TimestampLtz => true,
+                        TimestampType::TimestampNtz => false,
+                    },
+                    spec::TimeZoneInfo::LocalTimeZone => false,
+                    spec::TimeZoneInfo::NoTimeZone => false,
+                    spec::TimeZoneInfo::TimeZone {
+                        timezone: _timezone,
+                    } => false,
+                };
+                let adjusted_milliseconds = if rebase {
+                    Self::rebase_timestamp_milliseconds(milliseconds, &timezone)?
+                } else {
+                    milliseconds
+                };
+                Ok(ScalarValue::TimestampMillisecond(
+                    adjusted_milliseconds,
+                    timezone,
+                ))
+            }
             Literal::TimestampMicrosecond {
                 microseconds,
                 timezone_info,
-            } => Ok(ScalarValue::TimestampMicrosecond(
-                microseconds,
-                Self::resolve_timezone(
+            } => {
+                let timezone = Self::resolve_timezone(
                     &timezone_info,
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
-                )?,
-            )),
+                )?;
+                let rebase = match timezone_info {
+                    spec::TimeZoneInfo::SQLConfigured => match self.config.timestamp_type {
+                        TimestampType::TimestampLtz => true,
+                        TimestampType::TimestampNtz => false,
+                    },
+                    spec::TimeZoneInfo::LocalTimeZone => false,
+                    spec::TimeZoneInfo::NoTimeZone => false,
+                    spec::TimeZoneInfo::TimeZone {
+                        timezone: _timezone,
+                    } => false,
+                };
+                let adjusted_microseconds = if rebase {
+                    Self::rebase_timestamp_microseconds(microseconds, &timezone)?
+                } else {
+                    microseconds
+                };
+                Ok(ScalarValue::TimestampMicrosecond(
+                    adjusted_microseconds,
+                    timezone,
+                ))
+            }
             Literal::TimestampNanosecond {
                 nanoseconds,
                 timezone_info,
-            } => Ok(ScalarValue::TimestampNanosecond(
-                nanoseconds,
-                Self::resolve_timezone(
+            } => {
+                let timezone = Self::resolve_timezone(
                     &timezone_info,
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
-                )?,
-            )),
+                )?;
+                let rebase = match timezone_info {
+                    spec::TimeZoneInfo::SQLConfigured => match self.config.timestamp_type {
+                        TimestampType::TimestampLtz => true,
+                        TimestampType::TimestampNtz => false,
+                    },
+                    spec::TimeZoneInfo::LocalTimeZone => false,
+                    spec::TimeZoneInfo::NoTimeZone => false,
+                    spec::TimeZoneInfo::TimeZone {
+                        timezone: _timezone,
+                    } => false,
+                };
+                let adjusted_nanoseconds = if rebase {
+                    Self::rebase_timestamp_nanoseconds(nanoseconds, &timezone)?
+                } else {
+                    nanoseconds
+                };
+                Ok(ScalarValue::TimestampNanosecond(
+                    adjusted_nanoseconds,
+                    timezone,
+                ))
+            }
             Literal::Date32 { days } => Ok(ScalarValue::Date32(days)),
             Literal::Date64 { milliseconds } => Ok(ScalarValue::Date64(milliseconds)),
             Literal::Time32Second { seconds } => Ok(ScalarValue::Time32Second(seconds)),

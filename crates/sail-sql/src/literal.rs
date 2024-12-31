@@ -206,17 +206,10 @@ impl TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> for spec::L
                     timezone: Some("UTC".into()),
                 },
             ),
-            TimeZoneVariant::None => {
-                let local_dt =
-                    dt.and_local_timezone(chrono::Local)
-                        .earliest()
-                        .ok_or_else(|| SqlError::invalid(format!("TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> {literal:?}")))?;
-                let utc_dt = local_dt.with_timezone(&chrono::Utc);
-                (
-                    utc_dt.naive_utc() - chrono::NaiveDateTime::UNIX_EPOCH,
-                    spec::TimeZoneInfo::Configured,
-                )
-            }
+            TimeZoneVariant::None => (
+                dt - chrono::NaiveDateTime::UNIX_EPOCH,
+                spec::TimeZoneInfo::SQLConfigured,
+            ),
         };
         let microseconds = delta.num_microseconds().ok_or_else(|| {
             SqlError::invalid(format!(

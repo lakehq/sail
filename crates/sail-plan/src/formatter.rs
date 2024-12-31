@@ -114,7 +114,7 @@ impl PlanFormatter for DefaultPlanFormatter {
             )),
             DataType::Timestamp {
                 time_unit: _,
-                timezone_info: spec::TimeZoneInfo::Configured,
+                timezone_info: spec::TimeZoneInfo::SQLConfigured,
             }
             | DataType::Timestamp {
                 time_unit: _,
@@ -919,7 +919,7 @@ fn format_timestamp(
 ) -> PlanResult<String> {
     let formatted_time = utc_datetime.format(format).to_string();
     let prefix = match timezone_info {
-        spec::TimeZoneInfo::Configured => match config_timestamp_type {
+        spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
             TimestampType::TimestampLtz => "TIMESTAMP",
             TimestampType::TimestampNtz => "TIMESTAMP_NTZ",
         },
