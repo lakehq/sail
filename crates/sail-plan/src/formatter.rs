@@ -3,7 +3,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use chrono::TimeZone;
 use chrono_tz::Tz;
 use half::f16;
 use sail_common::object::DynObject;
@@ -913,15 +912,8 @@ fn naive_datetime_to_utc_datetime(
                 "Literal::TimestampMicrosecond: literal to string: {e:?}"
             ))
         })?;
-        let local_dt = tz
-            .from_local_datetime(&naive_datetime)
-            .earliest()
-            .ok_or_else(|| {
-                PlanError::invalid(format!(
-                    "naive_datetime_to_utc_datetime: {naive_datetime:?} {tz:?}"
-                ))
-            })?;
-        Ok(local_dt.with_timezone(&chrono::Utc))
+        let utc_datetime = naive_datetime.and_utc();
+        Ok(utc_datetime.with_timezone(&tz).with_timezone(&chrono::Utc))
     } else {
         Ok(naive_datetime.and_utc())
     }
