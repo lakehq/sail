@@ -28,7 +28,7 @@ lazy_static! {
         regex::Regex::new(r"^\s*(?P<year>\d{4})(-(?P<month>\d{1,2})(-(?P<day>\d{1,2})T?)?)?\s*$")
             .unwrap();
     static ref TIMESTAMP_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<year>\d{4})(-(?P<month>\d{1,2})(-(?P<day>\d{1,2})((\s+|T)(?P<hour>\d{1,2})(:((?P<minute>\d{1,2})(:((?P<second>\d{1,2})([.]((?P<fraction>\d{1,6})?(?P<tz>.*))?)?)?)?)?)?)?)?)?\s*$")
+        regex::Regex::new(r"^\s*(?P<year>\d{4})(-(?P<month>\d{1,2})(-(?P<day>\d{1,2})((\s+|T)(?P<hour>\d{1,2})(:(?P<minute>\d{1,2})(:(?P<second>\d{1,2})(\.(?P<fraction>\d{1,9}))?(?P<tz>.*)?)?)?)?)?)?\s*$")
             .unwrap();
     static ref TIMEZONE_OFFSET_REGEX: regex::Regex =
         regex::Regex::new(r"^\s*(UTC|UT|GMT)?(?P<sign>[+-]?)(?P<hour>\d{1,2})(:(?P<minute>\d{1,2})(:(?P<second>\d{1,2}))?)?\s*$")
@@ -683,21 +683,26 @@ pub fn parse_date_string(s: &str) -> SqlResult<spec::Literal> {
 }
 
 pub fn parse_timestamp_string(s: &str) -> SqlResult<spec::Literal> {
-    let error = || SqlError::invalid(format!("timestamp: {s}"));
-    let captures = TIMESTAMP_REGEX.captures(s).ok_or_else(error)?;
-    let year = extract_match(&captures, "year", error)?.ok_or_else(error)?;
-    let month = extract_match(&captures, "month", error)?.unwrap_or(1);
-    let day = extract_match(&captures, "day", error)?.unwrap_or(1);
-    let hour = extract_match(&captures, "hour", error)?.unwrap_or(0);
-    let minute = extract_match(&captures, "minute", error)?.unwrap_or(0);
-    let second = extract_match(&captures, "second", error)?.unwrap_or(0);
-    let fraction = extract_second_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
+    let error = |msg: &str| SqlError::invalid(format!("{msg} error when parsing timestamp: {s}"));
+    let captures = TIMESTAMP_REGEX
+        .captures(s)
+        .ok_or_else(|| error("Invalid format"))?;
+    let year = extract_match(&captures, "year", || error("Invalid year"))?
+        .ok_or_else(|| error("Missing year"))?;
+    let month = extract_match(&captures, "month", || error("Invalid month"))?.unwrap_or(1);
+    let day = extract_match(&captures, "day", || error("Invalid day"))?.unwrap_or(1);
+    let hour = extract_match(&captures, "hour", || error("Invalid hour"))?.unwrap_or(0);
+    let minute = extract_match(&captures, "minute", || error("Invalid minute"))?.unwrap_or(0);
+    let second = extract_match(&captures, "second", || error("Invalid second"))?.unwrap_or(0);
+    let fraction =
+        extract_second_fraction_match(&captures, "fraction", 6, || error("Invalid fraction"))?
+            .unwrap_or(0);
     let tz = captures.name("tz").map(|tz| tz.as_str());
     let tz = parse_timezone_string(tz)?;
     let dt = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .and_then(|d| d.and_hms_opt(hour, minute, second))
         .and_then(|d| d.checked_add_signed(chrono::Duration::microseconds(fraction)))
-        .ok_or_else(error)?;
+        .ok_or_else(|| error("Invalid date/time values"))?;
     spec::Literal::try_from(LiteralValue((dt, tz)))
 }
 
@@ -731,9 +736,9 @@ fn parse_timezone_string(tz: Option<&str>) -> SqlResult<TimeZoneVariant> {
     match tz {
         None => Ok(TimeZoneVariant::None),
         Some(tz) if tz.trim().is_empty() => Ok(TimeZoneVariant::None),
-        Some(tz) if tz.trim() == "Z" => Ok(TimeZoneVariant::Utc),
+        Some(tz) if tz.to_uppercase().trim() == "Z" => Ok(TimeZoneVariant::Utc),
         Some(tz) => {
-            let error = || SqlError::invalid(format!("timezone: {tz}"));
+            let error = || SqlError::invalid(format!("timezone in parse_timezone_string: {tz}"));
             let captures = TIMEZONE_OFFSET_REGEX
                 .captures(tz)
                 .or_else(|| TIMEZONE_OFFSET_COMPACT_REGEX.captures(tz));

@@ -2680,7 +2680,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: timestamp: 1970-01-01 00:00:01Z"
+        "failure": "not implemented: function: unix_micros"
       }
     },
     {
@@ -2702,7 +2702,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: timestamp: 1970-01-01 00:00:01Z"
+        "failure": "not implemented: function: unix_millis"
       }
     },
     {
@@ -2724,7 +2724,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: timestamp: 1970-01-01 00:00:01Z"
+        "failure": "not implemented: function: unix_seconds"
       }
     },
     {
