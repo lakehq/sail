@@ -14,7 +14,6 @@ fn timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<
     if args.len() == 1 {
         let arg = args.one()?;
         match arg {
-            // FIXME: Sail's SQL parser should parse the timestamp string into a timestamp
             Expr::Literal(ScalarValue::Utf8(Some(timestamp_string))) => {
                 let timestamp_micros =
                     string_to_timestamp_nanos(&timestamp_string).map(|x| x / 1_000)?;
