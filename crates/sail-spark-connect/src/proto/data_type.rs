@@ -383,14 +383,13 @@ impl TryFrom<spec::DataType> for DataType {
             })),
             spec::DataType::Interval {
                 interval_unit: spec::IntervalUnit::DayTime,
-                start_field: _,
-                end_field: _,
-            } => {
-                // This error theoretically should never be reached.
-                Err(SparkError::unsupported(
-                    "TryFrom spec::DataType::Interval(DayTime) to Spark Kind",
-                ))
-            }
+                start_field,
+                end_field,
+            } => Ok(Kind::DayTimeInterval(sdt::DayTimeInterval {
+                start_field: start_field.map(|f| f as i32),
+                end_field: end_field.map(|f| f as i32),
+                type_variation_reference: 0,
+            })),
             spec::DataType::Duration {
                 time_unit: spec::TimeUnit::Microsecond,
             } => Ok(Kind::DayTimeInterval(sdt::DayTimeInterval {
