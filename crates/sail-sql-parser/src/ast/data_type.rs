@@ -93,7 +93,6 @@ pub enum DataType {
 }
 
 #[allow(unused)]
-#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalType {
     YearMonth(
@@ -109,7 +108,6 @@ pub enum IntervalType {
 }
 
 #[allow(unused)]
-#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalYearMonthUnit {
     Year(Year),
@@ -117,7 +115,6 @@ pub enum IntervalYearMonthUnit {
 }
 
 #[allow(unused)]
-#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalDayTimeUnit {
     Day(Year),
@@ -136,7 +133,6 @@ pub enum TimezoneType {
 }
 
 #[allow(unused)]
-#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "DataType")]
 pub struct StructField {
