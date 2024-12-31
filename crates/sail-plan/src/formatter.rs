@@ -1,8 +1,10 @@
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::ops::Sub;
 use std::sync::Arc;
 
+use chrono::{Offset, TimeDelta, TimeZone, Utc};
 use chrono_tz::Tz;
 use half::f16;
 use sail_common::object::DynObject;
@@ -349,8 +351,9 @@ impl PlanFormatter for DefaultPlanFormatter {
                         config_timezone,
                         config_timestamp_type,
                     )?;
-                    let naive_dt =
-                        chrono::NaiveDateTime::UNIX_EPOCH + chrono::Duration::seconds(*seconds);
+                    let naive_dt = Utc.timestamp_opt(*seconds, 0).earliest().ok_or_else(|| {
+                        PlanError::invalid(format!("Literal to string TimestampSecond: {seconds}"))
+                    })?;
                     let utc_datetime = naive_datetime_to_utc_datetime(naive_dt, &timezone)?;
                     format_timestamp(
                         utc_datetime,
@@ -371,8 +374,14 @@ impl PlanFormatter for DefaultPlanFormatter {
                         config_timezone,
                         config_timestamp_type,
                     )?;
-                    let naive_dt = chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::milliseconds(*milliseconds);
+                    let naive_dt = Utc
+                        .timestamp_millis_opt(*milliseconds)
+                        .earliest()
+                        .ok_or_else(|| {
+                            PlanError::invalid(format!(
+                                "Literal to string TimestampMillisecond: {milliseconds}"
+                            ))
+                        })?;
                     let utc_datetime = naive_datetime_to_utc_datetime(naive_dt, &timezone)?;
                     format_timestamp(
                         utc_datetime,
@@ -393,8 +402,14 @@ impl PlanFormatter for DefaultPlanFormatter {
                         config_timezone,
                         config_timestamp_type,
                     )?;
-                    let naive_dt = chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::microseconds(*microseconds);
+                    let naive_dt =
+                        Utc.timestamp_micros(*microseconds)
+                            .earliest()
+                            .ok_or_else(|| {
+                                PlanError::invalid(format!(
+                                    "Literal to string TimestampMicrosecond: {microseconds}"
+                                ))
+                            })?;
                     let utc_datetime = naive_datetime_to_utc_datetime(naive_dt, &timezone)?;
                     format_timestamp(
                         utc_datetime,
@@ -415,8 +430,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                         config_timezone,
                         config_timestamp_type,
                     )?;
-                    let naive_dt = chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::nanoseconds(*nanoseconds);
+                    let naive_dt = Utc.timestamp_nanos(*nanoseconds);
                     let utc_datetime = naive_datetime_to_utc_datetime(naive_dt, &timezone)?;
                     format_timestamp(
                         utc_datetime,
@@ -884,7 +898,7 @@ fn format_decimal(value: &str, scale: i8) -> String {
 }
 
 fn format_timestamp(
-    utc_datetime: chrono::DateTime<Tz>,
+    utc_datetime: chrono::DateTime<chrono::Utc>,
     format: &str,
     timezone_info: &spec::TimeZoneInfo,
     config_timestamp_type: &TimestampType,
@@ -903,18 +917,28 @@ fn format_timestamp(
 }
 
 fn naive_datetime_to_utc_datetime(
-    naive_datetime: chrono::NaiveDateTime,
+    naive_datetime: chrono::DateTime<Utc>,
     timezone: &Option<Arc<str>>,
-) -> PlanResult<chrono::DateTime<Tz>> {
+) -> PlanResult<chrono::DateTime<Utc>> {
     if let Some(timezone) = timezone {
         let tz: Tz = timezone.parse().map_err(|e| {
             PlanError::invalid(format!(
                 "Literal::TimestampMicrosecond: literal to string: {e:?}"
             ))
         })?;
-        Ok(naive_datetime.and_utc().with_timezone(&tz))
+        let offset_seconds: i64 = tz
+            .offset_from_utc_datetime(&naive_datetime.naive_utc())
+            .fix()
+            .local_minus_utc() as i64;
+        let adjusted_date_time =
+            naive_datetime.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+                PlanError::invalid(format!(
+                    "naive_datetime_to_utc_datetime: Invalid offset seconds: {offset_seconds}"
+                ))
+            })?);
+        Ok(adjusted_date_time)
     } else {
-        Ok(naive_datetime.and_utc().with_timezone(&Tz::UTC))
+        Ok(naive_datetime)
     }
 }
 
