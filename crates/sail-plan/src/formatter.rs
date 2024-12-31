@@ -913,15 +913,20 @@ fn naive_datetime_to_utc_datetime(
                 "Literal::TimestampMicrosecond: literal to string: {e:?}"
             ))
         })?;
-        let local_datetime = tz
-            .from_local_datetime(&naive_datetime)
-            .earliest()
-            .ok_or_else(|| {
-                PlanError::invalid(format!(
-                    "naive_datetime_to_utc_datetime: {naive_datetime:?} {tz:?}"
-                ))
-            })?;
-        Ok(local_datetime.with_timezone(&chrono::Utc))
+        match tz {
+            Tz::UTC => Ok(naive_datetime.and_utc()),
+            tz => {
+                let local_datetime = tz
+                    .from_local_datetime(&naive_datetime)
+                    .earliest()
+                    .ok_or_else(|| {
+                        PlanError::invalid(format!(
+                            "naive_datetime_to_utc_datetime: {naive_datetime:?} {tz:?}"
+                        ))
+                    })?;
+                Ok(local_datetime.with_timezone(&chrono::Utc))
+            }
+        }
     } else {
         Ok(naive_datetime.and_utc())
     }

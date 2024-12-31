@@ -48,17 +48,11 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let rebase = match timezone_info {
-                    spec::TimeZoneInfo::SQLConfigured => match self.config.timestamp_type {
-                        TimestampType::TimestampLtz => true,
-                        TimestampType::TimestampNtz => false,
-                    },
-                    spec::TimeZoneInfo::LocalTimeZone => false,
-                    spec::TimeZoneInfo::NoTimeZone => false,
-                    spec::TimeZoneInfo::TimeZone {
-                        timezone: _timezone,
-                    } => false,
-                };
+                let rebase = Self::should_rebase_timestamp(
+                    &timezone,
+                    &timezone_info,
+                    &self.config.timestamp_type,
+                )?;
                 let adjusted_seconds = if rebase {
                     Self::rebase_timestamp_seconds(seconds, &timezone)?
                 } else {
@@ -75,17 +69,11 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let rebase = match timezone_info {
-                    spec::TimeZoneInfo::SQLConfigured => match self.config.timestamp_type {
-                        TimestampType::TimestampLtz => true,
-                        TimestampType::TimestampNtz => false,
-                    },
-                    spec::TimeZoneInfo::LocalTimeZone => false,
-                    spec::TimeZoneInfo::NoTimeZone => false,
-                    spec::TimeZoneInfo::TimeZone {
-                        timezone: _timezone,
-                    } => false,
-                };
+                let rebase = Self::should_rebase_timestamp(
+                    &timezone,
+                    &timezone_info,
+                    &self.config.timestamp_type,
+                )?;
                 let adjusted_milliseconds = if rebase {
                     Self::rebase_timestamp_milliseconds(milliseconds, &timezone)?
                 } else {
@@ -105,17 +93,11 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let rebase = match timezone_info {
-                    spec::TimeZoneInfo::SQLConfigured => match self.config.timestamp_type {
-                        TimestampType::TimestampLtz => true,
-                        TimestampType::TimestampNtz => false,
-                    },
-                    spec::TimeZoneInfo::LocalTimeZone => false,
-                    spec::TimeZoneInfo::NoTimeZone => false,
-                    spec::TimeZoneInfo::TimeZone {
-                        timezone: _timezone,
-                    } => false,
-                };
+                let rebase = Self::should_rebase_timestamp(
+                    &timezone,
+                    &timezone_info,
+                    &self.config.timestamp_type,
+                )?;
                 let adjusted_microseconds = if rebase {
                     Self::rebase_timestamp_microseconds(microseconds, &timezone)?
                 } else {
@@ -135,17 +117,11 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let rebase = match timezone_info {
-                    spec::TimeZoneInfo::SQLConfigured => match self.config.timestamp_type {
-                        TimestampType::TimestampLtz => true,
-                        TimestampType::TimestampNtz => false,
-                    },
-                    spec::TimeZoneInfo::LocalTimeZone => false,
-                    spec::TimeZoneInfo::NoTimeZone => false,
-                    spec::TimeZoneInfo::TimeZone {
-                        timezone: _timezone,
-                    } => false,
-                };
+                let rebase = Self::should_rebase_timestamp(
+                    &timezone,
+                    &timezone_info,
+                    &self.config.timestamp_type,
+                )?;
                 let adjusted_nanoseconds = if rebase {
                     Self::rebase_timestamp_nanoseconds(nanoseconds, &timezone)?
                 } else {
@@ -546,5 +522,35 @@ impl PlanResolver<'_> {
                 nanoseconds
             };
         Ok(adjusted_nanoseconds)
+    }
+    pub fn should_rebase_timestamp(
+        timezone: &Option<Arc<str>>,
+        timezone_info: &spec::TimeZoneInfo,
+        config_timestamp_type: &TimestampType,
+    ) -> PlanResult<bool> {
+        match timezone_info {
+            spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
+                TimestampType::TimestampLtz => match timezone {
+                    Some(tz) => {
+                        let tz: chrono_tz::Tz = tz.parse().map_err(|e| {
+                            PlanError::invalid(format!(
+                                "resolve_literal Literal::TimestampMicrosecond: {e:?}"
+                            ))
+                        })?;
+                        match tz {
+                            chrono_tz::Tz::UTC => Ok(false),
+                            _ => Ok(true),
+                        }
+                    }
+                    None => Ok(false),
+                },
+                TimestampType::TimestampNtz => Ok(false),
+            },
+            spec::TimeZoneInfo::LocalTimeZone => Ok(false),
+            spec::TimeZoneInfo::NoTimeZone => Ok(false),
+            spec::TimeZoneInfo::TimeZone {
+                timezone: _timezone,
+            } => Ok(false),
+        }
     }
 }
