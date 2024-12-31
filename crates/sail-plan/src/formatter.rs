@@ -912,8 +912,12 @@ fn naive_datetime_to_utc_datetime(
                 "Literal::TimestampMicrosecond: literal to string: {e:?}"
             ))
         })?;
-        let utc_datetime = naive_datetime.and_utc();
-        Ok(utc_datetime.with_timezone(&tz).with_timezone(&chrono::Utc))
+        let local_datetime = naive_datetime.and_utc().with_timezone(&tz);
+        let new_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+            local_datetime.naive_local(),
+            chrono::Utc,
+        );
+        Ok(new_utc)
     } else {
         Ok(naive_datetime.and_utc())
     }
