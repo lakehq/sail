@@ -10,7 +10,7 @@ where
     S: TreeParser<'a, D>,
     D: Clone,
 {
-    fn parser(data: D) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone {
-        sequence(T::parser(data.clone()), S::parser(data))
+    fn parser(args: D) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone {
+        sequence(T::parser(args.clone()), S::parser(args))
     }
 }

@@ -78,7 +78,7 @@ fn derive_fields_inner<'a>(
                 .unwrap_or_else(|| format_ident!("v{}", i));
             let field_type = &field.ty;
             let field_parser = if let Some(function) = field_function {
-                quote! { { let f = #function; f(data.clone()) } }
+                quote! { { let f = #function; f(args.clone()) } }
             } else {
                 quote! { <#field_type>::parser(()) }
             };
@@ -202,7 +202,7 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
         extractor.expect_empty()?;
         dep
     };
-    let (generics, trait_generics, data, where_clause) = match dependency {
+    let (generics, trait_generics, args, where_clause) = match dependency {
         ParserDependency::One(t) => (
             quote! { <'a, P> },
             quote! { <'a, P> },
@@ -232,7 +232,7 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
 
     Ok(quote! {
         impl #generics crate::tree::#trait_name #trait_generics for #name #where_clause {
-            fn parser(data: #data) -> impl chumsky::Parser<'a, &'a [crate::token::Token<'a>], Self> + Clone {
+            fn parser(args: #args) -> impl chumsky::Parser<'a, &'a [crate::token::Token<'a>], Self> + Clone {
                 use chumsky::Parser;
 
                 #parser

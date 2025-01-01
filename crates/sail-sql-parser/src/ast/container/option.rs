@@ -7,7 +7,7 @@ impl<'a, T, D> TreeParser<'a, D> for Option<T>
 where
     T: TreeParser<'a, D>,
 {
-    fn parser(data: D) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone {
-        T::parser(data).or_not()
+    fn parser(args: D) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone {
+        T::parser(args).or_not()
     }
 }

@@ -24,26 +24,30 @@ pub(crate) mod utils;
 /// The attribute `parser` can be used to control how the parsers are derived.
 /// There are a few supported arguments for the attribute.
 ///
-/// `parser(dependency = "type")` can be specified at the top level for the enum or the struct,
-/// where `type` is a single type `T` or a tuple type `(T1, T2, ...)`. Note that the dependency
-/// needs to be specified as a string literal.
-/// For a single type `T`, the derived `parser()` method will expect a parser for `T` as the data.
-/// For a tuple type `(T1, T2, ...)`, the derived `parser()` method will expect a tuple of parsers
-/// for each type as the data.
+/// * `parser(dependency = "type")`
 ///
-/// This argument is used to support recursive types, where the parser needs to first be declared
-/// via `chumsky::recursive::Recursive::declare()`. `parser()` receives the declared parser(s)
-/// and the returned parser can be then used for `chumsky::recursive::Recursive::define()`.
+///     This can be specified at the top level for the enum or the struct,
+///     where `type` is a single type `T` or a tuple type `(T1, T2, ...)`. Note that the dependency
+///     needs to be specified as a string literal.
+///     For a single type `T`, the derived `parser()` method will expect a parser for `T` as the
+///     argument. For a tuple type `(T1, T2, ...)`, the derived `parser()` method will expect a
+///     tuple of parsers for each type as the argument.
 ///
-/// If this argument is not specified, the `parser()` method will expect unit data (`()`).
+///     This argument is used to support recursive types, where the parser needs to first be
+///     declared via `chumsky::recursive::Recursive::declare()`. `parser()` receives the declared
+///     parser(s) and the returned parser can be used for `chumsky::recursive::Recursive::define()`.
 ///
-/// `parser(function = expr)` can be specified for individual fields (named or unnamed fields in
-/// enum variants or structs), where `expr` is a function that takes the data (one or a tuple of
-/// declared parsers) and returns the parser for the field.
+///     By default, the `parser()` method will expect unit argument (`()`).
 ///
-/// If this argument is not specified, the parser for the field is derived by calling the `parser()`
-/// method of the field type with unit data (`()`). Such unit data is accepted for terminal parsers
-/// or derived parsers without the `parser(dependency = "...")` attribute.
+/// * `parser(function = expr)`
+///
+///     This can be specified for individual fields (named or unnamed fields in
+///     enum variants or structs), where `expr` is a function that takes the argument (one or a tuple
+///     of declared parsers) and returns the parser for the field.
+///
+///     By default, the parser for the field is derived by calling the `parser()`
+///     method of the field type with unit argument (`()`). Such unit argument is accepted for terminal
+///     parsers or derived parsers without the `parser(dependency = "...")` attribute.
 ///
 /// The `parser` attribute is not allowed for at the enum variant level.
 #[proc_macro_derive(TreeParser, attributes(parser))]

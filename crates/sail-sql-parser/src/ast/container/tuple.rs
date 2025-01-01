@@ -18,9 +18,9 @@ macro_rules! impl_tree_parser_for_tuple {
             $(,$Ts: TreeParser<'a, D>)*
             , D: Clone
         {
-            fn parser(data: D) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone{
-                let parser = T1::parser(data.clone())
-                    $(.then($Ts::parser(data.clone())))*;
+            fn parser(args: D) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone{
+                let parser = T1::parser(args.clone())
+                    $(.then($Ts::parser(args.clone())))*;
                 paste! {
                     parser.map(|nested!([<$T:lower>] $([<$Ts:lower>])*)| ([<$T:lower>], $([<$Ts:lower>],)*))
                 }

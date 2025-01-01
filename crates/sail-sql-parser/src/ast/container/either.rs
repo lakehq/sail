@@ -11,7 +11,7 @@ where
     R: TreeParser<'a, D>,
     D: Clone,
 {
-    fn parser(data: D) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone {
-        either_or(L::parser(data.clone()), R::parser(data))
+    fn parser(args: D) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone {
+        either_or(L::parser(args.clone()), R::parser(args))
     }
 }
