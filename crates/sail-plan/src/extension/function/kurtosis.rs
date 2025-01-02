@@ -12,6 +12,7 @@ use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::types::logical_float64;
+use datafusion_expr_common::signature::TypeSignatureClass;
 
 pub struct KurtosisFunction {
     signature: Signature,
@@ -34,7 +35,10 @@ impl Default for KurtosisFunction {
 impl KurtosisFunction {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(vec![logical_float64()], Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![TypeSignatureClass::Native(logical_float64())],
+                Volatility::Immutable,
+            ),
         }
     }
 }

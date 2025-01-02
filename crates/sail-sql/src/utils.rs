@@ -1,4 +1,4 @@
-use datafusion::sql::sqlparser::ast as df_ast;
+use datafusion::sql::sqlparser::{ast as df_ast, tokenizer as df_tokenizer};
 use sail_common::spec;
 use sqlparser::ast;
 
@@ -104,9 +104,16 @@ pub fn to_datafusion_ast_object_name(object_name: &ast::ObjectName) -> df_ast::O
         object_name
             .0
             .iter()
-            .map(|ident| df_ast::Ident {
-                value: ident.value.clone(),
-                quote_style: ident.quote_style,
+            .map(|ident| {
+                let start =
+                    df_tokenizer::Location::new(ident.span.start.line, ident.span.start.column);
+                let end = df_tokenizer::Location::new(ident.span.end.line, ident.span.end.column);
+                let span = df_tokenizer::Span::new(start, end);
+                df_ast::Ident {
+                    value: ident.value.clone(),
+                    quote_style: ident.quote_style,
+                    span,
+                }
             })
             .collect(),
     )

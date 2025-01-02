@@ -5,7 +5,7 @@ use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use log::info;
@@ -116,8 +116,10 @@ impl SessionManager {
             .set_bool("datafusion.catalog.has_header", false);
         let runtime = {
             let registry = DynamicObjectStoreRegistry::new();
-            let config = RuntimeConfig::default().with_object_store_registry(Arc::new(registry));
-            Arc::new(RuntimeEnv::try_new(config)?)
+            let config = RuntimeEnvBuilder::default()
+                .with_object_store_registry(Arc::new(registry))
+                .build()?;
+            Arc::new(config)
         };
         let state = SessionStateBuilder::new()
             .with_config(session_config)

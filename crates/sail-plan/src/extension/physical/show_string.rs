@@ -8,8 +8,9 @@ use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::{
-    DisplayAs, ExecutionMode, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
@@ -39,7 +40,8 @@ impl ShowStringExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::RoundRobinBatch(1),
-            ExecutionMode::Bounded,
+            input.pipeline_behavior(), // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+            Boundedness::Bounded,
         );
         Self {
             input,

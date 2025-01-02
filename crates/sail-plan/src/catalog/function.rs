@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::datasource::function::TableFunctionImpl;
+use datafusion::catalog::TableFunctionImpl;
 use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{DdlStatement, DropFunction, LogicalPlan, ScalarUDF};
 use serde::{Deserialize, Serialize};
