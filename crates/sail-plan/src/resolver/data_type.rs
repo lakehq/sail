@@ -6,19 +6,24 @@ use sail_common::spec;
 
 use crate::config::TimestampType;
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    fn arrow_binary_type(&self) -> adt::DataType {
-        if self.config.arrow_use_large_var_types {
+    pub(super) fn arrow_binary_type(&self, state: &mut PlanResolverState) -> adt::DataType {
+        if state.get_apply_arrow_use_large_var_types_config()
+            && self.config.arrow_use_large_var_types
+        {
             adt::DataType::LargeBinary
         } else {
             adt::DataType::Binary
         }
     }
 
-    fn arrow_string_type(&self) -> adt::DataType {
-        if self.config.arrow_use_large_var_types {
+    pub(super) fn arrow_string_type(&self, state: &mut PlanResolverState) -> adt::DataType {
+        if state.get_apply_arrow_use_large_var_types_config()
+            && self.config.arrow_use_large_var_types
+        {
             adt::DataType::LargeUtf8
         } else {
             adt::DataType::Utf8
@@ -28,7 +33,11 @@ impl PlanResolver<'_> {
     /// References:
     ///   org.apache.spark.sql.util.ArrowUtils#toArrowType
     ///   org.apache.spark.sql.connect.common.DataTypeProtoConverter
-    pub fn resolve_data_type(&self, data_type: &spec::DataType) -> PlanResult<adt::DataType> {
+    pub(super) fn resolve_data_type(
+        &self,
+        data_type: &spec::DataType,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<adt::DataType> {
         use spec::DataType;
 
         match data_type {
@@ -50,7 +59,11 @@ impl PlanResolver<'_> {
                 timezone_info,
             } => Ok(adt::DataType::Timestamp(
                 Self::resolve_time_unit(time_unit)?,
-                self.resolve_timezone(timezone_info)?,
+                Self::resolve_timezone(
+                    timezone_info,
+                    self.config.timezone.as_str(),
+                    &self.config.timestamp_type,
+                )?,
             )),
             DataType::Date32 => Ok(adt::DataType::Date32),
             DataType::Date64 => Ok(adt::DataType::Date64),
@@ -92,7 +105,9 @@ impl PlanResolver<'_> {
                     nullable: *nullable,
                     metadata: vec![],
                 };
-                Ok(adt::DataType::List(Arc::new(self.resolve_field(&field)?)))
+                Ok(adt::DataType::List(Arc::new(
+                    self.resolve_field(&field, state)?,
+                )))
             }
             DataType::FixedSizeList {
                 data_type,
@@ -106,7 +121,7 @@ impl PlanResolver<'_> {
                     metadata: vec![],
                 };
                 Ok(adt::DataType::FixedSizeList(
-                    Arc::new(self.resolve_field(&field)?),
+                    Arc::new(self.resolve_field(&field, state)?),
                     *length,
                 ))
             }
@@ -121,17 +136,19 @@ impl PlanResolver<'_> {
                     metadata: vec![],
                 };
                 Ok(adt::DataType::LargeList(Arc::new(
-                    self.resolve_field(&field)?,
+                    self.resolve_field(&field, state)?,
                 )))
             }
-            DataType::Struct { fields } => Ok(adt::DataType::Struct(self.resolve_fields(fields)?)),
+            DataType::Struct { fields } => {
+                Ok(adt::DataType::Struct(self.resolve_fields(fields, state)?))
+            }
             DataType::Union {
                 union_fields,
                 union_mode,
             } => {
                 let union_fields = union_fields
                     .iter()
-                    .map(|(i, field)| Ok((*i, Arc::new(self.resolve_field(field)?))))
+                    .map(|(i, field)| Ok((*i, Arc::new(self.resolve_field(field, state)?))))
                     .collect::<PlanResult<_>>()?;
                 Ok(adt::DataType::Union(
                     union_fields,
@@ -142,8 +159,8 @@ impl PlanResolver<'_> {
                 key_type,
                 value_type,
             } => Ok(adt::DataType::Dictionary(
-                Box::new(self.resolve_data_type(key_type)?),
-                Box::new(self.resolve_data_type(value_type)?),
+                Box::new(self.resolve_data_type(key_type, state)?),
+                Box::new(self.resolve_data_type(value_type, state)?),
             )),
             DataType::Decimal128 { precision, scale } => {
                 Ok(adt::DataType::Decimal128(*precision, *scale))
@@ -174,7 +191,7 @@ impl PlanResolver<'_> {
                 Ok(adt::DataType::Map(
                     Arc::new(adt::Field::new(
                         "entries",
-                        adt::DataType::Struct(self.resolve_fields(&fields)?),
+                        adt::DataType::Struct(self.resolve_fields(&fields, state)?),
                         false,
                     )),
                     *keys_sorted,
@@ -183,9 +200,9 @@ impl PlanResolver<'_> {
             DataType::ConfiguredUtf8 { utf8_type: _ } => {
                 // FIXME: Currently `length` and `utf8_type` is lost in translation.
                 //  This impacts accuracy if `spec::ConfiguredUtf8Type` is `VarChar` or `Char`.
-                Ok(self.arrow_string_type())
+                Ok(self.arrow_string_type(state))
             }
-            DataType::ConfiguredBinary => Ok(self.arrow_binary_type()),
+            DataType::ConfiguredBinary => Ok(self.arrow_binary_type(state)),
             DataType::UserDefined { .. } => Err(PlanError::unsupported(
                 "user defined data type should only exist in a field",
             )),
@@ -321,7 +338,11 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn resolve_field(&self, field: &spec::Field) -> PlanResult<adt::Field> {
+    pub(super) fn resolve_field(
+        &self,
+        field: &spec::Field,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<adt::Field> {
         let spec::Field {
             name,
             data_type,
@@ -356,7 +377,7 @@ impl PlanResolver<'_> {
             x => x,
         };
         Ok(
-            adt::Field::new(name, self.resolve_data_type(data_type)?, *nullable)
+            adt::Field::new(name, self.resolve_data_type(data_type, state)?, *nullable)
                 .with_metadata(metadata),
         )
     }
@@ -391,10 +412,14 @@ impl PlanResolver<'_> {
         })
     }
 
-    pub fn resolve_fields(&self, fields: &spec::Fields) -> PlanResult<adt::Fields> {
+    pub(super) fn resolve_fields(
+        &self,
+        fields: &spec::Fields,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<adt::Fields> {
         let fields = fields
             .into_iter()
-            .map(|f| self.resolve_field(f))
+            .map(|f| self.resolve_field(f, state))
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(adt::Fields::from(fields))
     }
@@ -407,8 +432,12 @@ impl PlanResolver<'_> {
         Ok(spec::Fields::from(fields))
     }
 
-    pub fn resolve_schema(&self, schema: spec::Schema) -> PlanResult<adt::Schema> {
-        let fields = self.resolve_fields(&schema.fields)?;
+    pub(super) fn resolve_schema(
+        &self,
+        schema: spec::Schema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<adt::Schema> {
+        let fields = self.resolve_fields(&schema.fields, state)?;
         Ok(adt::Schema::new(fields))
     }
 
@@ -483,25 +512,28 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn resolve_timezone(&self, timezone: &spec::TimeZoneInfo) -> PlanResult<Option<Arc<str>>> {
+    pub fn resolve_timezone(
+        timezone: &spec::TimeZoneInfo,
+        config_timezone: &str,
+        config_timestamp_type: &TimestampType,
+    ) -> PlanResult<Option<Arc<str>>> {
         match timezone {
-            spec::TimeZoneInfo::Configured => match self.config.timestamp_type {
-                TimestampType::TimestampLtz => {
-                    Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
-                }
+            spec::TimeZoneInfo::Configured => match config_timestamp_type {
+                TimestampType::TimestampLtz => Ok(Some(Arc::<str>::from(config_timezone))),
                 TimestampType::TimestampNtz => Ok(None),
             },
-            spec::TimeZoneInfo::LocalTimeZone => {
-                Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
-            }
+            spec::TimeZoneInfo::LocalTimeZone => Ok(Some(Arc::<str>::from(config_timezone))),
             spec::TimeZoneInfo::NoTimeZone => Ok(None),
-            spec::TimeZoneInfo::TimeZone { timezone } => {
-                if timezone.is_empty() {
-                    Ok(Some(Arc::<str>::from(self.config.timezone.as_str())))
-                } else {
-                    Ok(Some(Arc::clone(timezone)))
+            spec::TimeZoneInfo::TimeZone { timezone } => match timezone {
+                None => Ok(Some(Arc::<str>::from(config_timezone))),
+                Some(timezone) => {
+                    if timezone.is_empty() {
+                        Ok(Some(Arc::<str>::from(config_timezone)))
+                    } else {
+                        Ok(Some(Arc::clone(timezone)))
+                    }
                 }
-            }
+            },
         }
     }
 
@@ -509,7 +541,7 @@ impl PlanResolver<'_> {
         match timezone {
             None => Ok(spec::TimeZoneInfo::NoTimeZone),
             Some(timezone) => Ok(spec::TimeZoneInfo::TimeZone {
-                timezone: Arc::clone(timezone),
+                timezone: Some(Arc::clone(timezone)),
             }),
         }
     }

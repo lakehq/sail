@@ -47,7 +47,9 @@
                     },
                     {
                       "literal": {
-                        "integer": 2
+                        "int32": {
+                          "value": 2
+                        }
                       }
                     }
                   ],

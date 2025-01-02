@@ -477,7 +477,9 @@
                 "arguments": [
                   {
                     "literal": {
-                      "integer": 1
+                      "int32": {
+                        "value": 1
+                      }
                     }
                   },
                   {
@@ -511,7 +513,9 @@
             "arguments": [
               {
                 "literal": {
-                  "integer": 1
+                  "int32": {
+                    "value": 1
+                  }
                 }
               },
               {
@@ -520,7 +524,9 @@
                   "arguments": [
                     {
                       "literal": {
-                        "string": "o"
+                        "utf8": {
+                          "value": "o"
+                        }
                       }
                     },
                     {
@@ -566,7 +572,9 @@
           "alias": {
             "expr": {
               "literal": {
-                "integer": 123
+                "int32": {
+                  "value": 123
+                }
               }
             },
             "name": [
@@ -588,7 +596,9 @@
       "output": {
         "success": {
           "literal": {
-            "boolean": false
+            "boolean": {
+              "value": false
+            }
           }
         }
       }
@@ -620,9 +630,11 @@
       "output": {
         "success": {
           "literal": {
-            "binary": [
-              10
-            ]
+            "binary": {
+              "value": [
+                10
+              ]
+            }
           }
         }
       }
@@ -2126,7 +2138,9 @@
                     },
                     {
                       "literal": {
-                        "string": "pattern%"
+                        "utf8": {
+                          "value": "pattern%"
+                        }
                       }
                     }
                   ],
@@ -2350,7 +2364,9 @@
               },
               {
                 "literal": {
-                  "string": "pattern%"
+                  "utf8": {
+                    "value": "pattern%"
+                  }
                 }
               }
             ],
@@ -2479,12 +2495,16 @@
                 "arguments": [
                   {
                     "literal": {
-                      "integer": 1
+                      "int32": {
+                        "value": 1
+                      }
                     }
                   },
                   {
                     "literal": {
-                      "integer": 1
+                      "int32": {
+                        "value": 1
+                      }
                     }
                   }
                 ],
@@ -2569,7 +2589,9 @@
             "arguments": [
               {
                 "literal": {
-                  "string": "abc"
+                  "utf8": {
+                    "value": "abc"
+                  }
                 }
               },
               {
@@ -2578,12 +2600,16 @@
                   "arguments": [
                     {
                       "literal": {
-                        "string": "utf"
+                        "utf8": {
+                          "value": "utf"
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "string": "-8"
+                        "utf8": {
+                          "value": "-8"
+                        }
                       }
                     }
                   ],
@@ -2607,12 +2633,16 @@
             "arguments": [
               {
                 "literal": {
-                  "string": "abc"
+                  "utf8": {
+                    "value": "abc"
+                  }
                 }
               },
               {
                 "literal": {
-                  "string": "utf-8"
+                  "utf8": {
+                    "value": "utf-8"
+                  }
                 }
               }
             ],
@@ -2631,12 +2661,16 @@
             "arguments": [
               {
                 "literal": {
-                  "string": "utf-8"
+                  "utf8": {
+                    "value": "utf-8"
+                  }
                 }
               },
               {
                 "literal": {
-                  "string": "abc"
+                  "utf8": {
+                    "value": "abc"
+                  }
                 }
               }
             ],
@@ -2655,12 +2689,16 @@
             "arguments": [
               {
                 "literal": {
-                  "string": "abc"
+                  "utf8": {
+                    "value": "abc"
+                  }
                 }
               },
               {
                 "literal": {
-                  "string": "utf-8"
+                  "utf8": {
+                    "value": "utf-8"
+                  }
                 }
               }
             ],
@@ -2691,7 +2729,9 @@
                       "expressions": [
                         {
                           "literal": {
-                            "string": "1"
+                            "utf8": {
+                              "value": "1"
+                            }
                           }
                         }
                       ]
@@ -2703,7 +2743,9 @@
               },
               {
                 "literal": {
-                  "string": "utf-8"
+                  "utf8": {
+                    "value": "utf-8"
+                  }
                 }
               }
             ],
@@ -2769,7 +2811,9 @@
                 "expressions": [
                   {
                     "literal": {
-                      "integer": 1
+                      "int32": {
+                        "value": 1
+                      }
                     }
                   }
                 ]
@@ -3052,12 +3096,16 @@
                   "arguments": [
                     {
                       "literal": {
-                        "boolean": true
+                        "boolean": {
+                          "value": true
+                        }
                       }
                     },
                     {
                       "literal": {
-                        "boolean": true
+                        "boolean": {
+                          "value": true
+                        }
                       }
                     }
                   ],
@@ -3138,7 +3186,9 @@
       "output": {
         "success": {
           "literal": {
-            "boolean": true
+            "boolean": {
+              "value": true
+            }
           }
         }
       }
@@ -3162,7 +3212,9 @@
                   },
                   {
                     "literal": {
-                      "integer": 1
+                      "int32": {
+                        "value": 1
+                      }
                     }
                   }
                 ],
@@ -3186,10 +3238,12 @@
       "output": {
         "success": {
           "literal": {
-            "binary": [
-              161,
-              12
-            ]
+            "binary": {
+              "value": [
+                161,
+                12
+              ]
+            }
           }
         }
       }

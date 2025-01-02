@@ -7,6 +7,7 @@ use futures::TryStreamExt;
 use sail_common::spec;
 
 use crate::error::PlanResult;
+use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 /// See also: <https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/listing/url.rs>
@@ -51,6 +52,7 @@ impl PlanResolver<'_> {
         urls: &[ListingTableUrl],
         options: &ListingOptions,
         schema: Option<spec::Schema>,
+        state: &mut PlanResolverState,
     ) -> PlanResult<adt::Schema> {
         let schema = match schema {
             // ignore empty schema
@@ -59,12 +61,12 @@ impl PlanResolver<'_> {
         };
         // The logic is similar to `ListingOptions::infer_schema()`
         // but here we also check for the existence of files.
-        let state = self.ctx.state();
+        let session_state = self.ctx.state();
         let mut file_groups = vec![];
         for url in urls {
             let store = self.ctx.runtime_env().object_store(url)?;
             let files: Vec<_> = url
-                .list_all_files(&state, &store, &options.file_extension)
+                .list_all_files(&session_state, &store, &options.file_extension)
                 .await?
                 .try_collect()
                 .await?;
@@ -80,11 +82,14 @@ impl PlanResolver<'_> {
             return plan_err!("No files found in the specified paths: {urls}")?;
         }
         let schema = match schema {
-            Some(schema) => self.resolve_schema(schema)?,
+            Some(schema) => self.resolve_schema(schema, state)?,
             None => {
                 let mut schemas = vec![];
                 for (store, files) in file_groups.iter() {
-                    let mut schema = options.format.infer_schema(&state, store, files).await?;
+                    let mut schema = options
+                        .format
+                        .infer_schema(&session_state, store, files)
+                        .await?;
                     let ext = options.format.get_ext().to_lowercase();
                     let ext = ext.trim();
                     if matches!(ext, ".csv") || matches!(ext, "csv") {

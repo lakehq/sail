@@ -162,7 +162,9 @@
                       },
                       {
                         "literal": {
-                          "string": "d"
+                          "utf8": {
+                            "value": "d"
+                          }
                         }
                       }
                     ],
@@ -184,7 +186,9 @@
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],

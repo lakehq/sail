@@ -5,7 +5,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "hello"
+            "utf8": {
+              "value": "hello"
+            }
           }
         }
       }
@@ -17,7 +19,9 @@
           "alias": {
             "expr": {
               "literal": {
-                "string": "hello"
+                "utf8": {
+                  "value": "hello"
+                }
               }
             },
             "name": [
@@ -40,7 +44,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "\\\""
+            "utf8": {
+              "value": "\\\""
+            }
           }
         }
       }
@@ -56,7 +62,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "\\0"
+            "utf8": {
+              "value": "\\0"
+            }
           }
         }
       }
@@ -66,7 +74,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "\\110\\145\\154\\154\\157\\041"
+            "utf8": {
+              "value": "\\110\\145\\154\\154\\157\\041"
+            }
           }
         }
       }
@@ -76,7 +86,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "\\Z"
+            "utf8": {
+              "value": "\\Z"
+            }
           }
         }
       }
@@ -86,7 +98,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "\\b"
+            "utf8": {
+              "value": "\\b"
+            }
           }
         }
       }
@@ -96,7 +110,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "\\n"
+            "utf8": {
+              "value": "\\n"
+            }
           }
         }
       }
@@ -106,7 +122,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "\\r"
+            "utf8": {
+              "value": "\\r"
+            }
           }
         }
       }
@@ -116,7 +134,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "\\t"
+            "utf8": {
+              "value": "\\t"
+            }
           }
         }
       }
@@ -126,7 +146,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "\\u0057\\u006F\\u0072\\u006C\\u0064\\u0020\\u003A\\u0029"
+            "utf8": {
+              "value": "\\u0057\\u006F\\u0072\\u006C\\u0064\\u0020\\u003A\\u0029"
+            }
           }
         }
       }
@@ -136,7 +158,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "hello"
+            "utf8": {
+              "value": "hello"
+            }
           }
         }
       }
@@ -152,7 +176,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "no-pattern\\%"
+            "utf8": {
+              "value": "no-pattern\\%"
+            }
           }
         }
       }
@@ -162,7 +188,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "pattern%"
+            "utf8": {
+              "value": "pattern%"
+            }
           }
         }
       }
@@ -172,7 +200,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "pattern\\\\%"
+            "utf8": {
+              "value": "pattern\\\\%"
+            }
           }
         }
       }
@@ -182,7 +212,9 @@
       "output": {
         "success": {
           "literal": {
-            "string": "pattern\\\\\\%"
+            "utf8": {
+              "value": "pattern\\\\\\%"
+            }
           }
         }
       }

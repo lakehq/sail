@@ -9,7 +9,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -14
                   }
                 }
@@ -30,8 +30,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 86401000000
+                  "intervalDayTime": {
+                    "days": 1,
+                    "milliseconds": 1000
                   }
                 }
               }
@@ -51,8 +52,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -86400000000
+                  "intervalDayTime": {
+                    "days": -1,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -72,7 +74,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -1476
                   }
                 }
@@ -93,8 +95,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -69497123456
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": -69497123456000
                   }
                 }
               }
@@ -114,7 +118,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -27
                   }
                 }
@@ -135,8 +139,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -604800000000
+                  "intervalDayTime": {
+                    "days": -7,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -156,8 +161,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -604800000000
+                  "intervalDayTime": {
+                    "days": -7,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -177,8 +183,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -25200000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -25200000
                   }
                 }
               }
@@ -198,8 +205,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -25200000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -25200000
                   }
                 }
               }
@@ -219,8 +227,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": -7000
                   }
                 }
               }
@@ -240,8 +250,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": -7000
                   }
                 }
               }
@@ -261,8 +273,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -7
                   }
                 }
               }
@@ -282,8 +295,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -7
                   }
                 }
               }
@@ -303,8 +317,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -420000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -420000
                   }
                 }
               }
@@ -324,8 +339,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -420000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -420000
                   }
                 }
               }
@@ -345,7 +361,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -7
                   }
                 }
@@ -366,7 +382,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -7
                   }
                 }
@@ -387,8 +403,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -7000
                   }
                 }
               }
@@ -408,8 +425,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -7000
                   }
                 }
               }
@@ -429,8 +447,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -4233600000000
+                  "intervalDayTime": {
+                    "days": -49,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -450,8 +469,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -4233600000000
+                  "intervalDayTime": {
+                    "days": -49,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -471,7 +491,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -84
                   }
                 }
@@ -492,7 +512,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -84
                   }
                 }
@@ -513,8 +533,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -8594553123456
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": -99,
+                    "nanoseconds": -40953123456000
                   }
                 }
               }
@@ -534,8 +556,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -555,8 +578,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -576,8 +600,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -597,8 +622,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -618,8 +644,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -639,8 +666,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -660,8 +688,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -681,8 +710,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -702,8 +732,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -723,8 +754,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -744,7 +776,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 0
                   }
                 }
@@ -765,7 +797,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 0
                   }
                 }
@@ -786,8 +818,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -807,8 +840,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -828,8 +862,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -849,8 +884,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -870,7 +906,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 0
                   }
                 }
@@ -891,7 +927,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 0
                   }
                 }
@@ -912,8 +948,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -933,8 +970,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 1000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 1000
                   }
                 }
               }
@@ -954,8 +992,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 86400000000
+                  "intervalDayTime": {
+                    "days": 1,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -975,8 +1014,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 86401000000
+                  "intervalDayTime": {
+                    "days": 1,
+                    "milliseconds": 1000
                   }
                 }
               }
@@ -996,8 +1036,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 93784005006
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 1,
+                    "nanoseconds": 7384005006000
                   }
                 }
               }
@@ -1017,7 +1059,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 14
                   }
                 }
@@ -1038,8 +1080,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 896887123456
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 10,
+                    "nanoseconds": 32887123456000
                   }
                 }
               }
@@ -1059,8 +1103,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 864000000000
+                  "intervalDayTime": {
+                    "days": 10,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -1080,8 +1125,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 864000000000
+                  "intervalDayTime": {
+                    "days": 10,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -1101,8 +1147,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 36000000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 36000000
                   }
                 }
               }
@@ -1122,8 +1169,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 36000000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 36000000
                   }
                 }
               }
@@ -1143,8 +1191,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 10000
                   }
                 }
               }
@@ -1164,8 +1214,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 10000
                   }
                 }
               }
@@ -1185,8 +1237,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 10
                   }
                 }
               }
@@ -1206,8 +1259,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 10
                   }
                 }
               }
@@ -1227,8 +1281,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 600000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 600000
                   }
                 }
               }
@@ -1248,8 +1303,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 600000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 600000
                   }
                 }
               }
@@ -1269,7 +1325,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 10
                   }
                 }
@@ -1290,7 +1346,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 10
                   }
                 }
@@ -1311,8 +1367,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 10000
                   }
                 }
               }
@@ -1332,8 +1389,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 10000
                   }
                 }
               }
@@ -1353,8 +1411,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 6048000000000
+                  "intervalDayTime": {
+                    "days": 70,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -1374,8 +1433,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 6048000000000
+                  "intervalDayTime": {
+                    "days": 70,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -1395,7 +1455,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 120
                   }
                 }
@@ -1416,7 +1476,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 120
                   }
                 }
@@ -1437,8 +1497,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 40953123456
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 40953123456000
                   }
                 }
               }
@@ -1458,7 +1520,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 1486
                   }
                 }
@@ -1479,8 +1541,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 1814400000000
+                  "intervalDayTime": {
+                    "days": 21,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -1500,8 +1563,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 1814400000000
+                  "intervalDayTime": {
+                    "days": 21,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -1521,8 +1585,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 75600000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 75600000
                   }
                 }
               }
@@ -1542,8 +1607,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 75600000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 75600000
                   }
                 }
               }
@@ -1563,8 +1629,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 21000
                   }
                 }
               }
@@ -1584,8 +1652,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 21000
                   }
                 }
               }
@@ -1605,8 +1675,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 21
                   }
                 }
               }
@@ -1626,8 +1697,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 21
                   }
                 }
               }
@@ -1647,8 +1719,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 1260000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 1260000
                   }
                 }
               }
@@ -1668,8 +1741,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 1260000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 1260000
                   }
                 }
               }
@@ -1689,7 +1763,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 21
                   }
                 }
@@ -1710,7 +1784,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 21
                   }
                 }
@@ -1731,8 +1805,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 21000
                   }
                 }
               }
@@ -1752,8 +1827,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 21000
                   }
                 }
               }
@@ -1773,8 +1849,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 12700800000000
+                  "intervalDayTime": {
+                    "days": 147,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -1794,8 +1871,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 12700800000000
+                  "intervalDayTime": {
+                    "days": 147,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -1815,7 +1893,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 252
                   }
                 }
@@ -1836,7 +1914,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 252
                   }
                 }
@@ -1857,10 +1935,10 @@
             "arguments": [
               {
                 "literal": {
-                  "calendarInterval": {
+                  "intervalMonthDayNano": {
                     "months": 3,
                     "days": 0,
-                    "microseconds": 3600000000
+                    "nanoseconds": 3600000000000
                   }
                 }
               }
@@ -1880,7 +1958,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 5952
                   }
                 }
@@ -1901,8 +1979,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 8594553123456
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 99,
+                    "nanoseconds": 40953123456000
                   }
                 }
               }
@@ -1922,8 +2002,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 32887123456
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 32887123456000
                   }
                 }
               }
@@ -1943,8 +2025,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -13123456
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": -13123456000
                   }
                 }
               }
@@ -1964,8 +2048,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -604800000000
+                  "intervalDayTime": {
+                    "days": -7,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -1985,8 +2070,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -604800000000
+                  "intervalDayTime": {
+                    "days": -7,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2006,8 +2092,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -25200000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -25200000
                   }
                 }
               }
@@ -2027,8 +2114,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -25200000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -25200000
                   }
                 }
               }
@@ -2048,8 +2136,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": -7000
                   }
                 }
               }
@@ -2069,8 +2159,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": -7000
                   }
                 }
               }
@@ -2090,8 +2182,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -7
                   }
                 }
               }
@@ -2111,8 +2204,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -7
                   }
                 }
               }
@@ -2132,8 +2226,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -420000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -420000
                   }
                 }
               }
@@ -2153,8 +2248,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -420000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -420000
                   }
                 }
               }
@@ -2174,7 +2270,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -7
                   }
                 }
@@ -2195,7 +2291,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -7
                   }
                 }
@@ -2216,8 +2312,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -7000
                   }
                 }
               }
@@ -2237,8 +2334,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -7000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": -7000
                   }
                 }
               }
@@ -2258,8 +2356,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -4233600000000
+                  "intervalDayTime": {
+                    "days": -49,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2279,8 +2378,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": -4233600000000
+                  "intervalDayTime": {
+                    "days": -49,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2300,7 +2400,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -84
                   }
                 }
@@ -2321,7 +2421,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": -84
                   }
                 }
@@ -2342,8 +2442,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2363,8 +2464,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2384,8 +2486,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2405,8 +2508,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2426,8 +2530,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2447,8 +2552,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2468,8 +2574,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2489,8 +2596,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2510,8 +2618,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2531,8 +2640,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2552,7 +2662,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 0
                   }
                 }
@@ -2573,7 +2683,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 0
                   }
                 }
@@ -2594,8 +2704,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2615,8 +2726,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2636,8 +2748,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2657,8 +2770,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 0
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2678,7 +2792,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 0
                   }
                 }
@@ -2699,7 +2813,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 0
                   }
                 }
@@ -2720,8 +2834,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 1001000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 1001
                   }
                 }
               }
@@ -2741,8 +2856,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 864000000000
+                  "intervalDayTime": {
+                    "days": 10,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2762,8 +2878,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 864000000000
+                  "intervalDayTime": {
+                    "days": 10,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -2783,8 +2900,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 36000000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 36000000
                   }
                 }
               }
@@ -2804,8 +2922,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 36000000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 36000000
                   }
                 }
               }
@@ -2825,8 +2944,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 10000
                   }
                 }
               }
@@ -2846,8 +2967,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 10000
                   }
                 }
               }
@@ -2867,8 +2990,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 10
                   }
                 }
               }
@@ -2888,8 +3012,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 10
                   }
                 }
               }
@@ -2909,8 +3034,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 600000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 600000
                   }
                 }
               }
@@ -2930,8 +3056,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 600000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 600000
                   }
                 }
               }
@@ -2951,7 +3078,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 10
                   }
                 }
@@ -2972,7 +3099,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 10
                   }
                 }
@@ -2993,8 +3120,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 10000
                   }
                 }
               }
@@ -3014,8 +3142,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 10000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 10000
                   }
                 }
               }
@@ -3035,8 +3164,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 6048000000000
+                  "intervalDayTime": {
+                    "days": 70,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -3056,8 +3186,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 6048000000000
+                  "intervalDayTime": {
+                    "days": 70,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -3077,7 +3208,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 120
                   }
                 }
@@ -3098,7 +3229,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 120
                   }
                 }
@@ -3119,7 +3250,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 123
                   }
                 }
@@ -3140,8 +3271,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 13123456
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 13123456000
                   }
                 }
               }
@@ -3161,8 +3294,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 13123456
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 13123456000
                   }
                 }
               }
@@ -3182,8 +3317,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 1814400000000
+                  "intervalDayTime": {
+                    "days": 21,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -3203,8 +3339,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 1814400000000
+                  "intervalDayTime": {
+                    "days": 21,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -3224,8 +3361,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 75600000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 75600000
                   }
                 }
               }
@@ -3245,8 +3383,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 75600000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 75600000
                   }
                 }
               }
@@ -3266,8 +3405,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 21000
                   }
                 }
               }
@@ -3287,8 +3428,10 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21
+                  "intervalMonthDayNano": {
+                    "months": 0,
+                    "days": 0,
+                    "nanoseconds": 21000
                   }
                 }
               }
@@ -3308,8 +3451,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 21
                   }
                 }
               }
@@ -3329,8 +3473,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 21
                   }
                 }
               }
@@ -3350,8 +3495,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 1260000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 1260000
                   }
                 }
               }
@@ -3371,8 +3517,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 1260000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 1260000
                   }
                 }
               }
@@ -3392,7 +3539,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 21
                   }
                 }
@@ -3413,7 +3560,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 21
                   }
                 }
@@ -3434,8 +3581,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 21000
                   }
                 }
               }
@@ -3455,8 +3603,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 21000000
+                  "intervalDayTime": {
+                    "days": 0,
+                    "milliseconds": 21000
                   }
                 }
               }
@@ -3476,8 +3625,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 12700800000000
+                  "intervalDayTime": {
+                    "days": 147,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -3497,8 +3647,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 12700800000000
+                  "intervalDayTime": {
+                    "days": 147,
+                    "milliseconds": 0
                   }
                 }
               }
@@ -3518,7 +3669,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 252
                   }
                 }
@@ -3539,7 +3690,7 @@
             "arguments": [
               {
                 "literal": {
-                  "yearMonthInterval": {
+                  "intervalYearMonth": {
                     "months": 252
                   }
                 }
@@ -3560,10 +3711,10 @@
             "arguments": [
               {
                 "literal": {
-                  "calendarInterval": {
+                  "intervalMonthDayNano": {
                     "months": 3,
                     "days": 4,
-                    "microseconds": 22001000
+                    "nanoseconds": 22001000000
                   }
                 }
               }
@@ -3583,8 +3734,9 @@
             "arguments": [
               {
                 "literal": {
-                  "dayTimeInterval": {
-                    "microseconds": 698601000000
+                  "intervalDayTime": {
+                    "days": 8,
+                    "milliseconds": 7401000
                   }
                 }
               }
@@ -3600,8 +3752,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 93784005006
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 1,
+              "nanoseconds": 7384005006000
             }
           }
         }
@@ -3612,7 +3766,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 14
             }
           }
@@ -3625,10 +3779,10 @@
       "output": {
         "success": {
           "literal": {
-            "calendarInterval": {
+            "intervalMonthDayNano": {
               "months": 12,
               "days": 0,
-              "microseconds": 2000000
+              "nanoseconds": 2000000000
             }
           }
         }
@@ -3639,10 +3793,10 @@
       "output": {
         "success": {
           "literal": {
-            "calendarInterval": {
+            "intervalMonthDayNano": {
               "months": 3,
               "days": 0,
-              "microseconds": 3600000000
+              "nanoseconds": 3600000000000
             }
           }
         }
@@ -3653,8 +3807,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 93784005006
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 1,
+              "nanoseconds": 7384005006000
             }
           }
         }
@@ -3665,7 +3821,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 14
             }
           }
@@ -3677,10 +3833,10 @@
       "output": {
         "success": {
           "literal": {
-            "calendarInterval": {
+            "intervalMonthDayNano": {
               "months": 3,
               "days": 0,
-              "microseconds": 3600000000
+              "nanoseconds": 3600000000000
             }
           }
         }
@@ -3712,7 +3868,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -14
             }
           }
@@ -3724,8 +3880,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 86401000000
+            "intervalDayTime": {
+              "days": 1,
+              "milliseconds": 1000
             }
           }
         }
@@ -3736,8 +3893,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -86400000000
+            "intervalDayTime": {
+              "days": -1,
+              "milliseconds": 0
             }
           }
         }
@@ -3748,7 +3906,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -1476
             }
           }
@@ -3760,8 +3918,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -69497123456
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": -69497123456000
             }
           }
         }
@@ -3772,7 +3932,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -27
             }
           }
@@ -3784,8 +3944,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -604800000000
+            "intervalDayTime": {
+              "days": -7,
+              "milliseconds": 0
             }
           }
         }
@@ -3796,8 +3957,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -604800000000
+            "intervalDayTime": {
+              "days": -7,
+              "milliseconds": 0
             }
           }
         }
@@ -3808,8 +3970,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -25200000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -25200000
             }
           }
         }
@@ -3820,8 +3983,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -25200000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -25200000
             }
           }
         }
@@ -3832,8 +3996,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": -7000
             }
           }
         }
@@ -3844,8 +4010,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": -7000
             }
           }
         }
@@ -3856,8 +4024,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -7
             }
           }
         }
@@ -3868,8 +4037,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -7
             }
           }
         }
@@ -3880,8 +4050,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -420000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -420000
             }
           }
         }
@@ -3892,8 +4063,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -420000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -420000
             }
           }
         }
@@ -3904,7 +4076,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -7
             }
           }
@@ -3916,7 +4088,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -7
             }
           }
@@ -3928,8 +4100,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -7000
             }
           }
         }
@@ -3940,8 +4113,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -7000
             }
           }
         }
@@ -3952,8 +4126,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -4233600000000
+            "intervalDayTime": {
+              "days": -49,
+              "milliseconds": 0
             }
           }
         }
@@ -3964,8 +4139,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -4233600000000
+            "intervalDayTime": {
+              "days": -49,
+              "milliseconds": 0
             }
           }
         }
@@ -3976,7 +4152,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -84
             }
           }
@@ -3988,7 +4164,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -84
             }
           }
@@ -4000,8 +4176,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -8594553123456
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": -99,
+              "nanoseconds": -40953123456000
             }
           }
         }
@@ -4012,8 +4190,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4024,8 +4203,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4036,8 +4216,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4048,8 +4229,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4060,8 +4242,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4072,8 +4255,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4084,8 +4268,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4096,8 +4281,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4108,8 +4294,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4120,8 +4307,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4132,7 +4320,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 0
             }
           }
@@ -4144,7 +4332,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 0
             }
           }
@@ -4156,8 +4344,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4168,8 +4357,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4180,8 +4370,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4192,8 +4383,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4204,7 +4396,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 0
             }
           }
@@ -4216,7 +4408,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 0
             }
           }
@@ -4228,8 +4420,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -4240,8 +4433,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 1000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 1000
             }
           }
         }
@@ -4252,8 +4446,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 86400000000
+            "intervalDayTime": {
+              "days": 1,
+              "milliseconds": 0
             }
           }
         }
@@ -4264,8 +4459,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 86401000000
+            "intervalDayTime": {
+              "days": 1,
+              "milliseconds": 1000
             }
           }
         }
@@ -4276,10 +4472,10 @@
       "output": {
         "success": {
           "literal": {
-            "calendarInterval": {
+            "intervalMonthDayNano": {
               "months": 15,
               "days": 16,
-              "microseconds": 3782100200
+              "nanoseconds": 3782100200000
             }
           }
         }
@@ -4290,8 +4486,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 896887123456
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 10,
+              "nanoseconds": 32887123456000
             }
           }
         }
@@ -4302,8 +4500,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 864000000000
+            "intervalDayTime": {
+              "days": 10,
+              "milliseconds": 0
             }
           }
         }
@@ -4314,8 +4513,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 864000000000
+            "intervalDayTime": {
+              "days": 10,
+              "milliseconds": 0
             }
           }
         }
@@ -4326,8 +4526,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 36000000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 36000000
             }
           }
         }
@@ -4338,8 +4539,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 36000000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 36000000
             }
           }
         }
@@ -4350,8 +4552,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 10000
             }
           }
         }
@@ -4362,8 +4566,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 10000
             }
           }
         }
@@ -4374,8 +4580,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 10
             }
           }
         }
@@ -4386,8 +4593,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 10
             }
           }
         }
@@ -4398,8 +4606,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 600000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 600000
             }
           }
         }
@@ -4410,8 +4619,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 600000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 600000
             }
           }
         }
@@ -4422,7 +4632,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 10
             }
           }
@@ -4441,7 +4651,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 10
             }
           }
@@ -4453,8 +4663,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 10000
             }
           }
         }
@@ -4465,8 +4676,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 10000
             }
           }
         }
@@ -4477,8 +4689,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 6048000000000
+            "intervalDayTime": {
+              "days": 70,
+              "milliseconds": 0
             }
           }
         }
@@ -4489,8 +4702,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 6048000000000
+            "intervalDayTime": {
+              "days": 70,
+              "milliseconds": 0
             }
           }
         }
@@ -4501,7 +4715,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 120
             }
           }
@@ -4513,7 +4727,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 120
             }
           }
@@ -4525,8 +4739,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 40953123456
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 40953123456000
             }
           }
         }
@@ -4537,7 +4753,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 1486
             }
           }
@@ -4549,8 +4765,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 1814400000000
+            "intervalDayTime": {
+              "days": 21,
+              "milliseconds": 0
             }
           }
         }
@@ -4561,8 +4778,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 1814400000000
+            "intervalDayTime": {
+              "days": 21,
+              "milliseconds": 0
             }
           }
         }
@@ -4573,8 +4791,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 75600000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 75600000
             }
           }
         }
@@ -4585,8 +4804,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 75600000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 75600000
             }
           }
         }
@@ -4597,8 +4817,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 21000
             }
           }
         }
@@ -4609,8 +4831,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 21000
             }
           }
         }
@@ -4621,8 +4845,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 21
             }
           }
         }
@@ -4633,8 +4858,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 21
             }
           }
         }
@@ -4645,8 +4871,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 1260000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 1260000
             }
           }
         }
@@ -4657,8 +4884,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 1260000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 1260000
             }
           }
         }
@@ -4669,7 +4897,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 21
             }
           }
@@ -4681,7 +4909,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 21
             }
           }
@@ -4693,8 +4921,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 21000
             }
           }
         }
@@ -4705,8 +4934,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 21000
             }
           }
         }
@@ -4717,8 +4947,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 12700800000000
+            "intervalDayTime": {
+              "days": 147,
+              "milliseconds": 0
             }
           }
         }
@@ -4729,8 +4960,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 12700800000000
+            "intervalDayTime": {
+              "days": 147,
+              "milliseconds": 0
             }
           }
         }
@@ -4741,7 +4973,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 252
             }
           }
@@ -4753,7 +4985,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 252
             }
           }
@@ -4765,7 +4997,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 5952
             }
           }
@@ -4777,8 +5009,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 8594553123456
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 99,
+              "nanoseconds": 40953123456000
             }
           }
         }
@@ -4789,8 +5023,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 32887123456
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 32887123456000
             }
           }
         }
@@ -4801,8 +5037,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -13123456
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": -13123456000
             }
           }
         }
@@ -4813,8 +5051,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -604800000000
+            "intervalDayTime": {
+              "days": -7,
+              "milliseconds": 0
             }
           }
         }
@@ -4825,8 +5064,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -604800000000
+            "intervalDayTime": {
+              "days": -7,
+              "milliseconds": 0
             }
           }
         }
@@ -4837,8 +5077,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -25200000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -25200000
             }
           }
         }
@@ -4849,8 +5090,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -25200000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -25200000
             }
           }
         }
@@ -4861,8 +5103,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": -7000
             }
           }
         }
@@ -4873,8 +5117,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": -7000
             }
           }
         }
@@ -4885,8 +5131,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -7
             }
           }
         }
@@ -4897,8 +5144,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -7
             }
           }
         }
@@ -4909,8 +5157,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -420000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -420000
             }
           }
         }
@@ -4921,8 +5170,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -420000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -420000
             }
           }
         }
@@ -4933,7 +5183,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -7
             }
           }
@@ -4945,7 +5195,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -7
             }
           }
@@ -4957,8 +5207,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -7000
             }
           }
         }
@@ -4969,8 +5220,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -7000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": -7000
             }
           }
         }
@@ -4981,8 +5233,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -4233600000000
+            "intervalDayTime": {
+              "days": -49,
+              "milliseconds": 0
             }
           }
         }
@@ -4993,8 +5246,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": -4233600000000
+            "intervalDayTime": {
+              "days": -49,
+              "milliseconds": 0
             }
           }
         }
@@ -5005,7 +5259,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -84
             }
           }
@@ -5017,7 +5271,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": -84
             }
           }
@@ -5029,8 +5283,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5041,8 +5296,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5053,8 +5309,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5065,8 +5322,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5077,8 +5335,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5089,8 +5348,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5101,8 +5361,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5113,8 +5374,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5125,8 +5387,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5137,8 +5400,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5149,7 +5413,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 0
             }
           }
@@ -5161,7 +5425,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 0
             }
           }
@@ -5173,8 +5437,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5185,8 +5450,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5197,8 +5463,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5209,8 +5476,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 0
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 0
             }
           }
         }
@@ -5221,7 +5489,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 0
             }
           }
@@ -5233,7 +5501,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 0
             }
           }
@@ -5245,8 +5513,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 1001000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 1001
             }
           }
         }
@@ -5257,8 +5526,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 864000000000
+            "intervalDayTime": {
+              "days": 10,
+              "milliseconds": 0
             }
           }
         }
@@ -5269,8 +5539,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 864000000000
+            "intervalDayTime": {
+              "days": 10,
+              "milliseconds": 0
             }
           }
         }
@@ -5281,8 +5552,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 36000000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 36000000
             }
           }
         }
@@ -5293,8 +5565,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 36000000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 36000000
             }
           }
         }
@@ -5305,8 +5578,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 10000
             }
           }
         }
@@ -5317,8 +5592,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 10000
             }
           }
         }
@@ -5329,8 +5606,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 10
             }
           }
         }
@@ -5341,8 +5619,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 10
             }
           }
         }
@@ -5353,8 +5632,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 600000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 600000
             }
           }
         }
@@ -5365,8 +5645,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 600000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 600000
             }
           }
         }
@@ -5377,7 +5658,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 10
             }
           }
@@ -5389,7 +5670,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 10
             }
           }
@@ -5408,8 +5689,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 10000
             }
           }
         }
@@ -5420,8 +5702,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 10000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 10000
             }
           }
         }
@@ -5432,8 +5715,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 6048000000000
+            "intervalDayTime": {
+              "days": 70,
+              "milliseconds": 0
             }
           }
         }
@@ -5444,8 +5728,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 6048000000000
+            "intervalDayTime": {
+              "days": 70,
+              "milliseconds": 0
             }
           }
         }
@@ -5456,7 +5741,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 120
             }
           }
@@ -5468,7 +5753,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 120
             }
           }
@@ -5480,7 +5765,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 123
             }
           }
@@ -5492,8 +5777,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 13123456
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 13123456000
             }
           }
         }
@@ -5504,8 +5791,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 13123456
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 13123456000
             }
           }
         }
@@ -5516,8 +5805,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 1814400000000
+            "intervalDayTime": {
+              "days": 21,
+              "milliseconds": 0
             }
           }
         }
@@ -5528,8 +5818,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 1814400000000
+            "intervalDayTime": {
+              "days": 21,
+              "milliseconds": 0
             }
           }
         }
@@ -5540,8 +5831,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 75600000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 75600000
             }
           }
         }
@@ -5552,8 +5844,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 75600000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 75600000
             }
           }
         }
@@ -5564,8 +5857,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 21000
             }
           }
         }
@@ -5576,8 +5871,10 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21
+            "intervalMonthDayNano": {
+              "months": 0,
+              "days": 0,
+              "nanoseconds": 21000
             }
           }
         }
@@ -5588,8 +5885,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 21
             }
           }
         }
@@ -5600,8 +5898,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 21
             }
           }
         }
@@ -5612,8 +5911,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 1260000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 1260000
             }
           }
         }
@@ -5624,8 +5924,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 1260000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 1260000
             }
           }
         }
@@ -5636,7 +5937,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 21
             }
           }
@@ -5648,7 +5949,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 21
             }
           }
@@ -5660,8 +5961,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 21000
             }
           }
         }
@@ -5672,8 +5974,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 21000000
+            "intervalDayTime": {
+              "days": 0,
+              "milliseconds": 21000
             }
           }
         }
@@ -5684,8 +5987,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 12700800000000
+            "intervalDayTime": {
+              "days": 147,
+              "milliseconds": 0
             }
           }
         }
@@ -5696,8 +6000,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 12700800000000
+            "intervalDayTime": {
+              "days": 147,
+              "milliseconds": 0
             }
           }
         }
@@ -5708,7 +6013,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 252
             }
           }
@@ -5720,7 +6025,7 @@
       "output": {
         "success": {
           "literal": {
-            "yearMonthInterval": {
+            "intervalYearMonth": {
               "months": 252
             }
           }
@@ -5732,10 +6037,10 @@
       "output": {
         "success": {
           "literal": {
-            "calendarInterval": {
+            "intervalMonthDayNano": {
               "months": 3,
               "days": 4,
-              "microseconds": 22001000
+              "nanoseconds": 22001000000
             }
           }
         }
@@ -5746,8 +6051,9 @@
       "output": {
         "success": {
           "literal": {
-            "dayTimeInterval": {
-              "microseconds": 698601000000
+            "intervalDayTime": {
+              "days": 8,
+              "milliseconds": 7401000
             }
           }
         }
