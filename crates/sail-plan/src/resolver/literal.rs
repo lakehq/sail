@@ -1,4 +1,4 @@
-use std::ops::Sub;
+use std::ops::{Add, Sub};
 use std::sync::Arc;
 
 use chrono::{Offset, TimeDelta, TimeZone, Utc};
@@ -48,8 +48,7 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let rebase =
-                    Self::should_rebase_timestamp(&timezone_info, &self.config.timestamp_type)?;
+                let rebase = should_rebase_timestamp(&timezone_info, &self.config.timestamp_type);
                 let adjusted_seconds = if rebase {
                     Self::rebase_timestamp_seconds(seconds, &timezone)?
                 } else {
@@ -66,8 +65,7 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let rebase =
-                    Self::should_rebase_timestamp(&timezone_info, &self.config.timestamp_type)?;
+                let rebase = should_rebase_timestamp(&timezone_info, &self.config.timestamp_type);
                 let adjusted_milliseconds = if rebase {
                     Self::rebase_timestamp_milliseconds(milliseconds, &timezone)?
                 } else {
@@ -82,13 +80,15 @@ impl PlanResolver<'_> {
                 microseconds,
                 timezone_info,
             } => {
+                println!(
+                    "CHECK HERE Literal::TimestampMicrosecond: {microseconds:?}, {timezone_info:?}"
+                );
                 let timezone = Self::resolve_timezone(
                     &timezone_info,
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let rebase =
-                    Self::should_rebase_timestamp(&timezone_info, &self.config.timestamp_type)?;
+                let rebase = should_rebase_timestamp(&timezone_info, &self.config.timestamp_type);
                 let adjusted_microseconds = if rebase {
                     Self::rebase_timestamp_microseconds(microseconds, &timezone)?
                 } else {
@@ -108,8 +108,7 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let rebase =
-                    Self::should_rebase_timestamp(&timezone_info, &self.config.timestamp_type)?;
+                let rebase = should_rebase_timestamp(&timezone_info, &self.config.timestamp_type);
                 let adjusted_nanoseconds = if rebase {
                     Self::rebase_timestamp_nanoseconds(nanoseconds, &timezone)?
                 } else {
@@ -409,7 +408,7 @@ impl PlanResolver<'_> {
                 .fix()
                 .local_minus_utc() as i64;
             let adjusted_date_time =
-                utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+                utc_dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
                     PlanError::invalid(format!(
                         "Invalid offset seconds for Literal TimestampSecond: {offset_seconds}"
                     ))
@@ -443,7 +442,7 @@ impl PlanResolver<'_> {
                     .fix()
                     .local_minus_utc() as i64;
                 let adjusted_date_time =
-                    utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+                    utc_dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
                         PlanError::invalid(format!(
                         "Invalid offset seconds for Literal TimestampMillisecond: {offset_seconds}"
                     ))
@@ -459,6 +458,7 @@ impl PlanResolver<'_> {
         microseconds: Option<i64>,
         timezone: &Option<Arc<str>>,
     ) -> PlanResult<Option<i64>> {
+        // return Ok(microseconds);
         let adjusted_microseconds =
             if let (Some(microseconds), Some(timezone)) = (microseconds, &timezone) {
                 let tz: Tz = timezone.parse().map_err(|e| {
@@ -475,9 +475,9 @@ impl PlanResolver<'_> {
                 let offset_seconds: i64 = tz
                     .offset_from_utc_datetime(&utc_dt.naive_utc())
                     .fix()
-                    .local_minus_utc() as i64;
+                    .utc_minus_local() as i64;
                 let adjusted_date_time =
-                    utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+                    utc_dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
                         PlanError::invalid(format!(
                         "Invalid offset seconds for Literal TimestampMicrosecond: {offset_seconds}"
                     ))
@@ -504,7 +504,7 @@ impl PlanResolver<'_> {
                     .fix()
                     .local_minus_utc() as i64;
                 let adjusted_date_time =
-                    utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+                    utc_dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
                         PlanError::invalid(format!(
                         "Invalid offset seconds for Literal TimestampNanosecond: {offset_seconds}"
                     ))
@@ -519,20 +519,21 @@ impl PlanResolver<'_> {
             };
         Ok(adjusted_nanoseconds)
     }
-    pub fn should_rebase_timestamp(
-        timezone_info: &spec::TimeZoneInfo,
-        config_timestamp_type: &TimestampType,
-    ) -> PlanResult<bool> {
-        match timezone_info {
-            spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
-                TimestampType::TimestampLtz => Ok(true),
-                TimestampType::TimestampNtz => Ok(false),
-            },
-            spec::TimeZoneInfo::LocalTimeZone => Ok(false),
-            spec::TimeZoneInfo::NoTimeZone => Ok(false),
-            spec::TimeZoneInfo::TimeZone {
-                timezone: _timezone,
-            } => Ok(false),
-        }
+}
+
+fn should_rebase_timestamp(
+    timezone_info: &spec::TimeZoneInfo,
+    config_timestamp_type: &TimestampType,
+) -> bool {
+    match timezone_info {
+        spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
+            TimestampType::TimestampLtz => true,
+            TimestampType::TimestampNtz => false,
+        },
+        spec::TimeZoneInfo::LocalTimeZone => false,
+        spec::TimeZoneInfo::NoTimeZone => false,
+        spec::TimeZoneInfo::TimeZone {
+            timezone: _timezone,
+        } => false,
     }
 }

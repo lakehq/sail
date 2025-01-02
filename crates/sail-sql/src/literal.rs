@@ -1,7 +1,5 @@
-use std::fmt::Debug;
-use std::ops::Neg;
-use std::str::FromStr;
-
+use chrono::{TimeDelta, Utc};
+use chrono_tz::Tz;
 use datafusion::arrow::datatypes::{
     i256, DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION,
     DECIMAL256_MAX_PRECISION as ARROW_DECIMAL256_MAX_PRECISION,
@@ -12,6 +10,9 @@ use sail_common::spec;
 use sqlparser::ast;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
+use std::fmt::Debug;
+use std::ops::{Add, Neg};
+use std::str::FromStr;
 use {chrono, chrono_tz};
 
 use crate::error::{SqlError, SqlResult};
@@ -180,11 +181,11 @@ impl TryFrom<LiteralValue<chrono::NaiveDate>> for spec::Literal {
     }
 }
 
-impl TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> for spec::Literal {
+impl TryFrom<LiteralValue<(chrono::DateTime<Utc>, TimeZoneVariant)>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(
-        literal: LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>,
+        literal: LiteralValue<(chrono::DateTime<Utc>, TimeZoneVariant)>,
     ) -> SqlResult<spec::Literal> {
         let (dt, ref tz) = literal.0;
         let (delta, timezone_info) = match tz {
@@ -201,13 +202,13 @@ impl TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> for spec::L
                 },
             ),
             TimeZoneVariant::Utc => (
-                dt - chrono::NaiveDateTime::UNIX_EPOCH,
+                dt - chrono::DateTime::UNIX_EPOCH,
                 spec::TimeZoneInfo::TimeZone {
                     timezone: Some("UTC".into()),
                 },
             ),
             TimeZoneVariant::None => (
-                dt - chrono::NaiveDateTime::UNIX_EPOCH,
+                dt - chrono::DateTime::UNIX_EPOCH,
                 spec::TimeZoneInfo::SQLConfigured,
             ),
         };
@@ -676,27 +677,43 @@ pub fn parse_date_string(s: &str) -> SqlResult<spec::Literal> {
 }
 
 pub fn parse_timestamp_string(s: &str) -> SqlResult<spec::Literal> {
+    println!("CHECK HERE STRING: {s:?}");
     let error = |msg: &str| SqlError::invalid(format!("{msg} error when parsing timestamp: {s}"));
     let captures = TIMESTAMP_REGEX
         .captures(s)
         .ok_or_else(|| error("Invalid format"))?;
+    println!("CHECK HERE captures: {captures:?}");
     let year = extract_match(&captures, "year", || error("Invalid year"))?
         .ok_or_else(|| error("Missing year"))?;
+    println!("CHECK HERE year: {year:?}");
     let month = extract_match(&captures, "month", || error("Invalid month"))?.unwrap_or(1);
+    println!("CHECK HERE month: {month:?}");
     let day = extract_match(&captures, "day", || error("Invalid day"))?.unwrap_or(1);
+    println!("CHECK HERE day: {day:?}");
     let hour = extract_match(&captures, "hour", || error("Invalid hour"))?.unwrap_or(0);
+    println!("CHECK HERE hour: {hour:?}");
     let minute = extract_match(&captures, "minute", || error("Invalid minute"))?.unwrap_or(0);
+    println!("CHECK HERE minute: {minute:?}");
     let second = extract_match(&captures, "second", || error("Invalid second"))?.unwrap_or(0);
+    println!("CHECK HERE second: {second:?}");
     let fraction =
         extract_second_fraction_match(&captures, "fraction", 6, || error("Invalid fraction"))?
             .unwrap_or(0);
+    println!("CHECK HERE fraction: {fraction:?}");
     let tz = captures.name("tz").map(|tz| tz.as_str());
+    println!("CHECK HERE tz: {tz:?}");
     let tz = parse_timezone_string(tz)?;
+    println!("CHECK HERE timezone variant: {tz:?}");
     let dt = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .and_then(|d| d.and_hms_opt(hour, minute, second))
         .and_then(|d| d.checked_add_signed(chrono::Duration::microseconds(fraction)))
         .ok_or_else(|| error("Invalid date/time values"))?;
-    spec::Literal::try_from(LiteralValue((dt, tz)))
+    println!("CHECK HERE naive datetime: {dt:?}");
+    let dt = chrono::DateTime::from_naive_utc_and_offset(dt, Utc);
+    println!("CHECK HERE datetime utc: {dt:?}");
+    let result = spec::Literal::try_from(LiteralValue((dt, tz)));
+    println!("CHECK HERE result: {result:?}");
+    result
 }
 
 #[derive(Debug)]
@@ -704,24 +721,26 @@ pub(crate) enum TimeZoneVariant {
     None,
     Utc,
     FixedOffset(chrono::FixedOffset),
-    Named(chrono_tz::Tz),
+    Named(Tz),
 }
 
 impl TimeZoneVariant {
     fn time_delta_from_unix_epoch<Tz, O>(
-        dt: &chrono::NaiveDateTime,
+        dt: &chrono::DateTime<Utc>,
         tz: &Tz,
-    ) -> SqlResult<chrono::TimeDelta>
+    ) -> SqlResult<TimeDelta>
     where
         Tz: chrono::TimeZone<Offset = O> + Debug,
         O: chrono::Offset,
     {
-        let local_dt = tz
-            .from_local_datetime(dt)
-            .earliest()
-            .ok_or_else(|| SqlError::invalid(format!("datetime: {dt:?} {tz:?}")))?;
-        let utc_dt = local_dt.with_timezone(&chrono::Utc);
-        Ok(utc_dt - chrono::DateTime::UNIX_EPOCH)
+        let offset_seconds = tz
+            .offset_from_utc_datetime(&dt.naive_utc())
+            .fix()
+            .local_minus_utc() as i64;
+        let adjusted_dt = dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+            SqlError::invalid("time_delta_from_unix_epoch: Invalid offset seconds")
+        })?);
+        Ok(adjusted_dt - chrono::DateTime::UNIX_EPOCH)
     }
 }
 
@@ -744,7 +763,7 @@ fn parse_timezone_string(tz: Option<&str>) -> SqlResult<TimeZoneVariant> {
                 let offset = chrono::FixedOffset::east_opt(n).ok_or_else(error)?;
                 Ok(TimeZoneVariant::FixedOffset(offset))
             } else {
-                let tz = tz.parse::<chrono_tz::Tz>().map_err(|_| error())?;
+                let tz = tz.parse::<Tz>().map_err(|_| error())?;
                 Ok(TimeZoneVariant::Named(tz))
             }
         }
@@ -788,15 +807,15 @@ fn parse_interval_day_time_string(
     let seconds: i64 = extract_match(&captures, "second", error)?.unwrap_or(0);
     let microseconds: i64 =
         extract_second_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
-    let delta = chrono::TimeDelta::try_days(days)
+    let delta = TimeDelta::try_days(days)
         .ok_or_else(error)?
-        .checked_add(&chrono::TimeDelta::try_hours(hours).ok_or_else(error)?)
+        .checked_add(&TimeDelta::try_hours(hours).ok_or_else(error)?)
         .ok_or_else(error)?
-        .checked_add(&chrono::TimeDelta::try_minutes(minutes).ok_or_else(error)?)
+        .checked_add(&TimeDelta::try_minutes(minutes).ok_or_else(error)?)
         .ok_or_else(error)?
-        .checked_add(&chrono::TimeDelta::try_seconds(seconds).ok_or_else(error)?)
+        .checked_add(&TimeDelta::try_seconds(seconds).ok_or_else(error)?)
         .ok_or_else(error)?
-        .checked_add(&chrono::TimeDelta::microseconds(microseconds))
+        .checked_add(&TimeDelta::microseconds(microseconds))
         .ok_or_else(error)?;
     let microseconds = delta.num_microseconds().ok_or_else(error)?;
     let n = if negated {
@@ -815,7 +834,7 @@ fn parse_multi_unit_interval(
 
     let error = || SqlError::invalid("multi-unit interval");
     let mut months = 0i32;
-    let mut delta = chrono::TimeDelta::zero();
+    let mut delta = TimeDelta::zero();
     for (expr, field) in values {
         match field {
             DateTimeField::Year | DateTimeField::Years => {
@@ -829,29 +848,29 @@ fn parse_multi_unit_interval(
             }
             DateTimeField::Week(None) | DateTimeField::Weeks => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let weeks = chrono::TimeDelta::try_weeks(value).ok_or_else(error)?;
+                let weeks = TimeDelta::try_weeks(value).ok_or_else(error)?;
                 delta = delta.checked_add(&weeks).ok_or_else(error)?;
             }
             DateTimeField::Day | DateTimeField::Days => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let days = chrono::TimeDelta::try_days(value).ok_or_else(error)?;
+                let days = TimeDelta::try_days(value).ok_or_else(error)?;
                 delta = delta.checked_add(&days).ok_or_else(error)?;
             }
             DateTimeField::Hour | DateTimeField::Hours => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let hours = chrono::TimeDelta::try_hours(value).ok_or_else(error)?;
+                let hours = TimeDelta::try_hours(value).ok_or_else(error)?;
                 delta = delta.checked_add(&hours).ok_or_else(error)?;
             }
             DateTimeField::Minute | DateTimeField::Minutes => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let minutes = chrono::TimeDelta::try_minutes(value).ok_or_else(error)?;
+                let minutes = TimeDelta::try_minutes(value).ok_or_else(error)?;
                 delta = delta.checked_add(&minutes).ok_or_else(error)?;
             }
             DateTimeField::Second | DateTimeField::Seconds => {
                 let Signed(value, negated) =
                     LiteralValue::<Signed<DecimalSecond>>::try_from(expr)?.0;
-                let seconds = chrono::TimeDelta::seconds(value.seconds as i64);
-                let microseconds = chrono::TimeDelta::microseconds(value.microseconds as i64);
+                let seconds = TimeDelta::seconds(value.seconds as i64);
+                let microseconds = TimeDelta::microseconds(value.microseconds as i64);
                 if negated {
                     delta = delta.checked_sub(&seconds).ok_or_else(error)?;
                     delta = delta.checked_sub(&microseconds).ok_or_else(error)?;
@@ -862,18 +881,18 @@ fn parse_multi_unit_interval(
             }
             DateTimeField::Millisecond | DateTimeField::Milliseconds => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let milliseconds = chrono::TimeDelta::try_milliseconds(value).ok_or_else(error)?;
+                let milliseconds = TimeDelta::try_milliseconds(value).ok_or_else(error)?;
                 delta = delta.checked_add(&milliseconds).ok_or_else(error)?;
             }
             DateTimeField::Microsecond | DateTimeField::Microseconds => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let microseconds = chrono::TimeDelta::microseconds(value);
+                let microseconds = TimeDelta::microseconds(value);
                 delta = delta.checked_add(&microseconds).ok_or_else(error)?;
             }
             _ => return Err(error()),
         }
     }
-    match (months != 0, delta != chrono::TimeDelta::zero()) {
+    match (months != 0, delta != TimeDelta::zero()) {
         (true, false) => {
             let n = if negated {
                 months.checked_mul(-1).ok_or_else(error)?
