@@ -90,7 +90,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             false => arg,
         };
 
-        let name = self.state.register_anonymous_field();
+        let name = self.state.register_field("");
         let out = match (data_type, with_position) {
             (ExplodeDataType::List, false) => vec![ident(&name).alias("col")],
             (ExplodeDataType::List, true) => {

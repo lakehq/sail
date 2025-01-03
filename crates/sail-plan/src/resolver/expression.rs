@@ -72,7 +72,10 @@ impl NamedExpr {
         match expr {
             expr::Expr::Column(column) => {
                 let name = state.get_field_name(column.name())?;
-                Ok(Self::new(vec![name.clone()], expr::Expr::Column(column)))
+                Ok(Self::new(
+                    vec![name.to_string()],
+                    expr::Expr::Column(column),
+                ))
             }
             _ => Err(PlanError::invalid(
                 "column expected to create named expression",
@@ -654,41 +657,24 @@ impl PlanResolver<'_> {
         let last = name
             .last()
             .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;
-        let candidates = if let Some(plan_id) = plan_id {
-            let field = state.get_resolved_field_name_in_plan(plan_id, first)?;
-            schema
-                .qualified_fields_with_unqualified_name(field)
-                .iter()
-                .map(|(qualifier, field)| {
-                    (
-                        last.clone(),
-                        field.data_type().clone(),
-                        Column::new(qualifier.cloned(), field.name()),
-                    )
-                })
-                .collect::<Vec<_>>()
-        } else {
-            schema
-                .iter()
-                .filter_map(|(qualifier, field)| {
-                    if state
-                        .get_field_name(field.name())
-                        .is_ok_and(|f| f.eq_ignore_ascii_case(last))
-                        && (name.len() == 1
-                            || name.len() == 2
-                                && qualifier.is_some_and(|q| q.table().eq_ignore_ascii_case(first)))
-                    {
-                        Some((
-                            last.clone(),
-                            field.data_type().clone(),
-                            Column::new(qualifier.cloned(), field.name()),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-        };
+        let candidates = schema
+            .iter()
+            .filter(|(qualifier, field)| {
+                state
+                    .get_field(field.name())
+                    .is_ok_and(|info| info.matches(last, plan_id))
+                    && (name.len() == 1
+                        || name.len() == 2
+                            && qualifier.is_some_and(|q| q.table().eq_ignore_ascii_case(first)))
+            })
+            .map(|(qualifier, field)| {
+                (
+                    last.clone(),
+                    field.data_type().clone(),
+                    Column::new(qualifier.cloned(), field.name()),
+                )
+            })
+            .collect::<Vec<_>>();
         Ok(candidates)
     }
 

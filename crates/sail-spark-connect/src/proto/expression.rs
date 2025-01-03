@@ -35,12 +35,12 @@ impl TryFrom<Expression> for spec::Expr {
                 unparsed_identifier,
                 plan_id,
             }) => {
-                // TODO: Revisit heuristic for parsing object names.
-                let name = if unparsed_identifier.contains('.') {
-                    parse_object_name(unparsed_identifier.as_str())?
-                } else {
-                    spec::ObjectName::new_unqualified(unparsed_identifier.into())
-                };
+                // The unparsed identifier such as `a.b` is supposed to be parsed as nested
+                // object names. However, there may be raw identifier such as `array(1)` which
+                // cannot be parsed. Therefore, when parsing fails, we create an object name
+                // containing the single raw identifier.
+                let name = parse_object_name(unparsed_identifier.as_str())
+                    .unwrap_or_else(|_| spec::ObjectName::from(vec![unparsed_identifier]));
                 Ok(spec::Expr::UnresolvedAttribute { name, plan_id })
             }
             ExprType::UnresolvedFunction(UnresolvedFunction {

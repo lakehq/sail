@@ -29,7 +29,7 @@ impl PlanResolver<'_> {
         let columns: Vec<Column> = if columns.is_empty() {
             input.schema().columns()
         } else {
-            self.get_resolved_columns(
+            self.resolve_columns(
                 input.schema(),
                 columns.iter().map(|x| x.into()).collect(),
                 state,
@@ -196,46 +196,48 @@ impl PlanResolver<'_> {
             for column in &columns {
                 let column_name = column.name().to_string();
                 let stat_expr = match stat_type {
-                    "count" => Some(Expr::Column(self.get_resolved_column(
+                    "count" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("count_{}", column_name),
                         state,
                     )?)),
                     "mean" => self
-                        .maybe_get_resolved_column(
+                        .resolve_optional_column(
                             stats_plan.schema(),
                             &format!("mean_{}", column_name),
+                            None,
                             state,
                         )?
                         .map(Expr::Column),
                     "stddev" => self
-                        .maybe_get_resolved_column(
+                        .resolve_optional_column(
                             stats_plan.schema(),
                             &format!("stddev_{}", column_name),
+                            None,
                             state,
                         )?
                         .map(Expr::Column),
-                    "min" => Some(Expr::Column(self.get_resolved_column(
+                    "min" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("min_{}", column_name),
                         state,
                     )?)),
-                    "25%" => Some(Expr::Column(self.get_resolved_column(
+                    "25%" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("25%_{}", column_name),
                         state,
                     )?)),
-                    "50%" => Some(Expr::Column(self.get_resolved_column(
+                    "50%" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("50%_{}", column_name),
                         state,
                     )?)),
-                    "75%" => Some(Expr::Column(self.get_resolved_column(
+                    "75%" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("75%_{}", column_name),
                         state,
                     )?)),
-                    "max" => Some(Expr::Column(self.get_resolved_column(
+                    "max" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("max_{}", column_name),
                         state,
@@ -270,8 +272,8 @@ impl PlanResolver<'_> {
         let left_column: &str = (&left_column).into();
         let right_column: &str = (&right_column).into();
         let cross_tab_column = state.register_field(format!("{left_column}_{right_column}"));
-        let left_column = self.get_resolved_column(input.schema(), left_column, state)?;
-        let right_column = self.get_resolved_column(input.schema(), right_column, state)?;
+        let left_column = self.resolve_one_column(input.schema(), left_column, state)?;
+        let right_column = self.resolve_one_column(input.schema(), right_column, state)?;
 
         let projected_plan = LogicalPlanBuilder::from(input.clone())
             .project(vec![Expr::Cast(expr::Cast {
