@@ -245,7 +245,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|col| {
                 Ok(NamedExpr::new(
-                    vec![state.get_field_name(col.name())?.clone()],
+                    vec![state.get_field_name(col.name())?.to_string()],
                     Expr::Column(col),
                 ))
             })

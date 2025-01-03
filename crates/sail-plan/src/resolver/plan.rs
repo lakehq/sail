@@ -1289,7 +1289,7 @@ impl PlanResolver<'_> {
                 .filter(|column| {
                     state
                         .get_field_name(column.name())
-                        .is_ok_and(|x| column_names.contains(x))
+                        .is_ok_and(|x| column_names.iter().any(|c| c == x))
                 })
                 .map(Expr::Column)
                 .collect();
@@ -1432,54 +1432,37 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
-        let mut excluded_names = vec![];
-        let mut excluded_fields = vec![];
-        for col in column_names {
-            excluded_names.push(col.into());
-        }
-        for col in columns {
-            if let spec::Expr::UnresolvedAttribute { name, plan_id } = col {
+        let excluded = columns
+            .into_iter()
+            .filter_map(|col| {
+                let spec::Expr::UnresolvedAttribute { name, plan_id } = col else {
+                    return Some(Err(PlanError::invalid("expecting column to drop")));
+                };
                 let name: Vec<String> = name.into();
-                if let Some(plan_id) = plan_id {
-                    let name = if name.len() > 1 {
-                        // In `crates/sail-spark-connect/src/proto/expression`,
-                        // unparsed identifiers with periods are split into multiple strings for `UnresolvedAttribute`.
-                        // Recombine them, as column names can contain periods.
-                        name.join(".")
-                    } else {
-                        name.one().map_err(|_| {
-                            PlanError::invalid("expecting a single column name to drop")
-                        })?
-                    };
-                    let field = state
-                        .get_resolved_field_name_in_plan(plan_id, &name)?
-                        .clone();
-                    excluded_fields.push(field)
-                } else {
-                    let name = name.last().ok_or_else(|| {
-                        PlanError::invalid("expecting at least one column name to drop")
-                    })?;
-                    // Ensure there is only one column name.
-                    // This applies only to columns given as expressions.
-                    let column = self.maybe_get_resolved_column(schema, name, state)?;
-                    if let Some(column) = column {
-                        excluded_fields.push(column.name().into());
-                    }
-                }
-            } else {
-                return Err(PlanError::invalid("expecting column name to drop"));
-            }
-        }
+                let Ok(name) = name.one() else {
+                    // Ignore nested names since they cannot match a column name.
+                    // This is not an error in Spark.
+                    return None;
+                };
+                // An error is returned when there are ambiguous columns.
+                self.resolve_optional_column(schema, &name, plan_id, state)
+                    .transpose()
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let excluded = excluded
+            .into_iter()
+            .chain(column_names.into_iter().flat_map(|name| {
+                let name: String = name.into();
+                // The excluded column names are allow to refer to ambiguous columns,
+                // so we just check the column name here.
+                self.resolve_column_candidates(schema, &name, None, state)
+                    .into_iter()
+            }))
+            .collect::<Vec<_>>();
         let expr: Vec<Expr> = schema
             .columns()
             .into_iter()
-            .filter(|column| {
-                let name = column.name().to_string();
-                !excluded_fields.contains(&name)
-                    && state
-                        .get_field_name(&name)
-                        .is_ok_and(|x| !excluded_names.contains(x))
-            })
+            .filter(|column| !excluded.contains(column))
             .map(Expr::Column)
             .collect();
         Ok(LogicalPlan::Projection(plan::Projection::try_new(
@@ -1999,7 +1982,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|col| {
                 Ok(NamedExpr {
-                    name: vec![state.get_field_name(&col.name)?.clone()],
+                    name: vec![state.get_field_name(&col.name)?.to_string()],
                     expr: Expr::Column(col),
                     metadata: vec![],
                 })
@@ -2909,7 +2892,7 @@ impl PlanResolver<'_> {
         let table_reference = self.resolve_table_reference(&table)?;
         let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
         let schema = self
-            .resolve_table_schema(&table_reference, &table_provider, &columns)
+            .resolve_table_schema(table_provider.schema(), &columns)
             .await?;
         let df_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_reference.clone(),
@@ -2967,7 +2950,7 @@ impl PlanResolver<'_> {
         let table_reference = self.resolve_table_reference(&table)?;
         let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
         let table_schema = self
-            .resolve_table_schema(&table_reference, &table_provider, &[])
+            .resolve_table_schema(table_provider.schema(), &[])
             .await?;
         let fields = table_schema
             .fields
@@ -3028,7 +3011,7 @@ impl PlanResolver<'_> {
         let table_reference = self.resolve_table_reference(&table)?;
         let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
         let table_schema = self
-            .resolve_table_schema(&table_reference, &table_provider, &[])
+            .resolve_table_schema(table_provider.schema(), &[])
             .await?;
         let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_reference.clone(),
@@ -3163,7 +3146,7 @@ impl PlanResolver<'_> {
                 .filter(|column| {
                     state
                         .get_field_name(column.name())
-                        .is_ok_and(|x| columns.contains(x))
+                        .is_ok_and(|x| columns.iter().any(|c| c == x))
                 })
                 .map(|c| col(c).is_not_null())
                 .collect::<Vec<Expr>>()
@@ -3288,9 +3271,8 @@ impl PlanResolver<'_> {
         if invalid.is_empty() {
             Ok(())
         } else {
-            let valid = state.get_fields();
             Err(PlanError::internal(format!(
-                "a plan resolver bug has produced invalid fields: {invalid:?}, valid fields: {valid:?}",
+                "a plan resolver bug has produced invalid fields: {invalid:?}",
             )))
         }
     }
@@ -3303,9 +3285,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<()> {
         if let Some(plan_id) = plan_id {
             for field in plan.schema().fields() {
-                let resolved = field.name().clone();
-                let name = state.get_field_name(&resolved)?.clone();
-                state.register_attribute(plan_id, name, resolved);
+                state.register_plan_id_for_field(field.name(), plan_id)?;
             }
         }
         Ok(())
@@ -3353,12 +3333,12 @@ impl PlanResolver<'_> {
         let covar_samp = Expr::AggregateFunction(expr::AggregateFunction {
             func: datafusion::functions_aggregate::covariance::covar_samp_udaf(),
             args: vec![
-                Expr::Column(self.get_resolved_column(
+                Expr::Column(self.resolve_one_column(
                     input.schema(),
                     (&left_column).into(),
                     state,
                 )?),
-                Expr::Column(self.get_resolved_column(
+                Expr::Column(self.resolve_one_column(
                     input.schema(),
                     (&right_column).into(),
                     state,
@@ -3392,12 +3372,12 @@ impl PlanResolver<'_> {
         let corr = Expr::AggregateFunction(expr::AggregateFunction {
             func: datafusion::functions_aggregate::correlation::corr_udaf(),
             args: vec![
-                Expr::Column(self.get_resolved_column(
+                Expr::Column(self.resolve_one_column(
                     input.schema(),
                     (&left_column).into(),
                     state,
                 )?),
-                Expr::Column(self.get_resolved_column(
+                Expr::Column(self.resolve_one_column(
                     input.schema(),
                     (&right_column).into(),
                     state,
