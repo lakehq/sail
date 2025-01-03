@@ -14,6 +14,7 @@ use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTable
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
+use datafusion::prelude::coalesce;
 use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
@@ -871,11 +872,6 @@ impl PlanResolver<'_> {
             // use inner join type to build the schema for cross join
             JoinType::Cross => (plan::JoinType::Inner, true),
         };
-        let join_schema = Arc::new(build_join_schema(
-            left.schema(),
-            right.schema(),
-            &join_type,
-        )?);
 
         if is_cross_join || (join_condition.is_none() && using_columns.is_empty()) {
             if join_condition.is_some() {
@@ -892,6 +888,11 @@ impl PlanResolver<'_> {
         // TODO: add more validation logic here and in the plan optimizer
         //  See `LogicalPlanBuilder` for details about such logic.
         if join_condition.is_some() && using_columns.is_empty() {
+            let join_schema = Arc::new(build_join_schema(
+                left.schema(),
+                right.schema(),
+                &join_type,
+            )?);
             let condition = match join_condition {
                 Some(condition) => Some(
                     self.resolve_expression(condition, &join_schema, state)
@@ -906,39 +907,49 @@ impl PlanResolver<'_> {
                 .build()?;
             Ok(plan)
         } else if join_condition.is_none() && !using_columns.is_empty() {
-            let left_names = state.get_field_names(left.schema().inner())?;
-            let right_names = state.get_field_names(right.schema().inner())?;
-            let on = using_columns
-                .into_iter()
+            let join_columns = using_columns
+                .iter()
                 .map(|name| {
-                    let name: &str = (&name).into();
-                    let left_idx = left_names
-                        .iter()
-                        .position(|left_name| left_name.eq_ignore_ascii_case(name))
-                        .ok_or_else(|| {
-                            PlanError::invalid(format!("left column not found: {name}"))
-                        })?;
-                    let right_idx = right_names
-                        .iter()
-                        .position(|right_name| right_name.eq_ignore_ascii_case(name))
-                        .ok_or_else(|| {
-                            PlanError::invalid(format!("right column not found: {name}"))
-                        })?;
-                    let left_column = Column::from(left.schema().qualified_field(left_idx));
-                    let right_column = Column::from(right.schema().qualified_field(right_idx));
-                    Ok((Expr::Column(left_column), Expr::Column(right_column)))
+                    let name: &str = name.into();
+                    let left_column = self.resolve_one_column(left.schema(), name, state)?;
+                    let right_column = self.resolve_one_column(right.schema(), name, state)?;
+                    Ok((left_column, right_column))
                 })
-                .collect::<PlanResult<Vec<(Expr, Expr)>>>()?;
-            Ok(LogicalPlan::Join(plan::Join {
-                left: Arc::new(left),
-                right: Arc::new(right),
-                on,
-                filter: None,
-                join_type,
-                join_constraint: plan::JoinConstraint::Using,
-                schema: join_schema,
-                null_equals_null: false,
-            }))
+                .collect::<PlanResult<Vec<(_, _)>>>()?;
+            let coalesced = join_columns
+                .iter()
+                .zip(using_columns)
+                .map(|((left, right), name)| {
+                    coalesce(vec![
+                        Expr::Column(left.clone()),
+                        Expr::Column(right.clone()),
+                    ])
+                    .alias(state.register_field(name))
+                })
+                .collect::<Vec<_>>();
+            let (left_columns, right_columns) =
+                join_columns.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
+
+            let plan = LogicalPlanBuilder::from(left)
+                .join_detailed(
+                    right,
+                    join_type,
+                    (left_columns.clone(), right_columns.clone()),
+                    None,
+                    false,
+                )?
+                .build()?;
+            let projections = coalesced.into_iter().chain(
+                plan.schema()
+                    .columns()
+                    .into_iter()
+                    .filter(|col| !left_columns.contains(col) && !right_columns.contains(col))
+                    .map(Expr::Column),
+            );
+            let plan = LogicalPlanBuilder::from(plan)
+                .project(projections)?
+                .build()?;
+            Ok(plan)
         } else {
             return Err(PlanError::invalid(
                 "expecting either join condition or using columns",
@@ -3608,15 +3619,16 @@ impl PlanResolver<'_> {
                         "one name expected for expression, got: {names}"
                     )));
                 };
-                if let Expr::Column(Column {
-                    name: column_name, ..
-                }) = &expr
-                {
-                    if state.get_field_name(column_name).ok() == Some(&name) {
-                        return Ok(expr);
-                    }
+                let plan_ids = if let Expr::Column(Column { name, .. }) = &expr {
+                    state.get_field(name).map_or(vec![], |info| info.plan_ids())
+                } else {
+                    vec![]
+                };
+                let field_id = state.register_field(name);
+                for plan_id in plan_ids {
+                    state.register_plan_id_for_field(&field_id, plan_id)?;
                 }
-                Ok(expr.alias(state.register_field(name)))
+                Ok(expr.alias(field_id))
             })
             .collect()
     }

@@ -21,6 +21,10 @@ impl FieldInfo {
                 None => true,
             }
     }
+
+    pub fn plan_ids(&self) -> Vec<i64> {
+        self.plan_ids.iter().copied().collect()
+    }
 }
 
 #[derive(Debug)]
