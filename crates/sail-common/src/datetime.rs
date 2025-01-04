@@ -5,6 +5,11 @@ use log::warn;
 use crate::error::{CommonError, CommonResult};
 
 pub fn get_local_datetime_offset() -> FixedOffset {
+    // CHECK HERE BEFORE MERGING IN
+    // There is a bug in the spark client. Commented out code should be the actual log,
+    // but spark client uses the current timezone offset to adjust the timestamp which does not account for DST
+    //  let local_datetime: DateTime<Local> = datetime.with_timezone(&Local);
+    //  let local_offset: FixedOffset = local_datetime.offset().fix();
     let local_datetime: DateTime<Local> = Local::now();
     local_datetime.offset().fix()
 }

@@ -112,22 +112,49 @@ impl PlanResolver<'_> {
                     &self.config.timestamp_type,
                 )?;
                 let adjusted_microseconds = if let Some(microseconds) = microseconds {
-                    let rebase =
-                        self.should_rebase_timestamp(&timezone_info, &self.config.timestamp_type);
-                    if rebase {
-                        let datetime =
-                            Utc.timestamp_micros(microseconds)
-                                .earliest()
-                                .ok_or_else(|| {
-                                    PlanError::invalid(format!(
-                                        "Invalid Literal TimestampMicrosecond: {microseconds}"
-                                    ))
-                                })?;
-                        let datetime = Self::utc_datetime_to_local_datetime(datetime)?;
-                        Some(datetime.timestamp_micros())
-                    } else {
-                        Some(microseconds)
-                    }
+                    let datetime =
+                        Utc.timestamp_micros(microseconds)
+                            .earliest()
+                            .ok_or_else(|| {
+                                PlanError::invalid(format!(
+                                    "Literal to string TimestampMicrosecond: {microseconds}"
+                                ))
+                            })?;
+                    let utc_datetime = local_datetime_to_utc_datetime(
+                        datetime,
+                        &timezone_info,
+                        &self.config.timestamp_type,
+                    )?;
+                    let adjusted_microseconds = utc_datetime.timestamp_micros();
+                    let new_timezone = match timezone_info {
+                        spec::TimeZoneInfo::SQLConfigured => match &self.config.timestamp_type {
+                            TimestampType::TimestampLtz => None,
+                            _ => timezone.clone(),
+                        },
+                        spec::TimeZoneInfo::LocalTimeZone => None,
+                        _ => timezone.clone(),
+                    };
+                    println!("CHECK HERE: TIMEZONE: {timezone:?} NEW TIMEZONE: {new_timezone:?} MICROSECONDS: {microseconds:?} ADJUSTED MICROSECONDS: {adjusted_microseconds:?}");
+                    return Ok(ScalarValue::TimestampMicrosecond(
+                        Some(adjusted_microseconds),
+                        new_timezone,
+                    ));
+                    // let rebase =
+                    //     self.should_rebase_timestamp(&timezone_info, &self.config.timestamp_type);
+                    // if rebase {
+                    //     let datetime =
+                    //         Utc.timestamp_micros(microseconds)
+                    //             .earliest()
+                    //             .ok_or_else(|| {
+                    //                 PlanError::invalid(format!(
+                    //                     "Invalid Literal TimestampMicrosecond: {microseconds}"
+                    //                 ))
+                    //             })?;
+                    //     let datetime = Self::utc_datetime_to_local_datetime(datetime)?;
+                    //     Some(datetime.timestamp_micros())
+                    // } else {
+                    //     Some(microseconds)
+                    // }
                 } else {
                     microseconds
                 };
@@ -481,5 +508,50 @@ impl PlanResolver<'_> {
                 timezone: _timezone,
             } => false,
         }
+    }
+}
+
+fn local_datetime_to_utc_datetime(
+    datetime: chrono::DateTime<Utc>,
+    timezone_info: &spec::TimeZoneInfo,
+    config_timestamp_type: &TimestampType,
+) -> PlanResult<chrono::DateTime<Utc>> {
+    let should_rebase = match timezone_info {
+        // PySpark client (via Spark Connect) applies the local timezone to timestamp literals
+        // before sending them when TimeZoneInfo::LocalTimeZone is specified.
+        // Example: datetime.datetime(2022, 12, 22, 17, 0, 0) becomes:
+        //    - UTC timezone:            Timestamp(1671728400000000)
+        //    - America/Los_Angeles:     Timestamp(1671757200000000)
+        //
+        // Rebasing to UTC is only needed for TimeZoneInfo::LocalTimeZone.
+        // For TimeZoneInfo::SQLConfigured, we don't rebase because we parse the timestamp as UTC.
+        spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
+            TimestampType::TimestampLtz => false,
+            TimestampType::TimestampNtz => false,
+        },
+        spec::TimeZoneInfo::LocalTimeZone => true,
+        spec::TimeZoneInfo::NoTimeZone => false,
+        spec::TimeZoneInfo::TimeZone {
+            timezone: _timezone,
+        } => false,
+    };
+    if should_rebase {
+        // There is a bug in the spark client. Commented out code should be the actual log,
+        // but spark client uses the current timezone offset to adjust the timestamp which does not account for DST
+        //  let local_datetime: DateTime<Local> = datetime.with_timezone(&Local);
+        //  let local_offset: FixedOffset = local_datetime.offset().fix();
+        let local_offset: FixedOffset = get_local_datetime_offset();
+        let offset_seconds: i64 = local_offset
+            .offset_from_utc_datetime(&datetime.naive_utc())
+            .fix()
+            .local_minus_utc() as i64;
+        let result = datetime.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+            PlanError::invalid(format!(
+                "Invalid offset seconds when converting from local to UTC: {offset_seconds}"
+            ))
+        })?);
+        Ok(result)
+    } else {
+        Ok(datetime)
     }
 }
