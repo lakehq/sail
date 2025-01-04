@@ -114,7 +114,7 @@
                       "dataType": {
                         "timestamp": {
                           "timeUnit": "microsecond",
-                          "timezoneInfo": "configured"
+                          "timezoneInfo": "sQLConfigured"
                         }
                       },
                       "nullable": true,
@@ -221,7 +221,7 @@
                           "keyType": {
                             "timestamp": {
                               "timeUnit": "microsecond",
-                              "timezoneInfo": "configured"
+                              "timezoneInfo": "sQLConfigured"
                             }
                           },
                           "valueType": {

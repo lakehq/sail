@@ -518,7 +518,7 @@ impl PlanResolver<'_> {
         config_timestamp_type: &TimestampType,
     ) -> PlanResult<Option<Arc<str>>> {
         match timezone {
-            spec::TimeZoneInfo::Configured => match config_timestamp_type {
+            spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
                 TimestampType::TimestampLtz => Ok(Some(Arc::<str>::from(config_timezone))),
                 TimestampType::TimestampNtz => Ok(None),
             },

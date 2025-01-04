@@ -57,7 +57,7 @@
             "castToType": {
               "timestamp": {
                 "timeUnit": "microsecond",
-                "timezoneInfo": "configured"
+                "timezoneInfo": "sQLConfigured"
               }
             }
           }

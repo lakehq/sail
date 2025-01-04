@@ -146,7 +146,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
 
             let timezone_info = match tz_info {
                 TimezoneInfo::WithoutTimeZone => spec::TimeZoneInfo::NoTimeZone,
-                TimezoneInfo::None => spec::TimeZoneInfo::Configured,
+                TimezoneInfo::None => spec::TimeZoneInfo::SQLConfigured,
                 TimezoneInfo::WithLocalTimeZone | TimezoneInfo::WithTimeZone | TimezoneInfo::Tz => {
                     spec::TimeZoneInfo::LocalTimeZone
                 }

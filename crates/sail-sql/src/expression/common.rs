@@ -246,7 +246,7 @@ fn from_ast_window_frame_bound(
 pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
     use ast::Expr;
 
-    match expr {
+    let expr = match expr {
         Expr::Identifier(ast::Ident {
             value,
             quote_style: _,
@@ -455,7 +455,10 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         } => {
             let literal = match data_type {
                 ast::DataType::Date => parse_date_string(value.as_str()),
-                ast::DataType::Timestamp(_, _) => parse_timestamp_string(value.as_str()),
+                ast::DataType::Timestamp(_precision, _timezone_info) => {
+                    // FIXME: Utilize precision and timezone_info
+                    parse_timestamp_string(value.as_str())
+                }
                 _ => Err(SqlError::unsupported(format!(
                     "typed string expression: {expr:?}"
                 ))),
@@ -513,13 +516,29 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                     (args, distinct)
                 }
             };
-            let function = spec::Expr::UnresolvedFunction {
-                function_name: name.to_string(),
-                arguments: args,
-                is_distinct: distinct,
-                is_user_defined_function: false,
-            };
-            if let Some(over) = over {
+            let function_name = name.to_string();
+            let function_name_upper = function_name.to_uppercase();
+            if matches!(function_name_upper.as_str(), "TIMESTAMP")
+                || matches!(function_name_upper.as_str(), "DATE")
+            {
+                if args.len() != 1 {
+                    Err(SqlError::invalid(format!(
+                        "{function_name} function requires exactly one argument"
+                    )))
+                } else {
+                    let arg = match &args[0] {
+                        spec::Expr::Literal(spec::Literal::Utf8{ value: Some(timestamp_string) }) | spec::Expr::Literal(spec::Literal::LargeUtf8{ value: Some(timestamp_string) }) | spec::Expr::Literal(spec::Literal::Utf8View{ value: Some(timestamp_string) }) => {
+                            Ok(timestamp_string)
+                        }
+                        other => Err(SqlError::invalid(format!("{function_name} function argument must be a string literal, found: {other:?}")))
+                    }?;
+                    if matches!(function_name_upper.as_str(), "TIMESTAMP") {
+                        Ok(spec::Expr::Literal(parse_timestamp_string(arg)?))
+                    } else {
+                        Ok(spec::Expr::Literal(parse_date_string(arg)?))
+                    }
+                }
+            } else if let Some(over) = over {
                 use ast::WindowType;
 
                 match over {
@@ -540,6 +559,12 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                         let frame_spec = window_frame
                             .map(|f| -> SqlResult<_> { from_ast_window_frame(f) })
                             .transpose()?;
+                        let function = spec::Expr::UnresolvedFunction {
+                            function_name,
+                            arguments: args,
+                            is_distinct: distinct,
+                            is_user_defined_function: false, // FIXME: This shouldn't always be false.
+                        };
                         Ok(spec::Expr::Window {
                             window_function: Box::new(function),
                             partition_spec,
@@ -552,7 +577,12 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                     }
                 }
             } else {
-                Ok(function)
+                Ok(spec::Expr::UnresolvedFunction {
+                    function_name,
+                    arguments: args,
+                    is_distinct: distinct,
+                    is_user_defined_function: false, // FIXME: This shouldn't always be false.
+                })
             }
         }
         Expr::Case {
@@ -861,7 +891,8 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
         | Expr::OuterJoin(_)
         | Expr::Prior(_)
         | Expr::Method(_) => Err(SqlError::unsupported(format!("expression: {expr:?}"))),
-    }
+    }?;
+    Ok(expr)
 }
 
 pub fn from_ast_struct(

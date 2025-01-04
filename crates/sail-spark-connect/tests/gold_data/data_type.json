@@ -46,7 +46,7 @@
                     "keyType": {
                       "timestamp": {
                         "timeUnit": "microsecond",
-                        "timezoneInfo": "configured"
+                        "timezoneInfo": "sQLConfigured"
                       }
                     },
                     "valueType": {
@@ -306,7 +306,7 @@
                 "dataType": {
                   "timestamp": {
                     "timeUnit": "microsecond",
-                    "timezoneInfo": "configured"
+                    "timezoneInfo": "sQLConfigured"
                   }
                 },
                 "nullable": true,
@@ -599,7 +599,7 @@
                 "dataType": {
                   "timestamp": {
                     "timeUnit": "microsecond",
-                    "timezoneInfo": "configured"
+                    "timezoneInfo": "sQLConfigured"
                   }
                 },
                 "nullable": true,
@@ -657,7 +657,7 @@
         "success": {
           "timestamp": {
             "timeUnit": "microsecond",
-            "timezoneInfo": "configured"
+            "timezoneInfo": "sQLConfigured"
           }
         }
       }
