@@ -199,7 +199,7 @@ impl TryFrom<LiteralValue<(chrono::DateTime<Utc>, TimeZoneVariant)>> for spec::L
             TimeZoneVariant::Named(tz) => (
                 TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?,
                 spec::TimeZoneInfo::TimeZone {
-                    timezone: Some(tz.name().into()),
+                    timezone: Some("UTC".into()),
                 },
             ),
             TimeZoneVariant::Utc => (

@@ -444,14 +444,14 @@ impl PlanResolver<'_> {
         utc_datetime: chrono::DateTime<Utc>,
     ) -> PlanResult<chrono::DateTime<Utc>> {
         let local_offset: FixedOffset = get_local_datetime_offset();
-        let local_offset_seconds: i64 = local_offset
+        let offset_seconds: i64 = local_offset
             .offset_from_utc_datetime(&utc_datetime.naive_utc())
             .fix()
-            .local_minus_utc() as i64;
+            .utc_minus_local() as i64;
         Ok(
-            utc_datetime.add(TimeDelta::try_seconds(local_offset_seconds).ok_or_else(|| {
+            utc_datetime.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
                 PlanError::invalid(format!(
-                "Invalid offset seconds when converting from UTC to local datetime: {local_offset_seconds}"
+                "Invalid offset seconds when converting from UTC to local datetime: {offset_seconds}"
             ))
             })?),
         )
