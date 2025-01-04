@@ -22,12 +22,11 @@ pub fn warn_if_spark_session_timezone_mismatches_local_timezone(
         .fix();
     if session_tz_offset != local_offset {
         warn!(
-            "Local timezone does not match session timezone. This may cause unexpected behavior \
-            with Timestamp values.\n\
-            - Session timezone: {session_timezone}\n\
-            - Parsed timezone: {session_tz}\n\
-            - Session timezone offset: {session_tz_offset}\n\
-            - Local timezone offset: {local_offset}\n\
+            "Local timezone does not match session timezone. \
+            Raw Session timezone: {session_timezone}, \
+            Parsed Session timezone: {session_tz}, \
+            Session timezone offset: {session_tz_offset}, and \
+            Local timezone offset: {local_offset}. \
             The Spark client applies the local client timezone to TimestampLtz values before \
             sending them to the server. If these timezones do not match, the server may rely on \
             the local server timezone, which may lead to unintended interpretation of values. \
