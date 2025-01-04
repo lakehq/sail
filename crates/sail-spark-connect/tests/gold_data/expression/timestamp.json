@@ -19,7 +19,7 @@
         "success": {
           "literal": {
             "timestampMicrosecond": {
-              "microseconds": 1547668200567000,
+              "microseconds": 1547675400567000,
               "timezoneInfo": {
                 "timeZone": {
                   "timezone": "UTC"
@@ -49,7 +49,7 @@
         "success": {
           "literal": {
             "timestampMicrosecond": {
-              "microseconds": -3600000000,
+              "microseconds": 3600000000,
               "timezoneInfo": {
                 "timeZone": {
                   "timezone": "UTC"

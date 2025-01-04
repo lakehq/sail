@@ -1,3 +1,7 @@
+use std::fmt::Debug;
+use std::ops::{Add, Neg};
+use std::str::FromStr;
+
 use chrono::{TimeDelta, Utc};
 use chrono_tz::Tz;
 use datafusion::arrow::datatypes::{
@@ -10,9 +14,6 @@ use sail_common::spec;
 use sqlparser::ast;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
-use std::fmt::Debug;
-use std::ops::{Add, Neg};
-use std::str::FromStr;
 use {chrono, chrono_tz};
 
 use crate::error::{SqlError, SqlResult};
@@ -677,43 +678,28 @@ pub fn parse_date_string(s: &str) -> SqlResult<spec::Literal> {
 }
 
 pub fn parse_timestamp_string(s: &str) -> SqlResult<spec::Literal> {
-    println!("CHECK HERE STRING: {s:?}");
     let error = |msg: &str| SqlError::invalid(format!("{msg} error when parsing timestamp: {s}"));
     let captures = TIMESTAMP_REGEX
         .captures(s)
         .ok_or_else(|| error("Invalid format"))?;
-    println!("CHECK HERE captures: {captures:?}");
     let year = extract_match(&captures, "year", || error("Invalid year"))?
         .ok_or_else(|| error("Missing year"))?;
-    println!("CHECK HERE year: {year:?}");
     let month = extract_match(&captures, "month", || error("Invalid month"))?.unwrap_or(1);
-    println!("CHECK HERE month: {month:?}");
     let day = extract_match(&captures, "day", || error("Invalid day"))?.unwrap_or(1);
-    println!("CHECK HERE day: {day:?}");
     let hour = extract_match(&captures, "hour", || error("Invalid hour"))?.unwrap_or(0);
-    println!("CHECK HERE hour: {hour:?}");
     let minute = extract_match(&captures, "minute", || error("Invalid minute"))?.unwrap_or(0);
-    println!("CHECK HERE minute: {minute:?}");
     let second = extract_match(&captures, "second", || error("Invalid second"))?.unwrap_or(0);
-    println!("CHECK HERE second: {second:?}");
     let fraction =
         extract_second_fraction_match(&captures, "fraction", 6, || error("Invalid fraction"))?
             .unwrap_or(0);
-    println!("CHECK HERE fraction: {fraction:?}");
     let tz = captures.name("tz").map(|tz| tz.as_str());
-    println!("CHECK HERE tz: {tz:?}");
     let tz = parse_timezone_string(tz)?;
-    println!("CHECK HERE timezone variant: {tz:?}");
     let dt = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .and_then(|d| d.and_hms_opt(hour, minute, second))
         .and_then(|d| d.checked_add_signed(chrono::Duration::microseconds(fraction)))
         .ok_or_else(|| error("Invalid date/time values"))?;
-    println!("CHECK HERE naive datetime: {dt:?}");
     let dt = chrono::DateTime::from_naive_utc_and_offset(dt, Utc);
-    println!("CHECK HERE datetime utc: {dt:?}");
-    let result = spec::Literal::try_from(LiteralValue((dt, tz)));
-    println!("CHECK HERE result: {result:?}");
-    result
+    spec::Literal::try_from(LiteralValue((dt, tz)))
 }
 
 #[derive(Debug)]

@@ -1,19 +1,16 @@
-use chrono::Local;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::{Add, Sub};
-use std::sync::Arc;
+use std::ops::Add;
 
-use chrono::{Offset, TimeDelta, TimeZone, Utc};
-use chrono_tz::Tz;
+use chrono::{FixedOffset, Offset, TimeDelta, TimeZone, Utc};
 use half::f16;
+use sail_common::datetime::get_local_datetime_offset;
 use sail_common::object::DynObject;
 use sail_common::{impl_dyn_object_traits, spec};
 
 use crate::config::TimestampType;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 /// Utilities to format various data structures in the plan specification.
@@ -266,6 +263,7 @@ impl PlanFormatter for DefaultPlanFormatter {
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn literal_to_string(
         &self,
         literal: &spec::Literal,
@@ -347,17 +345,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match seconds {
                 Some(seconds) => {
-                    let timezone = PlanResolver::resolve_timezone(
-                        timezone_info,
-                        config_timezone,
-                        config_timestamp_type,
-                    )?;
-                    let naive_dt = Utc.timestamp_opt(*seconds, 0).earliest().ok_or_else(|| {
+                    let datetime = Utc.timestamp_opt(*seconds, 0).earliest().ok_or_else(|| {
                         PlanError::invalid(format!("Literal to string TimestampSecond: {seconds}"))
                     })?;
-                    let utc_datetime = naive_datetime_to_utc_datetime(
-                        naive_dt,
-                        &timezone,
+                    let utc_datetime = local_datetime_to_utc_datetime(
+                        datetime,
                         timezone_info,
                         config_timestamp_type,
                     )?;
@@ -375,12 +367,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match milliseconds {
                 Some(milliseconds) => {
-                    let timezone = PlanResolver::resolve_timezone(
-                        timezone_info,
-                        config_timezone,
-                        config_timestamp_type,
-                    )?;
-                    let naive_dt = Utc
+                    let datetime = Utc
                         .timestamp_millis_opt(*milliseconds)
                         .earliest()
                         .ok_or_else(|| {
@@ -388,9 +375,8 @@ impl PlanFormatter for DefaultPlanFormatter {
                                 "Literal to string TimestampMillisecond: {milliseconds}"
                             ))
                         })?;
-                    let utc_datetime = naive_datetime_to_utc_datetime(
-                        naive_dt,
-                        &timezone,
+                    let utc_datetime = local_datetime_to_utc_datetime(
+                        datetime,
                         timezone_info,
                         config_timestamp_type,
                     )?;
@@ -408,12 +394,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match microseconds {
                 Some(microseconds) => {
-                    let timezone = PlanResolver::resolve_timezone(
-                        timezone_info,
-                        config_timezone,
-                        config_timestamp_type,
-                    )?;
-                    let naive_dt =
+                    let datetime =
                         Utc.timestamp_micros(*microseconds)
                             .earliest()
                             .ok_or_else(|| {
@@ -421,9 +402,8 @@ impl PlanFormatter for DefaultPlanFormatter {
                                     "Literal to string TimestampMicrosecond: {microseconds}"
                                 ))
                             })?;
-                    let utc_datetime = naive_datetime_to_utc_datetime(
-                        naive_dt,
-                        &timezone,
+                    let utc_datetime = local_datetime_to_utc_datetime(
+                        datetime,
                         timezone_info,
                         config_timestamp_type,
                     )?;
@@ -441,15 +421,9 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match nanoseconds {
                 Some(nanoseconds) => {
-                    let timezone = PlanResolver::resolve_timezone(
-                        timezone_info,
-                        config_timezone,
-                        config_timestamp_type,
-                    )?;
-                    let naive_dt = Utc.timestamp_nanos(*nanoseconds);
-                    let utc_datetime = naive_datetime_to_utc_datetime(
-                        naive_dt,
-                        &timezone,
+                    let datetime = Utc.timestamp_nanos(*nanoseconds);
+                    let utc_datetime = local_datetime_to_utc_datetime(
+                        datetime,
                         timezone_info,
                         config_timestamp_type,
                     )?;
@@ -937,16 +911,20 @@ fn format_timestamp(
     Ok(format!("{prefix} '{formatted_time}'"))
 }
 
-fn naive_datetime_to_utc_datetime(
-    naive_datetime: chrono::DateTime<Utc>,
-    timezone: &Option<Arc<str>>,
+fn local_datetime_to_utc_datetime(
+    datetime: chrono::DateTime<Utc>,
     timezone_info: &spec::TimeZoneInfo,
     config_timestamp_type: &TimestampType,
 ) -> PlanResult<chrono::DateTime<Utc>> {
-    let local_time = Local::now();
-    println!("CHECK HERE Local time: {local_time}");
-    println!("CHECK HERE Timezone offset: {}", local_time.offset());
-    let should_covert = match timezone_info {
+    let should_rebase = match timezone_info {
+        // PySpark client (via Spark Connect) applies the local timezone to timestamp literals
+        // before sending them when TimeZoneInfo::LocalTimeZone is specified.
+        // Example: datetime.datetime(2022, 12, 22, 17, 0, 0) becomes:
+        //    - UTC timezone:            Timestamp(1671728400000000)
+        //    - America/Los_Angeles:     Timestamp(1671757200000000)
+        //
+        // Rebasing to UTC is only needed for TimeZoneInfo::LocalTimeZone.
+        // For TimeZoneInfo::SQLConfigured, we don't rebase because we parse the timestamp as UTC.
         spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
             TimestampType::TimestampLtz => false,
             TimestampType::TimestampNtz => false,
@@ -957,32 +935,20 @@ fn naive_datetime_to_utc_datetime(
             timezone: _timezone,
         } => false,
     };
-    if should_covert {
-        if let Some(timezone) = timezone {
-            let tz: Tz = timezone.parse().map_err(|e| {
-                PlanError::invalid(format!(
-                    "Literal::TimestampMicrosecond: literal to string: {e:?}"
-                ))
-            })?;
-            println!("CHECK HERE TZ: {tz:?}");
-            let offset_seconds: i64 = tz
-                .offset_from_utc_datetime(&naive_datetime.naive_utc())
-                .fix()
-                .local_minus_utc() as i64;
-            println!("CHECK HERE offset_seconds: {offset_seconds:?}");
-            let adjusted_date_time =
-                naive_datetime.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
-                    PlanError::invalid(format!(
-                        "naive_datetime_to_utc_datetime: Invalid offset seconds: {offset_seconds}"
-                    ))
-                })?);
-            println!("CHECK HERE adjusted_date_time: {adjusted_date_time:?}");
-            Ok(adjusted_date_time)
-        } else {
-            Ok(naive_datetime)
-        }
+    if should_rebase {
+        let local_offset: FixedOffset = get_local_datetime_offset();
+        let offset_seconds: i64 = local_offset
+            .offset_from_utc_datetime(&datetime.naive_utc())
+            .fix()
+            .local_minus_utc() as i64;
+        let result = datetime.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+            PlanError::invalid(format!(
+                "Invalid offset seconds when converting from local to UTC: {offset_seconds}"
+            ))
+        })?);
+        Ok(result)
     } else {
-        Ok(naive_datetime)
+        Ok(datetime)
     }
 }
 
