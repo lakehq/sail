@@ -49,15 +49,7 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let timezone = match timezone_info {
-                    spec::TimeZoneInfo::SQLConfigured => match &self.config.timestamp_type {
-                        TimestampType::TimestampLtz => None,
-                        _ => timezone,
-                    },
-                    spec::TimeZoneInfo::LocalTimeZone => None,
-                    _ => timezone,
-                };
-                let adjusted_seconds = if let Some(seconds) = seconds {
+                if let Some(seconds) = seconds {
                     let datetime = Utc.timestamp_opt(seconds, 0).earliest().ok_or_else(|| {
                         PlanError::invalid(format!("Invalid Literal TimestampSecond: {seconds}"))
                     })?;
@@ -66,11 +58,15 @@ impl PlanResolver<'_> {
                         &timezone_info,
                         &self.config.timestamp_type,
                     )?;
-                    Some(utc_datetime.timestamp())
+                    let adjusted_seconds = utc_datetime.timestamp();
+                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
+                    Ok(ScalarValue::TimestampSecond(
+                        Some(adjusted_seconds),
+                        adjusted_timezone,
+                    ))
                 } else {
-                    seconds
-                };
-                Ok(ScalarValue::TimestampSecond(adjusted_seconds, timezone))
+                    Ok(ScalarValue::TimestampSecond(seconds, timezone))
+                }
             }
             Literal::TimestampMillisecond {
                 milliseconds,
@@ -81,15 +77,7 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let timezone = match timezone_info {
-                    spec::TimeZoneInfo::SQLConfigured => match &self.config.timestamp_type {
-                        TimestampType::TimestampLtz => None,
-                        _ => timezone,
-                    },
-                    spec::TimeZoneInfo::LocalTimeZone => None,
-                    _ => timezone,
-                };
-                let adjusted_milliseconds = if let Some(milliseconds) = milliseconds {
+                if let Some(milliseconds) = milliseconds {
                     let datetime = Utc
                         .timestamp_millis_opt(milliseconds)
                         .earliest()
@@ -103,14 +91,15 @@ impl PlanResolver<'_> {
                         &timezone_info,
                         &self.config.timestamp_type,
                     )?;
-                    Some(utc_datetime.timestamp_millis())
+                    let adjusted_milliseconds = utc_datetime.timestamp_millis();
+                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
+                    Ok(ScalarValue::TimestampMillisecond(
+                        Some(adjusted_milliseconds),
+                        adjusted_timezone,
+                    ))
                 } else {
-                    milliseconds
-                };
-                Ok(ScalarValue::TimestampMillisecond(
-                    adjusted_milliseconds,
-                    timezone,
-                ))
+                    Ok(ScalarValue::TimestampMillisecond(milliseconds, timezone))
+                }
             }
             Literal::TimestampMicrosecond {
                 microseconds,
@@ -121,15 +110,7 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let timezone = match timezone_info {
-                    spec::TimeZoneInfo::SQLConfigured => match &self.config.timestamp_type {
-                        TimestampType::TimestampLtz => None,
-                        _ => timezone,
-                    },
-                    spec::TimeZoneInfo::LocalTimeZone => None,
-                    _ => timezone,
-                };
-                let adjusted_microseconds = if let Some(microseconds) = microseconds {
+                if let Some(microseconds) = microseconds {
                     let datetime =
                         Utc.timestamp_micros(microseconds)
                             .earliest()
@@ -143,14 +124,15 @@ impl PlanResolver<'_> {
                         &timezone_info,
                         &self.config.timestamp_type,
                     )?;
-                    Some(utc_datetime.timestamp_micros())
+                    let adjusted_microseconds = utc_datetime.timestamp_micros();
+                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
+                    Ok(ScalarValue::TimestampMicrosecond(
+                        Some(adjusted_microseconds),
+                        adjusted_timezone,
+                    ))
                 } else {
-                    microseconds
-                };
-                Ok(ScalarValue::TimestampMicrosecond(
-                    adjusted_microseconds,
-                    timezone,
-                ))
+                    Ok(ScalarValue::TimestampMicrosecond(microseconds, timezone))
+                }
             }
             Literal::TimestampNanosecond {
                 nanoseconds,
@@ -161,33 +143,27 @@ impl PlanResolver<'_> {
                     self.config.timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
-                let timezone = match timezone_info {
-                    spec::TimeZoneInfo::SQLConfigured => match &self.config.timestamp_type {
-                        TimestampType::TimestampLtz => None,
-                        _ => timezone,
-                    },
-                    spec::TimeZoneInfo::LocalTimeZone => None,
-                    _ => timezone,
-                };
-                let adjusted_nanoseconds = if let Some(nanoseconds) = nanoseconds {
+                if let Some(nanoseconds) = nanoseconds {
                     let datetime = Utc.timestamp_nanos(nanoseconds);
                     let utc_datetime = Self::local_datetime_to_utc_datetime(
                         datetime,
                         &timezone_info,
                         &self.config.timestamp_type,
                     )?;
-                    Some(utc_datetime.timestamp_nanos_opt().ok_or_else(|| {
-                        PlanError::invalid(format!(
-                            "Invalid Literal TimestampNanosecond: {nanoseconds}"
-                        ))
-                    })?)
+                    let adjusted_nanoseconds =
+                        utc_datetime.timestamp_nanos_opt().ok_or_else(|| {
+                            PlanError::invalid(format!(
+                                "Invalid Literal TimestampNanosecond: {nanoseconds}"
+                            ))
+                        })?;
+                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
+                    Ok(ScalarValue::TimestampNanosecond(
+                        Some(adjusted_nanoseconds),
+                        adjusted_timezone,
+                    ))
                 } else {
-                    nanoseconds
-                };
-                Ok(ScalarValue::TimestampNanosecond(
-                    adjusted_nanoseconds,
-                    timezone,
-                ))
+                    Ok(ScalarValue::TimestampNanosecond(nanoseconds, timezone))
+                }
             }
             Literal::Date32 { days } => Ok(ScalarValue::Date32(days)),
             Literal::Date64 { milliseconds } => Ok(ScalarValue::Date64(milliseconds)),
@@ -501,6 +477,21 @@ impl PlanResolver<'_> {
             Ok(result)
         } else {
             Ok(datetime)
+        }
+    }
+
+    fn get_adjusted_timezone(
+        &self,
+        timezone: Option<Arc<str>>,
+        timezone_info: &spec::TimeZoneInfo,
+    ) -> Option<Arc<str>> {
+        match timezone_info {
+            spec::TimeZoneInfo::SQLConfigured => match &self.config.timestamp_type {
+                TimestampType::TimestampLtz => None,
+                _ => timezone,
+            },
+            spec::TimeZoneInfo::LocalTimeZone => None,
+            _ => timezone,
         }
     }
 }
