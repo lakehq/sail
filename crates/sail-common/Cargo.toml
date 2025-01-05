@@ -22,3 +22,4 @@ figment = { workspace = true }
 futures = { workspace = true }
 half = { workspace = true }
 log = { workspace = true }
+iana-time-zone = { workspace = true }

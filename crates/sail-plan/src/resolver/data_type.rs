@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes as adt;
-use sail_common::datetime::get_local_datetime_offset;
+use sail_common::datetime::get_system_timezone;
 use sail_common::spec;
 
 use crate::config::TimestampType;
@@ -518,23 +518,19 @@ impl PlanResolver<'_> {
         _config_timezone: &str,
         config_timestamp_type: &TimestampType,
     ) -> PlanResult<Option<Arc<str>>> {
-        let local_tz: Option<Arc<str>> = Some(get_local_datetime_offset().to_string().into());
+        let system_timezone = Some(get_system_timezone()?.into());
         match timezone {
             spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
-                // TimestampType::TimestampLtz => Ok(Some(Arc::<str>::from(config_timezone))),
-                TimestampType::TimestampLtz => Ok(local_tz),
+                TimestampType::TimestampLtz => Ok(system_timezone),
                 TimestampType::TimestampNtz => Ok(None),
             },
-            // spec::TimeZoneInfo::LocalTimeZone => Ok(Some(Arc::<str>::from(config_timezone))),
-            spec::TimeZoneInfo::LocalTimeZone => Ok(local_tz),
+            spec::TimeZoneInfo::LocalTimeZone => Ok(system_timezone),
             spec::TimeZoneInfo::NoTimeZone => Ok(None),
             spec::TimeZoneInfo::TimeZone { timezone } => match timezone {
-                // None => Ok(Some(Arc::<str>::from(config_timezone))),
-                None => Ok(local_tz),
+                None => Ok(None),
                 Some(timezone) => {
                     if timezone.is_empty() {
-                        // Ok(Some(Arc::<str>::from(config_timezone)))
-                        Ok(local_tz)
+                        Ok(None)
                     } else {
                         Ok(Some(Arc::clone(timezone)))
                     }
