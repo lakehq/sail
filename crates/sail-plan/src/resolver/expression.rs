@@ -12,8 +12,9 @@ use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
 use datafusion_expr::expr::{PlannedReplaceSelectItem, ScalarFunction};
 use datafusion_expr::{
-    expr, expr_fn, lit, window_frame, AggregateUDF, ExprSchemable, Operator, ScalarUDF,
+    expr, expr_fn, lit, window_frame, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF,
 };
+use datafusion_functions_nested::expr_fn::array_element;
 use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
@@ -1253,11 +1254,8 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let extraction = match extraction {
-            spec::Expr::Literal(literal) => literal,
-            _ => {
-                return Err(PlanError::invalid("extraction must be a literal"));
-            }
+        let spec::Expr::Literal(extraction) = extraction else {
+            return Err(PlanError::invalid("extraction must be a literal"));
         };
         let extraction_name = self.config.plan_formatter.literal_to_string(
             &extraction,
@@ -1267,22 +1265,36 @@ impl PlanResolver<'_> {
         let extraction = self.resolve_literal(extraction, state)?;
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
-        let name = if let expr::Expr::Column(column) = &expr {
-            let data_type = schema
-                .field_with_unqualified_name(&column.name)?
-                .data_type();
-            match data_type {
-                DataType::Struct(_) => {
-                    format!("{}.{}", name.one()?, extraction_name)
-                }
-                _ => {
-                    format!("{}[{}]", name.one()?, extraction_name)
-                }
+        let data_type = expr.get_type(schema)?;
+        let name = match data_type {
+            DataType::Struct(_) => {
+                format!("{}.{}", name.one()?, extraction_name)
             }
-        } else {
-            format!("{}[{}]", name.one()?, extraction_name)
+            _ => {
+                format!("{}[{}]", name.one()?, extraction_name)
+            }
         };
-        Ok(NamedExpr::new(vec![name], expr.field(extraction)))
+        let expr = match data_type {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => array_element(
+                expr,
+                expr::Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(expr::Expr::Literal(extraction)),
+                    Operator::Plus,
+                    Box::new(lit(1i64)),
+                )),
+            ),
+            DataType::Struct(_) | DataType::Map(_, _) => expr.field(extraction),
+            _ => {
+                return Err(PlanError::AnalysisError(format!(
+                    "cannot extract value from data type: {data_type}"
+                )))
+            }
+        };
+        Ok(NamedExpr::new(vec![name], expr))
     }
 
     async fn resolve_expression_common_inline_udf(
