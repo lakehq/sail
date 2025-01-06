@@ -7,13 +7,13 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion::functions::core::get_field;
 use datafusion::sql::unparser::expr_to_sql;
-use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
-use datafusion_expr::expr::PlannedReplaceSelectItem;
+use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
+use datafusion_expr::expr::{PlannedReplaceSelectItem, ScalarFunction};
 use datafusion_expr::{
-    expr, expr_fn, window_frame, AggregateUDF, ExprSchemable, Operator, ScalarUDF,
+    expr, expr_fn, lit, window_frame, AggregateUDF, ExprSchemable, Operator, ScalarUDF,
 };
-use log::debug;
 use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
@@ -24,6 +24,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::drop_struct_field::DropStructField;
+use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::function::table_input::TableInput;
 use crate::extension::function::update_struct_field::UpdateStructField;
 use crate::function::common::{AggFunctionContext, FunctionContext};
@@ -614,68 +615,124 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let candidates =
-            self.resolve_expression_attribute_candidates(&name, plan_id, schema, state)?;
-        if !candidates.is_empty() {
-            if candidates.len() > 1 {
-                // FIXME: This is a temporary hack to handle ambiguous attributes.
-                debug!("ambiguous attribute: name: {name:?}, candidates: {candidates:?}");
-            }
-            let ((name, _, column), _candidates) = candidates.at_least_one()?;
-            return Ok(NamedExpr::new(vec![name], expr::Expr::Column(column)));
+        if let Some((name, expr)) =
+            self.resolve_field_or_nested_field(&name, plan_id, schema, state)?
+        {
+            return Ok(NamedExpr::new(vec![name], expr));
         }
-        let candidates = if let Some(schema) = state.get_outer_query_schema().cloned() {
-            self.resolve_expression_attribute_candidates(&name, None, &schema, state)?
-        } else {
-            vec![]
+        let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
+            return Err(PlanError::AnalysisError(format!(
+                "cannot resolve attribute: {name:?}"
+            )));
         };
-        if candidates.len() > 1 {
-            return plan_err!("ambiguous outer attribute: {name:?}")?;
+        match self.resolve_outer_field(&name, &outer_schema, state)? {
+            Some((name, expr)) => Ok(NamedExpr::new(vec![name], expr)),
+            None => Err(PlanError::AnalysisError(format!(
+                "cannot resolve attribute or outer attribute: {name:?}"
+            ))),
         }
-        if !candidates.is_empty() {
-            let (name, dt, column) = candidates.one()?;
-            return Ok(NamedExpr::new(
-                vec![name],
-                expr::Expr::OuterReferenceColumn(dt, column),
-            ));
-        }
-        plan_err!("cannot resolve attribute: {name:?}")?
     }
 
-    fn resolve_expression_attribute_candidates(
+    fn resolve_field_or_nested_field(
         &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
-    ) -> PlanResult<Vec<(String, DataType, Column)>> {
-        // TODO: handle qualifier and nested fields
-        let name: Vec<String> = name.clone().into();
-        let first = name
-            .first()
-            .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;
-        let last = name
-            .last()
-            .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;
-        let candidates = schema
+    ) -> PlanResult<Option<(String, expr::Expr)>> {
+        let name: Vec<&str> = name.into();
+        let candidates = Self::generate_qualified_nested_field_candidates(&name);
+        let mut candidates = schema
             .iter()
-            .filter(|(qualifier, field)| {
-                state
-                    .get_field(field.name())
-                    .is_ok_and(|info| info.matches(last, plan_id))
-                    && (name.len() == 1
-                        || name.len() == 2
-                            && qualifier.is_some_and(|q| q.table().eq_ignore_ascii_case(first)))
-            })
-            .map(|(qualifier, field)| {
-                (
-                    last.clone(),
-                    field.data_type().clone(),
-                    Column::new(qualifier.cloned(), field.name()),
-                )
+            .flat_map(|(qualifier, field)| {
+                let Ok(info) = state.get_field(field.name()) else {
+                    return vec![];
+                };
+                candidates
+                    .iter()
+                    .filter_map(|(q, name, inner)| {
+                        if qualifier_matches(q.as_ref(), qualifier) && info.matches(name, plan_id) {
+                            let expr = Self::resolve_nested_field(
+                                expr::Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                                field.data_type(),
+                                inner,
+                            )?;
+                            let name = inner.last().unwrap_or(name).to_string();
+                            Some((name, expr))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
             })
             .collect::<Vec<_>>();
-        Ok(candidates)
+        if candidates.len() > 1 {
+            return Err(PlanError::AnalysisError(format!(
+                "ambiguous outer attribute: {name:?}"
+            )));
+        }
+        Ok(candidates.pop())
+    }
+
+    fn resolve_outer_field(
+        &self,
+        name: &spec::ObjectName,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Option<(String, expr::Expr)>> {
+        let name: Vec<&str> = name.into();
+        let candidates = Self::generate_qualified_field_candidates(&name);
+        let mut candidates = schema
+            .iter()
+            .flat_map(|(qualifier, field)| {
+                let Ok(info) = state.get_field(field.name()) else {
+                    return vec![];
+                };
+                candidates
+                    .iter()
+                    .filter(|(q, name)| {
+                        qualifier_matches(q.as_ref(), qualifier) && info.matches(name, None)
+                    })
+                    .map(|(_, name)| {
+                        (
+                            name.to_string(),
+                            expr::Expr::OuterReferenceColumn(
+                                field.data_type().clone(),
+                                Column::new(qualifier.cloned(), field.name()),
+                            ),
+                        )
+                    })
+                    .collect()
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() > 1 {
+            return Err(PlanError::AnalysisError(format!(
+                "ambiguous outer attribute: {name:?}"
+            )));
+        }
+        Ok(candidates.pop())
+    }
+
+    fn resolve_nested_field(
+        expr: expr::Expr,
+        data_type: &DataType,
+        inner: &[&str],
+    ) -> Option<expr::Expr> {
+        match inner {
+            [] => Some(expr),
+            [name, remaining @ ..] => match data_type {
+                DataType::Struct(fields) => fields
+                    .iter()
+                    .find(|x| x.name().eq_ignore_ascii_case(name))
+                    .and_then(|field| {
+                        let args = vec![expr, lit(field.name().to_string())];
+                        let expr =
+                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                        Self::resolve_nested_field(expr, field.data_type(), remaining)
+                    }),
+                _ => None,
+            },
+        }
     }
 
     async fn resolve_expression_table_function(
@@ -966,23 +1023,116 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let wildcard_options = self
-            .resolve_wildcard_options(wildcard_options, schema, state)
-            .await?;
-        // FIXME: column reference is parsed as qualifier
-        let expr = if let Some(target) = target {
-            let target: Vec<String> = target.into();
-            expr::Expr::Wildcard {
-                qualifier: Some(target.join(".").into()),
-                options: wildcard_options,
+        match target {
+            Some(target) if wildcard_options == Default::default() => {
+                self.resolve_wildcard_or_nested_field_wildcard(&target, schema, state)
             }
-        } else {
-            expr::Expr::Wildcard {
-                qualifier: None,
-                options: wildcard_options,
+            _ => {
+                let qualifier = target
+                    .map(|x| self.resolve_table_reference(&x))
+                    .transpose()?;
+                let options = self
+                    .resolve_wildcard_options(wildcard_options, schema, state)
+                    .await?;
+                Ok(NamedExpr::new(
+                    vec!["*".to_string()],
+                    expr::Expr::Wildcard { qualifier, options },
+                ))
             }
+        }
+    }
+
+    fn resolve_wildcard_or_nested_field_wildcard(
+        &self,
+        name: &spec::ObjectName,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let name: Vec<&str> = name.into();
+        let candidates = Self::generate_qualified_wildcard_candidates(&name)
+            .into_iter()
+            .flat_map(|(qualifier, name)| match name {
+                [] => {
+                    if schema
+                        .iter()
+                        .any(|(q, _)| qualifier_matches(qualifier.as_ref(), q))
+                    {
+                        vec![NamedExpr::new(
+                            vec!["*".to_string()],
+                            expr::Expr::Wildcard {
+                                qualifier,
+                                options: Default::default(),
+                            },
+                        )]
+                    } else {
+                        vec![]
+                    }
+                }
+                [col, inner @ ..] => schema
+                    .iter()
+                    .filter_map(|(q, field)| {
+                        let Ok(info) = state.get_field(field.name()) else {
+                            return None;
+                        };
+                        if qualifier_matches(qualifier.as_ref(), q) && info.matches(col, None) {
+                            Self::resolve_nested_field_wildcard(
+                                expr::Expr::Column(Column::new(qualifier.clone(), field.name())),
+                                field.data_type(),
+                                inner,
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() > 1 {
+            return Err(PlanError::AnalysisError(format!(
+                "ambiguous wildcard: {name:?}"
+            )));
+        }
+        candidates
+            .one()
+            .map_err(|_| PlanError::AnalysisError(format!("cannot resolve wildcard: {name:?}")))
+    }
+
+    fn resolve_nested_field_wildcard(
+        expr: expr::Expr,
+        data_type: &DataType,
+        inner: &[&str],
+    ) -> Option<NamedExpr> {
+        let DataType::Struct(fields) = data_type else {
+            return None;
         };
-        Ok(NamedExpr::new(vec!["*".to_string()], expr))
+        match inner {
+            [] => {
+                let (names, exprs) = fields
+                    .iter()
+                    .map(|field| {
+                        let name = field.name().to_string();
+                        let args = vec![expr.clone(), lit(name.clone())];
+                        (
+                            name,
+                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args)),
+                        )
+                    })
+                    .unzip();
+                Some(NamedExpr::new(
+                    names,
+                    ScalarUDF::from(MultiExpr::new()).call(exprs),
+                ))
+            }
+            [name, remaining @ ..] => fields
+                .iter()
+                .find(|x| x.name().eq_ignore_ascii_case(name))
+                .and_then(|field| {
+                    let args = vec![expr, lit(field.name().to_string())];
+                    let expr =
+                        expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                    Self::resolve_nested_field_wildcard(expr, field.data_type(), remaining)
+                }),
+        }
     }
 
     async fn resolve_wildcard_options(
@@ -1194,15 +1344,9 @@ impl PlanResolver<'_> {
             let value_expr = self
                 .resolve_expression(value_expression, schema, state)
                 .await?;
-            expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func: Arc::new(ScalarUDF::from(UpdateStructField::new(field_name))),
-                args: vec![expr, value_expr],
-            })
+            ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr])
         } else {
-            expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func: Arc::new(ScalarUDF::from(DropStructField::new(field_name))),
-                args: vec![expr],
-            })
+            ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr])
         };
         Ok(NamedExpr::new(vec![name], new_expr))
     }
@@ -1573,6 +1717,83 @@ impl PlanResolver<'_> {
                 case_insensitive,
             )),
         ))
+    }
+
+    fn generate_qualified_field_candidates<'a>(
+        name: &'a [&'a str],
+    ) -> Vec<(Option<TableReference>, &'a str)> {
+        match name {
+            [n1] => vec![(None, *n1)],
+            [n1, n2] => vec![(Some(TableReference::bare(*n1)), *n2)],
+            [n1, n2, n3] => vec![(Some(TableReference::partial(*n1, *n2)), *n3)],
+            [n1, n2, n3, n4] => vec![(Some(TableReference::full(*n1, *n2, *n3)), *n4)],
+            _ => vec![],
+        }
+    }
+
+    fn generate_qualified_nested_field_candidates<'a>(
+        name: &'a [&'a str],
+    ) -> Vec<(Option<TableReference>, &'a str, &'a [&'a str])> {
+        let mut out = vec![];
+        if let [n1, x @ ..] = name {
+            out.push((None, *n1, x));
+        }
+        if let [n1, n2, x @ ..] = name {
+            out.push((Some(TableReference::bare(*n1)), *n2, x));
+        }
+        if let [n1, n2, n3, x @ ..] = name {
+            out.push((Some(TableReference::partial(*n1, *n2)), *n3, x));
+        }
+        if let [n1, n2, n3, n4, x @ ..] = name {
+            out.push((Some(TableReference::full(*n1, *n2, *n3)), *n4, x));
+        }
+        out
+    }
+
+    fn generate_qualified_wildcard_candidates<'a>(
+        name: &'a [&'a str],
+    ) -> Vec<(Option<TableReference>, &'a [&'a str])> {
+        let mut out = vec![(None, name)];
+        if let [n1, x @ ..] = name {
+            out.push((Some(TableReference::bare(*n1)), x));
+        }
+        if let [n1, n2, x @ ..] = name {
+            out.push((Some(TableReference::partial(*n1, *n2)), x));
+        }
+        if let [n1, n2, n3, x @ ..] = name {
+            out.push((Some(TableReference::full(*n1, *n2, *n3)), x));
+        }
+        out
+    }
+}
+
+fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableReference>) -> bool {
+    let table_matches = |table: &str| {
+        target
+            .map(|x| x.table())
+            .map_or(false, |x| x.eq_ignore_ascii_case(table))
+    };
+    let schema_matches = |schema: &str| {
+        target
+            .and_then(|x| x.schema())
+            .map_or(false, |x| x.eq_ignore_ascii_case(schema))
+    };
+    let catalog_matches = |catalog: &str| {
+        target
+            .and_then(|x| x.catalog())
+            .map_or(false, |x| x.eq_ignore_ascii_case(catalog))
+    };
+    match qualifier {
+        Some(TableReference::Bare { table }) => table_matches(table),
+        Some(TableReference::Partial { schema, table }) => {
+            schema_matches(schema) && table_matches(table)
+        }
+        Some(TableReference::Full {
+            catalog,
+            schema,
+            table,
+        }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
+        None => true,
     }
 }
 
