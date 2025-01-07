@@ -12,7 +12,6 @@ use datafusion::arrow::datatypes as adt;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::utils::{array_into_fixed_size_list_array, array_into_large_list_array};
 use datafusion_common::ScalarValue;
-use sail_common::datetime::get_system_timezone;
 use sail_common::spec::{self, Literal};
 
 use crate::config::TimestampType;
@@ -46,7 +45,7 @@ impl PlanResolver<'_> {
             } => {
                 let timezone = Self::resolve_timezone(
                     &timezone_info,
-                    self.config.timezone.as_str(),
+                    self.config.system_timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
                 if let Some(seconds) = seconds {
@@ -57,6 +56,7 @@ impl PlanResolver<'_> {
                         datetime,
                         &timezone_info,
                         &self.config.timestamp_type,
+                        &self.config.system_timezone,
                     )?;
                     let adjusted_seconds = utc_datetime.timestamp();
                     let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
@@ -74,7 +74,7 @@ impl PlanResolver<'_> {
             } => {
                 let timezone = Self::resolve_timezone(
                     &timezone_info,
-                    self.config.timezone.as_str(),
+                    self.config.system_timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
                 if let Some(milliseconds) = milliseconds {
@@ -90,6 +90,7 @@ impl PlanResolver<'_> {
                         datetime,
                         &timezone_info,
                         &self.config.timestamp_type,
+                        &self.config.system_timezone,
                     )?;
                     let adjusted_milliseconds = utc_datetime.timestamp_millis();
                     let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
@@ -107,7 +108,7 @@ impl PlanResolver<'_> {
             } => {
                 let timezone = Self::resolve_timezone(
                     &timezone_info,
-                    self.config.timezone.as_str(),
+                    self.config.system_timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
                 if let Some(microseconds) = microseconds {
@@ -123,6 +124,7 @@ impl PlanResolver<'_> {
                         datetime,
                         &timezone_info,
                         &self.config.timestamp_type,
+                        &self.config.system_timezone,
                     )?;
                     let adjusted_microseconds = utc_datetime.timestamp_micros();
                     let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
@@ -140,7 +142,7 @@ impl PlanResolver<'_> {
             } => {
                 let timezone = Self::resolve_timezone(
                     &timezone_info,
-                    self.config.timezone.as_str(),
+                    self.config.system_timezone.as_str(),
                     &self.config.timestamp_type,
                 )?;
                 if let Some(nanoseconds) = nanoseconds {
@@ -149,6 +151,7 @@ impl PlanResolver<'_> {
                         datetime,
                         &timezone_info,
                         &self.config.timestamp_type,
+                        &self.config.system_timezone,
                     )?;
                     let adjusted_nanoseconds =
                         utc_datetime.timestamp_nanos_opt().ok_or_else(|| {
@@ -442,6 +445,7 @@ impl PlanResolver<'_> {
         datetime: chrono::DateTime<Utc>,
         timezone_info: &spec::TimeZoneInfo,
         config_timestamp_type: &TimestampType,
+        system_timezone: &str,
     ) -> PlanResult<chrono::DateTime<Utc>> {
         let should_rebase = match timezone_info {
             // PySpark client (via Spark Connect) applies the local timezone to timestamp literals
@@ -464,7 +468,7 @@ impl PlanResolver<'_> {
             } => false,
         };
         if should_rebase {
-            let system_timezone: Tz = get_system_timezone()?.parse()?;
+            let system_timezone: Tz = system_timezone.parse()?;
             let offset_seconds: i64 = system_timezone
                 .offset_from_utc_datetime(&datetime.naive_utc())
                 .fix()
@@ -486,10 +490,6 @@ impl PlanResolver<'_> {
         timezone_info: &spec::TimeZoneInfo,
     ) -> Option<Arc<str>> {
         match timezone_info {
-            spec::TimeZoneInfo::SQLConfigured => match &self.config.timestamp_type {
-                TimestampType::TimestampLtz => None,
-                _ => timezone,
-            },
             spec::TimeZoneInfo::LocalTimeZone => None,
             _ => timezone,
         }

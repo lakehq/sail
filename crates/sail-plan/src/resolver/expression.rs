@@ -597,7 +597,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let name = self.config.plan_formatter.literal_to_string(
             &literal,
-            self.config.timezone.as_str(),
+            self.config.system_timezone.as_str(),
             &self.config.timestamp_type,
         )?;
         let literal = self.resolve_literal(literal, state)?;
@@ -1125,7 +1125,7 @@ impl PlanResolver<'_> {
         };
         let extraction_name = self.config.plan_formatter.literal_to_string(
             &extraction,
-            self.config.timezone.as_str(),
+            self.config.system_timezone.as_str(),
             &self.config.timestamp_type,
         )?;
         let extraction = self.resolve_literal(extraction, state)?;
@@ -1702,7 +1702,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_expression_with_name() -> PlanResult<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::default()));
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
         async fn resolve(resolver: &PlanResolver<'_>, expr: spec::Expr) -> PlanResult<NamedExpr> {
             resolver

@@ -994,7 +994,7 @@ impl RemoteExecutionCodec {
                     return plan_err!("PySpark UDTF options not found");
                 };
                 let options = PySparkUdtfOptions {
-                    timezone: options.timezone,
+                    session_timezone: options.session_timezone,
                     arrow_cast_safe_check: options.arrow_cast_safe_check,
                 };
                 Arc::new(PySparkUDTF::try_new(
@@ -1041,7 +1041,7 @@ impl RemoteExecutionCodec {
                 .map(|x| x.to_vec())
                 .unwrap_or_default();
             let options = gen::PySparkUdtfOptions {
-                timezone: func.options().timezone.to_string(),
+                session_timezone: func.options().session_timezone.to_string(),
                 arrow_cast_safe_check: func.options().arrow_cast_safe_check,
             };
             StreamUdfKind::PySparkUdtf(gen::PySparkUdtf {

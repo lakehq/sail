@@ -12,11 +12,17 @@ pub enum PyUdfError {
     IoError(#[from] std::io::Error),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    #[error("internal error: {0}")]
+    InternalError(String),
 }
 
 impl PyUdfError {
     pub fn invalid(message: impl Into<String>) -> Self {
         PyUdfError::InvalidArgument(message.into())
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        PyUdfError::InternalError(message.into())
     }
 }
 
@@ -26,6 +32,7 @@ impl From<PyUdfError> for DataFusionError {
             PyUdfError::PythonError(e) => DataFusionError::External(e.into()),
             PyUdfError::IoError(e) => DataFusionError::External(e.into()),
             PyUdfError::InvalidArgument(message) => DataFusionError::Plan(message),
+            PyUdfError::InternalError(message) => DataFusionError::Internal(message),
         }
     }
 }

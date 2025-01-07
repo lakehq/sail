@@ -12,11 +12,12 @@ pub fn get_system_timezone() -> CommonResult<String> {
 
 pub fn warn_if_spark_session_timezone_mismatches_local_timezone(
     configured_session_timezone: &str,
+    configured_system_timezone: &str,
 ) -> CommonResult<()> {
-    let system_timezone: Tz = get_system_timezone()?
+    let session_timezone: Tz = configured_session_timezone
         .parse()
         .map_err(|e| CommonError::invalid(format!("{e}")))?;
-    let session_timezone: Tz = configured_session_timezone
+    let system_timezone: Tz = configured_system_timezone
         .parse()
         .map_err(|e| CommonError::invalid(format!("{e}")))?;
     if system_timezone != session_timezone {

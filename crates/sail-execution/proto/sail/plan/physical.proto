@@ -179,7 +179,7 @@ enum PySparkUdtfKind {
 }
 
 message PySparkUdtfOptions {
-  string timezone = 1;
+  string session_timezone = 1;
   bool arrow_cast_safe_check = 2;
 }
 

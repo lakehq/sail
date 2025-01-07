@@ -128,7 +128,7 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
 fn current_timezone(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<Expr> {
     args.zero()?;
     Ok(Expr::Literal(ScalarValue::Utf8(Some(
-        function_context.plan_config().timezone.clone(),
+        function_context.plan_config().session_timezone.clone(),
     ))))
 }
 
@@ -161,13 +161,21 @@ fn unix_timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanRe
             args: vec![],
         }))
     } else if args.len() == 1 {
-        let timezone: Arc<str> = function_context.plan_config().timezone.clone().into();
+        let timezone: Arc<str> = function_context
+            .plan_config()
+            .system_timezone
+            .clone()
+            .into();
         Ok(Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(SparkUnixTimestamp::new(timezone))),
             args,
         }))
     } else if args.len() == 2 {
-        let timezone: Arc<str> = function_context.plan_config().timezone.clone().into();
+        let timezone: Arc<str> = function_context
+            .plan_config()
+            .system_timezone
+            .clone()
+            .into();
         let (expr, format) = args.two()?;
         let format = to_chrono_fmt(format)?;
         Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -216,7 +224,11 @@ fn from_unixtime(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanRe
 
 fn weekofyear(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<Expr> {
     if args.len() == 1 {
-        let timezone: Arc<str> = function_context.plan_config().timezone.clone().into();
+        let timezone: Arc<str> = function_context
+            .plan_config()
+            .system_timezone
+            .clone()
+            .into();
         Ok(Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(SparkWeekOfYear::new(timezone))),
             args,

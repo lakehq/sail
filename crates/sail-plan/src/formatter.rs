@@ -21,7 +21,7 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
     fn literal_to_string(
         &self,
         literal: &spec::Literal,
-        config_timezone: &str,
+        config_system_timezone: &str,
         config_timestamp_type: &TimestampType,
     ) -> PlanResult<String>;
 
@@ -262,11 +262,10 @@ impl PlanFormatter for DefaultPlanFormatter {
         }
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn literal_to_string(
         &self,
         literal: &spec::Literal,
-        config_timezone: &str,
+        config_system_timezone: &str,
         config_timestamp_type: &TimestampType,
     ) -> PlanResult<String> {
         use spec::Literal;
@@ -274,7 +273,7 @@ impl PlanFormatter for DefaultPlanFormatter {
         let literal_list_to_string = |name: &str, values: &Vec<Literal>| -> PlanResult<String> {
             let values = values
                 .iter()
-                .map(|x| self.literal_to_string(x, config_timezone, config_timestamp_type))
+                .map(|x| self.literal_to_string(x, config_system_timezone, config_timestamp_type))
                 .collect::<PlanResult<Vec<String>>>()?;
             Ok(format!("{name}({})", values.join(", ")))
         };
@@ -351,6 +350,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                         datetime,
                         timezone_info,
                         config_timestamp_type,
+                        config_system_timezone,
                     )?;
                     format_timestamp(
                         utc_datetime,
@@ -378,6 +378,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                         datetime,
                         timezone_info,
                         config_timestamp_type,
+                        config_system_timezone,
                     )?;
                     format_timestamp(
                         utc_datetime,
@@ -405,6 +406,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                         datetime,
                         timezone_info,
                         config_timestamp_type,
+                        config_system_timezone,
                     )?;
                     format_timestamp(
                         utc_datetime,
@@ -425,6 +427,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                         datetime,
                         timezone_info,
                         config_timestamp_type,
+                        config_system_timezone,
                     )?;
                     format_timestamp(
                         utc_datetime,
@@ -680,7 +683,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                                 "{} AS {}",
                                 self.literal_to_string(
                                     value,
-                                    config_timezone,
+                                    config_system_timezone,
                                     config_timestamp_type
                                 )?,
                                 field.name
@@ -697,8 +700,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 value,
             } => match value {
                 Some((id, value)) => {
-                    let value =
-                        self.literal_to_string(value, config_timezone, config_timestamp_type)?;
+                    let value = self.literal_to_string(
+                        value,
+                        config_system_timezone,
+                        config_timestamp_type,
+                    )?;
                     Ok(format!("{id}:{value}"))
                 }
                 None => Ok("NULL".to_string()),
@@ -709,8 +715,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 value,
             } => match value {
                 Some(value) => {
-                    let value =
-                        self.literal_to_string(value, config_timezone, config_timestamp_type)?;
+                    let value = self.literal_to_string(
+                        value,
+                        config_system_timezone,
+                        config_timestamp_type,
+                    )?;
                     Ok(format!("dictionary({value})"))
                 }
                 None => Ok("NULL".to_string()),
@@ -920,12 +929,12 @@ mod tests {
 
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {
-        let plan_config = PlanConfig::default();
-        let config_timezone = plan_config.timezone.as_str();
+        let plan_config = PlanConfig::new()?;
+        let config_system_timezone = plan_config.system_timezone.as_str();
         let config_timestamp_type = plan_config.timestamp_type;
         let formatter = DefaultPlanFormatter;
         let to_string = |literal| {
-            formatter.literal_to_string(&literal, config_timezone, &config_timestamp_type)
+            formatter.literal_to_string(&literal, config_system_timezone, &config_timestamp_type)
         };
 
         assert_eq!(to_string(Literal::Null)?, "NULL");

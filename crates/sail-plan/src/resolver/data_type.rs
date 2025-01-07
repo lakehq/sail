@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes as adt;
-use sail_common::datetime::get_system_timezone;
 use sail_common::spec;
 
 use crate::config::TimestampType;
@@ -62,7 +61,7 @@ impl PlanResolver<'_> {
                 Self::resolve_time_unit(time_unit)?,
                 Self::resolve_timezone(
                     timezone_info,
-                    self.config.timezone.as_str(),
+                    self.config.system_timezone.as_str(),
                     &self.config.timestamp_type,
                 )?,
             )),
@@ -515,28 +514,29 @@ impl PlanResolver<'_> {
 
     pub fn resolve_timezone(
         timezone: &spec::TimeZoneInfo,
-        _config_timezone: &str,
+        config_system_timezone: &str,
         config_timestamp_type: &TimestampType,
     ) -> PlanResult<Option<Arc<str>>> {
-        let system_timezone = Some(get_system_timezone()?.into());
-        match timezone {
+        let system_timezone = Some(config_system_timezone.into());
+        let resolved_timezone = match timezone {
             spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
-                TimestampType::TimestampLtz => Ok(system_timezone),
-                TimestampType::TimestampNtz => Ok(None),
+                TimestampType::TimestampLtz => Some("UTC".into()),
+                TimestampType::TimestampNtz => None,
             },
-            spec::TimeZoneInfo::LocalTimeZone => Ok(system_timezone),
-            spec::TimeZoneInfo::NoTimeZone => Ok(None),
+            spec::TimeZoneInfo::LocalTimeZone => system_timezone,
+            spec::TimeZoneInfo::NoTimeZone => None,
             spec::TimeZoneInfo::TimeZone { timezone } => match timezone {
-                None => Ok(None),
+                None => None,
                 Some(timezone) => {
                     if timezone.is_empty() {
-                        Ok(None)
+                        None
                     } else {
-                        Ok(Some(Arc::clone(timezone)))
+                        Some(Arc::clone(timezone))
                     }
                 }
             },
-        }
+        };
+        Ok(resolved_timezone)
     }
 
     pub fn unresolve_timezone(timezone: &Option<Arc<str>>) -> PlanResult<spec::TimeZoneInfo> {

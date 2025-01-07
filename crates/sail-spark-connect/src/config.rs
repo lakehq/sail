@@ -171,14 +171,17 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
     type Error = SparkError;
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
-        let mut output = PlanConfig::default();
+        let mut output = PlanConfig::new()?;
 
         if let Some(value) = config
             .get(SPARK_SQL_SESSION_TIME_ZONE)?
             .map(|x| x.to_string())
         {
-            output.timezone = value;
-            warn_if_spark_session_timezone_mismatches_local_timezone(output.timezone.as_str())?;
+            output.session_timezone = value;
+            warn_if_spark_session_timezone_mismatches_local_timezone(
+                output.session_timezone.as_str(),
+                output.system_timezone.as_str(),
+            )?;
         }
 
         if let Some(value) = config
@@ -228,13 +231,13 @@ impl TryFrom<&SparkRuntimeConfig> for SparkUdfConfig {
     type Error = SparkError;
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
-        let mut output = SparkUdfConfig::default();
+        let mut output = SparkUdfConfig::new().map_err(|e| SparkError::internal(format!("{e}")))?;
 
         if let Some(value) = config
             .get(SPARK_SQL_SESSION_TIME_ZONE)?
             .map(|x| x.to_string())
         {
-            output.timezone = value;
+            output.session_timezone = value;
         }
 
         if let Some(value) = config
