@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
@@ -8,6 +9,7 @@ use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use pyo3::{PyObject, Python};
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
+use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
@@ -30,6 +32,7 @@ pub struct PySparkUDF {
     deterministic: bool,
     input_types: Vec<DataType>,
     output_type: DataType,
+    config: Arc<PySparkUdfConfig>,
     udf: LazyPyObject,
 }
 
@@ -41,6 +44,7 @@ impl PySparkUDF {
         deterministic: bool,
         input_types: Vec<DataType>,
         output_type: DataType,
+        config: Arc<PySparkUdfConfig>,
     ) -> Self {
         Self {
             signature: Signature::exact(
@@ -56,6 +60,7 @@ impl PySparkUDF {
             deterministic,
             input_types,
             output_type,
+            config,
             udf: LazyPyObject::new(),
         }
     }
@@ -80,22 +85,38 @@ impl PySparkUDF {
         &self.output_type
     }
 
+    pub fn config(&self) -> &Arc<PySparkUdfConfig> {
+        &self.config
+    }
+
     fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
                 PySparkUdfKind::Batch => {
-                    PySpark::batch_udf(py, udf, &self.input_types, &self.output_type)?
+                    PySpark::batch_udf(py, udf, &self.input_types, &self.output_type, &self.config)?
                 }
-                PySparkUdfKind::ArrowBatch => {
-                    PySpark::arrow_batch_udf(py, udf, &self.input_types, &self.output_type)?
-                }
-                PySparkUdfKind::ScalarPandas => {
-                    PySpark::scalar_pandas_udf(py, udf, &self.input_types, &self.output_type)?
-                }
-                PySparkUdfKind::ScalarPandasIter => {
-                    PySpark::scalar_pandas_iter_udf(py, udf, &self.input_types, &self.output_type)?
-                }
+                PySparkUdfKind::ArrowBatch => PySpark::arrow_batch_udf(
+                    py,
+                    udf,
+                    &self.input_types,
+                    &self.output_type,
+                    &self.config,
+                )?,
+                PySparkUdfKind::ScalarPandas => PySpark::scalar_pandas_udf(
+                    py,
+                    udf,
+                    &self.input_types,
+                    &self.output_type,
+                    &self.config,
+                )?,
+                PySparkUdfKind::ScalarPandasIter => PySpark::scalar_pandas_iter_udf(
+                    py,
+                    udf,
+                    &self.input_types,
+                    &self.output_type,
+                    &self.config,
+                )?,
             };
             Ok(udf.unbind())
         })?;

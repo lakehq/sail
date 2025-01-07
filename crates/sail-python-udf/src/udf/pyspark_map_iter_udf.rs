@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
@@ -8,6 +9,7 @@ use sail_common::udf::StreamUDF;
 use sail_common::utils::rename_record_batch_stream;
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
+use crate::config::PySparkUdfConfig;
 use crate::error::PyUdfResult;
 use crate::stream::PyMapStream;
 use crate::utils::spark::PySpark;
@@ -25,6 +27,7 @@ pub struct PySparkMapIterUDF {
     payload: Vec<u8>,
     input_names: Vec<String>,
     output_schema: SchemaRef,
+    config: Arc<PySparkUdfConfig>,
 }
 
 impl PySparkMapIterUDF {
@@ -34,6 +37,7 @@ impl PySparkMapIterUDF {
         payload: Vec<u8>,
         input_names: Vec<String>,
         output_schema: SchemaRef,
+        config: Arc<PySparkUdfConfig>,
     ) -> Self {
         Self {
             kind,
@@ -41,6 +45,7 @@ impl PySparkMapIterUDF {
             payload,
             input_names,
             output_schema,
+            config,
         }
     }
 
@@ -55,6 +60,10 @@ impl PySparkMapIterUDF {
     pub fn input_names(&self) -> &[String] {
         &self.input_names
     }
+
+    pub fn config(&self) -> &Arc<PySparkUdfConfig> {
+        &self.config
+    }
 }
 
 #[derive(PartialEq, PartialOrd)]
@@ -63,6 +72,7 @@ struct PySparkMapIterUDFOrd<'a> {
     name: &'a String,
     payload: &'a Vec<u8>,
     input_names: &'a [String],
+    config: &'a PySparkUdfConfig,
 }
 
 impl<'a> From<&'a PySparkMapIterUDF> for PySparkMapIterUDFOrd<'a> {
@@ -72,6 +82,7 @@ impl<'a> From<&'a PySparkMapIterUDF> for PySparkMapIterUDFOrd<'a> {
             name: &udf.name,
             payload: &udf.payload,
             input_names: &udf.input_names,
+            config: &udf.config,
         }
     }
 }
@@ -96,9 +107,9 @@ impl StreamUDF for PySparkMapIterUDF {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
                 PySparkMapIterKind::Pandas => {
-                    PySpark::map_pandas_iter_udf(py, udf, self.output_schema.clone())?
+                    PySpark::map_pandas_iter_udf(py, udf, self.output_schema.clone(), &self.config)?
                 }
-                PySparkMapIterKind::Arrow => PySpark::map_arrow_iter_udf(py, udf)?,
+                PySparkMapIterKind::Arrow => PySpark::map_arrow_iter_udf(py, udf, &self.config)?,
             };
             Ok(udf.unbind())
         })?;

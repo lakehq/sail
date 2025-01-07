@@ -112,7 +112,7 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &((0..arguments.len()).collect::<Vec<_>>()),
-            &self.config.spark_udf_config,
+            &self.config.pyspark_udf_config,
         )?;
 
         match function.eval_type {
@@ -136,6 +136,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
@@ -150,6 +151,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
@@ -164,6 +166,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
@@ -178,6 +181,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
@@ -192,6 +196,7 @@ impl PlanResolver<'_> {
                     argument_names.to_vec(),
                     input_types,
                     function.output_type,
+                    self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::AggregateFunction(expr::AggregateFunction {
                     func: Arc::new(AggregateUDF::from(udaf)),
@@ -224,7 +229,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             arguments.len(),
             &function.return_type,
-            &self.config.spark_udf_config,
+            &self.config.pyspark_udf_config,
         )?;
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
@@ -272,7 +277,7 @@ impl PlanResolver<'_> {
             function.return_type,
             function_output_names,
             deterministic,
-            (&self.config.spark_udf_config).into(),
+            self.config.pyspark_udf_config.clone(),
         )?;
         let output_names = state.register_fields(&udtf.output_schema());
         let output_qualifiers = (0..output_names.len())

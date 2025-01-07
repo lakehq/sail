@@ -13,10 +13,10 @@ use datafusion_expr::ScalarUDFImpl;
 use pyo3::{PyObject, Python};
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
+use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
-use crate::udf::ColumnMatch;
 use crate::utils::spark::PySpark;
 
 #[derive(Debug)]
@@ -31,7 +31,7 @@ pub struct PySparkCoGroupMapUDF {
     right_inner_schema: SchemaRef,
     output_type: DataType,
     output_inner_schema: SchemaRef,
-    column_match: ColumnMatch,
+    config: Arc<PySparkUdfConfig>,
     udf: LazyPyObject,
 }
 
@@ -43,7 +43,7 @@ impl PySparkCoGroupMapUDF {
         left_type: DataType,
         right_type: DataType,
         output_type: DataType,
-        column_match: ColumnMatch,
+        config: Arc<PySparkUdfConfig>,
     ) -> Result<Self> {
         let input_types = vec![left_type.clone(), right_type.clone()];
         let left_inner_schema = Self::get_inner_schema(&left_type)?;
@@ -66,7 +66,7 @@ impl PySparkCoGroupMapUDF {
             right_inner_schema,
             output_type,
             output_inner_schema,
-            column_match,
+            config,
             udf: LazyPyObject::new(),
         })
     }
@@ -91,20 +91,17 @@ impl PySparkCoGroupMapUDF {
         &self.output_type
     }
 
-    pub fn column_match(&self) -> ColumnMatch {
-        self.column_match
+    pub fn config(&self) -> &Arc<PySparkUdfConfig> {
+        &self.config
     }
 
     fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
-            Ok(PySpark::cogroup_map_udf(
-                py,
-                udf,
-                self.output_inner_schema.clone(),
-                self.column_match,
-            )?
-            .unbind())
+            Ok(
+                PySpark::cogroup_map_udf(py, udf, self.output_inner_schema.clone(), &self.config)?
+                    .unbind(),
+            )
         })?;
         Ok(udf.clone_ref(py))
     }

@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use sail_python_udf::config::SparkUdfConfig;
+use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::formatter::{DefaultPlanFormatter, PlanFormatter};
 
@@ -25,8 +25,7 @@ pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     /// The plan formatter.
     pub plan_formatter: Arc<F>,
     /// The Spark UDF configuration.
-    // TODO: use `Arc` for cheap cloning.
-    pub spark_udf_config: SparkUdfConfig,
+    pub pyspark_udf_config: Arc<PySparkUdfConfig>,
     /// The default file format for bounded tables.
     pub default_bounded_table_file_format: String,
     /// The default file format for unbounded tables.
@@ -45,7 +44,7 @@ impl Default for PlanConfig {
             timestamp_type: TimestampType::TimestampLtz,
             arrow_use_large_var_types: false,
             plan_formatter: Arc::new(DefaultPlanFormatter),
-            spark_udf_config: SparkUdfConfig::default(),
+            pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
             default_bounded_table_file_format: "PARQUET".to_string(),
             default_unbounded_table_file_format: "ARROW".to_string(),
             default_warehouse_directory: "spark-warehouse".to_string(),

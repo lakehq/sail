@@ -12,7 +12,7 @@ use pyo3::Python;
 use sail_common::udf::StreamUDF;
 
 use crate::cereal::pyspark_udtf::PySparkUdtfPayload;
-use crate::config::SparkUdfConfig;
+use crate::config::PySparkUdfConfig;
 use crate::error::PyUdfResult;
 use crate::stream::PyMapStream;
 use crate::utils::spark::PySpark;
@@ -21,21 +21,6 @@ use crate::utils::spark::PySpark;
 pub enum PySparkUdtfKind {
     Table,
     ArrowTable,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub struct PySparkUdtfOptions {
-    pub timezone: String,
-    pub arrow_cast_safe_check: bool,
-}
-
-impl From<&SparkUdfConfig> for PySparkUdtfOptions {
-    fn from(config: &SparkUdfConfig) -> Self {
-        Self {
-            timezone: config.timezone.clone(),
-            arrow_cast_safe_check: config.pandas_convert_to_arrow_array_safely,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -56,7 +41,7 @@ pub struct PySparkUDTF {
     /// The optional names to override the field names in the UDTF return type.
     function_output_names: Option<Vec<String>>,
     deterministic: bool,
-    options: PySparkUdtfOptions,
+    config: Arc<PySparkUdfConfig>,
     /// The output schema of the UDTF output stream.
     /// The output batch contains the passthrough non-argument columns from the input batch,
     /// followed by the columns of the UDTF output.
@@ -74,7 +59,7 @@ struct PySparkUDTFOrd<'a> {
     function_return_type: &'a DataType,
     function_output_names: &'a Option<Vec<String>>,
     deterministic: &'a bool,
-    options: &'a PySparkUdtfOptions,
+    config: &'a PySparkUdfConfig,
 }
 
 impl<'a> From<&'a PySparkUDTF> for PySparkUDTFOrd<'a> {
@@ -89,7 +74,7 @@ impl<'a> From<&'a PySparkUDTF> for PySparkUDTFOrd<'a> {
             function_return_type: &udtf.function_return_type,
             function_output_names: &udtf.function_output_names,
             deterministic: &udtf.deterministic,
-            options: &udtf.options,
+            config: &udtf.config,
         }
     }
 }
@@ -112,7 +97,7 @@ impl PySparkUDTF {
         function_return_type: DataType,
         function_output_names: Option<Vec<String>>,
         deterministic: bool,
-        options: PySparkUdtfOptions,
+        config: Arc<PySparkUdfConfig>,
     ) -> Result<Self> {
         if input_names.len() != input_types.len() {
             return plan_err!(
@@ -175,7 +160,7 @@ impl PySparkUDTF {
             function_output_names,
             output_schema: Arc::new(Schema::new(output_fields)),
             deterministic,
-            options,
+            config,
         })
     }
 
@@ -211,8 +196,8 @@ impl PySparkUDTF {
         self.deterministic
     }
 
-    pub fn options(&self) -> &PySparkUdtfOptions {
-        &self.options
+    pub fn config(&self) -> &Arc<PySparkUdfConfig> {
+        &self.config
     }
 }
 
@@ -241,6 +226,7 @@ impl StreamUDF for PySparkUDTF {
                     &self.input_types,
                     self.passthrough_columns,
                     &self.output_schema,
+                    &self.config,
                 )?,
                 PySparkUdtfKind::ArrowTable => PySpark::arrow_table_udf(
                     py,
@@ -248,8 +234,7 @@ impl StreamUDF for PySparkUDTF {
                     &self.input_names,
                     self.passthrough_columns,
                     &self.output_schema,
-                    &self.options.timezone,
-                    self.options.arrow_cast_safe_check,
+                    &self.config,
                 )?,
             };
             Ok(udtf.unbind())

@@ -5,7 +5,7 @@ use pyo3::{intern, PyObject, Python, ToPyObject};
 use sail_common::spec;
 
 use crate::cereal::{check_python_udf_version, should_write_config};
-use crate::config::SparkUdfConfig;
+use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
 
 pub struct PySparkUdfPayload;
@@ -36,7 +36,7 @@ impl PySparkUdfPayload {
         command: &[u8],
         eval_type: spec::PySparkUdfType,
         arg_offsets: &[usize],
-        config: &SparkUdfConfig,
+        config: &PySparkUdfConfig,
     ) -> PyUdfResult<Vec<u8>> {
         check_python_udf_version(python_version)?;
         let mut data: Vec<u8> = Vec::new();

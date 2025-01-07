@@ -910,7 +910,7 @@ impl PlanResolver<'_> {
                         &function.command,
                         function.eval_type,
                         &((0..arguments.len()).collect::<Vec<_>>()),
-                        &self.config.spark_udf_config,
+                        &self.config.pyspark_udf_config,
                     )?;
                     let function = match function.eval_type {
                         PySparkUdfType::GroupedAggPandas => {
@@ -921,6 +921,7 @@ impl PlanResolver<'_> {
                                 argument_names.clone(),
                                 input_types,
                                 function.output_type,
+                                self.config.pyspark_udf_config.clone(),
                             );
                             let udaf = AggregateUDF::from(udaf);
                             expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf))

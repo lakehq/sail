@@ -12,10 +12,10 @@ use pyo3::{PyObject, Python};
 
 use crate::accumulator::{BatchAggregateAccumulator, BatchAggregator};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
+use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::{PyUdfError, PyUdfResult};
 use crate::lazy::LazyPyObject;
-use crate::udf::ColumnMatch;
 use crate::utils::spark::PySpark;
 
 #[derive(Debug)]
@@ -27,7 +27,7 @@ pub struct PySparkGroupMapUDF {
     input_names: Vec<String>,
     input_types: Vec<DataType>,
     output_type: DataType,
-    column_match: ColumnMatch,
+    config: Arc<PySparkUdfConfig>,
     udf: LazyPyObject,
 }
 
@@ -39,7 +39,7 @@ impl PySparkGroupMapUDF {
         input_names: Vec<String>,
         input_types: Vec<DataType>,
         output_type: DataType,
-        column_match: ColumnMatch,
+        config: Arc<PySparkUdfConfig>,
     ) -> Self {
         let signature = Signature::exact(
             input_types.clone(),
@@ -56,7 +56,7 @@ impl PySparkGroupMapUDF {
             input_names,
             input_types,
             output_type,
-            column_match,
+            config,
             udf: LazyPyObject::new(),
         }
     }
@@ -81,8 +81,8 @@ impl PySparkGroupMapUDF {
         &self.output_type
     }
 
-    pub fn column_match(&self) -> ColumnMatch {
-        self.column_match
+    pub fn config(&self) -> &Arc<PySparkUdfConfig> {
+        &self.config
     }
 
     fn output_schema(&self) -> PyUdfResult<SchemaRef> {
@@ -104,7 +104,7 @@ impl PySparkGroupMapUDF {
                 udf,
                 self.input_names.clone(),
                 self.output_schema()?,
-                self.column_match,
+                &self.config,
             )?
             .unbind())
         })?;

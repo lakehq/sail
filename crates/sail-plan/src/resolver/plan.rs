@@ -36,12 +36,12 @@ use datafusion_expr::{
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
+use sail_python_udf::udf::get_udf_name;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
-use sail_python_udf::udf::{get_udf_name, ColumnMatch};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
@@ -1682,7 +1682,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             // MapPartitions UDF has the iterator as the only argument
             &[0],
-            &self.config.spark_udf_config,
+            &self.config.pyspark_udf_config,
         )?;
         let kind = match function.eval_type {
             spec::PySparkUdfType::MapPandasIter => PySparkMapIterKind::Pandas,
@@ -1699,6 +1699,7 @@ impl PlanResolver<'_> {
             payload,
             input_names,
             output_schema,
+            self.config.pyspark_udf_config.clone(),
         );
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(MapPartitionsNode::try_new(
@@ -1821,13 +1822,8 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
-            &self.config.spark_udf_config,
+            &self.config.pyspark_udf_config,
         )?;
-        let column_match = ColumnMatch::by_name(
-            self.config
-                .spark_udf_config
-                .pandas_grouped_map_assign_columns_by_name,
-        );
         let udaf = PySparkGroupMapUDF::new(
             get_udf_name(&function_name, &payload),
             payload,
@@ -1835,7 +1831,7 @@ impl PlanResolver<'_> {
             input_names,
             input_types,
             udf_output_type,
-            column_match,
+            self.config.pyspark_udf_config.clone(),
         );
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
             func: Arc::new(AggregateUDF::from(udaf)),
@@ -1942,13 +1938,8 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
-            &self.config.spark_udf_config,
+            &self.config.pyspark_udf_config,
         )?;
-        let column_match = ColumnMatch::by_name(
-            self.config
-                .spark_udf_config
-                .pandas_grouped_map_assign_columns_by_name,
-        );
         let udf = PySparkCoGroupMapUDF::try_new(
             get_udf_name(&function_name, &payload),
             payload,
@@ -1956,7 +1947,7 @@ impl PlanResolver<'_> {
             left.mapper_input_type,
             right.mapper_input_type,
             mapper_output_type,
-            column_match,
+            self.config.pyspark_udf_config.clone(),
         )?;
         let mapping = Expr::ScalarFunction(ScalarFunction {
             func: Arc::new(ScalarUDF::from(udf)),

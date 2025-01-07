@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
-pub struct SparkUdfConfig {
+pub struct PySparkUdfConfig {
     pub timezone: String,
     pub pandas_window_bound_types: Option<String>,
     pub pandas_grouped_map_assign_columns_by_name: bool,
@@ -7,7 +7,7 @@ pub struct SparkUdfConfig {
     pub arrow_max_records_per_batch: usize,
 }
 
-impl Default for SparkUdfConfig {
+impl Default for PySparkUdfConfig {
     fn default() -> Self {
         Self {
             timezone: "UTC".to_string(),
@@ -19,7 +19,7 @@ impl Default for SparkUdfConfig {
     }
 }
 
-impl SparkUdfConfig {
+impl PySparkUdfConfig {
     pub fn with_pandas_window_bound_types(mut self, value: Option<String>) -> Self {
         self.pandas_window_bound_types = value;
         self

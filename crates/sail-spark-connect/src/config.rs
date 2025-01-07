@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
-use sail_python_udf::config::SparkUdfConfig;
+use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
@@ -216,17 +216,17 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         output.plan_formatter = Arc::new(DefaultPlanFormatter);
-        output.spark_udf_config = SparkUdfConfig::try_from(config)?;
+        output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
 
         Ok(output)
     }
 }
 
-impl TryFrom<&SparkRuntimeConfig> for SparkUdfConfig {
+impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
     type Error = SparkError;
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
-        let mut output = SparkUdfConfig::default();
+        let mut output = PySparkUdfConfig::default();
 
         if let Some(value) = config
             .get(SPARK_SQL_SESSION_TIME_ZONE)?

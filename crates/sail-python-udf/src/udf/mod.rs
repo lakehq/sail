@@ -21,26 +21,3 @@ pub fn get_udf_name(name: &str, payload: &[u8]) -> String {
     let hash = BigUint::from_bytes_be(&hash).to_str_radix(36);
     format!("{name}@{hash}")
 }
-
-#[derive(Debug, Copy, Clone)]
-pub enum ColumnMatch {
-    ByName,
-    ByPosition,
-}
-
-impl ColumnMatch {
-    pub fn by_name(value: bool) -> Self {
-        if value {
-            ColumnMatch::ByName
-        } else {
-            ColumnMatch::ByPosition
-        }
-    }
-
-    pub fn is_by_name(&self) -> bool {
-        match self {
-            ColumnMatch::ByName => true,
-            ColumnMatch::ByPosition => false,
-        }
-    }
-}

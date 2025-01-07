@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
 use datafusion::arrow::datatypes::{DataType, Field};
@@ -11,6 +12,7 @@ use pyo3::{PyObject, Python};
 
 use crate::accumulator::{BatchAggregateAccumulator, BatchAggregator};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
+use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
@@ -25,6 +27,7 @@ pub struct PySparkGroupAggregateUDF {
     input_names: Vec<String>,
     input_types: Vec<DataType>,
     output_type: DataType,
+    config: Arc<PySparkUdfConfig>,
     udf: LazyPyObject,
 }
 
@@ -36,6 +39,7 @@ impl PySparkGroupAggregateUDF {
         input_names: Vec<String>,
         input_types: Vec<DataType>,
         output_type: DataType,
+        config: Arc<PySparkUdfConfig>,
     ) -> Self {
         let signature = Signature::exact(
             input_types.clone(),
@@ -52,6 +56,7 @@ impl PySparkGroupAggregateUDF {
             input_names,
             input_types,
             output_type,
+            config,
             udf: LazyPyObject::new(),
         }
     }
@@ -76,6 +81,10 @@ impl PySparkGroupAggregateUDF {
         &self.output_type
     }
 
+    pub fn config(&self) -> &Arc<PySparkUdfConfig> {
+        &self.config
+    }
+
     fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
         let udf = self.udf.get_or_try_init(py, || {
             Ok(PySpark::group_agg_udf(
@@ -84,6 +93,7 @@ impl PySparkGroupAggregateUDF {
                 self.input_names.clone(),
                 &self.input_types,
                 &self.output_type,
+                &self.config,
             )?
             .unbind())
         })?;
