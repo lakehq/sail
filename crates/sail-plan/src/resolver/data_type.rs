@@ -520,7 +520,7 @@ impl PlanResolver<'_> {
         let system_timezone = Some(config_system_timezone.into());
         let resolved_timezone = match timezone {
             spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
-                TimestampType::TimestampLtz => Some("UTC".into()),
+                TimestampType::TimestampLtz => None,
                 TimestampType::TimestampNtz => None,
             },
             spec::TimeZoneInfo::LocalTimeZone => system_timezone,
