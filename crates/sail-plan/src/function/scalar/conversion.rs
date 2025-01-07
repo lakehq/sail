@@ -19,7 +19,7 @@ fn timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<
                     string_to_timestamp_nanos(&timestamp_string).map(|x| x / 1_000)?;
                 let timezone: Arc<str> = function_context
                     .plan_config()
-                    .system_timezone
+                    .session_timezone
                     .clone()
                     .into();
                 Ok(Expr::Literal(ScalarValue::TimestampMicrosecond(

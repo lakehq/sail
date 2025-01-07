@@ -163,7 +163,7 @@ fn unix_timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanRe
     } else if args.len() == 1 {
         let timezone: Arc<str> = function_context
             .plan_config()
-            .system_timezone
+            .session_timezone
             .clone()
             .into();
         Ok(Expr::ScalarFunction(expr::ScalarFunction {
@@ -173,7 +173,7 @@ fn unix_timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanRe
     } else if args.len() == 2 {
         let timezone: Arc<str> = function_context
             .plan_config()
-            .system_timezone
+            .session_timezone
             .clone()
             .into();
         let (expr, format) = args.two()?;
@@ -226,7 +226,7 @@ fn weekofyear(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult
     if args.len() == 1 {
         let timezone: Arc<str> = function_context
             .plan_config()
-            .system_timezone
+            .session_timezone
             .clone()
             .into();
         Ok(Expr::ScalarFunction(expr::ScalarFunction {
