@@ -1287,7 +1287,27 @@ impl PlanResolver<'_> {
                     Box::new(lit(1i64)),
                 )),
             ),
-            DataType::Struct(_) | DataType::Map(_, _) => expr.field(extraction),
+            DataType::Struct(fields) => {
+                let ScalarValue::Utf8(Some(name)) = extraction else {
+                    return Err(PlanError::AnalysisError(format!(
+                        "invalid extraction value for struct: {extraction}"
+                    )));
+                };
+                let Ok(name) = fields
+                    .iter()
+                    .filter(|x| x.name().eq_ignore_ascii_case(&name))
+                    .map(|x| x.name().to_string())
+                    .collect::<Vec<_>>()
+                    .one()
+                else {
+                    return Err(PlanError::AnalysisError(format!(
+                        "missing or ambiguous field: {name}"
+                    )));
+                };
+                expr.field(name)
+            }
+            // TODO: support non-string map keys
+            DataType::Map(_, _) => expr.field(extraction),
             _ => {
                 return Err(PlanError::AnalysisError(format!(
                     "cannot extract value from data type: {data_type}"
