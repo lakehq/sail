@@ -1,11 +1,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
+use datafusion::arrow::array::{make_array, Array, ArrayData, ArrayRef, ListArray};
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
-use datafusion_common::arrow::datatypes::SchemaRef;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::AggregateUDFImpl;
 use pyo3::{PyObject, Python};
@@ -85,25 +84,18 @@ impl PySparkGroupMapUDF {
         &self.config
     }
 
-    fn output_schema(&self) -> PyUdfResult<SchemaRef> {
-        let schema = match &self.output_type {
-            DataType::List(field) => match field.data_type() {
-                DataType::Struct(fields) => Arc::new(Schema::new(fields.clone())),
-                _ => return Err(PyUdfError::invalid("group map output type")),
-            },
+    fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
+        let field = match &self.output_type {
+            DataType::List(field) => field,
             _ => return Err(PyUdfError::invalid("group map output type")),
         };
-        Ok(schema)
-    }
-
-    fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             Ok(PySpark::group_map_udf(
                 py,
                 udf,
                 self.input_names.clone(),
-                self.output_schema()?,
+                field.data_type(),
                 &self.config,
             )?
             .unbind())
@@ -153,11 +145,11 @@ struct PySparkGroupMapper {
 
 impl BatchAggregator for PySparkGroupMapper {
     fn call(&self, args: &[ArrayRef]) -> PyUdfResult<ArrayRef> {
-        let batch = Python::with_gil(|py| {
+        let output = Python::with_gil(|py| {
             let output = self.udf.call1(py, (args.try_to_py(py)?,))?;
-            RecordBatch::try_from_py(py, &output)
+            ArrayData::try_from_py(py, &output)
         })?;
-        let array = StructArray::from(batch);
+        let array = make_array(output);
         let array = ListArray::new(
             Arc::new(Field::new_list_field(array.data_type().clone(), false)),
             OffsetBuffer::from_lengths(vec![array.len()]),

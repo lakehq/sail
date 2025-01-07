@@ -1,9 +1,17 @@
+use pyo3::pyclass;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+#[pyclass(frozen)]
 pub struct PySparkUdfConfig {
+    #[pyo3(get)]
     pub timezone: String,
+    #[pyo3(get, name = "window_bound_types")]
     pub pandas_window_bound_types: Option<String>,
+    #[pyo3(get, name = "assign_columns_by_name")]
     pub pandas_grouped_map_assign_columns_by_name: bool,
+    #[pyo3(get, name = "arrow_convert_safely")]
     pub pandas_convert_to_arrow_array_safely: bool,
+    #[pyo3(get)]
     pub arrow_max_records_per_batch: usize,
 }
 

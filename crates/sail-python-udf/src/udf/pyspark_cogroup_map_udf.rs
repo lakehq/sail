@@ -15,7 +15,7 @@ use pyo3::{PyObject, Python};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
-use crate::error::PyUdfResult;
+use crate::error::{PyUdfError, PyUdfResult};
 use crate::lazy::LazyPyObject;
 use crate::utils::spark::PySpark;
 
@@ -96,12 +96,13 @@ impl PySparkCoGroupMapUDF {
     }
 
     fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
+        let field = match &self.output_type {
+            DataType::List(field) => field,
+            _ => return Err(PyUdfError::invalid("co-group map output type")),
+        };
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
-            Ok(
-                PySpark::cogroup_map_udf(py, udf, self.output_inner_schema.clone(), &self.config)?
-                    .unbind(),
-            )
+            Ok(PySpark::cogroup_map_udf(py, udf, field.data_type(), &self.config)?.unbind())
         })?;
         Ok(udf.clone_ref(py))
     }
