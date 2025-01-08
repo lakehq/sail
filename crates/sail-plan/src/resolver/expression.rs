@@ -730,18 +730,13 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let mut scope = {
-            let mut scope = state.enter_config_scope();
-            if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
-                if let Some(_f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
-                    scope
-                        .state()
-                        .register_config_apply_arrow_use_large_var_types(true);
-                }
-            }
-            scope
-        };
+        let mut scope = state.enter_config_scope();
         let state = scope.state();
+        if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
+            if let Some(_f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+                state.register_config_apply_arrow_use_large_var_types(true);
+            }
+        }
 
         let (argument_names, arguments) = self
             .resolve_expressions_and_names(arguments, schema, state)
