@@ -10,32 +10,20 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(super) fn arrow_binary_type(
-        &self,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<adt::DataType> {
-        let binary_type = if state.get_config_apply_arrow_use_large_var_types()?
-            && self.config.arrow_use_large_var_types
-        {
+    fn arrow_binary_type(&self, state: &mut PlanResolverState) -> adt::DataType {
+        if self.config.arrow_use_large_var_types && state.config().arrow_allow_large_var_types {
             adt::DataType::LargeBinary
         } else {
             adt::DataType::Binary
-        };
-        Ok(binary_type)
+        }
     }
 
-    pub(super) fn arrow_string_type(
-        &self,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<adt::DataType> {
-        let string_type = if state.get_config_apply_arrow_use_large_var_types()?
-            && self.config.arrow_use_large_var_types
-        {
+    fn arrow_string_type(&self, state: &mut PlanResolverState) -> adt::DataType {
+        if self.config.arrow_use_large_var_types && state.config().arrow_allow_large_var_types {
             adt::DataType::LargeUtf8
         } else {
             adt::DataType::Utf8
-        };
-        Ok(string_type)
+        }
     }
 
     /// References:
@@ -208,9 +196,9 @@ impl PlanResolver<'_> {
             DataType::ConfiguredUtf8 { utf8_type: _ } => {
                 // FIXME: Currently `length` and `utf8_type` is lost in translation.
                 //  This impacts accuracy if `spec::ConfiguredUtf8Type` is `VarChar` or `Char`.
-                self.arrow_string_type(state)
+                Ok(self.arrow_string_type(state))
             }
-            DataType::ConfiguredBinary => self.arrow_binary_type(state),
+            DataType::ConfiguredBinary => Ok(self.arrow_binary_type(state)),
             DataType::UserDefined { .. } => Err(PlanError::unsupported(
                 "user defined data type should only exist in a field",
             )),

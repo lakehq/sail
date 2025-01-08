@@ -13,7 +13,10 @@ pub(super) type FieldName = String;
 
 pub(super) type ResolvedFieldName = String;
 
-pub(super) const APPLY_ARROW_USE_LARGE_VAR_TYPES: &str = "APPLY_ARROW_USE_LARGE_VAR_TYPES";
+#[derive(Debug, Clone, Default)]
+pub(super) struct PlanResolverStateConfig {
+    pub arrow_allow_large_var_types: bool,
+}
 
 #[derive(Debug)]
 pub(super) struct PlanResolverState {
@@ -24,7 +27,7 @@ pub(super) struct PlanResolverState {
     outer_query_schema: Option<DFSchemaRef>,
     /// The CTEs for the current query.
     ctes: HashMap<TableReference, Arc<LogicalPlan>>,
-    configs: HashMap<String, String>,
+    config: PlanResolverStateConfig,
 }
 
 impl Default for PlanResolverState {
@@ -41,7 +44,7 @@ impl PlanResolverState {
             attributes: HashMap::new(),
             outer_query_schema: None,
             ctes: HashMap::new(),
-            configs: HashMap::new(),
+            config: PlanResolverStateConfig::default(),
         }
     }
 
@@ -143,23 +146,13 @@ impl PlanResolverState {
     //      https://github.com/search?q=repo%3Aapache%2Fspark%20%22useLargeVarTypes%22&type=code
     //  2. We are likely overly liberal in setting this flag to `true`.
     //     Evaluate if we are unnecessarily setting this flag to `true` anywhere.
-    pub fn register_config_apply_arrow_use_large_var_types(&mut self, apply: bool) {
-        self.configs.insert(
-            APPLY_ARROW_USE_LARGE_VAR_TYPES.to_string(),
-            apply.to_string(),
-        );
+
+    pub fn config(&self) -> &PlanResolverStateConfig {
+        &self.config
     }
 
-    pub fn get_config_apply_arrow_use_large_var_types(&self) -> PlanResult<bool> {
-        self.configs
-            .get(APPLY_ARROW_USE_LARGE_VAR_TYPES)
-            .map_or(Ok(false), |s| {
-                s.parse::<bool>().map_err(|e| {
-                    PlanError::InvalidArgument(format!(
-                        "Invalid bool value for apply_arrow_use_large_var_types_config: {e}"
-                    ))
-                })
-            })
+    pub fn config_mut(&mut self) -> &mut PlanResolverStateConfig {
+        &mut self.config
     }
 }
 
@@ -216,15 +209,15 @@ impl Drop for CteScope<'_> {
 
 pub(crate) struct ConfigScope<'a> {
     state: &'a mut PlanResolverState,
-    previous_configs: HashMap<String, String>,
+    previous_config: PlanResolverStateConfig,
 }
 
 impl<'a> ConfigScope<'a> {
     fn new(state: &'a mut PlanResolverState) -> Self {
-        let previous_configs = state.configs.clone();
+        let previous_config = state.config.clone();
         Self {
             state,
-            previous_configs,
+            previous_config,
         }
     }
 
@@ -235,6 +228,6 @@ impl<'a> ConfigScope<'a> {
 
 impl Drop for ConfigScope<'_> {
     fn drop(&mut self) {
-        self.state.configs = std::mem::take(&mut self.previous_configs);
+        self.state.config = std::mem::take(&mut self.previous_config);
     }
 }

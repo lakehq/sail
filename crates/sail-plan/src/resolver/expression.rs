@@ -733,8 +733,8 @@ impl PlanResolver<'_> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
         if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
-            if let Some(_f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
-                state.register_config_apply_arrow_use_large_var_types(true);
+            if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
+                state.config_mut().arrow_allow_large_var_types = true;
             }
         }
 
@@ -895,7 +895,7 @@ impl PlanResolver<'_> {
                 spec::Expr::CommonInlineUserDefinedFunction(function) => {
                     let mut scope = state.enter_config_scope();
                     let state = scope.state();
-                    state.register_config_apply_arrow_use_large_var_types(true);
+                    state.config_mut().arrow_allow_large_var_types = true;
                     let spec::CommonInlineUserDefinedFunction {
                         function_name,
                         deterministic,
@@ -1163,7 +1163,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        state.register_config_apply_arrow_use_large_var_types(true);
+        state.config_mut().arrow_allow_large_var_types = true;
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
