@@ -20,7 +20,7 @@ pub(super) struct PlanResolverState {
     outer_query_schema: Option<DFSchemaRef>,
     /// The CTEs for the current query.
     ctes: HashMap<TableReference, Arc<LogicalPlan>>,
-    apply_arrow_use_large_var_types_config: bool,
+    configs: HashMap<String, String>,
 }
 
 impl Default for PlanResolverState {
@@ -37,7 +37,7 @@ impl PlanResolverState {
             attributes: HashMap::new(),
             outer_query_schema: None,
             ctes: HashMap::new(),
-            apply_arrow_use_large_var_types_config: false,
+            configs: HashMap::new(),
         }
     }
 
@@ -127,6 +127,10 @@ impl PlanResolverState {
         self.ctes.insert(table_ref, Arc::new(plan));
     }
 
+    pub fn enter_config_scope(&mut self) -> ConfigScope {
+        ConfigScope::new(self)
+    }
+
     // TODO:
     //  1. It's unclear which `PySparkUdfType`s rely on the `arrow_use_large_var_types` config.
     //     While searching through the Spark codebase provides insight into this config's usage,
@@ -135,12 +139,23 @@ impl PlanResolverState {
     //      https://github.com/search?q=repo%3Aapache%2Fspark%20%22useLargeVarTypes%22&type=code
     //  2. We are likely overly liberal in setting this flag to `true`.
     //     Evaluate if we are unnecessarily setting this flag to `true` anywhere.
-    pub fn register_apply_arrow_use_large_var_types_config(&mut self, apply: bool) {
-        self.apply_arrow_use_large_var_types_config = apply;
+    pub fn register_config_apply_arrow_use_large_var_types(&mut self, apply: bool) {
+        self.configs.insert(
+            "apply_arrow_use_large_var_types".to_string(),
+            apply.to_string(),
+        );
     }
 
-    pub fn get_apply_arrow_use_large_var_types_config(&self) -> bool {
-        self.apply_arrow_use_large_var_types_config
+    pub fn get_config_apply_arrow_use_large_var_types(&self) -> PlanResult<bool> {
+        self.configs
+            .get("apply_arrow_use_large_var_types_config")
+            .map_or(Ok(false), |s| {
+                s.parse::<bool>().map_err(|e| {
+                    PlanError::InvalidArgument(format!(
+                        "Invalid bool value for apply_arrow_use_large_var_types_config: {e}"
+                    ))
+                })
+            })
     }
 }
 
@@ -192,5 +207,30 @@ impl<'a> CteScope<'a> {
 impl Drop for CteScope<'_> {
     fn drop(&mut self) {
         self.state.ctes = std::mem::take(&mut self.previous_ctes);
+    }
+}
+
+pub(crate) struct ConfigScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_configs: HashMap<String, String>,
+}
+
+impl<'a> ConfigScope<'a> {
+    fn new(state: &'a mut PlanResolverState) -> Self {
+        let previous_configs = state.configs.clone();
+        Self {
+            state,
+            previous_configs,
+        }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for ConfigScope<'_> {
+    fn drop(&mut self) {
+        self.state.configs = std::mem::take(&mut self.previous_configs);
     }
 }

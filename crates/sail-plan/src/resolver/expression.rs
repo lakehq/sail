@@ -732,7 +732,9 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
             if let Some(_f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
-                state.register_apply_arrow_use_large_var_types_config(true);
+                let mut scope = state.enter_config_scope();
+                let state = scope.state();
+                state.register_config_apply_arrow_use_large_var_types(true);
             }
         }
         let (argument_names, arguments) = self
@@ -890,7 +892,9 @@ impl PlanResolver<'_> {
                     )
                 }
                 spec::Expr::CommonInlineUserDefinedFunction(function) => {
-                    state.register_apply_arrow_use_large_var_types_config(true);
+                    let mut scope = state.enter_config_scope();
+                    let state = scope.state();
+                    state.register_config_apply_arrow_use_large_var_types(true);
                     let spec::CommonInlineUserDefinedFunction {
                         function_name,
                         deterministic,
@@ -1155,7 +1159,9 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        state.register_apply_arrow_use_large_var_types_config(true);
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.register_config_apply_arrow_use_large_var_types(true);
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
