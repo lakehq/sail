@@ -8,8 +8,12 @@ use datafusion_expr::LogicalPlan;
 use crate::error::{PlanError, PlanResult};
 
 pub(super) type PlanId = i64;
+
 pub(super) type FieldName = String;
+
 pub(super) type ResolvedFieldName = String;
+
+pub(super) const APPLY_ARROW_USE_LARGE_VAR_TYPES: &str = "APPLY_ARROW_USE_LARGE_VAR_TYPES";
 
 #[derive(Debug)]
 pub(super) struct PlanResolverState {
@@ -141,14 +145,14 @@ impl PlanResolverState {
     //     Evaluate if we are unnecessarily setting this flag to `true` anywhere.
     pub fn register_config_apply_arrow_use_large_var_types(&mut self, apply: bool) {
         self.configs.insert(
-            "apply_arrow_use_large_var_types".to_string(),
+            APPLY_ARROW_USE_LARGE_VAR_TYPES.to_string(),
             apply.to_string(),
         );
     }
 
     pub fn get_config_apply_arrow_use_large_var_types(&self) -> PlanResult<bool> {
         self.configs
-            .get("apply_arrow_use_large_var_types_config")
+            .get(APPLY_ARROW_USE_LARGE_VAR_TYPES)
             .map_or(Ok(false), |s| {
                 s.parse::<bool>().map_err(|e| {
                     PlanError::InvalidArgument(format!(
