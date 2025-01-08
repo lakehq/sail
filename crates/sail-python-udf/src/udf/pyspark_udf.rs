@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -96,27 +97,11 @@ impl PySparkUDF {
                 PySparkUdfKind::Batch => {
                     PySpark::batch_udf(py, udf, &self.input_types, &self.output_type, &self.config)?
                 }
-                PySparkUdfKind::ArrowBatch => PySpark::arrow_batch_udf(
-                    py,
-                    udf,
-                    &self.input_types,
-                    &self.output_type,
-                    &self.config,
-                )?,
-                PySparkUdfKind::ScalarPandas => PySpark::scalar_pandas_udf(
-                    py,
-                    udf,
-                    &self.input_types,
-                    &self.output_type,
-                    &self.config,
-                )?,
-                PySparkUdfKind::ScalarPandasIter => PySpark::scalar_pandas_iter_udf(
-                    py,
-                    udf,
-                    &self.input_types,
-                    &self.output_type,
-                    &self.config,
-                )?,
+                PySparkUdfKind::ArrowBatch => PySpark::arrow_batch_udf(py, udf, &self.config)?,
+                PySparkUdfKind::ScalarPandas => PySpark::scalar_pandas_udf(py, udf, &self.config)?,
+                PySparkUdfKind::ScalarPandasIter => {
+                    PySpark::scalar_pandas_iter_udf(py, udf, &self.config)?
+                }
             };
             Ok(udf.unbind())
         })?;
@@ -144,10 +129,11 @@ impl ScalarUDFImpl for PySparkUDF {
     fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
         let udf = Python::with_gil(|py| self.udf(py))?;
-        let output = Python::with_gil(|py| -> PyUdfResult<_> {
+        let data = Python::with_gil(|py| -> PyUdfResult<_> {
             let output = udf.call1(py, (args.try_to_py(py)?, number_rows))?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;
-        Ok(ColumnarValue::Array(make_array(output)))
+        let array = cast(&make_array(data), &self.output_type)?;
+        Ok(ColumnarValue::Array(array))
     }
 }

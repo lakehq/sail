@@ -2,6 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayData, ArrayRef, AsArray};
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, Signature, Volatility};
@@ -104,7 +105,6 @@ impl PySparkCoGroupMapUDF {
     }
 
     fn udf(&self, py: Python) -> Result<PyObject> {
-        let field = get_list_field(&self.output_type)?;
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             Ok(PySpark::cogroup_map_udf(
@@ -112,7 +112,6 @@ impl PySparkCoGroupMapUDF {
                 udf,
                 self.left_names.clone(),
                 self.right_names.clone(),
-                field.data_type(),
                 &self.config,
             )?
             .unbind())
@@ -165,15 +164,17 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
             );
         }
         let udf = Python::with_gil(|py| self.udf(py))?;
+        let field = get_list_field(self.output_type())?;
         let arrays = (0..left.len())
             .map(|i| {
                 let left = Self::get_group(&left, i)?;
                 let right = Self::get_group(&right, i)?;
-                let array = Python::with_gil(|py| -> PyUdfResult<_> {
+                let data = Python::with_gil(|py| -> PyUdfResult<_> {
                     let output = udf.call1(py, (left.try_to_py(py)?, right.try_to_py(py)?))?;
                     Ok(ArrayData::try_from_py(py, &output)?)
                 })?;
-                Ok(make_array(array))
+                let array = cast(&make_array(data), field.data_type())?;
+                Ok(array)
             })
             .collect::<Result<Vec<_>>>()?;
         let array = build_list_array(&arrays, &self.output_type)?;

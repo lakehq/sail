@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::Result;
 use pyo3::Python;
@@ -106,10 +106,7 @@ impl StreamUDF for PySparkMapIterUDF {
         let function = Python::with_gil(|py| -> PyUdfResult<_> {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
-                PySparkMapIterKind::Pandas => {
-                    let output_type = DataType::Struct(self.output_schema.fields().clone());
-                    PySpark::map_pandas_iter_udf(py, udf, &output_type, &self.config)?
-                }
+                PySparkMapIterKind::Pandas => PySpark::map_pandas_iter_udf(py, udf, &self.config)?,
                 PySparkMapIterKind::Arrow => PySpark::map_arrow_iter_udf(py, udf, &self.config)?,
             };
             Ok(udf.unbind())

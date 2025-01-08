@@ -48,57 +48,36 @@ impl PySpark {
     pub fn arrow_batch_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
-        input_types: &[DataType],
-        output_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkArrowBatchUdf"),
-            (
-                udf,
-                input_types.try_to_py(py)?,
-                output_type.try_to_py(py)?,
-                config.clone(),
-            ),
+            (udf, config.clone()),
         )
     }
 
     pub fn scalar_pandas_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
-        input_types: &[DataType],
-        output_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkScalarPandasUdf"),
-            (
-                udf,
-                input_types.try_to_py(py)?,
-                output_type.try_to_py(py)?,
-                config.clone(),
-            ),
+            (udf, config.clone()),
         )
     }
 
     pub fn scalar_pandas_iter_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
-        input_types: &[DataType],
-        output_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkScalarPandasIterUdf"),
-            (
-                udf,
-                input_types.try_to_py(py)?,
-                output_type.try_to_py(py)?,
-                config.clone(),
-            ),
+            (udf, config.clone()),
         )
     }
 
@@ -106,20 +85,12 @@ impl PySpark {
         py: Python<'py>,
         udf: PyObject,
         input_names: Vec<String>,
-        input_types: &[DataType],
-        output_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkGroupAggUdf"),
-            (
-                udf,
-                input_names,
-                input_types.try_to_py(py)?,
-                output_type.try_to_py(py)?,
-                config.clone(),
-            ),
+            (udf, input_names, config.clone()),
         )
     }
 
@@ -127,13 +98,12 @@ impl PySpark {
         py: Python<'py>,
         udf: PyObject,
         input_names: Vec<String>,
-        output_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkGroupMapUdf"),
-            (udf, input_names, output_type.try_to_py(py)?, config.clone()),
+            (udf, input_names, config.clone()),
         )
     }
 
@@ -142,32 +112,24 @@ impl PySpark {
         udf: PyObject,
         left_names: Vec<String>,
         right_names: Vec<String>,
-        output_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkCoGroupMapUdf"),
-            (
-                udf,
-                left_names,
-                right_names,
-                output_type.try_to_py(py)?,
-                config.clone(),
-            ),
+            (udf, left_names, right_names, config.clone()),
         )
     }
 
     pub fn map_pandas_iter_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
-        output_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkMapPandasIterUdf"),
-            (udf, output_type.try_to_py(py)?, config.clone()),
+            (udf, config.clone()),
         )
     }
 
@@ -189,7 +151,7 @@ impl PySpark {
         input_types: &[DataType],
         passthrough_columns: usize,
         output_schema: &SchemaRef,
-        _config: &PySparkUdfConfig,
+        config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
@@ -199,6 +161,7 @@ impl PySpark {
                 input_types.try_to_py(py)?,
                 passthrough_columns,
                 output_schema.try_to_py(py)?,
+                config.clone(),
             ),
         )
     }

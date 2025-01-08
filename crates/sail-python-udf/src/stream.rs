@@ -12,6 +12,7 @@ use futures::{Stream, StreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{pyclass, pymethods, IntoPy, PyObject, PyRef, PyRefMut, PyResult, Python};
+use sail_common::utils::record_batch_with_schema;
 use tokio::runtime::Handle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot};
@@ -105,11 +106,20 @@ impl PyMapStream {
         let (output_tx, output_rx) = mpsc::channel(Self::OUTPUT_CHANNEL_BUFFER);
         let (signal_tx, signal_rx) = oneshot::channel();
         let handle = Handle::current();
+        let python_output_schema = output_schema.clone();
         // We have to spawn a thread instead of spawning a tokio task
         // due to the blocking operation inside the input iterator.
         let python_task = std::thread::spawn(move || {
             match Python::with_gil(|py| {
-                Self::run_python_task(py, function, input, signal_rx, output_tx.clone(), handle)
+                Self::run_python_task(
+                    py,
+                    function,
+                    input,
+                    python_output_schema,
+                    signal_rx,
+                    output_tx.clone(),
+                    handle,
+                )
             }) {
                 Ok(()) => {}
                 Err(e) => {
@@ -133,6 +143,7 @@ impl PyMapStream {
         py: Python,
         function: PyObject,
         input: SendableRecordBatchStream,
+        output_schema: SchemaRef,
         signal: oneshot::Receiver<()>,
         sender: mpsc::Sender<Result<RecordBatch>>,
         handle: Handle,
@@ -153,7 +164,9 @@ impl PyMapStream {
             let batch = batch.and_then(|x| RecordBatch::from_pyarrow_bound(&x));
             if py
                 .allow_threads(|| {
-                    let batch = batch.map_err(|e| DataFusionError::External(e.into()));
+                    let batch = batch
+                        .map_err(|e| DataFusionError::External(e.into()))
+                        .and_then(|x| record_batch_with_schema(x, &output_schema));
                     sender.blocking_send(batch)
                 })
                 .is_err()

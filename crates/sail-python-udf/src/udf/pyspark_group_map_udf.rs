@@ -2,7 +2,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::compute::cast;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_common::Result;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -86,17 +87,9 @@ impl PySparkGroupMapUDF {
     }
 
     fn udf(&self, py: Python) -> Result<PyObject> {
-        let field = get_list_field(&self.output_type)?;
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
-            Ok(PySpark::group_map_udf(
-                py,
-                udf,
-                self.input_names.clone(),
-                field.data_type(),
-                &self.config,
-            )?
-            .unbind())
+            Ok(PySpark::group_map_udf(py, udf, self.input_names.clone(), &self.config)?.unbind())
         })?;
         Ok(udf.clone_ref(py))
     }
@@ -120,8 +113,9 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let field = get_list_field(&self.output_type)?;
         let udf = Python::with_gil(|py| self.udf(py))?;
-        let aggregator = Box::new(PySparkGroupMapper { udf });
+        let aggregator = Box::new(PySparkGroupMapper { udf, field });
         Ok(Box::new(BatchAggregateAccumulator::new(
             self.input_types.clone(),
             self.output_type.clone(),
@@ -136,6 +130,7 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
 
 struct PySparkGroupMapper {
     udf: PyObject,
+    field: FieldRef,
 }
 
 impl BatchAggregator for PySparkGroupMapper {
@@ -144,6 +139,7 @@ impl BatchAggregator for PySparkGroupMapper {
             let output = self.udf.call1(py, (args.try_to_py(py)?,))?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;
-        Ok(build_singleton_list_array(make_array(data)))
+        let array = cast(&make_array(data), self.field.data_type())?;
+        Ok(build_singleton_list_array(array))
     }
 }
