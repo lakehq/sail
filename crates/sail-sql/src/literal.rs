@@ -209,6 +209,7 @@ impl TryFrom<LiteralValue<(chrono::DateTime<Utc>, TimeZoneVariant)>> for spec::L
                 },
             ),
             TimeZoneVariant::None => (
+                // FIXME: See FIXME in `PlanResolver::resolve_timezone` for more details.
                 dt - chrono::DateTime::UNIX_EPOCH,
                 spec::TimeZoneInfo::SQLConfigured,
             ),

@@ -447,6 +447,7 @@ impl PlanResolver<'_> {
         config_timestamp_type: &TimestampType,
         system_timezone: &str,
     ) -> PlanResult<chrono::DateTime<Utc>> {
+        // FIXME: See FIXME in `PlanResolver::resolve_timezone` for more details.
         let should_rebase = match timezone_info {
             // PySpark client (via Spark Connect) applies the local timezone to timestamp literals
             // before sending them when TimeZoneInfo::LocalTimeZone is specified.
@@ -489,6 +490,7 @@ impl PlanResolver<'_> {
         timezone: Option<Arc<str>>,
         timezone_info: &spec::TimeZoneInfo,
     ) -> Option<Arc<str>> {
+        // FIXME: See FIXME in `PlanResolver::resolve_timezone` for more details.
         match timezone_info {
             spec::TimeZoneInfo::LocalTimeZone => None,
             _ => timezone,

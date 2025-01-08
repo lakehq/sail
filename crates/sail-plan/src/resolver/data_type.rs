@@ -520,6 +520,23 @@ impl PlanResolver<'_> {
         let system_timezone = Some(config_system_timezone.into());
         let resolved_timezone = match timezone {
             spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
+                // FIXME:
+                //  This should be:
+                //    1. TimestampType::TimestampLtz => config_session_timezone
+                //         - With the timestamp parsed in `sail-sql` adjusted accordingly.
+                //  The reason we are not doing this is because the tests fail if we do.
+                //  The Spark client has inconsistent behavior when applying timezones, where
+                //  sometimes the local client timezone is used, while other times the session
+                //  timezone is used.
+                //  There is also a known bug in Spark that has been unresolved for several years:
+                //    - https://github.com/apache/spark/pull/28946
+                //  A temporary workaround that leads to the most tests passing is the following:
+                //    1. Set timezone to None when parsing timestamps in `sail-sql`.
+                //    2. When receiving a timestamp from the client (TimeZoneInfo::LocalTimeZone):
+                //      - Adjust the timestamp (PlanResolver::local_datetime_to_utc_datetime),
+                //      - Set timezone to None (get_adjusted_timezone in `literal.rs`).
+                //  More time needs to be spent looking through the Spark codebase to replicate the
+                //  exact behavior of the Spark server.
                 TimestampType::TimestampLtz => None,
                 TimestampType::TimestampNtz => None,
             },
