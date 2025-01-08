@@ -5,7 +5,7 @@ use pyo3::{intern, Bound, Py, PyAny, PyObject, PyResult, Python};
 
 use crate::config::PySparkUdfConfig;
 use crate::conversion::TryToPy;
-use crate::utils::py_init_object;
+use crate::python::py_init_object;
 
 const MODULE_NAME: &str = "utils.spark";
 const MODULE_FILE_NAME: &str = "spark.py";
@@ -140,13 +140,21 @@ impl PySpark {
     pub fn cogroup_map_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
+        left_names: Vec<String>,
+        right_names: Vec<String>,
         output_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkCoGroupMapUdf"),
-            (udf, output_type.try_to_py(py)?, config.clone()),
+            (
+                udf,
+                left_names,
+                right_names,
+                output_type.try_to_py(py)?,
+                config.clone(),
+            ),
         )
     }
 

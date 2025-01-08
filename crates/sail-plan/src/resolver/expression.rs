@@ -18,7 +18,7 @@ use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
-use sail_python_udf::udf::get_udf_name;
+use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 

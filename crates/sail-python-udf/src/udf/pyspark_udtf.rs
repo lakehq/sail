@@ -14,8 +14,8 @@ use sail_common::udf::StreamUDF;
 use crate::cereal::pyspark_udtf::PySparkUdtfPayload;
 use crate::config::PySparkUdfConfig;
 use crate::error::PyUdfResult;
+use crate::python::spark::PySpark;
 use crate::stream::PyMapStream;
-use crate::utils::spark::PySpark;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub enum PySparkUdtfKind {

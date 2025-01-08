@@ -607,13 +607,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 name,
                 payload,
                 deterministic,
-                left_type,
-                right_type,
+                left_types,
+                left_names,
+                right_types,
+                right_names,
                 output_type,
                 config,
             }) => {
-                let left_type = self.try_decode_data_type(&left_type)?;
-                let right_type = self.try_decode_data_type(&right_type)?;
+                let left_types = left_types
+                    .iter()
+                    .map(|x| self.try_decode_data_type(x))
+                    .collect::<Result<Vec<_>>>()?;
+                let right_types = right_types
+                    .iter()
+                    .map(|x| self.try_decode_data_type(x))
+                    .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
                 let config = match config {
                     Some(config) => self.try_decode_pyspark_udf_config(config)?,
@@ -623,8 +631,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     name,
                     payload,
                     deterministic,
-                    left_type,
-                    right_type,
+                    left_types,
+                    left_names,
+                    right_types,
+                    right_names,
                     output_type,
                     Arc::new(config),
                 )?;
@@ -763,16 +773,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 config: Some(config),
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkCoGroupMapUDF>() {
-            let left_type = self.try_encode_data_type(func.left_type())?;
-            let right_type = self.try_encode_data_type(func.right_type())?;
+            let left_types = func
+                .left_types()
+                .iter()
+                .map(|x| self.try_encode_data_type(x))
+                .collect::<Result<Vec<_>>>()?;
+            let right_types = func
+                .right_types()
+                .iter()
+                .map(|x| self.try_encode_data_type(x))
+                .collect::<Result<Vec<_>>>()?;
             let output_type = self.try_encode_data_type(func.output_type())?;
             let config = self.try_encode_pyspark_udf_config(func.config())?;
             UdfKind::PySparkCoGroupMap(gen::PySparkCoGroupMapUdf {
                 name: func.name().to_string(),
                 payload: func.payload().to_vec(),
                 deterministic: func.deterministic(),
-                left_type,
-                right_type,
+                left_types,
+                left_names: func.left_names().to_vec(),
+                right_types,
+                right_names: func.right_names().to_vec(),
                 output_type,
                 config: Some(config),
             })
@@ -880,14 +900,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             Some(UdafKind::PySparkBatchCollector(gen::PySparkBatchCollectorUdaf {
                 input_types,
-                output_type,
+                input_names,
             })) => {
                 let input_types = input_types
                     .iter()
                     .map(|x| self.try_decode_data_type(x))
                     .collect::<Result<Vec<_>>>()?;
-                let output_type = self.try_decode_data_type(&output_type)?;
-                let udaf = PySparkBatchCollectorUDF::new(input_types, output_type);
+                let udaf = PySparkBatchCollectorUDF::new(input_types, input_names);
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
             None => plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
@@ -950,10 +969,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .iter()
                 .map(|x| self.try_encode_data_type(x))
                 .collect::<Result<Vec<_>>>()?;
-            let output_type = self.try_encode_data_type(func.output_type())?;
             UdafKind::PySparkBatchCollector(gen::PySparkBatchCollectorUdaf {
                 input_types,
-                output_type,
+                input_names: func.input_names().to_vec(),
             })
         } else {
             return Ok(());

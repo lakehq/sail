@@ -478,6 +478,15 @@ class PySparkGroupAggUdf:
         return _pandas_to_arrow_array(output, self._output_type, self._serializer)
 
 
+def _map_input_to_pandas(
+    data: Sequence[pa.Array], names: Sequence[str], serializer: ArrowStreamPandasUDFSerializer
+) -> Sequence[pd.Series]:
+    inputs = [serializer.arrow_to_pandas(x) for x in data]
+    for x, name in zip(inputs, names):
+        x.name = name
+    return inputs
+
+
 class PySparkGroupMapUdf:
     def __init__(
         self,
@@ -500,9 +509,7 @@ class PySparkGroupMapUdf:
         )
 
     def __call__(self, args: list[pa.Array]) -> pa.Array:
-        inputs = tuple(self._serializer.arrow_to_pandas(x) for x in args)
-        for x, name in zip(inputs, self._input_names):
-            x.name = name
+        inputs = _map_input_to_pandas(args, self._input_names, self._serializer)
         [[(output, _output_type)]] = list(self._udf(None, (inputs,)))
         return _pandas_to_arrow_array(output, self._output_type, self._serializer)
 
@@ -511,10 +518,14 @@ class PySparkCoGroupMapUdf:
     def __init__(
         self,
         udf: Callable[..., Any],
+        left_names: Sequence[str],
+        right_names: Sequence[str],
         output_type: pa.DataType,
         config,
     ):
         self._udf = udf
+        self._left_names = left_names
+        self._right_names = right_names
         self._output_type = output_type
         self._serializer = ArrowStreamPandasUDFSerializer(
             timezone=config.timezone,
@@ -526,13 +537,13 @@ class PySparkCoGroupMapUdf:
             arrow_cast=False,
         )
 
-    def __call__(self, left: pa.RecordBatch, right: pa.RecordBatch) -> pa.Array:
-        args = (self._convert_input(left), self._convert_input(right))
+    def __call__(self, left: list[pa.Array], right: list[pa.Array]) -> pa.Array:
+        args = [
+            _map_input_to_pandas(left, self._left_names, self._serializer),
+            _map_input_to_pandas(right, self._right_names, self._serializer),
+        ]
         [[(output, _output_type)]] = list(self._udf(None, (args,)))
         return _pandas_to_arrow_array(output, self._output_type, self._serializer)
-
-    def _convert_input(self, batch: pa.RecordBatch) -> list[pd.Series]:
-        return [self._serializer.arrow_to_pandas(c) for c in pa.Table.from_batches([batch]).itercolumns()]
 
 
 class PySparkMapPandasIterUdf:

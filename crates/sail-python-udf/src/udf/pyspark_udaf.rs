@@ -16,7 +16,7 @@ use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
-use crate::utils::spark::PySpark;
+use crate::python::spark::PySpark;
 
 #[derive(Debug)]
 pub struct PySparkGroupAggregateUDF {
@@ -85,7 +85,7 @@ impl PySparkGroupAggregateUDF {
         &self.config
     }
 
-    fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
+    fn udf(&self, py: Python) -> Result<PyObject> {
         let udf = self.udf.get_or_try_init(py, || {
             Ok(PySpark::group_agg_udf(
                 py,
@@ -138,11 +138,11 @@ struct PySparkGroupAggregator {
 }
 
 impl BatchAggregator for PySparkGroupAggregator {
-    fn call(&self, args: &[ArrayRef]) -> PyUdfResult<ArrayRef> {
-        Python::with_gil(|py| {
+    fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
+        Ok(Python::with_gil(|py| -> PyUdfResult<_> {
             let output = self.udf.call1(py, (args.try_to_py(py)?,))?;
             let data = ArrayData::try_from_py(py, &output)?;
             Ok(make_array(data))
-        })
+        })?)
     }
 }

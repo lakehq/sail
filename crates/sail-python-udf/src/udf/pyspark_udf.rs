@@ -13,7 +13,7 @@ use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
 use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
-use crate::utils::spark::PySpark;
+use crate::python::spark::PySpark;
 
 #[derive(Debug, Clone, Copy)]
 pub enum PySparkUdfKind {
@@ -89,7 +89,7 @@ impl PySparkUDF {
         &self.config
     }
 
-    fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
+    fn udf(&self, py: Python) -> Result<PyObject> {
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
@@ -143,10 +143,9 @@ impl ScalarUDFImpl for PySparkUDF {
 
     fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
+        let udf = Python::with_gil(|py| self.udf(py))?;
         let output = Python::with_gil(|py| -> PyUdfResult<_> {
-            let output = self
-                .udf(py)?
-                .call1(py, (args.try_to_py(py)?, number_rows))?;
+            let output = udf.call1(py, (args.try_to_py(py)?, number_rows))?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;
         Ok(ColumnarValue::Array(make_array(output)))

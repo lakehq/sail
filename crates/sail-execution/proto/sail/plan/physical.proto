@@ -76,10 +76,12 @@ message PySparkCoGroupMapUdf {
   string name = 1;
   bytes payload = 2;
   bool deterministic = 3;
-  bytes left_type = 4;
-  bytes right_type = 5;
-  bytes output_type = 6;
-  PySparkUdfConfig config = 7;
+  repeated bytes left_types = 4;
+  repeated string left_names = 5;
+  repeated bytes right_types = 6;
+  repeated string right_names = 7;
+  bytes output_type = 8;
+  PySparkUdfConfig config = 9;
 }
 
 message MapToArrayUdf {
@@ -134,7 +136,7 @@ message PySparkGroupMapUdaf {
 
 message PySparkBatchCollectorUdaf {
   repeated bytes input_types = 1;
-  bytes output_type = 2;
+  repeated string input_names = 2;
 }
 
 message PySparkMapIterUdf {

@@ -1,23 +1,22 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, ListArray, RecordBatch, StructArray};
-use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::compute::concat;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::array::{Array, ArrayData, ArrayRef, AsArray};
+use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, Signature, Volatility};
-use datafusion_common::arrow::datatypes::SchemaRef;
+use datafusion_common::arrow::array::make_array;
 use datafusion_common::exec_err;
 use datafusion_expr::ScalarUDFImpl;
 use pyo3::{PyObject, Python};
 
+use crate::array::{build_list_array, get_list_field, get_struct_array_type};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
-use crate::error::{PyUdfError, PyUdfResult};
+use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
-use crate::utils::spark::PySpark;
+use crate::python::spark::PySpark;
 
 #[derive(Debug)]
 pub struct PySparkCoGroupMapUDF {
@@ -25,30 +24,32 @@ pub struct PySparkCoGroupMapUDF {
     name: String,
     payload: Vec<u8>,
     deterministic: bool,
-    left_type: DataType,
-    left_inner_schema: SchemaRef,
-    right_type: DataType,
-    right_inner_schema: SchemaRef,
+    left_types: Vec<DataType>,
+    left_names: Vec<String>,
+    right_types: Vec<DataType>,
+    right_names: Vec<String>,
     output_type: DataType,
-    output_inner_schema: SchemaRef,
     config: Arc<PySparkUdfConfig>,
     udf: LazyPyObject,
 }
 
 impl PySparkCoGroupMapUDF {
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         name: String,
         payload: Vec<u8>,
         deterministic: bool,
-        left_type: DataType,
-        right_type: DataType,
+        left_types: Vec<DataType>,
+        left_names: Vec<String>,
+        right_types: Vec<DataType>,
+        right_names: Vec<String>,
         output_type: DataType,
         config: Arc<PySparkUdfConfig>,
     ) -> Result<Self> {
-        let input_types = vec![left_type.clone(), right_type.clone()];
-        let left_inner_schema = Self::get_inner_schema(&left_type)?;
-        let right_inner_schema = Self::get_inner_schema(&right_type)?;
-        let output_inner_schema = Self::get_inner_schema(&output_type)?;
+        let input_types = vec![
+            get_struct_array_type(&left_types, &left_names)?,
+            get_struct_array_type(&right_types, &right_names)?,
+        ];
         Ok(Self {
             signature: Signature::exact(
                 input_types,
@@ -60,12 +61,11 @@ impl PySparkCoGroupMapUDF {
             name,
             payload,
             deterministic,
-            left_type,
-            left_inner_schema,
-            right_type,
-            right_inner_schema,
+            left_types,
+            left_names,
+            right_types,
+            right_names,
             output_type,
-            output_inner_schema,
             config,
             udf: LazyPyObject::new(),
         })
@@ -79,12 +79,20 @@ impl PySparkCoGroupMapUDF {
         self.deterministic
     }
 
-    pub fn left_type(&self) -> &DataType {
-        &self.left_type
+    pub fn left_types(&self) -> &[DataType] {
+        &self.left_types
     }
 
-    pub fn right_type(&self) -> &DataType {
-        &self.right_type
+    pub fn left_names(&self) -> &[String] {
+        &self.left_names
+    }
+
+    pub fn right_types(&self) -> &[DataType] {
+        &self.right_types
+    }
+
+    pub fn right_names(&self) -> &[String] {
+        &self.right_names
     }
 
     pub fn output_type(&self) -> &DataType {
@@ -95,53 +103,35 @@ impl PySparkCoGroupMapUDF {
         &self.config
     }
 
-    fn udf(&self, py: Python) -> PyUdfResult<PyObject> {
-        let field = match &self.output_type {
-            DataType::List(field) => field,
-            _ => return Err(PyUdfError::invalid("co-group map output type")),
-        };
+    fn udf(&self, py: Python) -> Result<PyObject> {
+        let field = get_list_field(&self.output_type)?;
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
-            Ok(PySpark::cogroup_map_udf(py, udf, field.data_type(), &self.config)?.unbind())
+            Ok(PySpark::cogroup_map_udf(
+                py,
+                udf,
+                self.left_names.clone(),
+                self.right_names.clone(),
+                field.data_type(),
+                &self.config,
+            )?
+            .unbind())
         })?;
         Ok(udf.clone_ref(py))
     }
 
-    fn validate_input(data: &ArrayRef, data_type: &DataType) -> Result<()> {
-        if data.data_type() == data_type {
-            Ok(())
-        } else {
-            exec_err!(
-                "co-group map UDF input type mismatch: expected {}, got {}",
-                data_type,
-                data.data_type()
-            )
-        }
-    }
-
-    fn get_inner_schema(data_type: &DataType) -> Result<SchemaRef> {
-        let error = || exec_err!("invalid co-group map UDF data type: {data_type}");
-        let field = match data_type {
-            DataType::List(field) => field,
-            _ => return error(),
-        };
-        match field.data_type() {
-            DataType::Struct(fields) => Ok(Arc::new(Schema::new(fields.clone()))),
-            _ => error(),
-        }
-    }
-
-    fn get_group(list: &ArrayRef, i: usize, schema: &SchemaRef) -> Result<RecordBatch> {
+    fn get_group(list: &ArrayRef, i: usize) -> Result<Vec<ArrayRef>> {
         let list = list.as_list::<i32>();
-        if list.is_null(i) {
-            return Ok(RecordBatch::new_empty(schema.clone()));
-        }
-        let value = list.value(i);
-        let value = value.as_struct();
+        let array = if list.is_null(i) {
+            make_array(ArrayData::new_null(&list.value_type(), 0))
+        } else {
+            list.value(i)
+        };
+        let value = array.as_struct();
         if value.nulls().map(|x| x.null_count()).unwrap_or_default() > 0 {
             return exec_err!("co-group map UDF input arrays must not contain nulls");
         }
-        Ok(RecordBatch::from(value.clone()))
+        Ok(value.columns().to_vec())
     }
 }
 
@@ -163,13 +153,10 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
     }
 
     fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-        let num_args = args.len();
         let mut args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
         let (Some(right), Some(left), true) = (args.pop(), args.pop(), args.is_empty()) else {
-            return exec_err!("co-group map expects exactly two arguments, got {num_args}");
+            return exec_err!("co-group map expects exactly two arguments");
         };
-        Self::validate_input(&left, &self.left_type)?;
-        Self::validate_input(&right, &self.right_type)?;
         if left.len() != right.len() {
             return exec_err!(
                 "co-group map UDF input arrays have different lengths: left {}, right {}",
@@ -177,35 +164,19 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
                 right.len()
             );
         }
-        let mut arrays: Vec<ArrayRef> = vec![];
-        for i in 0..left.len() {
-            let left = Self::get_group(&left, i, &self.left_inner_schema)?;
-            let right = Self::get_group(&right, i, &self.right_inner_schema)?;
-            let result = Python::with_gil(|py| -> PyUdfResult<_> {
-                let output = self
-                    .udf(py)?
-                    .call1(py, (left.try_to_py(py)?, right.try_to_py(py)?))?;
-                Ok(RecordBatch::try_from_py(py, &output)?)
-            })?;
-            let result = StructArray::from(result);
-            arrays.push(Arc::new(result));
-        }
-        let field = Arc::new(Field::new_list_field(
-            DataType::Struct(self.output_inner_schema.fields.clone()),
-            false,
-        ));
-        let array = if arrays.is_empty() {
-            ListArray::new_null(field, 0)
-        } else {
-            let lengths = arrays.iter().map(|x| x.len()).collect::<Vec<_>>();
-            let arrays = arrays.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
-            ListArray::new(
-                field,
-                OffsetBuffer::from_lengths(lengths),
-                concat(&arrays)?,
-                None,
-            )
-        };
-        Ok(ColumnarValue::Array(Arc::new(array)))
+        let udf = Python::with_gil(|py| self.udf(py))?;
+        let arrays = (0..left.len())
+            .map(|i| {
+                let left = Self::get_group(&left, i)?;
+                let right = Self::get_group(&right, i)?;
+                let array = Python::with_gil(|py| -> PyUdfResult<_> {
+                    let output = udf.call1(py, (left.try_to_py(py)?, right.try_to_py(py)?))?;
+                    Ok(ArrayData::try_from_py(py, &output)?)
+                })?;
+                Ok(make_array(array))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let array = build_list_array(&arrays, &self.output_type)?;
+        Ok(ColumnarValue::Array(array))
     }
 }

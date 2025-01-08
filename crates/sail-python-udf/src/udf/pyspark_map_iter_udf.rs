@@ -11,8 +11,8 @@ use sail_common::utils::rename_record_batch_stream;
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
 use crate::error::PyUdfResult;
+use crate::python::spark::PySpark;
 use crate::stream::PyMapStream;
-use crate::utils::spark::PySpark;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum PySparkMapIterKind {
