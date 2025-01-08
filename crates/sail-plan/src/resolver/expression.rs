@@ -730,21 +730,33 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
+        // We need to call `resolve_expressions_and_names` inside the if statement because we need
+        // to use the state from the temporary scope. If we moved the call outside the if statement,
+        // the scope would be dropped, and we'd lose the large var types configuration.
+        let (argument_names, arguments) = if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
             if let Some(_f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
                 let mut scope = state.enter_config_scope();
                 let state = scope.state();
                 state.register_config_apply_arrow_use_large_var_types(true);
+                self.resolve_expressions_and_names(arguments, schema, state)
+                    .await?
+            } else {
+                self.resolve_expressions_and_names(arguments, schema, state)
+                    .await?
             }
-        }
-        let (argument_names, arguments) = self
-            .resolve_expressions_and_names(arguments, schema, state)
-            .await?;
+        } else {
+            self.resolve_expressions_and_names(arguments, schema, state)
+                .await?
+        };
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
         let func = if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
             if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+                let mut scope = state.enter_config_scope();
+                let state = scope.state();
+                state.register_config_apply_arrow_use_large_var_types(true);
+
                 let function = PythonUdf {
                     python_version: f.python_version().to_string(),
                     eval_type: f.eval_type(),
