@@ -25,14 +25,14 @@ pub enum PySparkUdtfKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct PySparkUdtfOptions {
-    pub timezone: String,
+    pub session_timezone: String,
     pub arrow_cast_safe_check: bool,
 }
 
 impl From<&SparkUdfConfig> for PySparkUdtfOptions {
     fn from(config: &SparkUdfConfig) -> Self {
         Self {
-            timezone: config.timezone.clone(),
+            session_timezone: config.session_timezone.clone(),
             arrow_cast_safe_check: config.pandas_convert_to_arrow_array_safely,
         }
     }
@@ -248,7 +248,7 @@ impl StreamUDF for PySparkUDTF {
                     &self.input_names,
                     self.passthrough_columns,
                     &self.output_schema,
-                    &self.options.timezone,
+                    &self.options.session_timezone,
                     self.options.arrow_cast_safe_check,
                 )?,
             };

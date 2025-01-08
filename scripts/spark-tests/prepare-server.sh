@@ -13,7 +13,7 @@ else
 fi
 
 export PYO3_PYTHON="${python_env}/bin/python"
-export RUST_LOG="${RUST_LOG:-sail_spark_connect=debug}"
+export RUST_LOG="${RUST_LOG:-sail=debug}"
 export RUST_BACKTRACE="${RUST_BACKTRACE:-full}"
 # We have to set `PYTHONPATH` even if we are using the virtual environment.
 # This is because the Python executable is the Rust program itself, and there is
