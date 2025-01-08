@@ -1246,7 +1246,7 @@ impl RemoteExecutionCodec {
         config: gen::PySparkUdfConfig,
     ) -> Result<PySparkUdfConfig> {
         let config = PySparkUdfConfig {
-            timezone: config.timezone,
+            session_timezone: config.session_timezone,
             pandas_window_bound_types: config.pandas_window_bound_types,
             pandas_grouped_map_assign_columns_by_name: config
                 .pandas_grouped_map_assign_columns_by_name,
@@ -1261,7 +1261,7 @@ impl RemoteExecutionCodec {
         config: &PySparkUdfConfig,
     ) -> Result<gen::PySparkUdfConfig> {
         let config = gen::PySparkUdfConfig {
-            timezone: config.timezone.clone(),
+            session_timezone: config.session_timezone.clone(),
             pandas_window_bound_types: config.pandas_window_bound_types.clone(),
             pandas_grouped_map_assign_columns_by_name: config
                 .pandas_grouped_map_assign_columns_by_name,

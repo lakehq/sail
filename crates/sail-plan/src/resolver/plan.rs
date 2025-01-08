@@ -661,7 +661,9 @@ impl PlanResolver<'_> {
         udtf: spec::ReadUdtf,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        state.register_apply_arrow_use_large_var_types_config(true);
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.register_config_apply_arrow_use_large_var_types(true);
         let spec::ReadUdtf {
             name,
             arguments,
@@ -1654,7 +1656,9 @@ impl PlanResolver<'_> {
         _is_barrier: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        state.register_apply_arrow_use_large_var_types_config(true);
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.register_config_apply_arrow_use_large_var_types(true);
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic: _,
@@ -1734,7 +1738,9 @@ impl PlanResolver<'_> {
         map: spec::GroupMap,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        state.register_apply_arrow_use_large_var_types_config(true);
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.register_config_apply_arrow_use_large_var_types(true);
         let spec::GroupMap {
             input,
             grouping_expressions: grouping,
@@ -1866,7 +1872,9 @@ impl PlanResolver<'_> {
         map: spec::CoGroupMap,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        state.register_apply_arrow_use_large_var_types_config(true);
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.register_config_apply_arrow_use_large_var_types(true);
         let spec::CoGroupMap {
             input: left,
             input_grouping_expressions: left_grouping,
@@ -2182,7 +2190,9 @@ impl PlanResolver<'_> {
         };
         if let Ok(f) = self.ctx.udf(&function_name) {
             if let Some(_f) = f.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
-                state.register_apply_arrow_use_large_var_types_config(true);
+                let mut scope = state.enter_config_scope();
+                let state = scope.state();
+                state.register_config_apply_arrow_use_large_var_types(true);
             }
         }
         let input = match input {
@@ -2280,7 +2290,9 @@ impl PlanResolver<'_> {
         udtf: spec::CommonInlineUserDefinedTableFunction,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        state.register_apply_arrow_use_large_var_types_config(true);
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.register_config_apply_arrow_use_large_var_types(true);
         let spec::CommonInlineUserDefinedTableFunction {
             function_name,
             deterministic,
@@ -2824,7 +2836,9 @@ impl PlanResolver<'_> {
         function: spec::CommonInlineUserDefinedFunction,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        state.register_apply_arrow_use_large_var_types_config(true);
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.register_config_apply_arrow_use_large_var_types(true);
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
@@ -2853,7 +2867,9 @@ impl PlanResolver<'_> {
         function: spec::CommonInlineUserDefinedTableFunction,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        state.register_apply_arrow_use_large_var_types_config(true);
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.register_config_apply_arrow_use_large_var_types(true);
         let spec::CommonInlineUserDefinedTableFunction {
             function_name,
             deterministic,

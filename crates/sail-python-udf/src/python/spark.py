@@ -398,7 +398,7 @@ class PySparkArrowBatchUdf:
     def __init__(self, udf: Callable[..., Any], config):
         self._udf = udf
         self._serializer = ArrowStreamPandasUDFSerializer(
-            timezone=config.timezone,
+            timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
             assign_cols_by_name=config.assign_columns_by_name,
             df_for_struct=False,
@@ -421,7 +421,7 @@ class PySparkScalarPandasUdf:
     ):
         self._udf = udf
         self._serializer = ArrowStreamPandasUDFSerializer(
-            timezone=config.timezone,
+            timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
             assign_cols_by_name=config.assign_columns_by_name,
             df_for_struct=True,
@@ -444,7 +444,7 @@ class PySparkScalarPandasIterUdf:
     ):
         self._udf = udf
         self._serializer = ArrowStreamPandasUDFSerializer(
-            timezone=config.timezone,
+            timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
             assign_cols_by_name=config.assign_columns_by_name,
             df_for_struct=True,
@@ -469,7 +469,7 @@ class PySparkGroupAggUdf:
         self._udf = udf
         self._input_names = input_names
         self._serializer = ArrowStreamPandasUDFSerializer(
-            timezone=config.timezone,
+            timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
             assign_cols_by_name=config.assign_columns_by_name,
             df_for_struct=True,
@@ -494,7 +494,7 @@ class PySparkGroupMapUdf:
         self._udf = udf
         self._input_names = input_names
         self._serializer = ArrowStreamPandasUDFSerializer(
-            timezone=config.timezone,
+            timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
             assign_cols_by_name=config.assign_columns_by_name,
             df_for_struct=True,
@@ -521,7 +521,7 @@ class PySparkCoGroupMapUdf:
         self._left_names = left_names
         self._right_names = right_names
         self._serializer = ArrowStreamPandasUDFSerializer(
-            timezone=config.timezone,
+            timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
             assign_cols_by_name=config.assign_columns_by_name,
             df_for_struct=True,
@@ -547,7 +547,7 @@ class PySparkMapPandasIterUdf:
     ):
         self._udf = udf
         self._serializer = ArrowStreamPandasUDFSerializer(
-            timezone=config.timezone,
+            timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
             assign_cols_by_name=config.assign_columns_by_name,
             df_for_struct=True,
@@ -644,7 +644,7 @@ class PySparkArrowTableUdf:
         self._output_schema = output_schema
         self._output_type = pa.struct([output_schema.field(i) for i in range(len(output_schema.names))])
         self._serializer = ArrowStreamPandasUDTFSerializer(
-            timezone=config.timezone, safecheck=config.arrow_convert_safely
+            timezone=config.session_timezone, safecheck=config.arrow_convert_safely
         )
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:

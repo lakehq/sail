@@ -10,24 +10,32 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(super) fn arrow_binary_type(&self, state: &mut PlanResolverState) -> adt::DataType {
-        if state.get_apply_arrow_use_large_var_types_config()
+    pub(super) fn arrow_binary_type(
+        &self,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<adt::DataType> {
+        let binary_type = if state.get_config_apply_arrow_use_large_var_types()?
             && self.config.arrow_use_large_var_types
         {
             adt::DataType::LargeBinary
         } else {
             adt::DataType::Binary
-        }
+        };
+        Ok(binary_type)
     }
 
-    pub(super) fn arrow_string_type(&self, state: &mut PlanResolverState) -> adt::DataType {
-        if state.get_apply_arrow_use_large_var_types_config()
+    pub(super) fn arrow_string_type(
+        &self,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<adt::DataType> {
+        let string_type = if state.get_config_apply_arrow_use_large_var_types()?
             && self.config.arrow_use_large_var_types
         {
             adt::DataType::LargeUtf8
         } else {
             adt::DataType::Utf8
-        }
+        };
+        Ok(string_type)
     }
 
     /// References:
@@ -61,7 +69,7 @@ impl PlanResolver<'_> {
                 Self::resolve_time_unit(time_unit)?,
                 Self::resolve_timezone(
                     timezone_info,
-                    self.config.timezone.as_str(),
+                    self.config.system_timezone.as_str(),
                     &self.config.timestamp_type,
                 )?,
             )),
@@ -200,9 +208,9 @@ impl PlanResolver<'_> {
             DataType::ConfiguredUtf8 { utf8_type: _ } => {
                 // FIXME: Currently `length` and `utf8_type` is lost in translation.
                 //  This impacts accuracy if `spec::ConfiguredUtf8Type` is `VarChar` or `Char`.
-                Ok(self.arrow_string_type(state))
+                self.arrow_string_type(state)
             }
-            DataType::ConfiguredBinary => Ok(self.arrow_binary_type(state)),
+            DataType::ConfiguredBinary => self.arrow_binary_type(state),
             DataType::UserDefined { .. } => Err(PlanError::unsupported(
                 "user defined data type should only exist in a field",
             )),
@@ -514,27 +522,46 @@ impl PlanResolver<'_> {
 
     pub fn resolve_timezone(
         timezone: &spec::TimeZoneInfo,
-        config_timezone: &str,
+        config_system_timezone: &str,
         config_timestamp_type: &TimestampType,
     ) -> PlanResult<Option<Arc<str>>> {
-        match timezone {
-            spec::TimeZoneInfo::Configured => match config_timestamp_type {
-                TimestampType::TimestampLtz => Ok(Some(Arc::<str>::from(config_timezone))),
-                TimestampType::TimestampNtz => Ok(None),
+        let system_timezone = Some(config_system_timezone.into());
+        let resolved_timezone = match timezone {
+            spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
+                // FIXME:
+                //  This should be:
+                //    1. TimestampType::TimestampLtz => config_session_timezone
+                //         - With the timestamp parsed in `sail-sql` adjusted accordingly.
+                //  The reason we are not doing this is because the tests fail if we do.
+                //  The Spark client has inconsistent behavior when applying timezones, where
+                //  sometimes the local client timezone is used, while other times the session
+                //  timezone is used.
+                //  There is also a known bug in Spark that has been unresolved for several years:
+                //    - https://github.com/apache/spark/pull/28946
+                //  A temporary workaround that leads to the most tests passing is the following:
+                //    1. Set timezone to None when parsing timestamps in `sail-sql`.
+                //    2. When receiving a timestamp from the client (TimeZoneInfo::LocalTimeZone):
+                //      - Adjust the timestamp (PlanResolver::local_datetime_to_utc_datetime),
+                //      - Set timezone to None (get_adjusted_timezone in `literal.rs`).
+                //  More time needs to be spent looking through the Spark codebase to replicate the
+                //  exact behavior of the Spark server.
+                TimestampType::TimestampLtz => None,
+                TimestampType::TimestampNtz => None,
             },
-            spec::TimeZoneInfo::LocalTimeZone => Ok(Some(Arc::<str>::from(config_timezone))),
-            spec::TimeZoneInfo::NoTimeZone => Ok(None),
+            spec::TimeZoneInfo::LocalTimeZone => system_timezone,
+            spec::TimeZoneInfo::NoTimeZone => None,
             spec::TimeZoneInfo::TimeZone { timezone } => match timezone {
-                None => Ok(Some(Arc::<str>::from(config_timezone))),
+                None => None,
                 Some(timezone) => {
                     if timezone.is_empty() {
-                        Ok(Some(Arc::<str>::from(config_timezone)))
+                        None
                     } else {
-                        Ok(Some(Arc::clone(timezone)))
+                        Some(Arc::clone(timezone))
                     }
                 }
             },
-        }
+        };
+        Ok(resolved_timezone)
     }
 
     pub fn unresolve_timezone(timezone: &Option<Arc<str>>) -> PlanResult<spec::TimeZoneInfo> {
