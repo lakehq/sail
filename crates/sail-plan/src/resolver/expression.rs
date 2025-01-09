@@ -1045,7 +1045,10 @@ impl PlanResolver<'_> {
                     .await?;
                 Ok(NamedExpr::new(
                     vec!["*".to_string()],
-                    expr::Expr::Wildcard { qualifier, options },
+                    expr::Expr::Wildcard {
+                        qualifier,
+                        options: Box::new(options),
+                    },
                 ))
             }
         }

@@ -10,7 +10,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes as adt;
 use datafusion_common::scalar::ScalarStructBuilder;
-use datafusion_common::utils::{array_into_fixed_size_list_array, array_into_large_list_array};
+use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::ScalarValue;
 use sail_common::spec::{self, Literal};
 
@@ -259,7 +259,8 @@ impl PlanResolver<'_> {
                         })?
                     };
                     Ok(ScalarValue::FixedSizeList(Arc::new(
-                        array_into_fixed_size_list_array(scalars, length as usize),
+                        SingleRowListArrayBuilder::new(scalars)
+                            .build_fixed_size_list_array(length as usize),
                     )))
                 } else {
                     let data_type = adt::DataType::FixedSizeList(
@@ -288,7 +289,7 @@ impl PlanResolver<'_> {
                         })?
                     };
                     Ok(ScalarValue::LargeList(Arc::new(
-                        array_into_large_list_array(scalars),
+                        SingleRowListArrayBuilder::new(scalars).build_large_list_array(),
                     )))
                 } else {
                     let data_type = adt::DataType::LargeList(

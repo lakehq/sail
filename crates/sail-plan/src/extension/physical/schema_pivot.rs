@@ -34,7 +34,8 @@ impl SchemaPivotExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             partitioning,
-            input.execution_mode(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         );
         Self {
             input,

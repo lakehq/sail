@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::datasource::function::TableFunction;
+use datafusion::catalog::TableFunction;
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};

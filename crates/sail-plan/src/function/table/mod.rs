@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::datasource::function::TableFunction;
+use datafusion::catalog::TableFunction;
 
 use crate::function::table::range::RangeTableFunction;
 

@@ -84,15 +84,16 @@ iana-time-zone = "0.1.61"
 # The versions of the following dependencies are managed manually.
 ######
 
-datafusion = { version = "43.0.0", features = ["serde", "pyarrow", "avro"] }
-datafusion-common = { version = "43.0.0", features = ["object_store", "pyarrow", "avro"] }
-datafusion-expr = "43.0.0"
-datafusion-proto = "43.0.0"
-datafusion-functions-nested = "43.0.0"
-datafusion-functions-json = "0.43.0"
+datafusion = { version = "44.0.0", features = ["serde", "pyarrow", "avro"] }
+datafusion-common = { version = "44.0.0", features = ["object_store", "pyarrow", "avro"] }
+datafusion-expr = { version = "44.0.0" }
+datafusion-expr-common = { version = "44.0.0" }
+datafusion-proto = { version = "44.0.0" }
+datafusion-functions-nested = { version = "44.0.0" }
+datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "7bcca26" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.22.0", features = ["auto-initialize", "serde"] }
-arrow-flight = { version = "53.1.0" }
+arrow-flight = { version = "53.3.0" }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
@@ -106,27 +107,6 @@ sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "69514bb
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
-datafusion = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-catalog = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-common-runtime = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-functions-aggregate-common = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-functions-window = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-functions-window-common = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-physical-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-physical-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-proto-common = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
-datafusion-sql = { git = "https://github.com/apache/datafusion.git", rev = "6d8313e" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release
