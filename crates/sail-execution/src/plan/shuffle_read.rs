@@ -46,9 +46,9 @@ impl ShuffleReadExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             partitioning,
-            EmissionType::Both, // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+            EmissionType::Both,
             Boundedness::Unbounded {
-                requires_infinite_memory: true, // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+                requires_infinite_memory: true,
             },
         );
         Self {

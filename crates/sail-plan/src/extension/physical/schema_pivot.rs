@@ -34,7 +34,7 @@ impl SchemaPivotExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             partitioning,
-            input.pipeline_behavior(), // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+            input.pipeline_behavior(),
             input.boundedness(),
         );
         Self {

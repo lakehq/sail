@@ -66,9 +66,9 @@ impl ShuffleWriteExec {
             // These output streams are written to locations managed by the worker,
             // while the return value of `.execute()` is always an empty stream.
             input_partitioning,
-            plan.pipeline_behavior(), // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+            plan.pipeline_behavior(),
             Boundedness::Unbounded {
-                requires_infinite_memory: true, // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+                requires_infinite_memory: true,
             },
         );
         let locations = vec![vec![]; input_partition_count];

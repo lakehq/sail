@@ -561,7 +561,7 @@ pub enum Utf8Type {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TimeZoneInfo {
-    Configured,
+    SQLConfigured,
     LocalTimeZone,
     NoTimeZone,
     TimeZone { timezone: Option<Arc<str>> },

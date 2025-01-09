@@ -674,8 +674,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
-            // "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
-            // "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
+            "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
+            "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
@@ -994,7 +994,7 @@ impl RemoteExecutionCodec {
                     return plan_err!("PySpark UDTF options not found");
                 };
                 let options = PySparkUdtfOptions {
-                    timezone: options.timezone,
+                    session_timezone: options.session_timezone,
                     arrow_cast_safe_check: options.arrow_cast_safe_check,
                 };
                 Arc::new(PySparkUDTF::try_new(
@@ -1041,7 +1041,7 @@ impl RemoteExecutionCodec {
                 .map(|x| x.to_vec())
                 .unwrap_or_default();
             let options = gen::PySparkUdtfOptions {
-                timezone: func.options().timezone.to_string(),
+                session_timezone: func.options().session_timezone.to_string(),
                 arrow_cast_safe_check: func.options().arrow_cast_safe_check,
             };
             StreamUdfKind::PySparkUdtf(gen::PySparkUdtf {

@@ -28,7 +28,7 @@ impl RangeExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::RoundRobinBatch(num_partitions),
-            EmissionType::Both, // [CHECK HERE] DON'T MERGE IN UNTIL VALIDATING!!
+            EmissionType::Both,
             Boundedness::Bounded,
         );
         Self {

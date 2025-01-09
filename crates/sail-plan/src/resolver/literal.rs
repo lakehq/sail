@@ -1,4 +1,4 @@
-use std::ops::Sub;
+use std::ops::Add;
 use std::sync::Arc;
 
 use chrono::{Offset, TimeDelta, TimeZone, Utc};
@@ -14,6 +14,7 @@ use datafusion_common::utils::{array_into_fixed_size_list_array, array_into_larg
 use datafusion_common::ScalarValue;
 use sail_common::spec::{self, Literal};
 
+use crate::config::TimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -41,47 +42,132 @@ impl PlanResolver<'_> {
             Literal::TimestampSecond {
                 seconds,
                 timezone_info,
-            } => Ok(ScalarValue::TimestampSecond(
-                seconds,
-                Self::resolve_timezone(
+            } => {
+                let timezone = Self::resolve_timezone(
                     &timezone_info,
-                    self.config.timezone.as_str(),
+                    self.config.system_timezone.as_str(),
                     &self.config.timestamp_type,
-                )?,
-            )),
+                )?;
+                if let Some(seconds) = seconds {
+                    let datetime = Utc.timestamp_opt(seconds, 0).earliest().ok_or_else(|| {
+                        PlanError::invalid(format!("Invalid Literal TimestampSecond: {seconds}"))
+                    })?;
+                    let utc_datetime = Self::local_datetime_to_utc_datetime(
+                        datetime,
+                        &timezone_info,
+                        &self.config.timestamp_type,
+                        &self.config.system_timezone,
+                    )?;
+                    let adjusted_seconds = utc_datetime.timestamp();
+                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
+                    Ok(ScalarValue::TimestampSecond(
+                        Some(adjusted_seconds),
+                        adjusted_timezone,
+                    ))
+                } else {
+                    Ok(ScalarValue::TimestampSecond(seconds, timezone))
+                }
+            }
             Literal::TimestampMillisecond {
                 milliseconds,
                 timezone_info,
-            } => Ok(ScalarValue::TimestampMillisecond(
-                milliseconds,
-                Self::resolve_timezone(
+            } => {
+                let timezone = Self::resolve_timezone(
                     &timezone_info,
-                    self.config.timezone.as_str(),
+                    self.config.system_timezone.as_str(),
                     &self.config.timestamp_type,
-                )?,
-            )),
+                )?;
+                if let Some(milliseconds) = milliseconds {
+                    let datetime = Utc
+                        .timestamp_millis_opt(milliseconds)
+                        .earliest()
+                        .ok_or_else(|| {
+                            PlanError::invalid(format!(
+                                "Literal to string TimestampMillisecond: {milliseconds}"
+                            ))
+                        })?;
+                    let utc_datetime = Self::local_datetime_to_utc_datetime(
+                        datetime,
+                        &timezone_info,
+                        &self.config.timestamp_type,
+                        &self.config.system_timezone,
+                    )?;
+                    let adjusted_milliseconds = utc_datetime.timestamp_millis();
+                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
+                    Ok(ScalarValue::TimestampMillisecond(
+                        Some(adjusted_milliseconds),
+                        adjusted_timezone,
+                    ))
+                } else {
+                    Ok(ScalarValue::TimestampMillisecond(milliseconds, timezone))
+                }
+            }
             Literal::TimestampMicrosecond {
                 microseconds,
                 timezone_info,
-            } => Ok(ScalarValue::TimestampMicrosecond(
-                microseconds,
-                Self::resolve_timezone(
+            } => {
+                let timezone = Self::resolve_timezone(
                     &timezone_info,
-                    self.config.timezone.as_str(),
+                    self.config.system_timezone.as_str(),
                     &self.config.timestamp_type,
-                )?,
-            )),
+                )?;
+                if let Some(microseconds) = microseconds {
+                    let datetime =
+                        Utc.timestamp_micros(microseconds)
+                            .earliest()
+                            .ok_or_else(|| {
+                                PlanError::invalid(format!(
+                                    "Literal to string TimestampMicrosecond: {microseconds}"
+                                ))
+                            })?;
+                    let utc_datetime = Self::local_datetime_to_utc_datetime(
+                        datetime,
+                        &timezone_info,
+                        &self.config.timestamp_type,
+                        &self.config.system_timezone,
+                    )?;
+                    let adjusted_microseconds = utc_datetime.timestamp_micros();
+                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
+                    Ok(ScalarValue::TimestampMicrosecond(
+                        Some(adjusted_microseconds),
+                        adjusted_timezone,
+                    ))
+                } else {
+                    Ok(ScalarValue::TimestampMicrosecond(microseconds, timezone))
+                }
+            }
             Literal::TimestampNanosecond {
                 nanoseconds,
                 timezone_info,
-            } => Ok(ScalarValue::TimestampNanosecond(
-                nanoseconds,
-                Self::resolve_timezone(
+            } => {
+                let timezone = Self::resolve_timezone(
                     &timezone_info,
-                    self.config.timezone.as_str(),
+                    self.config.system_timezone.as_str(),
                     &self.config.timestamp_type,
-                )?,
-            )),
+                )?;
+                if let Some(nanoseconds) = nanoseconds {
+                    let datetime = Utc.timestamp_nanos(nanoseconds);
+                    let utc_datetime = Self::local_datetime_to_utc_datetime(
+                        datetime,
+                        &timezone_info,
+                        &self.config.timestamp_type,
+                        &self.config.system_timezone,
+                    )?;
+                    let adjusted_nanoseconds =
+                        utc_datetime.timestamp_nanos_opt().ok_or_else(|| {
+                            PlanError::invalid(format!(
+                                "Invalid Literal TimestampNanosecond: {nanoseconds}"
+                            ))
+                        })?;
+                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
+                    Ok(ScalarValue::TimestampNanosecond(
+                        Some(adjusted_nanoseconds),
+                        adjusted_timezone,
+                    ))
+                } else {
+                    Ok(ScalarValue::TimestampNanosecond(nanoseconds, timezone))
+                }
+            }
             Literal::Date32 { days } => Ok(ScalarValue::Date32(days)),
             Literal::Date64 { milliseconds } => Ok(ScalarValue::Date64(milliseconds)),
             Literal::Time32Second { seconds } => Ok(ScalarValue::Time32Second(seconds)),
@@ -105,26 +191,22 @@ impl PlanResolver<'_> {
                 Ok(ScalarValue::DurationNanosecond(nanoseconds))
             }
             Literal::IntervalYearMonth { months } => Ok(ScalarValue::IntervalYearMonth(months)),
-            Literal::IntervalDayTime { days, milliseconds } => {
-                if days.is_some() || milliseconds.is_some() {
+            Literal::IntervalDayTime { value } => {
+                if let Some(value) = value {
                     Ok(ScalarValue::IntervalDayTime(Some(
-                        adt::IntervalDayTime::new(days.unwrap_or(0), milliseconds.unwrap_or(0)),
+                        adt::IntervalDayTime::new(value.days, value.milliseconds),
                     )))
                 } else {
                     Ok(ScalarValue::IntervalDayTime(None))
                 }
             }
-            Literal::IntervalMonthDayNano {
-                months,
-                days,
-                nanoseconds,
-            } => {
-                if months.is_some() || days.is_some() || nanoseconds.is_some() {
+            Literal::IntervalMonthDayNano { value } => {
+                if let Some(value) = value {
                     Ok(ScalarValue::IntervalMonthDayNano(Some(
                         adt::IntervalMonthDayNanoType::make_value(
-                            months.unwrap_or(0),
-                            days.unwrap_or(0),
-                            nanoseconds.unwrap_or(0),
+                            value.months,
+                            value.days,
+                            value.nanoseconds,
                         ),
                     )))
                 } else {
@@ -359,122 +441,59 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn rebase_timestamp_seconds(
-        seconds: Option<i64>,
-        timezone: &Option<Arc<str>>,
-    ) -> PlanResult<Option<i64>> {
-        let adjusted_seconds = if let (Some(seconds), Some(timezone)) = (seconds, &timezone) {
-            let tz: Tz = timezone.parse()?;
-            let utc_dt = Utc.timestamp_opt(seconds, 0).earliest().ok_or_else(|| {
-                PlanError::invalid(format!("Invalid Literal TimestampSecond: {seconds}"))
-            })?;
-            let offset_seconds: i64 = tz
-                .offset_from_utc_datetime(&utc_dt.naive_utc())
+    pub fn local_datetime_to_utc_datetime(
+        datetime: chrono::DateTime<Utc>,
+        timezone_info: &spec::TimeZoneInfo,
+        config_timestamp_type: &TimestampType,
+        system_timezone: &str,
+    ) -> PlanResult<chrono::DateTime<Utc>> {
+        // FIXME: See FIXME in `PlanResolver::resolve_timezone` for more details.
+        let should_rebase = match timezone_info {
+            // PySpark client (via Spark Connect) applies the local timezone to timestamp literals
+            // before sending them when TimeZoneInfo::LocalTimeZone is specified.
+            //
+            // Example: datetime(2022, 12, 22, 17, 0, 0) is passed up as Timestamp(1671757200000000)
+            //   - Timestamp(1671757200000000): 2022-12-22 17:00:00 America/Los_Angeles
+            //   - Timestamp(1671728400000000): 2022-12-22 17:00:00 UTC
+            //
+            // Rebasing to UTC is only needed for TimeZoneInfo::LocalTimeZone.
+            // For TimeZoneInfo::SQLConfigured, we don't rebase because we parse the timestamp as UTC.
+            spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
+                TimestampType::TimestampLtz => false,
+                TimestampType::TimestampNtz => false,
+            },
+            spec::TimeZoneInfo::LocalTimeZone => true,
+            spec::TimeZoneInfo::NoTimeZone => false,
+            spec::TimeZoneInfo::TimeZone {
+                timezone: _timezone,
+            } => false,
+        };
+        if should_rebase {
+            let system_timezone: Tz = system_timezone.parse()?;
+            let offset_seconds: i64 = system_timezone
+                .offset_from_utc_datetime(&datetime.naive_utc())
                 .fix()
                 .local_minus_utc() as i64;
-            let adjusted_date_time =
-                utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
-                    PlanError::invalid(format!(
-                        "Invalid offset seconds for Literal TimestampSecond: {offset_seconds}"
-                    ))
-                })?);
-            Some(adjusted_date_time.timestamp())
+            let result = datetime.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+                PlanError::invalid(format!(
+                    "Invalid offset seconds when converting from local to UTC: {offset_seconds}"
+                ))
+            })?);
+            Ok(result)
         } else {
-            seconds
-        };
-        Ok(adjusted_seconds)
+            Ok(datetime)
+        }
     }
 
-    pub fn rebase_timestamp_milliseconds(
-        milliseconds: Option<i64>,
-        timezone: &Option<Arc<str>>,
-    ) -> PlanResult<Option<i64>> {
-        let adjusted_milliseconds =
-            if let (Some(milliseconds), Some(timezone)) = (milliseconds, &timezone) {
-                let tz: Tz = timezone.parse()?;
-                let utc_dt = Utc
-                    .timestamp_millis_opt(milliseconds)
-                    .earliest()
-                    .ok_or_else(|| {
-                        PlanError::invalid(format!(
-                            "Invalid Literal TimestampMillisecond: {milliseconds}"
-                        ))
-                    })?;
-                let offset_seconds: i64 = tz
-                    .offset_from_utc_datetime(&utc_dt.naive_utc())
-                    .fix()
-                    .local_minus_utc() as i64;
-                let adjusted_date_time =
-                    utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
-                        PlanError::invalid(format!(
-                        "Invalid offset seconds for Literal TimestampMillisecond: {offset_seconds}"
-                    ))
-                    })?);
-                Some(adjusted_date_time.timestamp_millis())
-            } else {
-                milliseconds
-            };
-        Ok(adjusted_milliseconds)
-    }
-
-    pub fn rebase_timestamp_microseconds(
-        microseconds: Option<i64>,
-        timezone: &Option<Arc<str>>,
-    ) -> PlanResult<Option<i64>> {
-        let adjusted_microseconds =
-            if let (Some(microseconds), Some(timezone)) = (microseconds, &timezone) {
-                let tz: Tz = timezone.parse()?;
-                let utc_dt = Utc
-                    .timestamp_micros(microseconds)
-                    .earliest()
-                    .ok_or_else(|| {
-                        PlanError::invalid(format!(
-                            "Invalid Literal TimestampMicrosecond: {microseconds}"
-                        ))
-                    })?;
-                let offset_seconds: i64 = tz
-                    .offset_from_utc_datetime(&utc_dt.naive_utc())
-                    .fix()
-                    .local_minus_utc() as i64;
-                let adjusted_date_time =
-                    utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
-                        PlanError::invalid(format!(
-                        "Invalid offset seconds for Literal TimestampMicrosecond: {offset_seconds}"
-                    ))
-                    })?);
-                Some(adjusted_date_time.timestamp_micros())
-            } else {
-                microseconds
-            };
-        Ok(adjusted_microseconds)
-    }
-
-    pub fn rebase_timestamp_nanoseconds(
-        nanoseconds: Option<i64>,
-        timezone: &Option<Arc<str>>,
-    ) -> PlanResult<Option<i64>> {
-        let adjusted_nanoseconds =
-            if let (Some(nanoseconds), Some(timezone)) = (nanoseconds, &timezone) {
-                let tz: Tz = timezone.parse()?;
-                let utc_dt = Utc.timestamp_nanos(nanoseconds);
-                let offset_seconds: i64 = tz
-                    .offset_from_utc_datetime(&utc_dt.naive_utc())
-                    .fix()
-                    .local_minus_utc() as i64;
-                let adjusted_date_time =
-                    utc_dt.sub(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
-                        PlanError::invalid(format!(
-                        "Invalid offset seconds for Literal TimestampNanosecond: {offset_seconds}"
-                    ))
-                    })?);
-                Some(adjusted_date_time.timestamp_nanos_opt().ok_or_else(|| {
-                    PlanError::invalid(format!(
-                        "Invalid Literal TimestampNanosecond: {nanoseconds}"
-                    ))
-                })?)
-            } else {
-                nanoseconds
-            };
-        Ok(adjusted_nanoseconds)
+    fn get_adjusted_timezone(
+        &self,
+        timezone: Option<Arc<str>>,
+        timezone_info: &spec::TimeZoneInfo,
+    ) -> Option<Arc<str>> {
+        // FIXME: See FIXME in `PlanResolver::resolve_timezone` for more details.
+        match timezone_info {
+            spec::TimeZoneInfo::LocalTimeZone => None,
+            _ => timezone,
+        }
     }
 }

@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
+use chrono::{TimeZone, Utc};
 use half::f16;
 use sail_common::object::DynObject;
 use sail_common::{impl_dyn_object_traits, spec};
@@ -20,7 +21,7 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
     fn literal_to_string(
         &self,
         literal: &spec::Literal,
-        config_timezone: &str,
+        config_system_timezone: &str,
         config_timestamp_type: &TimestampType,
     ) -> PlanResult<String>;
 
@@ -114,7 +115,7 @@ impl PlanFormatter for DefaultPlanFormatter {
             )),
             DataType::Timestamp {
                 time_unit: _,
-                timezone_info: spec::TimeZoneInfo::Configured,
+                timezone_info: spec::TimeZoneInfo::SQLConfigured,
             }
             | DataType::Timestamp {
                 time_unit: _,
@@ -264,7 +265,7 @@ impl PlanFormatter for DefaultPlanFormatter {
     fn literal_to_string(
         &self,
         literal: &spec::Literal,
-        config_timezone: &str,
+        config_system_timezone: &str,
         config_timestamp_type: &TimestampType,
     ) -> PlanResult<String> {
         use spec::Literal;
@@ -272,7 +273,7 @@ impl PlanFormatter for DefaultPlanFormatter {
         let literal_list_to_string = |name: &str, values: &Vec<Literal>| -> PlanResult<String> {
             let values = values
                 .iter()
-                .map(|x| self.literal_to_string(x, config_timezone, config_timestamp_type))
+                .map(|x| self.literal_to_string(x, config_system_timezone, config_timestamp_type))
                 .collect::<PlanResult<Vec<String>>>()?;
             Ok(format!("{name}({})", values.join(", ")))
         };
@@ -342,21 +343,15 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match seconds {
                 Some(seconds) => {
-                    let timezone = PlanResolver::resolve_timezone(
+                    let datetime = Utc.timestamp_opt(*seconds, 0).earliest().ok_or_else(|| {
+                        PlanError::invalid(format!("Literal to string TimestampSecond: {seconds}"))
+                    })?;
+                    let utc_datetime = PlanResolver::local_datetime_to_utc_datetime(
+                        datetime,
                         timezone_info,
-                        config_timezone,
                         config_timestamp_type,
+                        config_system_timezone,
                     )?;
-                    let adjusted_seconds =
-                        PlanResolver::rebase_timestamp_seconds(Some(*seconds), &timezone)?
-                            .ok_or_else(|| {
-                                PlanError::invalid(format!(
-                            "invalid TimestampSecond: literal to string (seconds: {seconds})"
-                        ))
-                            })?;
-                    let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::seconds(adjusted_seconds))
-                    .and_utc();
                     format_timestamp(
                         utc_datetime,
                         "%Y-%m-%d %H:%M:%S",
@@ -371,20 +366,20 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match milliseconds {
                 Some(milliseconds) => {
-                    let timezone = PlanResolver::resolve_timezone(
+                    let datetime = Utc
+                        .timestamp_millis_opt(*milliseconds)
+                        .earliest()
+                        .ok_or_else(|| {
+                            PlanError::invalid(format!(
+                                "Literal to string TimestampMillisecond: {milliseconds}"
+                            ))
+                        })?;
+                    let utc_datetime = PlanResolver::local_datetime_to_utc_datetime(
+                        datetime,
                         timezone_info,
-                        config_timezone,
                         config_timestamp_type,
+                        config_system_timezone,
                     )?;
-                    let adjusted_milliseconds = PlanResolver::rebase_timestamp_milliseconds(
-                        Some(*milliseconds),
-                        &timezone,
-                    )?.ok_or_else(|| {
-                        PlanError::invalid(format!("invalid TimestampMillisecond: literal to string (milliseconds: {milliseconds})"))
-                    })?;
-                    let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::milliseconds(adjusted_milliseconds))
-                    .and_utc();
                     format_timestamp(
                         utc_datetime,
                         "%Y-%m-%d %H:%M:%S",
@@ -399,20 +394,20 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match microseconds {
                 Some(microseconds) => {
-                    let timezone = PlanResolver::resolve_timezone(
+                    let datetime =
+                        Utc.timestamp_micros(*microseconds)
+                            .earliest()
+                            .ok_or_else(|| {
+                                PlanError::invalid(format!(
+                                    "Literal to string TimestampMicrosecond: {microseconds}"
+                                ))
+                            })?;
+                    let utc_datetime = PlanResolver::local_datetime_to_utc_datetime(
+                        datetime,
                         timezone_info,
-                        config_timezone,
                         config_timestamp_type,
+                        config_system_timezone,
                     )?;
-                    let adjusted_microseconds = PlanResolver::rebase_timestamp_microseconds(
-                        Some(*microseconds),
-                        &timezone,
-                    )?.ok_or_else(|| {
-                        PlanError::invalid(format!("invalid TimestampMicrosecond: literal to string (microseconds: {microseconds})"))
-                    })?;
-                    let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::microseconds(adjusted_microseconds))
-                    .and_utc();
                     format_timestamp(
                         utc_datetime,
                         "%Y-%m-%d %H:%M:%S",
@@ -427,20 +422,13 @@ impl PlanFormatter for DefaultPlanFormatter {
                 timezone_info,
             } => match nanoseconds {
                 Some(nanoseconds) => {
-                    let timezone = PlanResolver::resolve_timezone(
+                    let datetime = Utc.timestamp_nanos(*nanoseconds);
+                    let utc_datetime = PlanResolver::local_datetime_to_utc_datetime(
+                        datetime,
                         timezone_info,
-                        config_timezone,
                         config_timestamp_type,
+                        config_system_timezone,
                     )?;
-                    let adjusted_nanoseconds = PlanResolver::rebase_timestamp_nanoseconds(
-                        Some(*nanoseconds),
-                        &timezone,
-                    )?.ok_or_else(|| {
-                        PlanError::invalid(format!("invalid TimestampNanosecond: literal to string (nanoseconds: {nanoseconds})"))
-                    })?;
-                    let utc_datetime = (chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::nanoseconds(adjusted_nanoseconds))
-                    .and_utc();
                     format_timestamp(
                         utc_datetime,
                         "%Y-%m-%d %H:%M:%S",
@@ -609,11 +597,9 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::IntervalDayTime { days, milliseconds } => match (days, milliseconds) {
-                (None, None) => Ok("NULL".to_string()),
-                (days, milliseconds) => {
-                    let days = days.unwrap_or(0);
-                    let milliseconds = milliseconds.unwrap_or(0);
+            Literal::IntervalDayTime { value } => match value {
+                Some(value) => {
+                    let (days, milliseconds) = (value.days, value.milliseconds);
                     let total_days = days + (milliseconds / 86_400_000); // Add days from milliseconds
                     let remaining_millis = milliseconds % 86_400_000; // Get remaining sub-day milliseconds
                     let prepend = if total_days < 0 {
@@ -631,27 +617,24 @@ impl PlanFormatter for DefaultPlanFormatter {
                         "INTERVAL '{prepend}{total_days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
                     ))
                 }
+                None => Ok("NULL".to_string()),
             },
-            Literal::IntervalMonthDayNano {
-                months,
-                days,
-                nanoseconds,
-            } => match (months, days, nanoseconds) {
-                (Some(months), Some(days), Some(nanoseconds)) => {
-                    let years = *months / 12;
-                    let months = *months % 12;
-                    let days = *days;
-                    let hours = *nanoseconds / 3_600_000_000_000;
-                    let minutes = (*nanoseconds % 3_600_000_000_000) / 60_000_000_000;
-                    let seconds = (*nanoseconds % 60_000_000_000) / 1_000_000_000;
-                    let milliseconds = (*nanoseconds % 1_000_000_000) / 1_000_000;
-                    let microseconds = (*nanoseconds % 1_000_000) / 1_000;
-                    let nanoseconds = *nanoseconds % 1_000;
+            Literal::IntervalMonthDayNano { value } => match value {
+                Some(value) => {
+                    let (months, days, nanoseconds) = (value.months, value.days, value.nanoseconds);
+                    let years = months / 12;
+                    let months = months % 12;
+                    let hours = nanoseconds / 3_600_000_000_000;
+                    let minutes = (nanoseconds % 3_600_000_000_000) / 60_000_000_000;
+                    let seconds = (nanoseconds % 60_000_000_000) / 1_000_000_000;
+                    let milliseconds = (nanoseconds % 1_000_000_000) / 1_000_000;
+                    let microseconds = (nanoseconds % 1_000_000) / 1_000;
+                    let nanoseconds = nanoseconds % 1_000;
                     Ok(format!(
                         "INTERVAL {years} YEAR {months} MONTH {days} DAY {hours} HOUR {minutes} MINUTE {seconds} SECOND {milliseconds} MILLISECOND {microseconds} MICROSECOND {nanoseconds} NANOSECOND"
                     ))
                 }
-                _ => Ok("NULL".to_string()),
+                None => Ok("NULL".to_string()),
             },
             Literal::Binary { value }
             | Literal::FixedSizeBinary { size: _, value }
@@ -700,7 +683,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                                 "{} AS {}",
                                 self.literal_to_string(
                                     value,
-                                    config_timezone,
+                                    config_system_timezone,
                                     config_timestamp_type
                                 )?,
                                 field.name
@@ -717,8 +700,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 value,
             } => match value {
                 Some((id, value)) => {
-                    let value =
-                        self.literal_to_string(value, config_timezone, config_timestamp_type)?;
+                    let value = self.literal_to_string(
+                        value,
+                        config_system_timezone,
+                        config_timestamp_type,
+                    )?;
                     Ok(format!("{id}:{value}"))
                 }
                 None => Ok("NULL".to_string()),
@@ -729,8 +715,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 value,
             } => match value {
                 Some(value) => {
-                    let value =
-                        self.literal_to_string(value, config_timezone, config_timestamp_type)?;
+                    let value = self.literal_to_string(
+                        value,
+                        config_system_timezone,
+                        config_timestamp_type,
+                    )?;
                     Ok(format!("dictionary({value})"))
                 }
                 None => Ok("NULL".to_string()),
@@ -912,14 +901,14 @@ fn format_decimal(value: &str, scale: i8) -> String {
 }
 
 fn format_timestamp(
-    utc_datetime: chrono::DateTime<chrono::Utc>,
+    utc_datetime: chrono::DateTime<Utc>,
     format: &str,
     timezone_info: &spec::TimeZoneInfo,
     config_timestamp_type: &TimestampType,
 ) -> PlanResult<String> {
     let formatted_time = utc_datetime.format(format).to_string();
     let prefix = match timezone_info {
-        spec::TimeZoneInfo::Configured => match config_timestamp_type {
+        spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
             TimestampType::TimestampLtz => "TIMESTAMP",
             TimestampType::TimestampNtz => "TIMESTAMP_NTZ",
         },
@@ -940,12 +929,12 @@ mod tests {
 
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {
-        let plan_config = PlanConfig::default();
-        let config_timezone = plan_config.timezone.as_str();
+        let plan_config = PlanConfig::new()?;
+        let config_system_timezone = plan_config.system_timezone.as_str();
         let config_timestamp_type = plan_config.timestamp_type;
         let formatter = DefaultPlanFormatter;
         let to_string = |literal| {
-            formatter.literal_to_string(&literal, config_timezone, &config_timestamp_type)
+            formatter.literal_to_string(&literal, config_system_timezone, &config_timestamp_type)
         };
 
         assert_eq!(to_string(Literal::Null)?, "NULL");
@@ -1092,17 +1081,21 @@ mod tests {
         );
         assert_eq!(
             to_string(Literal::IntervalMonthDayNano {
-                months: Some(15),
-                days: Some(-20),
-                nanoseconds: Some(123_456_789_000),
+                value: Some(spec::IntervalMonthDayNano {
+                    months: 15,
+                    days: -20,
+                    nanoseconds: 123_456_789_000,
+                })
             })?,
             "INTERVAL 1 YEAR 3 MONTH -20 DAY 0 HOUR 2 MINUTE 3 SECOND 456 MILLISECOND 789 MICROSECOND 0 NANOSECOND",
         );
         assert_eq!(
             to_string(Literal::IntervalMonthDayNano {
-                months: Some( -15),
-                days: Some(10),
-                nanoseconds: Some(-1_001_000),
+                value: Some(spec::IntervalMonthDayNano {
+                    months: -15,
+                    days: 10,
+                    nanoseconds: -1_001_000,
+                })
             })?,
             "INTERVAL -1 YEAR -3 MONTH 10 DAY 0 HOUR 0 MINUTE 0 SECOND -1 MILLISECOND -1 MICROSECOND 0 NANOSECOND",
         );
@@ -1116,15 +1109,19 @@ mod tests {
         );
         assert_eq!(
             to_string(Literal::IntervalDayTime {
-                days: Some(0),
-                milliseconds: Some(123_456_000),
+                value: Some(spec::IntervalDayTime {
+                    days: 0,
+                    milliseconds: 123_456_000,
+                })
             })?,
             "INTERVAL '1 10:17:36.000' DAY TO SECOND",
         );
         assert_eq!(
             to_string(Literal::IntervalDayTime {
-                days: Some(0),
-                milliseconds: Some(-123_456_000),
+                value: Some(spec::IntervalDayTime {
+                    days: 0,
+                    milliseconds: -123_456_000,
+                })
             })?,
             "INTERVAL '-1 10:17:36.000' DAY TO SECOND",
         );
