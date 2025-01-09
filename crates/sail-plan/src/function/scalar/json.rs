@@ -47,8 +47,6 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, Function)> {
         ("from_json", F::unknown("from_json")),
         ("get_json_object", F::custom(get_json_object)),
         ("json_array_length", F::scalar_udf(udfs::json_length_udf)),
-        ("get_json_object", F::unknown("get_json_object")),
-        ("json_array_length", F::unknown("json_array_length")),
         ("json_object_keys", F::unknown("json_object_keys")),
         ("json_tuple", F::unknown("json_tuple")),
         ("schema_of_json", F::unknown("schema_of_json")),
