@@ -7,7 +7,7 @@
           "literal": {
             "timestampMicrosecond": {
               "microseconds": 1547499240000000,
-              "timezoneInfo": "configured"
+              "timezoneInfo": "sQLConfigured"
             }
           }
         }
@@ -19,7 +19,7 @@
         "success": {
           "literal": {
             "timestampMicrosecond": {
-              "microseconds": 1547668200567000,
+              "microseconds": 1547675400567000,
               "timezoneInfo": {
                 "timeZone": {
                   "timezone": "UTC"
@@ -37,7 +37,7 @@
           "literal": {
             "timestampMicrosecond": {
               "microseconds": 946688100000000,
-              "timezoneInfo": "configured"
+              "timezoneInfo": "sQLConfigured"
             }
           }
         }
@@ -49,7 +49,7 @@
         "success": {
           "literal": {
             "timestampMicrosecond": {
-              "microseconds": -3600000000,
+              "microseconds": 3600000000,
               "timezoneInfo": {
                 "timeZone": {
                   "timezone": "UTC"
@@ -67,7 +67,7 @@
           "literal": {
             "timestampMicrosecond": {
               "microseconds": 1457729640000000,
-              "timezoneInfo": "configured"
+              "timezoneInfo": "sQLConfigured"
             }
           }
         }
@@ -80,7 +80,7 @@
           "literal": {
             "timestampMicrosecond": {
               "microseconds": 1457729640000000,
-              "timezoneInfo": "configured"
+              "timezoneInfo": "sQLConfigured"
             }
           }
         }
@@ -93,7 +93,7 @@
           "literal": {
             "timestampMicrosecond": {
               "microseconds": 1457729640000000,
-              "timezoneInfo": "configured"
+              "timezoneInfo": "sQLConfigured"
             }
           }
         }
@@ -103,21 +103,21 @@
       "input": "tImEstAmp_Ntz '2016-33-11 20:54:00.000'",
       "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIMESTAMP_NTZ\" is invalid: '2016-33-11 20:54:00.000'.(line 1, pos 0)\n\n== SQL ==\ntImEstAmp_Ntz '2016-33-11 20:54:00.000'\n^^^\n",
       "output": {
-        "failure": "invalid argument: timestamp: 2016-33-11 20:54:00.000"
+        "failure": "invalid argument: Invalid date/time values error when parsing timestamp: 2016-33-11 20:54:00.000"
       }
     },
     {
       "input": "timestamP '2016-33-11 20:54:00.000'",
       "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIMESTAMP\" is invalid: '2016-33-11 20:54:00.000'.(line 1, pos 0)\n\n== SQL ==\ntimestamP '2016-33-11 20:54:00.000'\n^^^\n",
       "output": {
-        "failure": "invalid argument: timestamp: 2016-33-11 20:54:00.000"
+        "failure": "invalid argument: Invalid date/time values error when parsing timestamp: 2016-33-11 20:54:00.000"
       }
     },
     {
       "input": "timestamP_LTZ '2016-33-11 20:54:00.000'",
       "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIMESTAMP_LTZ\" is invalid: '2016-33-11 20:54:00.000'.(line 1, pos 0)\n\n== SQL ==\ntimestamP_LTZ '2016-33-11 20:54:00.000'\n^^^\n",
       "output": {
-        "failure": "invalid argument: timestamp: 2016-33-11 20:54:00.000"
+        "failure": "invalid argument: Invalid date/time values error when parsing timestamp: 2016-33-11 20:54:00.000"
       }
     }
   ]

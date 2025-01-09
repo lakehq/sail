@@ -3,9 +3,9 @@ use pyo3::prelude::PyModule;
 use pyo3::sync::GILOnceCell;
 use pyo3::{intern, Bound, Py, PyAny, PyObject, PyResult, Python};
 
+use crate::config::PySparkUdfConfig;
 use crate::conversion::TryToPy;
-use crate::udf::ColumnMatch;
-use crate::utils::py_init_object;
+use crate::python::py_init_object;
 
 const MODULE_NAME: &str = "utils.spark";
 const MODULE_FILE_NAME: &str = "spark.py";
@@ -36,6 +36,7 @@ impl PySpark {
         udf: PyObject,
         input_types: &[DataType],
         output_type: &DataType,
+        _config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
@@ -47,39 +48,36 @@ impl PySpark {
     pub fn arrow_batch_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
-        input_types: &[DataType],
-        output_type: &DataType,
+        config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkArrowBatchUdf"),
-            (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+            (udf, config.clone()),
         )
     }
 
     pub fn scalar_pandas_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
-        input_types: &[DataType],
-        output_type: &DataType,
+        config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkScalarPandasUdf"),
-            (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+            (udf, config.clone()),
         )
     }
 
     pub fn scalar_pandas_iter_udf<'py>(
         py: Python<'py>,
         udf: PyObject,
-        input_types: &[DataType],
-        output_type: &DataType,
+        config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkScalarPandasIterUdf"),
-            (udf, input_types.try_to_py(py)?, output_type.try_to_py(py)?),
+            (udf, config.clone()),
         )
     }
 
@@ -87,66 +85,59 @@ impl PySpark {
         py: Python<'py>,
         udf: PyObject,
         input_names: Vec<String>,
-        input_types: &[DataType],
-        output_type: &DataType,
+        config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkGroupAggUdf"),
-            (
-                udf,
-                input_names,
-                input_types.try_to_py(py)?,
-                output_type.try_to_py(py)?,
-            ),
+            (udf, input_names, config.clone()),
         )
     }
 
-    pub fn group_map_udf(
-        py: Python,
+    pub fn group_map_udf<'py>(
+        py: Python<'py>,
         udf: PyObject,
         input_names: Vec<String>,
-        output_schema: SchemaRef,
-        column_match: ColumnMatch,
-    ) -> PyResult<Bound<PyAny>> {
+        config: &PySparkUdfConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkGroupMapUdf"),
-            (
-                udf,
-                input_names,
-                output_schema.try_to_py(py)?,
-                column_match.is_by_name(),
-            ),
+            (udf, input_names, config.clone()),
         )
     }
 
-    pub fn cogroup_map_udf(
-        py: Python,
+    pub fn cogroup_map_udf<'py>(
+        py: Python<'py>,
         udf: PyObject,
-        output_schema: SchemaRef,
-        column_match: ColumnMatch,
-    ) -> PyResult<Bound<PyAny>> {
+        left_names: Vec<String>,
+        right_names: Vec<String>,
+        config: &PySparkUdfConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkCoGroupMapUdf"),
-            (udf, output_schema.try_to_py(py)?, column_match.is_by_name()),
+            (udf, left_names, right_names, config.clone()),
         )
     }
 
-    pub fn map_pandas_iter_udf(
-        py: Python,
+    pub fn map_pandas_iter_udf<'py>(
+        py: Python<'py>,
         udf: PyObject,
-        output_schema: SchemaRef,
-    ) -> PyResult<Bound<PyAny>> {
+        config: &PySparkUdfConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkMapPandasIterUdf"),
-            (udf, output_schema.try_to_py(py)?),
+            (udf, config.clone()),
         )
     }
 
-    pub fn map_arrow_iter_udf(py: Python, udf: PyObject) -> PyResult<Bound<PyAny>> {
+    pub fn map_arrow_iter_udf<'py>(
+        py: Python<'py>,
+        udf: PyObject,
+        _config: &PySparkUdfConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkMapArrowIterUdf"),
@@ -160,6 +151,7 @@ impl PySpark {
         input_types: &[DataType],
         passthrough_columns: usize,
         output_schema: &SchemaRef,
+        config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
@@ -169,6 +161,7 @@ impl PySpark {
                 input_types.try_to_py(py)?,
                 passthrough_columns,
                 output_schema.try_to_py(py)?,
+                config.clone(),
             ),
         )
     }
@@ -179,8 +172,7 @@ impl PySpark {
         input_names: &[String],
         passthrough_columns: usize,
         output_schema: &SchemaRef,
-        timezone: &str,
-        safe_check: bool,
+        config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
@@ -190,8 +182,7 @@ impl PySpark {
                 input_names.to_vec(),
                 passthrough_columns,
                 output_schema.try_to_py(py)?,
-                timezone,
-                safe_check,
+                config.clone(),
             ),
         )
     }

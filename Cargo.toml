@@ -26,7 +26,7 @@ pbjson-build = "0.7.0"
 tower = { version = "0.5", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["full"] }
 uuid = { version = "1.10.0", features = ["v4"] }
-async-trait = "0.1.83"
+async-trait = "0.1.84"
 async-recursion = "1.1.0"
 async-stream = "0.3"
 lazy_static = "1.5.0"
@@ -41,28 +41,28 @@ chrono-tz = "0.10.0"
 futures = "0.3"
 comfy-table = "7.1"
 html-escape = "0.2"
-syn = "2.0.91"
+syn = "2.0.95"
 quote = "1.0.37"
-prettyplease = "0.2.24"
+prettyplease = "0.2.27"
 phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
 either = "1.12.0"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
-serde_arrow = { version = "0.12.2", features = ["arrow-53"] }
+serde_arrow = { version = "0.12.3", features = ["arrow-53"] }
 mimalloc = { version = "0.1.43", default-features = false }
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 rand_distr = "0.4.3"
 url = "2.5.4"
 lexical-core = { version = "1.0.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-aws-config = "1.5.11"
+aws-config = "1.5.13"
 aws-credential-types = "1.2.1"
 clap = { version = "4.5.23", features = ["derive"] }
 num_enum = "0.7.3"
 log = "0.4.22"
 env_logger = "0.11.6"
-fastrace = { version = "0.7.4", features = ["enable"] }
+fastrace = { version = "0.7.5", features = ["enable"] }
 fastrace-opentelemetry = "0.7.4"
 opentelemetry = "0.26.0"
 opentelemetry_sdk = "0.26.0"
@@ -78,6 +78,7 @@ cbc = { version = "0.1.2", features = ["std"] }
 base64 = "0.22.1"
 md-5 = "0.10.6"
 half = { version = "2.4.1", features = ["serde", "num-traits", "zerocopy"] }
+iana-time-zone = "0.1.61"
 
 ######
 # The versions of the following dependencies are managed manually.

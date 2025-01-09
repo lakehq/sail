@@ -69,16 +69,19 @@ message PySparkUdf {
   bool deterministic = 4;
   repeated bytes input_types = 5;
   bytes output_type = 6;
+  PySparkUdfConfig config = 7;
 }
 
 message PySparkCoGroupMapUdf {
   string name = 1;
   bytes payload = 2;
   bool deterministic = 3;
-  bytes left_type = 4;
-  bytes right_type = 5;
-  bytes output_type = 6;
-  ColumnMatch column_match = 7;
+  repeated bytes left_types = 4;
+  repeated string left_names = 5;
+  repeated bytes right_types = 6;
+  repeated string right_names = 7;
+  bytes output_type = 8;
+  PySparkUdfConfig config = 9;
 }
 
 message MapToArrayUdf {
@@ -118,6 +121,7 @@ message PySparkGroupAggUdaf {
   repeated string input_names = 4;
   repeated bytes input_types = 5;
   bytes output_type = 6;
+  PySparkUdfConfig config = 7;
 }
 
 message PySparkGroupMapUdaf {
@@ -127,12 +131,12 @@ message PySparkGroupMapUdaf {
   repeated string input_names = 4;
   repeated bytes input_types = 5;
   bytes output_type = 6;
-  ColumnMatch column_match = 7;
+  PySparkUdfConfig config = 7;
 }
 
 message PySparkBatchCollectorUdaf {
   repeated bytes input_types = 1;
-  bytes output_type = 2;
+  repeated string input_names = 2;
 }
 
 message PySparkMapIterUdf {
@@ -141,6 +145,7 @@ message PySparkMapIterUdf {
   bytes payload = 3;
   repeated string input_names = 4;
   bytes output_schema = 5;
+  PySparkUdfConfig config = 6;
 }
 
 message PySparkUdtf {
@@ -153,12 +158,7 @@ message PySparkUdtf {
   bytes function_return_type = 7;
   repeated string function_output_names = 8;
   bool deterministic = 9;
-  PySparkUdtfOptions options = 10;
-}
-
-enum ColumnMatch {
-  COLUMN_MATCH_BY_POSITION = 0;
-  COLUMN_MATCH_BY_NAME = 1;
+  PySparkUdfConfig config = 10;
 }
 
 enum PySparkUdfKind {
@@ -178,9 +178,12 @@ enum PySparkUdtfKind {
   PY_SPARK_UDTF_KIND_ARROW_TABLE = 1;
 }
 
-message PySparkUdtfOptions {
-  string timezone = 1;
-  bool arrow_cast_safe_check = 2;
+message PySparkUdfConfig {
+  string session_timezone = 1;
+  optional string pandas_window_bound_types = 2;
+  bool pandas_grouped_map_assign_columns_by_name = 3;
+  bool pandas_convert_to_arrow_array_safely = 4;
+  uint64 arrow_max_records_per_batch = 5;
 }
 
 message RangeExecNode {

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use sail_common::datetime::warn_if_spark_session_timezone_mismatches_local_timezone;
 use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
-use sail_python_udf::config::SparkUdfConfig;
+use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
@@ -170,13 +171,17 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
     type Error = SparkError;
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
-        let mut output = PlanConfig::default();
+        let mut output = PlanConfig::new()?;
 
         if let Some(value) = config
             .get(SPARK_SQL_SESSION_TIME_ZONE)?
             .map(|x| x.to_string())
         {
-            output.timezone = value;
+            output.session_timezone = value;
+            warn_if_spark_session_timezone_mismatches_local_timezone(
+                output.session_timezone.as_str(),
+                output.system_timezone.as_str(),
+            )?;
         }
 
         if let Some(value) = config
@@ -216,23 +221,23 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         output.plan_formatter = Arc::new(DefaultPlanFormatter);
-        output.spark_udf_config = SparkUdfConfig::try_from(config)?;
+        output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
 
         Ok(output)
     }
 }
 
-impl TryFrom<&SparkRuntimeConfig> for SparkUdfConfig {
+impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
     type Error = SparkError;
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
-        let mut output = SparkUdfConfig::default();
+        let mut output = PySparkUdfConfig::default();
 
         if let Some(value) = config
             .get(SPARK_SQL_SESSION_TIME_ZONE)?
             .map(|x| x.to_string())
         {
-            output.timezone = value;
+            output.session_timezone = value;
         }
 
         if let Some(value) = config

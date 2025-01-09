@@ -27,6 +27,11 @@ impl FieldInfo {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(super) struct PlanResolverStateConfig {
+    pub arrow_allow_large_var_types: bool,
+}
+
 #[derive(Debug)]
 pub(super) struct PlanResolverState {
     next_id: usize,
@@ -36,7 +41,7 @@ pub(super) struct PlanResolverState {
     outer_query_schema: Option<DFSchemaRef>,
     /// The CTEs for the current query.
     ctes: HashMap<TableReference, Arc<LogicalPlan>>,
-    apply_arrow_use_large_var_types_config: bool,
+    config: PlanResolverStateConfig,
 }
 
 impl Default for PlanResolverState {
@@ -52,7 +57,7 @@ impl PlanResolverState {
             fields: HashMap::new(),
             outer_query_schema: None,
             ctes: HashMap::new(),
-            apply_arrow_use_large_var_types_config: false,
+            config: PlanResolverStateConfig::default(),
         }
     }
 
@@ -132,6 +137,10 @@ impl PlanResolverState {
         self.ctes.insert(table_ref, Arc::new(plan));
     }
 
+    pub fn enter_config_scope(&mut self) -> ConfigScope {
+        ConfigScope::new(self)
+    }
+
     // TODO:
     //  1. It's unclear which `PySparkUdfType`s rely on the `arrow_use_large_var_types` config.
     //     While searching through the Spark codebase provides insight into this config's usage,
@@ -140,12 +149,13 @@ impl PlanResolverState {
     //      https://github.com/search?q=repo%3Aapache%2Fspark%20%22useLargeVarTypes%22&type=code
     //  2. We are likely overly liberal in setting this flag to `true`.
     //     Evaluate if we are unnecessarily setting this flag to `true` anywhere.
-    pub fn register_apply_arrow_use_large_var_types_config(&mut self, apply: bool) {
-        self.apply_arrow_use_large_var_types_config = apply;
+
+    pub fn config(&self) -> &PlanResolverStateConfig {
+        &self.config
     }
 
-    pub fn get_apply_arrow_use_large_var_types_config(&self) -> bool {
-        self.apply_arrow_use_large_var_types_config
+    pub fn config_mut(&mut self) -> &mut PlanResolverStateConfig {
+        &mut self.config
     }
 }
 
@@ -197,5 +207,30 @@ impl<'a> CteScope<'a> {
 impl Drop for CteScope<'_> {
     fn drop(&mut self) {
         self.state.ctes = std::mem::take(&mut self.previous_ctes);
+    }
+}
+
+pub(crate) struct ConfigScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_config: PlanResolverStateConfig,
+}
+
+impl<'a> ConfigScope<'a> {
+    fn new(state: &'a mut PlanResolverState) -> Self {
+        let previous_config = state.config.clone();
+        Self {
+            state,
+            previous_config,
+        }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for ConfigScope<'_> {
+    fn drop(&mut self) {
+        self.state.config = std::mem::take(&mut self.previous_config);
     }
 }

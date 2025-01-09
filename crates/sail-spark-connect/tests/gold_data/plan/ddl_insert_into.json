@@ -520,9 +520,11 @@
                       {
                         "literal": {
                           "intervalMonthDayNano": {
-                            "months": 0,
-                            "days": 1,
-                            "nanoseconds": 7384128462000
+                            "value": {
+                              "months": 0,
+                              "days": 1,
+                              "nanoseconds": 7384128462000
+                            }
                           }
                         }
                       }
@@ -640,9 +642,11 @@
                       {
                         "literal": {
                           "intervalMonthDayNano": {
-                            "months": 7,
-                            "days": 1,
-                            "nanoseconds": 1000000
+                            "value": {
+                              "months": 7,
+                              "days": 1,
+                              "nanoseconds": 1000000
+                            }
                           }
                         }
                       }
@@ -702,7 +706,7 @@
                         "literal": {
                           "timestampMicrosecond": {
                             "microseconds": 1546427471000000,
-                            "timezoneInfo": "configured"
+                            "timezoneInfo": "sQLConfigured"
                           }
                         }
                       }

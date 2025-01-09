@@ -68,6 +68,7 @@ impl From<PyUdfError> for PlanError {
             }
             PyUdfError::IoError(e) => PlanError::DataFusionError(DataFusionError::IoError(e)),
             PyUdfError::InvalidArgument(message) => PlanError::InvalidArgument(message),
+            PyUdfError::InternalError(message) => PlanError::InternalError(message),
         }
     }
 }
