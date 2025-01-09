@@ -2899,9 +2899,12 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(input, state).await?;
         let table_reference = self.resolve_table_reference(&table)?;
         let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
-        let schema = self
-            .resolve_schema_projection(table_provider.schema(), &columns)
-            .await?;
+        let schema = if columns.is_empty() {
+            table_provider.schema()
+        } else {
+            self.resolve_schema_projection(table_provider.schema(), &columns)
+                .await?
+        };
         let df_schema = Arc::new(DFSchema::try_from_qualified_schema(
             table_reference.clone(),
             &schema,
@@ -3427,8 +3430,9 @@ impl PlanResolver<'_> {
         let plan = LogicalPlanBuilder::from(input)
             .aggregate(group_exprs, aggregate_exprs.clone())?
             .build()?;
-        let projections = if with_grouping_expressions {
-            let mut results = vec![];
+        let (grouping_exprs, aggregate_or_grouping_exprs) = {
+            let mut grouping_exprs = vec![];
+            let mut aggregate_or_grouping_exprs = aggregate_exprs;
             for expr in grouping {
                 let NamedExpr {
                     name,
@@ -3444,19 +3448,19 @@ impl PlanResolver<'_> {
                         "group-by name count does not match expression count: {name:?} {exprs:?}",
                     )));
                 }
-                let exprs: Vec<_> = exprs
-                    .into_iter()
-                    .zip(name.into_iter())
-                    .map(|(expr, name)| NamedExpr {
+                grouping_exprs.extend(exprs.iter().zip(name.into_iter()).map(|(expr, name)| {
+                    NamedExpr {
                         name: vec![name],
-                        expr,
+                        expr: expr.clone(),
                         metadata: metadata.clone(),
-                    })
-                    .collect();
-                results.extend(exprs);
+                    }
+                }));
+                aggregate_or_grouping_exprs.extend(exprs);
             }
-            results.extend(projections);
-            results
+            (grouping_exprs, aggregate_or_grouping_exprs)
+        };
+        let projections = if with_grouping_expressions {
+            grouping_exprs.into_iter().chain(projections).collect()
         } else {
             projections
         };
@@ -3468,20 +3472,24 @@ impl PlanResolver<'_> {
                     expr,
                     metadata: _,
                 } = x;
-                let expr = rebase_expression(expr, &aggregate_exprs, &plan)?;
+                let expr = rebase_expression(expr, &aggregate_or_grouping_exprs, &plan)?;
                 let alias = state.register_field_name(name.one()?);
                 Ok(expr.alias(alias))
             })
             .collect::<PlanResult<Vec<_>>>()?;
         let having = match having {
-            Some(having) => Some(rebase_expression(having.clone(), &aggregate_exprs, &plan)?),
+            Some(having) => Some(rebase_expression(
+                having.clone(),
+                &aggregate_or_grouping_exprs,
+                &plan,
+            )?),
             None => None,
         };
         let builder = LogicalPlanBuilder::from(plan);
         match having {
             // We must apply the `HAVING` clause as a filter before the projection.
             // It is incorrect to filter after projection due to column renaming.
-            Some(having) => Ok(builder.filter(having)?.project(projections)?.build()?),
+            Some(having) => Ok(builder.having(having)?.project(projections)?.build()?),
             None => Ok(builder.project(projections)?.build()?),
         }
     }
