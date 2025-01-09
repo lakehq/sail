@@ -94,16 +94,14 @@ impl ScalarUDFImpl for SparkConcat {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
         if args
             .iter()
             .any(|arg| matches!(arg.data_type(), DataType::List(_)))
         {
-            #[allow(deprecated)] // TODO use invoke_batch
-            ArrayConcat::new().invoke(args)
+            ArrayConcat::new().invoke_batch(args, number_rows)
         } else {
-            #[allow(deprecated)] // TODO use invoke_batch
-            ConcatFunc::new().invoke(args)
+            ConcatFunc::new().invoke_batch(args, number_rows)
         }
     }
 }

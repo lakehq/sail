@@ -44,7 +44,7 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
         Ok(DataType::Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!("spark_unix_timestamp function requires 1 or more arguments");
         }
@@ -66,10 +66,9 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
                     None,
                 )?
                 .cast_to(&DataType::Int64, None),
-            #[allow(deprecated)] // TODO use invoke_batch
             DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
                 ToTimestampSecondsFunc::new()
-                    .invoke(args)?
+                    .invoke_batch(args, number_rows)?
                     .cast_to(
                         &DataType::Timestamp(TimeUnit::Second, Some(self.timezone.clone())),
                         None,

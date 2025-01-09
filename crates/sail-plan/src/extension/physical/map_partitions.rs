@@ -29,7 +29,8 @@ impl MapPartitionsExec {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             input.output_partitioning().clone(),
-            input.execution_mode(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         );
         Self {
             input,

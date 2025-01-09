@@ -44,14 +44,13 @@ impl ScalarUDFImpl for SparkReverse {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return exec_err!("array_reverse needs one argument");
         }
         match &args[0].data_type() {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                #[allow(deprecated)] // TODO use invoke_batch
-                ReverseFunc::new().invoke(args)
+                ReverseFunc::new().invoke_batch(args, number_rows)
             }
             _ => make_scalar_function(array_reverse_inner)(args),
         }

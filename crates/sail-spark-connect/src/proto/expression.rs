@@ -448,7 +448,7 @@ mod tests {
     fn test_sql_to_expression() -> Result<(), Box<dyn std::error::Error>> {
         // Run the test in a separate thread with a large stack size
         // so that it can handle deeply nested expressions.
-        let builder = thread::Builder::new().stack_size(128 * 1024 * 1024);
+        let builder = thread::Builder::new().stack_size(160 * 1024 * 1024);
         let handle = builder.spawn(|| {
             test_gold_set(
                 "tests/gold_data/expression/*.json",
