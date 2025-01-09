@@ -90,7 +90,7 @@ impl PlanResolver<'_> {
                     .get_field_info(field.name())
                     .is_ok_and(|info| info.matches(name, plan_id))
             })
-            .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name().clone()))
+            .map(|x| x.into())
             .collect()
     }
 

@@ -889,8 +889,6 @@ impl PlanResolver<'_> {
             }
             return Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?);
         }
-        // TODO: add more validation logic here and in the plan optimizer
-        //  See `LogicalPlanBuilder` for details about such logic.
         if join_condition.is_some() && using_columns.is_empty() {
             let join_schema = Arc::new(build_join_schema(
                 left.schema(),
@@ -3618,8 +3616,8 @@ impl PlanResolver<'_> {
                         "one name expected for expression, got: {names}"
                     )));
                 };
-                let plan_ids = if let Expr::Column(Column { name, .. }) = &expr {
-                    let info = state.get_field_info(name)?;
+                let plan_ids = if let Expr::Column(Column { name: field_id, .. }) = &expr {
+                    let info = state.get_field_info(field_id)?;
                     info.plan_ids()
                 } else {
                     vec![]

@@ -12,7 +12,8 @@ use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    expr, expr_fn, lit, window_frame, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF,
+    col, expr, expr_fn, lit, window_frame, AggregateUDF, BinaryExpr, ExprSchemable, Operator,
+    ScalarUDF,
 };
 use datafusion_functions_nested::expr_fn::array_element;
 use num_traits::Float;
@@ -654,7 +655,7 @@ impl PlanResolver<'_> {
                     .filter_map(|(q, name, inner)| {
                         if qualifier_matches(q.as_ref(), qualifier) && info.matches(name, plan_id) {
                             let expr = Self::resolve_nested_field(
-                                expr::Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                                col((qualifier, field)),
                                 field.data_type(),
                                 inner,
                             )?;
@@ -1063,16 +1064,16 @@ impl PlanResolver<'_> {
         let name: Vec<&str> = name.into();
         let candidates = Self::generate_qualified_wildcard_candidates(&name)
             .into_iter()
-            .flat_map(|(qualifier, name)| match name {
+            .flat_map(|(q, name)| match name {
                 [] => {
                     if schema
                         .iter()
-                        .any(|(q, _)| qualifier_matches(qualifier.as_ref(), q))
+                        .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
                     {
                         vec![NamedExpr::new(
                             vec!["*".to_string()],
                             expr::Expr::Wildcard {
-                                qualifier,
+                                qualifier: q,
                                 options: Default::default(),
                             },
                         )]
@@ -1080,15 +1081,15 @@ impl PlanResolver<'_> {
                         vec![]
                     }
                 }
-                [col, inner @ ..] => schema
+                [column, inner @ ..] => schema
                     .iter()
-                    .filter_map(|(q, field)| {
+                    .filter_map(|(qualifier, field)| {
                         let Ok(info) = state.get_field_info(field.name()) else {
                             return None;
                         };
-                        if qualifier_matches(qualifier.as_ref(), q) && info.matches(col, None) {
+                        if qualifier_matches(q.as_ref(), qualifier) && info.matches(column, None) {
                             Self::resolve_nested_field_wildcard(
-                                expr::Expr::Column(Column::new(qualifier.clone(), field.name())),
+                                col((q.as_ref(), field)),
                                 field.data_type(),
                                 inner,
                             )
@@ -1812,6 +1813,9 @@ impl PlanResolver<'_> {
     }
 }
 
+/// Returns whether the qualifier matches the target qualifier.
+/// Identifiers are case-insensitive.
+/// Note that the match is not symmetric, so please ensure the arguments are in the correct order.
 fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableReference>) -> bool {
     let table_matches = |table: &str| {
         target
