@@ -49,35 +49,31 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(super) async fn resolve_table_schema(
+    pub(super) async fn resolve_schema_projection(
         &self,
         schema: SchemaRef,
         columns: &[spec::Identifier],
     ) -> PlanResult<SchemaRef> {
-        if columns.is_empty() {
-            Ok(schema)
-        } else {
-            let fields = columns
-                .iter()
-                .map(|column| {
-                    let column: &str = column.into();
-                    let matches = schema
-                        .fields()
-                        .iter()
-                        .filter(|f| f.name().eq_ignore_ascii_case(column))
-                        .collect::<Vec<_>>();
-                    if matches.is_empty() {
-                        Err(PlanError::invalid(format!("column {column} not found")))
-                    } else {
-                        matches
-                            .one()
-                            .map_err(|_| PlanError::invalid(format!("ambiguous column {column}")))
-                            .cloned()
-                    }
-                })
-                .collect::<PlanResult<Vec<_>>>()?;
-            Ok(SchemaRef::new(Schema::new(Fields::from(fields))))
-        }
+        let fields = columns
+            .iter()
+            .map(|column| {
+                let column: &str = column.into();
+                let matches = schema
+                    .fields()
+                    .iter()
+                    .filter(|f| f.name().eq_ignore_ascii_case(column))
+                    .collect::<Vec<_>>();
+                if matches.is_empty() {
+                    Err(PlanError::invalid(format!("column {column} not found")))
+                } else {
+                    matches
+                        .one()
+                        .map_err(|_| PlanError::invalid(format!("ambiguous column {column}")))
+                        .cloned()
+                }
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(SchemaRef::new(Schema::new(Fields::from(fields))))
     }
 
     pub(super) fn resolve_column_candidates(
@@ -91,7 +87,7 @@ impl PlanResolver<'_> {
             .iter()
             .filter(|(_, field)| {
                 state
-                    .get_field(field.name())
+                    .get_field_info(field.name())
                     .is_ok_and(|info| info.matches(name, plan_id))
             })
             .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name().clone()))
@@ -144,5 +140,16 @@ impl PlanResolver<'_> {
             .iter()
             .map(|name| self.resolve_one_column(schema, name, state))
             .collect::<PlanResult<Vec<Column>>>()
+    }
+
+    pub(super) fn get_field_names(
+        schema: &DFSchemaRef,
+        state: &PlanResolverState,
+    ) -> PlanResult<Vec<String>> {
+        schema
+            .fields()
+            .iter()
+            .map(|field| Ok(state.get_field_info(field.name())?.name().to_string()))
+            .collect::<PlanResult<Vec<_>>>()
     }
 }

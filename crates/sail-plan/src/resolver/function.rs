@@ -261,7 +261,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|col| {
                 Ok(NamedExpr::new(
-                    vec![state.get_field_name(col.name())?.to_string()],
+                    vec![state.get_field_info(col.name())?.name().to_string()],
                     Expr::Column(col),
                 ))
             })
@@ -290,7 +290,7 @@ impl PlanResolver<'_> {
             deterministic,
             self.config.pyspark_udf_config.clone(),
         )?;
-        let output_names = state.register_fields(&udtf.output_schema());
+        let output_names = state.register_fields(udtf.output_schema().fields());
         let output_qualifiers = (0..output_names.len())
             .map(|i| {
                 if i < passthrough_columns {

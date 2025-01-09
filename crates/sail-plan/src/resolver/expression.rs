@@ -10,7 +10,7 @@ use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::core::get_field;
 use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
-use datafusion_expr::expr::{PlannedReplaceSelectItem, ScalarFunction};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     expr, expr_fn, lit, window_frame, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF,
 };
@@ -73,9 +73,9 @@ impl NamedExpr {
     ) -> PlanResult<Self> {
         match expr {
             expr::Expr::Column(column) => {
-                let name = state.get_field_name(column.name())?;
+                let info = state.get_field_info(column.name())?;
                 Ok(Self::new(
-                    vec![name.to_string()],
+                    vec![info.name().to_string()],
                     expr::Expr::Column(column),
                 ))
             }
@@ -646,7 +646,7 @@ impl PlanResolver<'_> {
         let mut candidates = schema
             .iter()
             .flat_map(|(qualifier, field)| {
-                let Ok(info) = state.get_field(field.name()) else {
+                let Ok(info) = state.get_field_info(field.name()) else {
                     return vec![];
                 };
                 candidates
@@ -686,7 +686,7 @@ impl PlanResolver<'_> {
         let mut candidates = schema
             .iter()
             .flat_map(|(qualifier, field)| {
-                let Ok(info) = state.get_field(field.name()) else {
+                let Ok(info) = state.get_field_info(field.name()) else {
                     return vec![];
                 };
                 candidates
@@ -776,7 +776,8 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
+        let canonical_function_name = function_name.to_ascii_lowercase();
+        if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
             if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
@@ -788,7 +789,7 @@ impl PlanResolver<'_> {
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
-        let func = if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
+        let func = if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
             if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
                 let function = PythonUdf {
                     python_version: f.python_version().to_string(),
@@ -806,16 +807,16 @@ impl PlanResolver<'_> {
                     state,
                 )?
             } else {
-                expr::Expr::ScalarFunction(expr::ScalarFunction {
+                expr::Expr::ScalarFunction(ScalarFunction {
                     func: udf,
                     args: arguments,
                 })
             }
-        } else if let Ok(func) = get_built_in_function(function_name.as_str()) {
+        } else if let Ok(func) = get_built_in_function(&canonical_function_name) {
             let function_context =
                 FunctionContext::new(self.config.clone(), self.ctx, &argument_names);
             func(arguments.clone(), &function_context)?
-        } else if let Ok(func) = get_built_in_aggregate_function(function_name.as_str()) {
+        } else if let Ok(func) = get_built_in_aggregate_function(&canonical_function_name) {
             let agg_function_context = AggFunctionContext::new(is_distinct);
             func(arguments.clone(), agg_function_context)?
         } else {
@@ -924,10 +925,11 @@ impl PlanResolver<'_> {
                     if is_distinct {
                         return Err(PlanError::unsupported("distinct window function"));
                     }
+                    let canonical_function_name = function_name.to_ascii_lowercase();
                     let (argument_names, arguments) = self
                         .resolve_expressions_and_names(arguments, schema, state)
                         .await?;
-                    let function = get_built_in_window_function(function_name.as_str())?;
+                    let function = get_built_in_window_function(&canonical_function_name)?;
                     (
                         function,
                         function_name,
@@ -1078,7 +1080,7 @@ impl PlanResolver<'_> {
                 [col, inner @ ..] => schema
                     .iter()
                     .filter_map(|(q, field)| {
-                        let Ok(info) = state.get_field(field.name()) else {
+                        let Ok(info) = state.get_field_info(field.name()) else {
                             return None;
                         };
                         if qualifier_matches(qualifier.as_ref(), q) && info.matches(col, None) {
@@ -1212,7 +1214,7 @@ impl PlanResolver<'_> {
                     items.push(item);
                     planned_expressions.push(expression);
                 }
-                Some(PlannedReplaceSelectItem {
+                Some(expr::PlannedReplaceSelectItem {
                     items,
                     planned_expressions,
                 })

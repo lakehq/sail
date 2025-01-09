@@ -11,7 +11,6 @@ use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
 
 pub(crate) struct WindowRewriter<'s> {
     plan: LogicalPlan,
-    #[allow(dead_code)]
     state: &'s mut PlanResolverState,
 }
 
@@ -34,7 +33,8 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
                 let name = node.schema_name().to_string();
                 let plan = mem::replace(&mut self.plan, empty_logical_plan());
                 self.plan = LogicalPlan::Window(Window::try_new(vec![node], Arc::new(plan))?);
-                Ok(Transformed::yes(ident(name)))
+                let alias = self.state.register_field_name(&name);
+                Ok(Transformed::yes(ident(name).alias(alias)))
             }
             _ => Ok(Transformed::no(node)),
         }

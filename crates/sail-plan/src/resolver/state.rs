@@ -1,29 +1,36 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::LogicalPlan;
 
 use crate::error::{PlanError, PlanResult};
 
+/// The field information for fields in the logical plan.
 #[derive(Debug, Clone)]
 pub(super) struct FieldInfo {
+    /// The set of plan IDs, if any, that reference this field.
     plan_ids: HashSet<i64>,
+    /// The user-facing name of the field.
     name: String,
 }
 
 impl FieldInfo {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn plan_ids(&self) -> Vec<i64> {
+        self.plan_ids.iter().copied().collect()
+    }
+
     pub fn matches(&self, name: &str, plan_id: Option<i64>) -> bool {
         self.name.eq_ignore_ascii_case(name)
             && match plan_id {
                 Some(plan_id) => self.plan_ids.contains(&plan_id),
                 None => true,
             }
-    }
-
-    pub fn plan_ids(&self) -> Vec<i64> {
-        self.plan_ids.iter().copied().collect()
     }
 }
 
@@ -70,7 +77,7 @@ impl PlanResolverState {
     /// Registers a field and returns a generated opaque string ID for the field.
     /// The field ID is unique within the plan resolver state.
     /// No assumption should be made about the format of the field ID.
-    pub fn register_field(&mut self, name: impl Into<String>) -> String {
+    pub fn register_field_name(&mut self, name: impl Into<String>) -> String {
         let field_id = self.next_field_id();
         self.fields.insert(
             field_id.clone(),
@@ -82,11 +89,17 @@ impl PlanResolverState {
         field_id
     }
 
-    pub fn register_fields(&mut self, schema: &SchemaRef) -> Vec<String> {
-        schema
-            .fields()
-            .iter()
-            .map(|field| self.register_field(field.name()))
+    pub fn register_field(&mut self, field: impl AsRef<Field>) -> String {
+        self.register_field_name(field.as_ref().name())
+    }
+
+    pub fn register_fields(
+        &mut self,
+        fields: impl IntoIterator<Item = impl AsRef<Field>>,
+    ) -> Vec<String> {
+        fields
+            .into_iter()
+            .map(|field| self.register_field(field))
             .collect()
     }
 
@@ -99,22 +112,10 @@ impl PlanResolverState {
         Ok(())
     }
 
-    pub fn get_field(&self, field_id: &str) -> PlanResult<&FieldInfo> {
+    pub fn get_field_info(&self, field_id: &str) -> PlanResult<&FieldInfo> {
         self.fields
             .get(field_id)
             .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))
-    }
-
-    pub fn get_field_name(&self, field_id: &str) -> PlanResult<&str> {
-        self.get_field(field_id).map(|x| x.name.as_str())
-    }
-
-    pub fn get_field_names(&self, schema: &SchemaRef) -> PlanResult<Vec<String>> {
-        schema
-            .fields()
-            .iter()
-            .map(|field| Ok(self.get_field_name(field.name())?.to_string()))
-            .collect::<PlanResult<Vec<_>>>()
     }
 
     pub fn get_outer_query_schema(&self) -> Option<&DFSchemaRef> {
