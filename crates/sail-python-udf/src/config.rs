@@ -1,32 +1,24 @@
-use sail_common::datetime::get_system_timezone;
-
-use crate::error::{PyUdfError, PyUdfResult};
+use pyo3::pyclass;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
-pub struct SparkUdfConfig {
+#[pyclass(frozen)]
+pub struct PySparkUdfConfig {
+    #[pyo3(get)]
     pub session_timezone: String,
-    pub system_timezone: String,
+    #[pyo3(get, name = "window_bound_types")]
     pub pandas_window_bound_types: Option<String>,
+    #[pyo3(get, name = "assign_columns_by_name")]
     pub pandas_grouped_map_assign_columns_by_name: bool,
+    #[pyo3(get, name = "arrow_convert_safely")]
     pub pandas_convert_to_arrow_array_safely: bool,
+    #[pyo3(get)]
     pub arrow_max_records_per_batch: usize,
 }
 
-impl SparkUdfConfig {
-    pub fn new() -> PyUdfResult<Self> {
-        Ok(Self {
-            system_timezone: get_system_timezone()
-                .map_err(|e| PyUdfError::internal(format!("{e}")))?,
-            ..Default::default()
-        })
-    }
-}
-
-impl Default for SparkUdfConfig {
+impl Default for PySparkUdfConfig {
     fn default() -> Self {
         Self {
             session_timezone: "UTC".to_string(),
-            system_timezone: "UTC".to_string(),
             pandas_window_bound_types: None,
             pandas_grouped_map_assign_columns_by_name: true,
             pandas_convert_to_arrow_array_safely: false,
@@ -35,7 +27,7 @@ impl Default for SparkUdfConfig {
     }
 }
 
-impl SparkUdfConfig {
+impl PySparkUdfConfig {
     pub fn with_pandas_window_bound_types(mut self, value: Option<String>) -> Self {
         self.pandas_window_bound_types = value;
         self

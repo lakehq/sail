@@ -72,14 +72,14 @@ use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{
     MapPartitionsExec, RangeExec, SchemaPivotExec, ShowStringExec,
 };
+use sail_python_udf::config::PySparkUdfConfig;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
-use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind, PySparkUdtfOptions};
-use sail_python_udf::udf::ColumnMatch;
+use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
@@ -580,6 +580,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 deterministic,
                 input_types,
                 output_type,
+                config,
             }) => {
                 let kind = self.try_decode_pyspark_udf_kind(kind)?;
                 let input_types = input_types
@@ -587,31 +588,55 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|x| self.try_decode_data_type(x))
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
-                let udf =
-                    PySparkUDF::new(kind, name, payload, deterministic, input_types, output_type);
+                let config = match config {
+                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    None => return plan_err!("missing config for PySparkUDF"),
+                };
+                let udf = PySparkUDF::new(
+                    kind,
+                    name,
+                    payload,
+                    deterministic,
+                    input_types,
+                    output_type,
+                    Arc::new(config),
+                );
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::PySparkCoGroupMap(gen::PySparkCoGroupMapUdf {
                 name,
                 payload,
                 deterministic,
-                left_type,
-                right_type,
+                left_types,
+                left_names,
+                right_types,
+                right_names,
                 output_type,
-                column_match,
+                config,
             }) => {
-                let left_type = self.try_decode_data_type(&left_type)?;
-                let right_type = self.try_decode_data_type(&right_type)?;
+                let left_types = left_types
+                    .iter()
+                    .map(|x| self.try_decode_data_type(x))
+                    .collect::<Result<Vec<_>>>()?;
+                let right_types = right_types
+                    .iter()
+                    .map(|x| self.try_decode_data_type(x))
+                    .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
-                let column_match = self.try_decode_column_match(column_match)?;
+                let config = match config {
+                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    None => return plan_err!("missing config for PySparkCoGroupMapUDF"),
+                };
                 let udf = PySparkCoGroupMapUDF::try_new(
                     name,
                     payload,
                     deterministic,
-                    left_type,
-                    right_type,
+                    left_types,
+                    left_names,
+                    right_types,
+                    right_names,
                     output_type,
-                    column_match,
+                    Arc::new(config),
                 )?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
@@ -737,6 +762,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map(|x| self.try_encode_data_type(x))
                 .collect::<Result<Vec<_>>>()?;
             let output_type = self.try_encode_data_type(func.output_type())?;
+            let config = self.try_encode_pyspark_udf_config(func.config())?;
             UdfKind::PySpark(gen::PySparkUdf {
                 kind,
                 name: func.name().to_string(),
@@ -744,20 +770,31 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 deterministic: func.deterministic(),
                 input_types,
                 output_type,
+                config: Some(config),
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkCoGroupMapUDF>() {
-            let left_type = self.try_encode_data_type(func.left_type())?;
-            let right_type = self.try_encode_data_type(func.right_type())?;
+            let left_types = func
+                .left_types()
+                .iter()
+                .map(|x| self.try_encode_data_type(x))
+                .collect::<Result<Vec<_>>>()?;
+            let right_types = func
+                .right_types()
+                .iter()
+                .map(|x| self.try_encode_data_type(x))
+                .collect::<Result<Vec<_>>>()?;
             let output_type = self.try_encode_data_type(func.output_type())?;
-            let column_match = self.try_encode_column_match(func.column_match())?;
+            let config = self.try_encode_pyspark_udf_config(func.config())?;
             UdfKind::PySparkCoGroupMap(gen::PySparkCoGroupMapUdf {
                 name: func.name().to_string(),
                 payload: func.payload().to_vec(),
                 deterministic: func.deterministic(),
-                left_type,
-                right_type,
+                left_types,
+                left_names: func.left_names().to_vec(),
+                right_types,
+                right_names: func.right_names().to_vec(),
                 output_type,
-                column_match,
+                config: Some(config),
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<MapToArray>() {
             let nullable = func.nullable();
@@ -810,12 +847,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_names,
                 input_types,
                 output_type,
+                config,
             })) => {
                 let input_types = input_types
                     .iter()
                     .map(|x| self.try_decode_data_type(x))
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
+                let config = match config {
+                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    None => return plan_err!("missing config for PySparkGroupAggUDF"),
+                };
                 let udaf = PySparkGroupAggregateUDF::new(
                     name,
                     payload,
@@ -823,6 +865,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_names,
                     input_types,
                     output_type,
+                    Arc::new(config),
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
@@ -833,14 +876,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_names,
                 input_types,
                 output_type,
-                column_match,
+                config,
             })) => {
                 let input_types = input_types
                     .iter()
                     .map(|x| self.try_decode_data_type(x))
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
-                let column_match = self.try_decode_column_match(column_match)?;
+                let config = match config {
+                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    None => return plan_err!("missing config for PySparkGroupMapUDF"),
+                };
                 let udaf = PySparkGroupMapUDF::new(
                     name,
                     payload,
@@ -848,20 +894,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_names,
                     input_types,
                     output_type,
-                    column_match,
+                    Arc::new(config),
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
             Some(UdafKind::PySparkBatchCollector(gen::PySparkBatchCollectorUdaf {
                 input_types,
-                output_type,
+                input_names,
             })) => {
                 let input_types = input_types
                     .iter()
                     .map(|x| self.try_decode_data_type(x))
                     .collect::<Result<Vec<_>>>()?;
-                let output_type = self.try_decode_data_type(&output_type)?;
-                let udaf = PySparkBatchCollectorUDF::new(input_types, output_type);
+                let udaf = PySparkBatchCollectorUDF::new(input_types, input_names);
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
             None => plan_err!("ExtendedScalarUdf: no UDF found for {name}"),
@@ -887,6 +932,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map(|x| self.try_encode_data_type(x))
                 .collect::<Result<Vec<_>>>()?;
             let output_type = self.try_encode_data_type(func.output_type())?;
+            let config = self.try_encode_pyspark_udf_config(func.config())?;
             UdafKind::PySparkGroupAgg(gen::PySparkGroupAggUdaf {
                 name: func.name().to_string(),
                 payload: func.payload().to_vec(),
@@ -894,6 +940,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_names: func.input_names().to_vec(),
                 input_types,
                 output_type,
+                config: Some(config),
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkGroupMapUDF>() {
             let input_types = func
@@ -902,7 +949,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map(|x| self.try_encode_data_type(x))
                 .collect::<Result<Vec<_>>>()?;
             let output_type = self.try_encode_data_type(func.output_type())?;
-            let column_match = self.try_encode_column_match(func.column_match())?;
+            let config = self.try_encode_pyspark_udf_config(func.config())?;
             UdafKind::PySparkGroupMap(gen::PySparkGroupMapUdaf {
                 name: func.name().to_string(),
                 payload: func.payload().to_vec(),
@@ -910,7 +957,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_names: func.input_names().to_vec(),
                 input_types,
                 output_type,
-                column_match,
+                config: Some(config),
             })
         } else if let Some(func) = node
             .inner()
@@ -922,10 +969,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .iter()
                 .map(|x| self.try_encode_data_type(x))
                 .collect::<Result<Vec<_>>>()?;
-            let output_type = self.try_encode_data_type(func.output_type())?;
             UdafKind::PySparkBatchCollector(gen::PySparkBatchCollectorUdaf {
                 input_types,
-                output_type,
+                input_names: func.input_names().to_vec(),
             })
         } else {
             return Ok(());
@@ -956,15 +1002,21 @@ impl RemoteExecutionCodec {
                 payload,
                 input_names,
                 output_schema,
+                config,
             }) => {
                 let kind = self.try_decode_pyspark_map_iter_kind(kind)?;
                 let output_schema = self.try_decode_schema(&output_schema)?;
+                let config = match config {
+                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    None => return plan_err!("missing config for PySparkMapIterUDF"),
+                };
                 Arc::new(PySparkMapIterUDF::new(
                     kind,
                     name,
                     payload,
                     input_names,
                     Arc::new(output_schema),
+                    Arc::new(config),
                 ))
             }
             StreamUdfKind::PySparkUdtf(gen::PySparkUdtf {
@@ -977,7 +1029,7 @@ impl RemoteExecutionCodec {
                 function_return_type,
                 function_output_names,
                 deterministic,
-                options,
+                config,
             }) => {
                 let kind = self.try_decode_pyspark_udtf_kind(kind)?;
                 let input_types = input_types
@@ -990,12 +1042,9 @@ impl RemoteExecutionCodec {
                 } else {
                     Some(function_output_names)
                 };
-                let Some(options) = options else {
-                    return plan_err!("PySpark UDTF options not found");
-                };
-                let options = PySparkUdtfOptions {
-                    session_timezone: options.session_timezone,
-                    arrow_cast_safe_check: options.arrow_cast_safe_check,
+                let config = match config {
+                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    None => return plan_err!("missing config for PySparkUdtf"),
                 };
                 Arc::new(PySparkUDTF::try_new(
                     kind,
@@ -1007,7 +1056,7 @@ impl RemoteExecutionCodec {
                     function_return_type,
                     function_output_names,
                     deterministic,
-                    options,
+                    Arc::new(config),
                 )?)
             }
         };
@@ -1020,12 +1069,14 @@ impl RemoteExecutionCodec {
         {
             let kind = self.try_encode_pyspark_map_iter_kind(func.kind())?;
             let output_schema = self.try_encode_schema(func.output_schema().as_ref())?;
+            let config = self.try_encode_pyspark_udf_config(func.config())?;
             StreamUdfKind::PySparkMapIter(gen::PySparkMapIterUdf {
                 kind,
                 name: func.name().to_string(),
                 payload: func.payload().to_vec(),
                 input_names: func.input_names().to_vec(),
                 output_schema,
+                config: Some(config),
             })
         } else if let Some(func) = udf.dyn_object_as_any().downcast_ref::<PySparkUDTF>() {
             let kind = self.try_encode_pyspark_udtf_kind(func.kind())?;
@@ -1040,10 +1091,7 @@ impl RemoteExecutionCodec {
                 .as_ref()
                 .map(|x| x.to_vec())
                 .unwrap_or_default();
-            let options = gen::PySparkUdtfOptions {
-                session_timezone: func.options().session_timezone.to_string(),
-                arrow_cast_safe_check: func.options().arrow_cast_safe_check,
-            };
+            let config = self.try_encode_pyspark_udf_config(func.config())?;
             StreamUdfKind::PySparkUdtf(gen::PySparkUdtf {
                 kind,
                 name: func.name().to_string(),
@@ -1054,7 +1102,7 @@ impl RemoteExecutionCodec {
                 function_return_type,
                 function_output_names,
                 deterministic: func.deterministic(),
-                options: Some(options),
+                config: Some(config),
             })
         } else {
             return plan_err!("unknown StreamUDF type");
@@ -1135,24 +1183,6 @@ impl RemoteExecutionCodec {
         Ok(style as i32)
     }
 
-    fn try_decode_column_match(&self, column_match: i32) -> Result<ColumnMatch> {
-        let column_match = gen::ColumnMatch::try_from(column_match)
-            .map_err(|e| plan_datafusion_err!("failed to decode column match: {e}"))?;
-        let column_match = match column_match {
-            gen::ColumnMatch::ByPosition => ColumnMatch::ByPosition,
-            gen::ColumnMatch::ByName => ColumnMatch::ByName,
-        };
-        Ok(column_match)
-    }
-
-    fn try_encode_column_match(&self, column_match: ColumnMatch) -> Result<i32> {
-        let column_match = match column_match {
-            ColumnMatch::ByPosition => gen::ColumnMatch::ByPosition,
-            ColumnMatch::ByName => gen::ColumnMatch::ByName,
-        };
-        Ok(column_match as i32)
-    }
-
     fn try_decode_pyspark_udf_kind(&self, kind: i32) -> Result<PySparkUdfKind> {
         let kind = gen::PySparkUdfKind::try_from(kind)
             .map_err(|e| plan_datafusion_err!("failed to decode pyspark UDF kind: {e}"))?;
@@ -1209,6 +1239,36 @@ impl RemoteExecutionCodec {
             PySparkUdtfKind::ArrowTable => gen::PySparkUdtfKind::ArrowTable,
         };
         Ok(kind as i32)
+    }
+
+    fn try_decode_pyspark_udf_config(
+        &self,
+        config: gen::PySparkUdfConfig,
+    ) -> Result<PySparkUdfConfig> {
+        let config = PySparkUdfConfig {
+            session_timezone: config.session_timezone,
+            pandas_window_bound_types: config.pandas_window_bound_types,
+            pandas_grouped_map_assign_columns_by_name: config
+                .pandas_grouped_map_assign_columns_by_name,
+            pandas_convert_to_arrow_array_safely: config.pandas_convert_to_arrow_array_safely,
+            arrow_max_records_per_batch: config.arrow_max_records_per_batch as usize,
+        };
+        Ok(config)
+    }
+
+    fn try_encode_pyspark_udf_config(
+        &self,
+        config: &PySparkUdfConfig,
+    ) -> Result<gen::PySparkUdfConfig> {
+        let config = gen::PySparkUdfConfig {
+            session_timezone: config.session_timezone.clone(),
+            pandas_window_bound_types: config.pandas_window_bound_types.clone(),
+            pandas_grouped_map_assign_columns_by_name: config
+                .pandas_grouped_map_assign_columns_by_name,
+            pandas_convert_to_arrow_array_safely: config.pandas_convert_to_arrow_array_safely,
+            arrow_max_records_per_batch: config.arrow_max_records_per_batch as u64,
+        };
+        Ok(config)
     }
 
     fn try_decode_shuffle_consumption(&self, consumption: i32) -> Result<ShuffleConsumption> {
