@@ -18,7 +18,7 @@ use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
-use sail_python_udf::udf::get_udf_name;
+use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
@@ -733,8 +733,8 @@ impl PlanResolver<'_> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
         if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
-            if let Some(_f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
-                state.register_config_apply_arrow_use_large_var_types(true);
+            if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
+                state.config_mut().arrow_allow_large_var_types = true;
             }
         }
 
@@ -895,7 +895,7 @@ impl PlanResolver<'_> {
                 spec::Expr::CommonInlineUserDefinedFunction(function) => {
                     let mut scope = state.enter_config_scope();
                     let state = scope.state();
-                    state.register_config_apply_arrow_use_large_var_types(true);
+                    state.config_mut().arrow_allow_large_var_types = true;
                     let spec::CommonInlineUserDefinedFunction {
                         function_name,
                         deterministic,
@@ -915,7 +915,7 @@ impl PlanResolver<'_> {
                         &function.command,
                         function.eval_type,
                         &((0..arguments.len()).collect::<Vec<_>>()),
-                        &self.config.spark_udf_config,
+                        &self.config.pyspark_udf_config,
                     )?;
                     let function = match function.eval_type {
                         PySparkUdfType::GroupedAggPandas => {
@@ -926,6 +926,7 @@ impl PlanResolver<'_> {
                                 argument_names.clone(),
                                 input_types,
                                 function.output_type,
+                                self.config.pyspark_udf_config.clone(),
                             );
                             let udaf = AggregateUDF::from(udaf);
                             expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf))
@@ -1162,7 +1163,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        state.register_config_apply_arrow_use_large_var_types(true);
+        state.config_mut().arrow_allow_large_var_types = true;
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,

@@ -36,12 +36,12 @@ use datafusion_expr::{
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
+use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
-use sail_python_udf::udf::{get_udf_name, ColumnMatch};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
@@ -663,7 +663,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        state.register_config_apply_arrow_use_large_var_types(true);
+        state.config_mut().arrow_allow_large_var_types = true;
         let spec::ReadUdtf {
             name,
             arguments,
@@ -1658,7 +1658,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        state.register_config_apply_arrow_use_large_var_types(true);
+        state.config_mut().arrow_allow_large_var_types = true;
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic: _,
@@ -1686,7 +1686,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             // MapPartitions UDF has the iterator as the only argument
             &[0],
-            &self.config.spark_udf_config,
+            &self.config.pyspark_udf_config,
         )?;
         let kind = match function.eval_type {
             spec::PySparkUdfType::MapPandasIter => PySparkMapIterKind::Pandas,
@@ -1703,6 +1703,7 @@ impl PlanResolver<'_> {
             payload,
             input_names,
             output_schema,
+            self.config.pyspark_udf_config.clone(),
         );
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(MapPartitionsNode::try_new(
@@ -1739,7 +1740,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        state.register_config_apply_arrow_use_large_var_types(true);
+        state.config_mut().arrow_allow_large_var_types = true;
         let spec::GroupMap {
             input,
             grouping_expressions: grouping,
@@ -1827,13 +1828,8 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
-            &self.config.spark_udf_config,
+            &self.config.pyspark_udf_config,
         )?;
-        let column_match = ColumnMatch::by_name(
-            self.config
-                .spark_udf_config
-                .pandas_grouped_map_assign_columns_by_name,
-        );
         let udaf = PySparkGroupMapUDF::new(
             get_udf_name(&function_name, &payload),
             payload,
@@ -1841,7 +1837,7 @@ impl PlanResolver<'_> {
             input_names,
             input_types,
             udf_output_type,
-            column_match,
+            self.config.pyspark_udf_config.clone(),
         );
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
             func: Arc::new(AggregateUDF::from(udaf)),
@@ -1878,7 +1874,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        state.register_config_apply_arrow_use_large_var_types(true);
+        state.config_mut().arrow_allow_large_var_types = true;
         let spec::CoGroupMap {
             input: left,
             input_grouping_expressions: left_grouping,
@@ -1950,21 +1946,18 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
-            &self.config.spark_udf_config,
+            &self.config.pyspark_udf_config,
         )?;
-        let column_match = ColumnMatch::by_name(
-            self.config
-                .spark_udf_config
-                .pandas_grouped_map_assign_columns_by_name,
-        );
         let udf = PySparkCoGroupMapUDF::try_new(
             get_udf_name(&function_name, &payload),
             payload,
             deterministic,
-            left.mapper_input_type,
-            right.mapper_input_type,
+            left.mapper_input_types,
+            left.mapper_input_names,
+            right.mapper_input_types,
+            right.mapper_input_names,
             mapper_output_type,
-            column_match,
+            self.config.pyspark_udf_config.clone(),
         )?;
         let mapping = Expr::ScalarFunction(ScalarFunction {
             func: Arc::new(ScalarUDF::from(udf)),
@@ -2027,16 +2020,7 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         let input_types = Self::resolve_expression_types(&args, plan.schema())?;
-        let input_fields = input_names
-            .iter()
-            .zip(input_types.iter())
-            .map(|(n, t)| adt::Field::new(n.clone(), t.clone(), false))
-            .collect::<Vec<_>>();
-        let agg_output_type = adt::DataType::List(Arc::new(adt::Field::new_list_field(
-            adt::DataType::Struct(input_fields.into()),
-            false,
-        )));
-        let udaf = PySparkBatchCollectorUDF::new(input_types, agg_output_type.clone());
+        let udaf = PySparkBatchCollectorUDF::new(input_types.clone(), input_names.clone());
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
             func: Arc::new(AggregateUDF::from(udaf)),
             args,
@@ -2062,7 +2046,8 @@ impl PlanResolver<'_> {
             plan,
             grouping,
             mapper_input: ident(resolved_agg_name),
-            mapper_input_type: agg_output_type,
+            mapper_input_types: input_types,
+            mapper_input_names: input_names,
             offsets,
         })
     }
@@ -2207,7 +2192,7 @@ impl PlanResolver<'_> {
             if let Some(_f) = f.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
                 let mut scope = state.enter_config_scope();
                 let state = scope.state();
-                state.register_config_apply_arrow_use_large_var_types(true);
+                state.config_mut().arrow_allow_large_var_types = true;
             }
         }
         let input = match input {
@@ -2307,7 +2292,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        state.register_config_apply_arrow_use_large_var_types(true);
+        state.config_mut().arrow_allow_large_var_types = true;
         let spec::CommonInlineUserDefinedTableFunction {
             function_name,
             deterministic,
@@ -2853,7 +2838,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        state.register_config_apply_arrow_use_large_var_types(true);
+        state.config_mut().arrow_allow_large_var_types = true;
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
@@ -2884,7 +2869,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        state.register_config_apply_arrow_use_large_var_types(true);
+        state.config_mut().arrow_allow_large_var_types = true;
         let spec::CommonInlineUserDefinedTableFunction {
             function_name,
             deterministic,
@@ -3724,6 +3709,7 @@ struct CoGroupMapData {
     plan: LogicalPlan,
     grouping: Vec<Expr>,
     mapper_input: Expr,
-    mapper_input_type: adt::DataType,
+    mapper_input_types: Vec<adt::DataType>,
+    mapper_input_names: Vec<String>,
     offsets: Vec<usize>,
 }

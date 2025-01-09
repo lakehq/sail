@@ -10,10 +10,8 @@ use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
 
-use crate::error::PyUdfResult;
-
 pub trait BatchAggregator: Send + Sync {
-    fn call(&self, args: &[ArrayRef]) -> PyUdfResult<ArrayRef>;
+    fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef>;
 }
 
 /// An accumulator that stores all batches in the state and apply aggregation at the end.

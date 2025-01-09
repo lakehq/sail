@@ -7,8 +7,8 @@ from typing import Any, Callable, Iterator, Sequence, Union
 
 import pandas as pd
 import pyarrow as pa
-from pyspark.sql.pandas.serializers import ArrowStreamPandasUDTFSerializer
-from pyspark.sql.pandas.types import _create_converter_from_pandas, _create_converter_to_pandas, from_arrow_type
+from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, ArrowStreamPandasUDTFSerializer
+from pyspark.sql.pandas.types import from_arrow_type
 from pyspark.sql.types import Row
 
 _PYARROW_HAS_VIEW_TYPES = all(hasattr(pa, x) for x in ("list_view", "large_list_view", "string_view", "binary_view"))
@@ -96,7 +96,7 @@ def _get_converter(t: pa.DataType) -> Converter:
     if pa.types.is_decimal(t):
         return DecimalConverter(t)
     if pa.types.is_time(t) or pa.types.is_timestamp(t) or pa.types.is_date(t) or pa.types.is_duration(t):
-        return IntegerConverter(t, ctypes.c_int64)
+        return DateTimeConverter(t)
     if _pyarrow_is_string(t):
         return StringConverter(t)
     if _pyarrow_is_binary(t):
@@ -118,19 +118,31 @@ def _raise_for_row(data: Any):
         raise TypeError(msg)
 
 
-class PrimitiveConverter(Converter):
+class ScalarConverter(Converter):
+    def to_pyspark(self, data: pa.Array) -> Sequence[Any]:
+        return [self._to_pyspark_value(x) for x in data.to_pylist()]
+
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
+        return pa.array([self._from_pyspark_value(x) for x in data], type=self._data_type)
+
+    def _to_pyspark_value(self, data: Any) -> Any:
+        raise NotImplementedError
+
+    def _from_pyspark_value(self, data: Any) -> Any:
+        raise NotImplementedError
+
+
+class PrimitiveConverter(ScalarConverter):
     def __init__(self, data_type: pa.DataType):
         super().__init__(data_type)
         self._spark_data_type = from_arrow_type(data_type)
 
-    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
-        return [None if x is None else self._spark_data_type.fromInternal(x) for x in array.to_pylist()]
+    def _to_pyspark_value(self, data: Any) -> Any:
+        # Reference: `pyspark.sql.types._create_row_inbound_converter`
+        return self._spark_data_type.fromInternal(data)
 
-    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
-        return pa.array(
-            [None if x is None else self._from_python_primitive(self._spark_data_type.fromInternal(x)) for x in data],
-            type=self._data_type,
-        )
+    def _from_pyspark_value(self, data: Any) -> Any:
+        return self._from_python_primitive(self._spark_data_type.toInternal(data))
 
     def _from_python_primitive(self, data: Any) -> Any:
         raise NotImplementedError
@@ -178,6 +190,17 @@ class DecimalConverter(PrimitiveConverter):
         return None
 
 
+class DateTimeConverter(ScalarConverter):
+    # No conversion is performed since pyarrow already handles conversion for
+    # types in the `datetime` module.
+
+    def _to_pyspark_value(self, data: Any) -> Any:
+        return data
+
+    def _from_pyspark_value(self, data: Any) -> Any:
+        return data
+
+
 def _to_string(data: Any) -> str | None:
     """Converts data to string where the behavior is similar to the Java `Object.toString()` method."""
     _raise_for_row(data)
@@ -196,12 +219,12 @@ def _to_string(data: Any) -> str | None:
     return str(data)
 
 
-class StringConverter(Converter):
-    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
-        return array.to_pylist()
+class StringConverter(ScalarConverter):
+    def _to_pyspark_value(self, data: Any) -> Any:
+        return data
 
-    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
-        return pa.array([_to_string(x) for x in data], type=self._data_type)
+    def _from_pyspark_value(self, data: Any) -> Any:
+        return _to_string(data)
 
 
 def _to_bytes(data: Any) -> bytes | None:
@@ -217,12 +240,12 @@ def _to_bytes(data: Any) -> bytes | None:
     return None
 
 
-class BinaryConverter(Converter):
-    def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
-        return [None if x is None else bytearray(x) for x in array.to_pylist()]
+class BinaryConverter(ScalarConverter):
+    def _to_pyspark_value(self, data: Any) -> Any:
+        return None if data is None else bytearray(data)
 
-    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
-        return pa.array([_to_bytes(x) for x in data], type=self._data_type)
+    def _from_pyspark_value(self, data: Any) -> Any:
+        return _to_bytes(data)
 
 
 class ArrayConverter(Converter):
@@ -332,7 +355,7 @@ class StructConverter(Converter):
                     columns[i].append(None)
             else:
                 mask.append(False)
-                for i, v in enumerate(x):
+                for i, v in enumerate(self._spark_data_type.toInternal(x)):
                     columns[i].append(v)
         return pa.StructArray.from_arrays(
             [c.from_pyspark(col) for col, c in zip(columns, self._field_converters)],
@@ -341,27 +364,24 @@ class StructConverter(Converter):
         )
 
 
-ARROW_TO_PANDAS_NULLABLE_TYPES = {
-    pa.int8(): pd.Int8Dtype(),
-    pa.int16(): pd.Int16Dtype(),
-    pa.int32(): pd.Int32Dtype(),
-    pa.int64(): pd.Int64Dtype(),
-    pa.uint8(): pd.UInt8Dtype(),
-    pa.uint16(): pd.UInt16Dtype(),
-    pa.uint32(): pd.UInt32Dtype(),
-    pa.uint64(): pd.UInt64Dtype(),
-    pa.bool_(): pd.BooleanDtype(),
-    pa.float32(): pd.Float32Dtype(),
-    pa.float64(): pd.Float64Dtype(),
-    pa.string(): pd.StringDtype(),
-}
+def _pandas_to_arrow_array(data, data_type: pa.DataType, serializer: ArrowStreamPandasUDFSerializer) -> pa.Array:
+    if serializer._struct_in_pandas == "dict" and pa.types.is_struct(data_type):  # noqa: SLF001
+        return serializer._create_struct_array(data, data_type)  # noqa: SLF001
+    return serializer._create_array(data, data_type, arrow_cast=serializer._arrow_cast)  # noqa: SLF001
+
+
+def _named_arrays_to_pandas(
+    data: Sequence[pa.Array], names: Sequence[str], serializer: ArrowStreamPandasUDFSerializer
+) -> Sequence[pd.Series]:
+    inputs = [serializer.arrow_to_pandas(x) for x in data]
+    for x, name in zip(inputs, names):
+        x.name = name
+    return inputs
 
 
 class PySparkBatchUdf:
-    def __init__(self, udf: Callable[..., Any], input_types: list[pa.DataType], output_type: pa.DataType):
+    def __init__(self, udf: Callable[..., Any], input_types: Sequence[pa.DataType], output_type: pa.DataType):
         self._udf = udf
-        self._input_types = input_types
-        self._output_type = output_type
         self._input_converters = [_get_converter(t) for t in input_types]
         self._output_converter = _get_converter(output_type)
 
@@ -374,148 +394,182 @@ class PySparkBatchUdf:
         return self._output_converter.from_pyspark(output)
 
 
-def _array_to_pandas(array: pa.Array) -> pd.Series:
-    return array.to_pandas(types_mapper=ARROW_TO_PANDAS_NULLABLE_TYPES.get, split_blocks=True)
-
-
 class PySparkArrowBatchUdf:
-    def __init__(self, udf: Callable[..., Any], input_types: list[pa.DataType], output_type: pa.DataType):
+    def __init__(self, udf: Callable[..., Any], config):
         self._udf = udf
-        self._input_types = input_types
-        self._output_type = output_type
-        self._input_converters = [
-            _create_converter_to_pandas(from_arrow_type(dt), nullable=True, struct_in_pandas="row")
-            for dt in input_types
-        ]
-        self._output_converter = _create_converter_from_pandas(from_arrow_type(output_type), timezone=None)
+        self._serializer = ArrowStreamPandasUDFSerializer(
+            timezone=config.session_timezone,
+            safecheck=config.arrow_convert_safely,
+            assign_cols_by_name=config.assign_columns_by_name,
+            df_for_struct=False,
+            struct_in_pandas="row",
+            ndarray_as_list=True,
+            arrow_cast=True,
+        )
 
     def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = tuple(c(_array_to_pandas(a)) for a, c in zip(args, self._input_converters))
-        [(output, _output_type)] = list(self._udf(None, (inputs,)))
-        return pa.array(self._output_converter(output), type=self._output_type, from_pandas=True)
+        inputs = tuple(self._serializer.arrow_to_pandas(a) for a in args)
+        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
 class PySparkScalarPandasUdf:
-    def __init__(self, udf: Callable[..., Any], input_types: list[pa.DataType], output_type: pa.DataType):
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        config,
+    ):
         self._udf = udf
-        self._input_types = input_types
-        self._output_type = output_type
+        self._serializer = ArrowStreamPandasUDFSerializer(
+            timezone=config.session_timezone,
+            safecheck=config.arrow_convert_safely,
+            assign_cols_by_name=config.assign_columns_by_name,
+            df_for_struct=True,
+            struct_in_pandas="dict",
+            ndarray_as_list=False,
+            arrow_cast=False,
+        )
 
     def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = tuple(_array_to_pandas(x) for x in args)
-        [(output, _output_type)] = list(self._udf(None, (inputs,)))
-        return pa.array(output, type=self._output_type, from_pandas=True)
+        inputs = tuple(self._serializer.arrow_to_pandas(x) for x in args)
+        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
 class PySparkScalarPandasIterUdf:
-    def __init__(self, udf: Callable[..., Any], input_types: list[pa.DataType], output_type: pa.DataType):
+    def __init__(
+        self,
+        udf: Callable[..., Any],
+        config,
+    ):
         self._udf = udf
-        self._input_types = input_types
-        self._output_type = output_type
+        self._serializer = ArrowStreamPandasUDFSerializer(
+            timezone=config.session_timezone,
+            safecheck=config.arrow_convert_safely,
+            assign_cols_by_name=config.assign_columns_by_name,
+            df_for_struct=True,
+            struct_in_pandas="dict",
+            ndarray_as_list=False,
+            arrow_cast=False,
+        )
 
     def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = tuple(_array_to_pandas(x) for x in args)
-        [(output, _output_type)] = list(self._udf(None, [inputs]))
-        return pa.array(output, type=self._output_type, from_pandas=True)
+        inputs = tuple(self._serializer.arrow_to_pandas(x) for x in args)
+        [(output, output_type)] = list(self._udf(None, [inputs]))
+        return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
 class PySparkGroupAggUdf:
     def __init__(
-        self, udf: Callable[..., Any], input_names: list[str], input_types: list[pa.DataType], output_type: pa.DataType
+        self,
+        udf: Callable[..., Any],
+        input_names: Sequence[str],
+        config,
     ):
         self._udf = udf
         self._input_names = input_names
-        self._input_types = input_types
-        self._output_type = output_type
+        self._serializer = ArrowStreamPandasUDFSerializer(
+            timezone=config.session_timezone,
+            safecheck=config.arrow_convert_safely,
+            assign_cols_by_name=config.assign_columns_by_name,
+            df_for_struct=True,
+            struct_in_pandas="dict",
+            ndarray_as_list=False,
+            arrow_cast=False,
+        )
 
     def __call__(self, args: list[pa.Array]) -> pa.Array:
-        inputs = tuple(_array_to_pandas(x) for x in args)
-        for x, name in zip(inputs, self._input_names):
-            x.name = name
-        [(output, _output_type)] = list(self._udf(None, (inputs,)))
-        return pa.array(output, type=self._output_type, from_pandas=True)
-
-
-def _pandas_to_record_batch(df: pd.DataFrame, schema: pa.Schema, *, column_match_by_name: bool) -> pa.RecordBatch:
-    if len(df) > 0:
-        if not column_match_by_name or all(not isinstance(x, str) for x in df.columns):
-            df = df[df.columns[: len(schema.names)]]
-            # An exception will be raised if the number of columns does not match the number of fields in the schema.
-            df.columns = schema.names
-        return pa.RecordBatch.from_pandas(df, schema=schema)
-    return pa.RecordBatch.from_pylist([], schema=schema)
+        inputs = _named_arrays_to_pandas(args, self._input_names, self._serializer)
+        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
 class PySparkGroupMapUdf:
     def __init__(
         self,
         udf: Callable[..., Any],
-        input_names: list[str],
-        output_schema: pa.Schema,
-        column_match_by_name: bool,  # noqa: FBT001
+        input_names: Sequence[str],
+        config,
     ):
         self._udf = udf
         self._input_names = input_names
-        self._output_schema = output_schema
-        self._column_match_by_name = column_match_by_name
+        self._serializer = ArrowStreamPandasUDFSerializer(
+            timezone=config.session_timezone,
+            safecheck=config.arrow_convert_safely,
+            assign_cols_by_name=config.assign_columns_by_name,
+            df_for_struct=True,
+            struct_in_pandas="dict",
+            ndarray_as_list=False,
+            arrow_cast=False,
+        )
 
-    def __call__(self, args: list[pa.Array]) -> pa.RecordBatch:
-        inputs = tuple(_array_to_pandas(x) for x in args)
-        for x, name in zip(inputs, self._input_names):
-            x.name = name
-        [[(output, _output_type)]] = list(self._udf(None, (inputs,)))
-        return _pandas_to_record_batch(output, self._output_schema, column_match_by_name=self._column_match_by_name)
+    def __call__(self, args: list[pa.Array]) -> pa.Array:
+        inputs = _named_arrays_to_pandas(args, self._input_names, self._serializer)
+        [[(output, output_type)]] = list(self._udf(None, (inputs,)))
+        return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
 class PySparkCoGroupMapUdf:
     def __init__(
         self,
         udf: Callable[..., Any],
-        output_schema: pa.Schema,
-        column_match_by_name: bool,  # noqa: FBT001
+        left_names: Sequence[str],
+        right_names: Sequence[str],
+        config,
     ):
         self._udf = udf
-        self._output_schema = output_schema
-        self._column_match_by_name = column_match_by_name
+        self._left_names = left_names
+        self._right_names = right_names
+        self._serializer = ArrowStreamPandasUDFSerializer(
+            timezone=config.session_timezone,
+            safecheck=config.arrow_convert_safely,
+            assign_cols_by_name=config.assign_columns_by_name,
+            df_for_struct=True,
+            struct_in_pandas="dict",
+            ndarray_as_list=False,
+            arrow_cast=False,
+        )
 
-    def __call__(self, left: pa.RecordBatch, right: pa.RecordBatch) -> pa.RecordBatch:
-        args = (self._convert_input(left), self._convert_input(right))
-        [[(output, _output_type)]] = list(self._udf(None, (args,)))
-        return _pandas_to_record_batch(output, self._output_schema, column_match_by_name=self._column_match_by_name)
-
-    @staticmethod
-    def _convert_input(batch: pa.RecordBatch) -> list[pd.Series]:
-        df = batch.to_pandas(split_blocks=True)
-        return [df[c] for c in df.columns]
+    def __call__(self, left: list[pa.Array], right: list[pa.Array]) -> pa.Array:
+        args = [
+            _named_arrays_to_pandas(left, self._left_names, self._serializer),
+            _named_arrays_to_pandas(right, self._right_names, self._serializer),
+        ]
+        [[(output, output_type)]] = list(self._udf(None, (args,)))
+        return _pandas_to_arrow_array(output, output_type, self._serializer)
 
 
 class PySparkMapPandasIterUdf:
     def __init__(
         self,
         udf: Callable[..., Iterator[pd.DataFrame]],
-        output_schema: pa.Schema,
+        config,
     ):
         self._udf = udf
-        self._output_schema = output_schema
+        self._serializer = ArrowStreamPandasUDFSerializer(
+            timezone=config.session_timezone,
+            safecheck=config.arrow_convert_safely,
+            assign_cols_by_name=config.assign_columns_by_name,
+            df_for_struct=True,
+            struct_in_pandas="dict",
+            ndarray_as_list=False,
+            arrow_cast=False,
+        )
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
-        input_ = map(self._convert_input, args)
-        output = self._udf(None, ((x,) for x in input_))
-        return map(self._convert_output, (x for x, _ in output))
+        output = self._udf(None, ((self._convert_input(x),) for x in args))
+        return (self._convert_output(x, t) for x, t in output)
 
-    @staticmethod
-    def _convert_input(batch: pa.RecordBatch) -> pd.DataFrame:
-        return batch.to_pandas(split_blocks=True)
+    def _convert_input(self, batch: pa.RecordBatch) -> pd.DataFrame:
+        return self._serializer.arrow_to_pandas(batch.to_struct_array())
 
-    def _convert_output(self, df: pd.DataFrame) -> pa.RecordBatch:
-        return _pandas_to_record_batch(df, self._output_schema, column_match_by_name=True)
+    def _convert_output(self, df: pd.DataFrame, data_type: pa.DataType) -> pa.RecordBatch:
+        array = _pandas_to_arrow_array(df, data_type, self._serializer)
+        return pa.RecordBatch.from_struct_array(array)
 
 
 class PySparkMapArrowIterUdf:
-    def __init__(
-        self,
-        udf: Callable[..., Iterator[pa.RecordBatch]],
-    ):
+    def __init__(self, udf: Callable[..., Iterator[pa.RecordBatch]]):
         self._udf = udf
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
@@ -527,14 +581,17 @@ class PySparkTableUdf:
     def __init__(
         self,
         udf: Callable[..., Any],
-        input_types: list[pa.DataType],
+        input_types: Sequence[pa.DataType],
         passthrough_columns: int,
         output_schema: pa.Schema,
-        batch_size: int = 1024,
+        config,
     ):
         self._udf = udf
         self._passthrough_columns = passthrough_columns
-        self._batch_size = batch_size
+        self._batch_size = config.arrow_max_records_per_batch
+        if self._batch_size <= 0:
+            msg = f"invalid batch size: {self._batch_size}"
+            raise ValueError(msg)
         self._output_schema = output_schema
         self._input_converters = [_get_converter(t) for t in input_types]
         self._output_converter = StructConverter(
@@ -579,15 +636,16 @@ class PySparkArrowTableUdf:
         input_names: Sequence[str],
         passthrough_columns: int,
         output_schema: pa.Schema,
-        timezone: str,
-        safe_check: bool,  # noqa: FBT001
+        config,
     ):
         self._udf = udf
         self._input_names = input_names
         self._passthrough_columns = passthrough_columns
         self._output_schema = output_schema
         self._output_type = pa.struct([output_schema.field(i) for i in range(len(output_schema.names))])
-        self._serializer = ArrowStreamPandasUDTFSerializer(timezone=timezone, safecheck=safe_check)
+        self._serializer = ArrowStreamPandasUDTFSerializer(
+            timezone=config.session_timezone, safecheck=config.arrow_convert_safely
+        )
 
     def __call__(self, args: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         for output in self._iter_output(args):
