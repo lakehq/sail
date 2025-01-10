@@ -31,8 +31,9 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    build_join_schema, col, expr, ident, lit, when, AggregateUDF, BinaryExpr, DmlStatement,
-    ExprSchemable, LogicalPlanBuilder, Operator, ScalarUDF, TryCast, WriteOp,
+    build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
+    DmlStatement, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
+    WriteOp,
 };
 use sail_common::spec;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
@@ -1081,15 +1082,69 @@ impl PlanResolver<'_> {
         let sorts = self
             .resolve_query_sort_orders_by_plan(&input, &order, state)
             .await?;
+        let sorts = Self::rebase_query_sort_orders(sorts, &input)?;
         if is_global {
             Ok(LogicalPlanBuilder::from(input).sort(sorts)?.build()?)
         } else {
+            // TODO: Use the logical plan builder to include logic such as expression rebase.
+            //   We can build a plan with a `Sort` node and then replace it with the
+            //   `SortWithinPartitions` node using a tree node rewriter.
             Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), sorts, None)),
             }))
         }
     }
 
+    /// Rebase sort expressions using aggregation expressions when the aggregate plan
+    /// is inside a projection plan.
+    /// Usually the [LogicalPlanBuilder] handles rebase, but this particular case is not handled yet.
+    /// We do not do so recursively to make sure this workaround is only applied to a particular pattern.
+    ///
+    /// This workaround is needed for queries where the aggregation expression is aliased.
+    /// Here is an example.
+    /// ```sql
+    /// SELECT a, sum(b) AS s FROM VALUES (1, 2) AS t(a, b) GROUP BY a ORDER BY sum(b)
+    /// ```
+    fn rebase_query_sort_orders(sorts: Vec<Sort>, plan: &LogicalPlan) -> PlanResult<Vec<Sort>> {
+        match plan {
+            LogicalPlan::Projection(Projection { input, .. }) => {
+                if let LogicalPlan::Aggregate(Aggregate {
+                    input,
+                    group_expr,
+                    aggr_expr,
+                    ..
+                }) = input.as_ref()
+                {
+                    let base = group_expr
+                        .iter()
+                        .cloned()
+                        .chain(aggr_expr.iter().cloned())
+                        .collect::<Vec<_>>();
+                    sorts
+                        .into_iter()
+                        .map(|x| {
+                            let Sort {
+                                expr,
+                                asc,
+                                nulls_first,
+                            } = x;
+                            let expr = rebase_expression(expr, &base, input.as_ref())?;
+                            Ok(Sort {
+                                expr,
+                                asc,
+                                nulls_first,
+                            })
+                        })
+                        .collect::<PlanResult<Vec<_>>>()
+                } else {
+                    Ok(sorts)
+                }
+            }
+            _ => Ok(sorts),
+        }
+    }
+
+    /// Resolve sort orders by attempting child plans recursively.
     async fn resolve_query_sort_orders_by_plan(
         &self,
         plan: &LogicalPlan,
@@ -1106,6 +1161,10 @@ impl PlanResolver<'_> {
         Ok(results)
     }
 
+    /// Resolve a sort order by attempting child plans recursively.
+    /// This is needed since the sort order may refer to a column in a child plan,
+    /// So we need to use the schema of the child plan to map between user-facing
+    /// field name and the opaque field ID.
     #[async_recursion]
     async fn resolve_query_sort_order_by_plan(
         &self,
@@ -3470,28 +3529,42 @@ impl PlanResolver<'_> {
                 let NamedExpr {
                     name,
                     expr,
-                    metadata: _,
+                    metadata,
                 } = x;
                 let expr = rebase_expression(expr, &aggregate_or_grouping_exprs, &plan)?;
-                let alias = state.register_field_name(name.one()?);
-                Ok(expr.alias(alias))
+                Ok(NamedExpr {
+                    name,
+                    expr,
+                    metadata,
+                })
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        let having = match having {
-            Some(having) => Some(rebase_expression(
-                having.clone(),
-                &aggregate_or_grouping_exprs,
-                &plan,
-            )?),
-            None => None,
+        let plan = match having {
+            Some(having) => {
+                let having =
+                    rebase_expression(having.clone(), &aggregate_or_grouping_exprs, &plan)?;
+                LogicalPlanBuilder::from(plan).having(having)?.build()?
+            }
+            None => plan,
         };
-        let builder = LogicalPlanBuilder::from(plan);
-        match having {
-            // We must apply the `HAVING` clause as a filter before the projection.
-            // It is incorrect to filter after projection due to column renaming.
-            Some(having) => Ok(builder.having(having)?.project(projections)?.build()?),
-            None => Ok(builder.project(projections)?.build()?),
-        }
+        let (plan, projections) =
+            self.rewrite_projection::<ExplodeRewriter>(plan, projections, state)?;
+        let (plan, projections) =
+            self.rewrite_projection::<WindowRewriter>(plan, projections, state)?;
+        let projections = projections
+            .into_iter()
+            .map(|x| {
+                let NamedExpr {
+                    name,
+                    expr,
+                    metadata: _,
+                } = x;
+                Ok(expr.alias(state.register_field_name(name.one()?)))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(LogicalPlanBuilder::from(plan)
+            .project(projections)?
+            .build()?)
     }
 
     fn rewrite_wildcard(
@@ -3604,6 +3677,10 @@ impl PlanResolver<'_> {
         Ok(out)
     }
 
+    /// Rewrite named expressions to DataFusion expressions.
+    /// A field is registered for each name.
+    /// If the expression is a column expression, all plan IDs for the column are registered for the field.
+    /// This means the column must refer to a **registered field** of the input plan. Otherwise, the column must be wrapped with an alias.
     pub(super) fn rewrite_named_expressions(
         &self,
         expr: Vec<NamedExpr>,
