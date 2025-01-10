@@ -1680,17 +1680,17 @@ impl PlanResolver<'_> {
         let high = self.resolve_expression(high, schema, state).await?;
 
         // DataFusion's BETWEEN operator has a bug, so we construct the expression manually.
-        let greater_eq = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+        let greater_eq = expr::Expr::BinaryExpr(BinaryExpr::new(
             Box::new(expr.clone()),
             Operator::GtEq,
             Box::new(low),
         ));
-        let less_eq = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+        let less_eq = expr::Expr::BinaryExpr(BinaryExpr::new(
             Box::new(expr),
             Operator::LtEq,
             Box::new(high),
         ));
-        let between_expr = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+        let between_expr = expr::Expr::BinaryExpr(BinaryExpr::new(
             Box::new(greater_eq),
             Operator::And,
             Box::new(less_eq),
@@ -1714,7 +1714,7 @@ impl PlanResolver<'_> {
         let right = self.resolve_expression(right, schema, state).await?;
         Ok(NamedExpr::new(
             vec!["is_distinct_from".to_string()],
-            expr::Expr::BinaryExpr(expr::BinaryExpr {
+            expr::Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::IsDistinctFrom,
                 right: Box::new(right),
@@ -1733,7 +1733,7 @@ impl PlanResolver<'_> {
         let right = self.resolve_expression(right, schema, state).await?;
         Ok(NamedExpr::new(
             vec!["is_not_distinct_from".to_string()],
-            expr::Expr::BinaryExpr(expr::BinaryExpr {
+            expr::Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::IsNotDistinctFrom,
                 right: Box::new(right),
@@ -1820,17 +1820,17 @@ fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableRe
     let table_matches = |table: &str| {
         target
             .map(|x| x.table())
-            .map_or(false, |x| x.eq_ignore_ascii_case(table))
+            .is_some_and(|x| x.eq_ignore_ascii_case(table))
     };
     let schema_matches = |schema: &str| {
         target
             .and_then(|x| x.schema())
-            .map_or(false, |x| x.eq_ignore_ascii_case(schema))
+            .is_some_and(|x| x.eq_ignore_ascii_case(schema))
     };
     let catalog_matches = |catalog: &str| {
         target
             .and_then(|x| x.catalog())
-            .map_or(false, |x| x.eq_ignore_ascii_case(catalog))
+            .is_some_and(|x| x.eq_ignore_ascii_case(catalog))
     };
     match qualifier {
         Some(TableReference::Bare { table }) => table_matches(table),

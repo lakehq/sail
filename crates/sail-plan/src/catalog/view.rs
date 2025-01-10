@@ -6,7 +6,7 @@ use datafusion_expr::{CreateView, DdlStatement, DropView, LogicalPlan};
 use crate::catalog::CatalogManager;
 use crate::temp_view::manage_temporary_views;
 
-impl<'a> CatalogManager<'a> {
+impl CatalogManager<'_> {
     pub(crate) async fn drop_temporary_view(
         &self,
         view_name: &str,

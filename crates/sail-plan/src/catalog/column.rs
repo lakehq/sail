@@ -29,7 +29,7 @@ impl TableColumnMetadata {
     }
 }
 
-impl<'a> CatalogManager<'a> {
+impl CatalogManager<'_> {
     pub(crate) async fn list_table_columns(
         &self,
         table: TableReference,
