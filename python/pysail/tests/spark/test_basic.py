@@ -309,10 +309,9 @@ def test_save_table(df):
     df.write.saveAsTable("meow")
 
 
-@pytest.mark.skip(reason="not working")
 def test_select_expression(df):
-    df.selectExpr("b.foo").toPandas()
-    df.selectExpr("b.*").toPandas()
+    assert_frame_equal(df.selectExpr("b.foo").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
+    assert_frame_equal(df.selectExpr("b.*").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
 
 
 @pytest.mark.skip(reason="not implemented")
