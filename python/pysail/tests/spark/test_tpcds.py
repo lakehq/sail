@@ -32,7 +32,6 @@ def test_derived_tpcds_query_execution(sail, query):
         "q12",
         "q16",
         "q20",
-        "q23",
         "q36",
         "q47",
         "q51",
@@ -56,7 +55,7 @@ def test_derived_tpcds_query_execution(sail, query):
         try:
             sail.sql(sql).toPandas()
         except Exception as e:
-            err = f"Error executing query {query} with error: {e}\n SQL: {sql}"
+            err = f"Error executing query {query} with error: {e}\nSQL: {sql}"
             raise Exception(err) from e  # noqa: TRY002
 
 

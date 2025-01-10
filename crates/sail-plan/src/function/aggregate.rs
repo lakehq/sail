@@ -258,9 +258,8 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
 }
 
 pub(crate) fn get_built_in_aggregate_function(name: &str) -> PlanResult<AggFunction> {
-    let name = name.to_lowercase();
     Ok(BUILT_IN_AGGREGATE_FUNCTIONS
-        .get(name.as_str())
+        .get(name)
         .ok_or_else(|| PlanError::unsupported(format!("unknown aggregate function: {name}")))?
         .clone())
 }

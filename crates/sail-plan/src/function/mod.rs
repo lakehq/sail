@@ -27,25 +27,22 @@ lazy_static! {
 }
 
 pub fn get_built_in_function(name: &str) -> PlanResult<Function> {
-    let name = name.to_lowercase();
     Ok(BUILT_IN_SCALAR_FUNCTIONS
-        .get(name.as_str())
-        .or_else(|| BUILT_IN_GENERATOR_FUNCTIONS.get(name.as_str()))
+        .get(name)
+        .or_else(|| BUILT_IN_GENERATOR_FUNCTIONS.get(name))
         .ok_or_else(|| PlanError::unsupported(format!("unknown function: {name}")))?
         .clone())
 }
 
 pub fn get_built_in_table_function(name: &str) -> PlanResult<Arc<TableFunction>> {
-    let name = name.to_lowercase();
     Ok(BUILT_IN_TABLE_FUNCTIONS
-        .get(name.as_str())
+        .get(name)
         .ok_or_else(|| PlanError::unsupported(format!("unknown table function: {name}")))?
         .clone())
 }
 
 pub fn is_built_in_generator_function(name: &str) -> bool {
-    let name = name.to_lowercase();
-    BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name.as_str())
+    BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name)
 }
 
 pub use generator::get_outer_built_in_generator_functions;
