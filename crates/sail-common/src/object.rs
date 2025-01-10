@@ -20,7 +20,7 @@ impl<T: PartialEq + Eq + Hash + PartialOrd + 'static> DynObject for T {
     }
 
     fn dyn_object_eq(&self, other: &dyn Any) -> bool {
-        other.downcast_ref::<Self>().map_or(false, |x| self == x)
+        other.downcast_ref::<Self>() == Some(self)
     }
 
     fn dyn_object_hash(&self, mut state: &mut dyn Hasher) {

@@ -18,7 +18,7 @@ pub(crate) struct FunctionMetadata {
     pub(crate) is_temporary: bool,
 }
 
-impl<'a> CatalogManager<'a> {
+impl CatalogManager<'_> {
     pub(crate) fn register_function(&self, udf: ScalarUDF) -> Result<()> {
         self.ctx.register_udf(udf);
         Ok(())
