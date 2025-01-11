@@ -23,9 +23,49 @@ fn integer_part(expr: Expr, part: String) -> Expr {
     })
 }
 
+fn trunc_part_conversion(part: Expr) -> Expr {
+    Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![
+            (
+                Box::new(
+                    part.clone()
+                        .ilike(lit("mon"))
+                        .or(part.clone().ilike(lit("mm"))),
+                ),
+                Box::new(lit("month")),
+            ),
+            (
+                Box::new(
+                    part.clone()
+                        .ilike(lit("yy"))
+                        .or(part.clone().ilike(lit("yyyy"))),
+                ),
+                Box::new(lit("year")),
+            ),
+            (
+                Box::new(part.clone().ilike(lit("dd"))),
+                Box::new(lit("day")),
+            ),
+        ],
+        else_expr: Some(Box::new(part)),
+    })
+}
+
 fn trunc(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
     let (date, part) = args.two()?;
-    Ok(expr_fn::date_trunc(part, date))
+    Ok(Expr::Cast(expr::Cast::new(
+        Box::new(expr_fn::date_trunc(trunc_part_conversion(part), date)),
+        DataType::Date32,
+    )))
+}
+
+fn date_trunc(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
+    let (part, timestamp) = args.two()?;
+    Ok(Expr::Cast(expr::Cast::new(
+        Box::new(expr_fn::date_trunc(trunc_part_conversion(part), timestamp)),
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+    )))
 }
 
 fn interval_arithmetic(args: Vec<Expr>, unit: &str, op: Operator) -> PlanResult<Expr> {
@@ -284,7 +324,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
             "date_sub",
             F::custom(|args, _config| interval_arithmetic(args, "days", Operator::Minus)),
         ),
-        ("date_trunc", F::binary(expr_fn::date_trunc)),
+        ("date_trunc", F::custom(date_trunc)),
         (
             "dateadd",
             F::custom(|args, _config| interval_arithmetic(args, "days", Operator::Plus)),

@@ -744,7 +744,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: dd"
+        "success": "ok"
       }
     },
     {
@@ -810,7 +810,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: mm"
+        "success": "ok"
       }
     },
     {
@@ -2504,7 +2504,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: mm"
+        "success": "ok"
       }
     },
     {
