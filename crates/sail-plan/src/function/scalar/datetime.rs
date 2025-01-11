@@ -251,19 +251,33 @@ fn to_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanRes
     }
 }
 
-fn from_unixtime(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
-    if args.len() == 1 {
-        let arg = args.one()?;
-        Ok(expr_fn::from_unixtime(arg))
+fn from_unixtime(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<Expr> {
+    let (expr, format) = if args.len() == 1 {
+        let expr = args.one()?;
+        // default format is "yyyy-MM-dd HH:mm:ss"
+        Ok((
+            expr,
+            lit(ScalarValue::Utf8(Some("yyyy-MM-dd HH:mm:ss".to_string()))),
+        ))
     } else if args.len() == 2 {
-        return Err(PlanError::invalid(
-            "from_unixtime with format is not supported yet",
-        ));
+        args.two()
     } else {
         return Err(PlanError::invalid(
             "from_unixtime requires 1 or 2 arguments",
         ));
-    }
+    }?;
+
+    let timezone: Arc<str> = function_context
+        .plan_config()
+        .session_timezone
+        .clone()
+        .into();
+    let format = to_chrono_fmt(format)?;
+    let expr = Expr::Cast(expr::Cast::new(
+        Box::new(expr),
+        DataType::Timestamp(TimeUnit::Second, Some(timezone)),
+    ));
+    Ok(expr_fn::to_char(expr, format))
 }
 
 fn weekofyear(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<Expr> {
