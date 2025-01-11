@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType,
+    DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
@@ -314,9 +314,39 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("quarter", F::unknown("quarter")),
         ("second", F::unknown("second")),
         ("session_window", F::unknown("session_window")),
-        ("timestamp_micros", F::unknown("timestamp_micros")),
-        ("timestamp_millis", F::unknown("timestamp_millis")),
-        ("timestamp_seconds", F::unknown("timestamp_seconds")),
+        (
+            "timestamp_micros",
+            F::cast(DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some("UTC".into()),
+            )),
+        ),
+        (
+            "timestamp_millis",
+            F::unary(|arg| {
+                Expr::Cast(expr::Cast::new(
+                    Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Int64))),
+                        Operator::Multiply,
+                        Box::new(lit(ScalarValue::Int64(Some(1_000)))),
+                    ))),
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                ))
+            }),
+        ),
+        (
+            "timestamp_seconds",
+            F::unary(|arg| {
+                Expr::Cast(expr::Cast::new(
+                    Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Int64))),
+                        Operator::Multiply,
+                        Box::new(lit(ScalarValue::Int64(Some(1_000_000)))),
+                    ))),
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                ))
+            }),
+        ),
         ("to_date", F::custom(to_date)),
         ("to_timestamp", F::custom(to_timestamp)),
         ("to_timestamp_ltz", F::unknown("to_timestamp_ltz")),

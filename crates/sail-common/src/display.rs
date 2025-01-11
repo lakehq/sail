@@ -475,7 +475,13 @@ fn write_timestamp(
             let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
             match format {
                 Some(s) => write!(f, "{}", date.format(s))?,
-                None => write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?,
+                None => write!(
+                    f,
+                    "{}",
+                    date.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+                        .replace('T', " ")
+                        .replace('Z', "")
+                )?,
             }
         }
         None => match format {

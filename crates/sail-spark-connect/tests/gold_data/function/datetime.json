@@ -2196,7 +2196,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: timestamp_micros"
+        "success": "ok"
       }
     },
     {
@@ -2218,7 +2218,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: timestamp_millis"
+        "success": "ok"
       }
     },
     {
@@ -2240,7 +2240,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: timestamp_seconds"
+        "success": "ok"
       }
     },
     {
@@ -2262,7 +2262,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: timestamp_seconds"
+        "success": "ok"
       }
     },
     {
