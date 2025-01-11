@@ -486,7 +486,7 @@ fn write_timestamp(
         }
         None => match format {
             Some(s) => write!(f, "{}", naive.format(s))?,
-            None => write!(f, "{naive:?}")?,
+            None => write!(f, "{}", format!("{naive:?}").replace('T', " "))?,
         },
     }
     Ok(())

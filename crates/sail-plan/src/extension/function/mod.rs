@@ -30,5 +30,5 @@ pub mod spark_weekofyear;
 pub mod spark_xxhash64;
 pub mod struct_function;
 pub mod table_input;
-pub mod unix_timestamp_now;
+pub mod timestamp_now;
 pub mod update_struct_field;

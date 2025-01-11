@@ -1470,7 +1470,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: localtimestamp"
+        "success": "ok"
       }
     },
     {
