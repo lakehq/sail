@@ -133,6 +133,8 @@ fn current_timezone(args: Vec<Expr>, function_context: &FunctionContext) -> Plan
 }
 
 fn to_chrono_fmt(format: Expr) -> PlanResult<Expr> {
+    // FIXME: Implement UDFs for all callers of this function so that we have `format` as a string
+    //  instead of some arbitrary expression
     match format {
         Expr::Literal(ScalarValue::Utf8(Some(format))) => {
             let format = spark_datetime_format_to_chrono_strftime(&format)?;
@@ -197,7 +199,10 @@ fn date_format(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResu
 
 fn to_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
     if args.len() == 1 {
-        Ok(expr_fn::to_timestamp_micros(args))
+        Ok(Expr::Cast(expr::Cast::new(
+            Box::new(args.one()?),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        )))
     } else if args.len() == 2 {
         let (expr, format) = args.two()?;
         let format = to_chrono_fmt(format)?;
@@ -349,8 +354,12 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ),
         ("to_date", F::custom(to_date)),
         ("to_timestamp", F::custom(to_timestamp)),
-        ("to_timestamp_ltz", F::unknown("to_timestamp_ltz")),
-        ("to_timestamp_ntz", F::unknown("to_timestamp_ntz")),
+        // The description for `to_timestamp_ltz` and `to_timestamp_ntz` are the same:
+        //  "Parses the timestamp with the format to a timestamp without time zone. Returns null with invalid input."
+        // https://spark.apache.org/docs/3.5.4/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ltz.html
+        // https://spark.apache.org/docs/3.5.4/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
+        ("to_timestamp_ltz", F::custom(to_timestamp)),
+        ("to_timestamp_ntz", F::custom(to_timestamp)),
         ("to_unix_timestamp", F::unknown("to_unix_timestamp")),
         ("to_utc_timestamp", F::unknown("to_utc_timestamp")),
         ("trunc", F::custom(trunc)),
