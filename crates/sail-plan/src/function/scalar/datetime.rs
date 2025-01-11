@@ -285,6 +285,30 @@ fn weekofyear(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult
     }
 }
 
+fn unix_time_unit(
+    args: Vec<Expr>,
+    function_context: &FunctionContext,
+    time_unit: TimeUnit,
+) -> PlanResult<Expr> {
+    let arg = args.one()?;
+    Ok(Expr::Cast(expr::Cast::new(
+        Box::new(Expr::Cast(expr::Cast::new(
+            Box::new(arg),
+            DataType::Timestamp(
+                time_unit,
+                Some(
+                    function_context
+                        .plan_config()
+                        .session_timezone
+                        .clone()
+                        .into(),
+                ),
+            ),
+        ))),
+        DataType::Int64,
+    )))
+}
+
 // FIXME: Spark displays dates and timestamps according to the session time zone.
 //  We should be setting the DataFusion config `datafusion.execution.time_zone`
 //  and casting any datetime functions that don't use the DataFusion config.
@@ -318,7 +342,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
             F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
         ),
         ("date_format", F::custom(date_format)),
-        ("date_from_unix_date", F::unknown("date_from_unix_date")),
+        ("date_from_unix_date", F::cast(DataType::Date32)),
         ("date_part", F::binary(expr_fn::date_part)),
         (
             "date_sub",
@@ -404,10 +428,33 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("to_utc_timestamp", F::unknown("to_utc_timestamp")),
         ("trunc", F::custom(trunc)),
         ("try_to_timestamp", F::unknown("try_to_timestamp")),
-        ("unix_date", F::unknown("unix_date")),
-        ("unix_micros", F::unknown("unix_micros")),
-        ("unix_millis", F::unknown("unix_millis")),
-        ("unix_seconds", F::unknown("unix_seconds")),
+        (
+            "unix_date",
+            F::unary(|arg| {
+                Expr::Cast(expr::Cast::new(
+                    Box::new(Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Date32))),
+                    DataType::Int32,
+                ))
+            }),
+        ),
+        (
+            "unix_micros",
+            F::custom(|args, function_context| {
+                unix_time_unit(args, function_context, TimeUnit::Microsecond)
+            }),
+        ),
+        (
+            "unix_millis",
+            F::custom(|args, function_context| {
+                unix_time_unit(args, function_context, TimeUnit::Millisecond)
+            }),
+        ),
+        (
+            "unix_seconds",
+            F::custom(|args, function_context| {
+                unix_time_unit(args, function_context, TimeUnit::Second)
+            }),
+        ),
         ("unix_timestamp", F::custom(unix_timestamp)),
         ("weekday", F::unknown("weekday")),
         ("weekofyear", F::custom(weekofyear)),

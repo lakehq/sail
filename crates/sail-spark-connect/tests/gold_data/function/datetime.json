@@ -524,7 +524,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_from_unix_date"
+        "success": "ok"
       }
     },
     {
@@ -2658,7 +2658,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unix_date"
+        "success": "ok"
       }
     },
     {
@@ -2680,7 +2680,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unix_micros"
+        "success": "ok"
       }
     },
     {
@@ -2702,7 +2702,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unix_millis"
+        "success": "ok"
       }
     },
     {
@@ -2724,7 +2724,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unix_seconds"
+        "success": "ok"
       }
     },
     {
