@@ -1118,7 +1118,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: dayofmonth"
+        "success": "ok"
       }
     },
     {
@@ -1140,7 +1140,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: dayofweek"
+        "success": "ok"
       }
     },
     {
@@ -1162,7 +1162,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: dayofyear"
+        "success": "ok"
       }
     },
     {
@@ -1426,7 +1426,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: hour"
+        "success": "ok"
       }
     },
     {
@@ -2020,7 +2020,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: minute"
+        "success": "ok"
       }
     },
     {
@@ -2152,7 +2152,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: quarter"
+        "success": "ok"
       }
     },
     {
@@ -2174,7 +2174,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: second"
+        "success": "ok"
       }
     },
     {
@@ -2790,7 +2790,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: weekday"
+        "success": "ok"
       }
     },
     {

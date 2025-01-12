@@ -15,7 +15,7 @@ use crate::extension::function::timestamp_now::TimestampNow;
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
 
-fn integer_part(expr: Expr, part: String) -> Expr {
+fn integer_part(expr: Expr, part: &str) -> Expr {
     let part = lit(ScalarValue::Utf8(Some(part.to_uppercase())));
     Expr::Cast(expr::Cast {
         expr: Box::new(expr_fn::date_part(part, expr)),
@@ -406,14 +406,23 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
             F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
         ),
         ("datepart", F::binary(expr_fn::date_part)),
-        ("day", F::unary(|x| integer_part(x, "DAY".to_string()))),
-        ("dayofmonth", F::unknown("dayofmonth")),
-        ("dayofweek", F::unknown("dayofweek")),
-        ("dayofyear", F::unknown("dayofyear")),
+        ("day", F::unary(|arg| integer_part(arg, "DAY"))),
+        ("dayofmonth", F::unary(|arg| integer_part(arg, "DAY"))),
+        (
+            "dayofweek",
+            F::unary(|arg| {
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(integer_part(arg, "DOW")),
+                    Operator::Plus,
+                    Box::new(lit(ScalarValue::Int32(Some(1)))),
+                ))
+            }),
+        ),
+        ("dayofyear", F::unary(|arg| integer_part(arg, "DOY"))),
         ("extract", F::binary(expr_fn::date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
         ("from_utc_timestamp", F::unknown("from_utc_timestamp")),
-        ("hour", F::unknown("hour")),
+        ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),
         ("last_day", F::unknown("last_day")),
         (
             "localtimestamp",
@@ -426,13 +435,13 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("make_timestamp_ltz", F::unknown("make_timestamp_ltz")),
         ("make_timestamp_ntz", F::unknown("make_timestamp_ntz")),
         ("make_ym_interval", F::unknown("make_ym_interval")),
-        ("minute", F::unknown("minute")),
-        ("month", F::unary(|x| integer_part(x, "MONTH".to_string()))),
+        ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
+        ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
         ("months_between", F::unknown("months_between")),
         ("next_day", F::unknown("next_day")),
         ("now", F::custom(current_timestamp_microseconds)),
-        ("quarter", F::unknown("quarter")),
-        ("second", F::unknown("second")),
+        ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
+        ("second", F::unary(|arg| integer_part(arg, "SECOND"))),
         ("session_window", F::unknown("session_window")),
         (
             "timestamp_micros",
@@ -507,10 +516,19 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
             }),
         ),
         ("unix_timestamp", F::custom(unix_timestamp)),
-        ("weekday", F::unknown("weekday")),
+        (
+            "weekday",
+            F::unary(|arg| {
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(integer_part(arg, "DOW")),
+                    Operator::Minus,
+                    Box::new(lit(ScalarValue::Int32(Some(1)))),
+                ))
+            }),
+        ),
         ("weekofyear", F::custom(weekofyear)),
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
-        ("year", F::unary(|x| integer_part(x, "YEAR".to_string()))),
+        ("year", F::unary(|arg| integer_part(arg, "YEAR"))),
     ]
 }
