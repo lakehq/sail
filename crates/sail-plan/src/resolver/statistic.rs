@@ -349,10 +349,28 @@ impl PlanResolver<'_> {
 
         let plan = LogicalPlanBuilder::from(projected_counts_plan)
             .aggregate(
-                vec![col(left_column).alias(cross_tab_alias)],
+                vec![col(left_column).alias(cross_tab_alias.as_str())],
                 aggregate_exprs,
             )?
             .build()?;
-        Ok(plan)
+        let expr: Vec<Expr> = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .map(|column| {
+                if column.name() == cross_tab_alias {
+                    Expr::Cast(expr::Cast {
+                        expr: Box::new(Expr::Column(column.clone())),
+                        data_type: adt::DataType::Utf8,
+                    })
+                } else {
+                    Expr::Column(column)
+                }
+            })
+            .collect();
+        LogicalPlanBuilder::from(plan)
+            .project(expr)?
+            .build()
+            .map_err(Into::into)
     }
 }
