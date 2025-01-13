@@ -9,7 +9,7 @@ version = "0.2.0"
 edition = "2021"
 
 [workspace.dependencies]
-thiserror = { version = "2.0.9" }
+thiserror = { version = "2.0.11" }
 tokio = { version = "1.42.0", features = ["full"] }
 tokio-stream = "0.1.17"
 tonic = { version = "0.12.3", features = ["tls", "tls-roots", "gzip", "zstd"] }
@@ -43,7 +43,7 @@ comfy-table = "7.1"
 html-escape = "0.2"
 syn = "2.0.95"
 quote = "1.0.37"
-prettyplease = "0.2.27"
+prettyplease = "0.2.29"
 phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
 either = "1.12.0"
