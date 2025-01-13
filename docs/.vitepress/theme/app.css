@@ -32,3 +32,8 @@ dl dt {
 dl dd {
   @apply ml-8 leading-7;
 }
+
+.pycon-prompt {
+  /* The prompt is not selectable to make it easier to copy code. */
+  @apply select-none;
+}

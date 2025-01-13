@@ -1,0 +1,13 @@
+>>> import pyarrow.compute as pc
+>>>
+>>> def transform(iterator):
+...     for batch in iterator:
+...         yield batch.filter(pc.utf8_length(pc.field("text")) > 2)
+...
+>>> df = spark.createDataFrame([(1, "Hello"), (2, "Hi")], ["id", "text"])
+>>> df.mapInArrow(transform, schema=df.schema).show()
++---+-----+
+| id| text|
++---+-----+
+|  1|Hello|
++---+-----+

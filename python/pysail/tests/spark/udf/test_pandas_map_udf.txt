@@ -1,0 +1,11 @@
+>>> def transform(iterator):
+...     for pdf in iterator:
+...         yield pdf[pdf.text.str.len() > 2]
+...
+>>> df = spark.createDataFrame([(1, "Hello"), (2, "Hi")], ["id", "text"])
+>>> df.mapInPandas(transform, schema=df.schema).show()
++---+-----+
+| id| text|
++---+-----+
+|  1|Hello|
++---+-----+

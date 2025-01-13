@@ -1408,12 +1408,17 @@ impl PlanResolver<'_> {
 
     async fn resolve_expression_call_function(
         &self,
-        _function_name: String,
-        _arguments: Vec<spec::Expr>,
-        _schema: &DFSchemaRef,
-        _state: &mut PlanResolverState,
+        function_name: spec::ObjectName,
+        arguments: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        Err(PlanError::todo("call function"))
+        let function_name: Vec<String> = function_name.into();
+        let Ok(function_name) = function_name.one() else {
+            return Err(PlanError::todo("qualified function name"));
+        };
+        self.resolve_expression_function(function_name, arguments, false, schema, state)
+            .await
     }
 
     async fn resolve_expression_placeholder(&self, placeholder: String) -> PlanResult<NamedExpr> {
