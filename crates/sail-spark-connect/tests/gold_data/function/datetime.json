@@ -524,7 +524,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: date_from_unix_date"
+        "success": "ok"
       }
     },
     {
@@ -744,7 +744,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: dd"
+        "success": "ok"
       }
     },
     {
@@ -810,7 +810,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: mm"
+        "success": "ok"
       }
     },
     {
@@ -1118,7 +1118,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: dayofmonth"
+        "success": "ok"
       }
     },
     {
@@ -1140,7 +1140,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: dayofweek"
+        "success": "ok"
       }
     },
     {
@@ -1162,7 +1162,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: dayofyear"
+        "success": "ok"
       }
     },
     {
@@ -1382,7 +1382,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: from_unixtime with format is not supported yet"
+        "success": "ok"
       }
     },
     {
@@ -1426,7 +1426,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: hour"
+        "success": "ok"
       }
     },
     {
@@ -1470,7 +1470,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: localtimestamp"
+        "success": "ok"
       }
     },
     {
@@ -2020,7 +2020,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: minute"
+        "success": "ok"
       }
     },
     {
@@ -2152,7 +2152,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: quarter"
+        "success": "ok"
       }
     },
     {
@@ -2174,7 +2174,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: second"
+        "success": "ok"
       }
     },
     {
@@ -2196,7 +2196,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: timestamp_micros"
+        "success": "ok"
       }
     },
     {
@@ -2218,7 +2218,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: timestamp_millis"
+        "success": "ok"
       }
     },
     {
@@ -2240,7 +2240,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: timestamp_seconds"
+        "success": "ok"
       }
     },
     {
@@ -2262,7 +2262,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: timestamp_seconds"
+        "success": "ok"
       }
     },
     {
@@ -2372,7 +2372,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -2394,7 +2394,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -2416,7 +2416,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_timestamp_ntz"
+        "success": "ok"
       }
     },
     {
@@ -2438,7 +2438,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_timestamp_ntz"
+        "success": "ok"
       }
     },
     {
@@ -2504,7 +2504,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported date_trunc granularity: mm"
+        "success": "ok"
       }
     },
     {
@@ -2658,7 +2658,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unix_date"
+        "success": "ok"
       }
     },
     {
@@ -2680,7 +2680,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unix_micros"
+        "success": "ok"
       }
     },
     {
@@ -2702,7 +2702,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unix_millis"
+        "success": "ok"
       }
     },
     {
@@ -2724,7 +2724,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: unix_seconds"
+        "success": "ok"
       }
     },
     {
@@ -2790,7 +2790,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: weekday"
+        "success": "ok"
       }
     },
     {

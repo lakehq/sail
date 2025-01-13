@@ -373,9 +373,28 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
                 "Only `SHOW CREATE TABLE ...` is supported.",
             )),
         },
-        Statement::ShowDatabases { .. } => Err(SqlError::todo("SQL show databases")),
-        Statement::ShowViews { .. } => Err(SqlError::todo("SQL show views")),
-        Statement::ShowSchemas { .. } => Err(SqlError::todo("SQL show schemas")),
+        Statement::ShowDatabases {
+            terse: _,
+            history: _,
+            // TODO: show options
+            show_options: _,
+        }
+        | Statement::ShowSchemas {
+            terse: _,
+            history: _,
+            // TODO: show options
+            show_options: _,
+        } => {
+            // The usage of SCHEMAS and DATABASES are interchangeable and mean the same thing.
+            // https://spark.apache.org/docs/3.5.4/sql-ref-syntax-aux-show-databases.html
+            parse_sql_statement("SELECT * FROM information_schema.schemata;")
+        }
+        Statement::ShowViews {
+            terse: _,
+            materialized: _,
+            // TODO: show options
+            show_options: _,
+        } => parse_sql_statement("SELECT * FROM information_schema.views;"),
         Statement::ShowTables {
             terse: _,
             history: _,

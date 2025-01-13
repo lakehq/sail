@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -66,7 +66,7 @@ use sail_plan::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_plan::extension::function::spark_weekofyear::SparkWeekOfYear;
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::struct_function::StructFunction;
-use sail_plan::extension::function::unix_timestamp_now::UnixTimestampNow;
+use sail_plan::extension::function::timestamp_now::TimestampNow;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{
@@ -669,6 +669,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkWeekOfYear::new(Arc::from(timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::TimestampNow(gen::TimestampNowUdf {
+                timezone,
+                time_unit,
+            }) => {
+                let time_unit = gen_datafusion_common::TimeUnit::from_str_name(time_unit.as_str())
+                    .ok_or_else(|| plan_datafusion_err!("invalid time unit: {time_unit}"))?;
+                let time_unit: TimeUnit = time_unit.into();
+                let udf = TimestampNow::new(Arc::from(timezone), time_unit);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -694,9 +704,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_unhex" | "unhex" => Ok(Arc::new(ScalarUDF::from(SparkUnHex::new()))),
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
             "spark_reverse" | "reverse" => Ok(Arc::new(ScalarUDF::from(SparkReverse::new()))),
-            "spark_unix_timestamp" | "unix_timestamp" | "unix_timestamp_now" => {
-                Ok(Arc::new(ScalarUDF::from(UnixTimestampNow::new())))
-            }
             "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
             "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
@@ -741,7 +748,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkMurmur3Hash>()
             || node.inner().as_any().is::<SparkReverse>()
             || node.inner().as_any().is::<SparkXxhash64>()
-            || node.inner().as_any().is::<UnixTimestampNow>()
             || node.inner().as_any().is::<OverlayFunc>()
             || node.inner().as_any().is::<SparkBase64>()
             || node.inner().as_any().is::<SparkUnbase64>()
@@ -817,6 +823,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkWeekOfYear>() {
             let timezone = func.timezone().to_string();
             UdfKind::SparkWeekOfYear(gen::SparkWeekOfYearUdf { timezone })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<TimestampNow>() {
+            let timezone = func.timezone().to_string();
+            let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
+            let time_unit = time_unit.as_str_name().to_string();
+            UdfKind::TimestampNow(gen::TimestampNowUdf {
+                timezone,
+                time_unit,
+            })
         } else {
             return Ok(());
         };
