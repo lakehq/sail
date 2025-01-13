@@ -18,10 +18,11 @@
 ...     for s in iterator:
 ...         yield s**2
 ...
->>> spark.range(2).select(square("id")).show()
+>>> spark.range(3).select(square("id")).show()
 +----------+
 |square(id)|
 +----------+
 |         0|
 |         1|
+|         4|
 +----------+

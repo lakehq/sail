@@ -34,6 +34,6 @@ dl dd {
 }
 
 .pycon-prompt {
-  /* The prompt is not selectable to make it easier to copy code. */
+  /* The prompt is not selectable so that it is easier to copy code. */
   @apply select-none;
 }

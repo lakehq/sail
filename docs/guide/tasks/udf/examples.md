@@ -31,7 +31,7 @@ You can define a Pandas UDF for aggregation. The UDF returns a single value for 
 
 <<< @/../python/pysail/tests/spark/udf/test_pandas_agg_udf.txt{python-console}
 
-The Pandas UDF can be registered for use in SQL queries, in the same way as Python scalar UDFs.
+The Pandas UDF can be registered for use in SQL queries, in the same way as the Python scalar UDF.
 
 You can define a Pandas UDF to transform data partitions using `mapInPandas()`.
 

@@ -1,6 +1,6 @@
 ---
 title: User-defined Functions
-rank: 30
+rank: 2
 ---
 
 # User-defined Functions

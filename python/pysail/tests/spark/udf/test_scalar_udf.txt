@@ -1,12 +1,13 @@
 >>> from pyspark.sql.functions import udf
 >>>
 >>> square = udf(lambda x: x**2, "integer")
->>> spark.range(2).select(square("id")).show()
+>>> spark.range(3).select(square("id")).show()
 +------------+
 |<lambda>(id)|
 +------------+
 |           0|
 |           1|
+|           4|
 +------------+
 
 >>> @udf("string")

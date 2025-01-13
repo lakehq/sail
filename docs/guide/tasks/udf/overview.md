@@ -15,14 +15,14 @@ For scalar UDFs, the user-provided Python function is called on each input row. 
 
 Since Spark 2.3, Pandas UDFs can be used to transform data in Spark, where the Python function operates on batches of rows represented as `pandas.DataFrame` or `pandas.Series` objects.
 This is usually more performant than the scalar UDF.
-In Sail, the internal in-memory data in Arrow format is converted to Pandas objects before the Python function invocation, and the result is converted back to Arrow format. Such conversion can be zero-copy, but data copy occurs when the `pyarrow` library decides it is unavoidable.
+In Sail, the internal in-memory data in Arrow format is converted to Pandas objects before Python function invocation, and the result is converted back to the Arrow format. Such conversion can be zero-copy, but data copy occurs when the `pyarrow` library decides it is unavoidable.
 
 Since Spark 3.3, the `pyspark.sql.DataFrame.mapInArrow()` method can be used to call Arrow UDFs on Spark data. This method expects a Python function that operates on Arrow record batches (`pyarrow.RecordBatch`).
 **It is recommended to use such Arrow UDFs to maximize performance.**
 In Sail, the implementation does not involve any data copy. The Python function and the Rust-based execution engine share Arrow data directly via pointers.
 
 For all types of UDFs, in the JVM-based Spark implementation, the Python worker wraps the user-provided Python function with additional code for type conversion and data validation.
-To ensure full parity with PySpark, such code path is also followed in Sail.
+To ensure full parity with PySpark, such wrappers are also used in Sail.
 It is recommended to use Pandas or Arrow UDFs so that the wrapper overhead is amortized over a batch of rows.
 
 ## Supported APIs
@@ -42,7 +42,7 @@ The following PySpark APIs are supported.
 - <PySparkApi name="pyspark.sql.UDTFRegistration.register" />
 
 ::: info
-The PySpark library follows different code path for input and output conversion, depending on whether Arrow optimization is enabled.
+The PySpark library uses different logic for input and output conversion, depending on whether Arrow optimization is enabled.
 Arrow optimization is controlled by the `useArrow` argument of the `udf()` and `udtf()` wrappers, and the `spark.sql.execution.pythonUDTF.arrow.enabled` configuration.
 Sail respects such configuration for input and output conversion. But note that Sail uses Arrow for query execution regardless of whether Arrow is enabled in PySpark.
 :::

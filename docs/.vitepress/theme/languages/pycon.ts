@@ -1,7 +1,7 @@
 import type { MarkdownOptions } from "vitepress";
 
 // The Shiki custom language for interactive Python Console.
-// The name "pycon" comes from Pygments, a Python syntax highlighter.
+// The name "pycon" comes from Pygments, a syntax highlighter written in Python.
 class PyCon {
   static language(): NonNullable<MarkdownOptions["languages"]>[number] {
     return {
@@ -41,7 +41,7 @@ class PyCon {
             return tokens;
           }
           return tokens.map((line) => {
-            // Shiki may merge tokens of the same type or whitespace tokens,
+            // Shiki may merge whitespace tokens or tokens of the same type,
             // so we need to split the prompt token from the Python code in the same line.
             return line.flatMap((token, idx) => {
               if (
