@@ -126,7 +126,7 @@ pub fn parse_normalized_identifier(parser: &mut Parser) -> SqlResult<spec::Ident
     let next_token = parser.next_token();
     let ast_ident = match next_token.token {
         Token::Word(word) => {
-            let mut ident = word.to_ident(next_token.span);
+            let mut ident = word.into_ident(next_token.span);
             maybe_append_number_identifier(parser, &mut ident);
             Ok(ident)
         }
@@ -203,6 +203,6 @@ where
 }
 
 pub fn parse_partition_column_name(parser: &mut Parser) -> SqlResult<spec::Identifier> {
-    let name = spec::Identifier::from(normalize_ident(&parser.parse_identifier(false)?));
+    let name = spec::Identifier::from(normalize_ident(&parser.parse_identifier()?));
     Ok(name)
 }
