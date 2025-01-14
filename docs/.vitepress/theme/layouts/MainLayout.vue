@@ -6,7 +6,12 @@
       </div>
     </template>
     <template #doc-before>
-      <div class="vp-doc external-link-icon-enabled">
+      <div
+        :class="[
+          'vp-doc',
+          theme.externalLinkIcon && 'external-link-icon-enabled',
+        ]"
+      >
         <div
           v-if="version !== 'latest' && !isDevGuide"
           class="warning custom-block py-4"
@@ -52,7 +57,7 @@ import DefaultTheme from "vitepress/theme";
 import { computed } from "vue";
 
 const { Layout } = DefaultTheme;
-const { site } = useData();
+const { site, theme } = useData();
 const route = useRoute();
 
 const version = computed(() => site.value.contentProps?.version);

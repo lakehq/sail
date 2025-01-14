@@ -50,3 +50,8 @@ def configure_spark_session(session: SparkSession):
     session.conf.set("spark.sql.session.timeZone", "UTC")
     # Enable Arrow to avoid data type errors when creating Spark DataFrame from Pandas.
     session.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def sail_doctest(doctest_namespace, sail):
+    doctest_namespace["spark"] = sail

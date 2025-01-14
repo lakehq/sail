@@ -1,0 +1,30 @@
+>>> from pyspark.sql.functions import udtf
+>>>
+>>> @udtf(returnType="word: string")
+... class Tokenizer:
+...     def eval(self, text: str):
+...         for word in text.split():
+...             yield (word.strip().lower(),)
+...
+>>> spark.udtf.register("tokenize", Tokenizer)
+<...UserDefinedTableFunction object at ...>
+>>> spark.sql("SELECT * FROM tokenize('Hello world')").show()
++-----+
+| word|
++-----+
+|hello|
+|world|
++-----+
+
+>>> spark.sql(
+...     "SELECT id, word FROM VALUES (1, 'Hello world'), (2, 'Hi') AS t(id, text), "
+...     "LATERAL tokenize(text) "
+...     "ORDER BY id, word"
+... ).show()
++---+-----+
+| id| word|
++---+-----+
+|  1|hello|
+|  1|world|
+|  2|   hi|
++---+-----+

@@ -1,0 +1,14 @@
+>>> from pyspark.sql.functions import udf
+>>>
+>>> @udf("integer")
+... def cube(x):
+...     return x**3
+...
+>>> spark.udf.register("cube", cube)
+<function cube at ...>
+>>> spark.sql("SELECT cube(5)").show()
++-------+
+|cube(5)|
++-------+
+|    125|
++-------+

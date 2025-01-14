@@ -162,6 +162,7 @@ packages = ["python/pysail"]
 
 [tool.pytest.ini_options]
 testpaths = ["python"]
+doctest_optionflags = "ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL NUMBER"
 
 [tool.maturin]
 python-source = "python"

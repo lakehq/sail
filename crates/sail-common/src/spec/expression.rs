@@ -62,7 +62,7 @@ pub enum Expr {
     UnresolvedNamedLambdaVariable(UnresolvedNamedLambdaVariable),
     CommonInlineUserDefinedFunction(CommonInlineUserDefinedFunction),
     CallFunction {
-        function_name: String,
+        function_name: ObjectName,
         arguments: Vec<Expr>,
     },
     // extensions

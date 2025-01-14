@@ -1,0 +1,22 @@
+>>> from pyspark.sql.functions import udf
+>>>
+>>> square = udf(lambda x: x**2, "integer")
+>>> spark.range(3).select(square("id")).show()
++------------+
+|<lambda>(id)|
++------------+
+|           0|
+|           1|
+|           4|
++------------+
+
+>>> @udf("string")
+... def upper(s):
+...     return s.upper() if s is not None else s
+...
+>>> spark.sql("SELECT 'hello' as v").select(upper("v")).show()
++--------+
+|upper(v)|
++--------+
+|   HELLO|
++--------+

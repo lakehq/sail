@@ -185,13 +185,16 @@ impl TryFrom<Expression> for spec::Expr {
             ExprType::CallFunction(CallFunction {
                 function_name,
                 arguments,
-            }) => Ok(spec::Expr::CallFunction {
-                function_name,
-                arguments: arguments
-                    .into_iter()
-                    .map(|x| x.try_into())
-                    .collect::<SparkResult<_>>()?,
-            }),
+            }) => {
+                let function_name = parse_object_name(function_name.as_str())?;
+                Ok(spec::Expr::CallFunction {
+                    function_name,
+                    arguments: arguments
+                        .into_iter()
+                        .map(|x| x.try_into())
+                        .collect::<SparkResult<_>>()?,
+                })
+            }
             ExprType::Extension(_) => Err(SparkError::todo("extension expression")),
         }
     }

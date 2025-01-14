@@ -5,6 +5,7 @@ import markdownItDeflist from "markdown-it-deflist";
 import markdownItFootnote from "markdown-it-footnote";
 import { defineConfig, HeadConfig } from "vitepress";
 
+import PyCon from "./theme/languages/pycon";
 import { PageLink } from "./theme/utils/link";
 import { loadPages } from "./theme/utils/page";
 import { loadSphinxPages } from "./theme/utils/sphinx";
@@ -87,6 +88,8 @@ class Markdown {
         md.use(markdownItFootnote);
         md.use(markdownItDeflist);
       },
+      languages: [PyCon.language()],
+      codeTransformers: [...PyCon.transformers()],
     };
   }
 }
