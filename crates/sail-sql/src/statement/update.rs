@@ -1,5 +1,6 @@
 use sail_common::spec;
 use sqlparser::ast;
+use sqlparser::ast::UpdateTableFromKind;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::common::{
@@ -62,7 +63,13 @@ pub(crate) fn update_statement_to_plan(update: ast::Statement) -> SqlResult<spec
         .collect::<SqlResult<_>>()?;
 
     let mut input_tables = vec![table];
-    input_tables.extend(from);
+    if let Some(from) = from {
+        let from = match from {
+            UpdateTableFromKind::BeforeSet(x) => x,
+            UpdateTableFromKind::AfterSet(x) => x,
+        };
+        input_tables.push(from);
+    };
 
     let plan = from_ast_tables(input_tables)?;
     let plan = query_plan_with_filter(plan, selection)?;

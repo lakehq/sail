@@ -112,6 +112,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             cache_metadata: _,
             noscan: _,
             compute_statistics: _,
+            has_table_keyword: _,
         } => Err(SqlError::todo("SQL analyze")),
         Statement::CreateDatabase {
             db_name,
@@ -204,6 +205,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             if_not_exists: _,
             temporary,
             to: _,
+            params: _,
         } => {
             // TODO: Parse Spark Syntax:
             //  https://spark.apache.org/docs/latest/sql-ref-syntax-ddl-create-view.html
@@ -413,9 +415,9 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         Statement::DropFunction {
             if_exists,
             func_desc,
-            option,
+            drop_behavior,
         } => {
-            if option.is_some() {
+            if drop_behavior.is_some() {
                 return Err(SqlError::unsupported(
                     "DROP FUNCTION with RESTRICT or CASCADE not supported.",
                 ));
@@ -461,6 +463,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         | Statement::DropSecret { .. }
         | Statement::Declare { .. }
         | Statement::CreateExtension { .. }
+        | Statement::DropExtension { .. }
         | Statement::Fetch { .. }
         | Statement::Flush { .. }
         | Statement::Discard { .. }
@@ -503,6 +506,10 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         | Statement::UNLISTEN { .. }
         | Statement::NOTIFY { .. }
         | Statement::LoadData { .. }
+        | Statement::List(_)
+        | Statement::Remove(_)
+        | Statement::SetSessionParam(_)
+        | Statement::RenameTable(_)
         | Statement::CreatePolicy { .. }
         | Statement::AlterPolicy { .. }
         | Statement::DropPolicy { .. } => Err(SqlError::unsupported(format!(

@@ -286,7 +286,7 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
             };
             let set_op_type = match op {
                 SetOperator::Union => spec::SetOpType::Union,
-                SetOperator::Except => spec::SetOpType::Except,
+                SetOperator::Except | SetOperator::Minus => spec::SetOpType::Except,
                 SetOperator::Intersect => spec::SetOpType::Intersect,
             };
             Ok(spec::QueryPlan::new(spec::QueryNode::SetOperation(

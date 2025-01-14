@@ -15,19 +15,22 @@ pub(crate) fn insert_statement_to_plan(insert: ast::Insert) -> SqlResult<spec::P
         or,
         ignore,
         into: _,
-        table_name,
         table_alias,
         columns,
         overwrite,
         source,
+        assignments: _,
         partitioned,
         after_columns,
-        table: _,
+        table,
+        has_table_keyword: _,
         on,
         returning,
         replace_into,
         priority,
         insert_alias,
+        settings: _,
+        format_clause: _,
     } = insert;
 
     let Some(source) = source else {
@@ -70,6 +73,11 @@ pub(crate) fn insert_statement_to_plan(insert: ast::Insert) -> SqlResult<spec::P
         return Err(SqlError::invalid("INSERT with an alias is not supported."));
     }
 
+    let ast::TableObject::TableName(table_name) = table else {
+        return Err(SqlError::invalid(
+            "INSERT without table name is not supported.",
+        ));
+    };
     let table_name = from_ast_object_name_normalized(&table_name)?;
     let columns: Vec<spec::Identifier> = columns
         .iter()

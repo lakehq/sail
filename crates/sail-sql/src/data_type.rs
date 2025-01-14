@@ -95,7 +95,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         ast::DataType::Float(_) | ast::DataType::Real | ast::DataType::Float32 => {
             Ok(spec::DataType::Float32)
         }
-        ast::DataType::Double | ast::DataType::DoublePrecision | ast::DataType::Float64 => {
+        ast::DataType::Double(_) | ast::DataType::DoublePrecision | ast::DataType::Float64 => {
             Ok(spec::DataType::Float64)
         }
         ast::DataType::Decimal(info) | ast::DataType::Dec(info) | ast::DataType::Numeric(info) => {
