@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1
+
+_January 15, 2025_
+
+- Supported SQL table functions and lateral views ([#326](https://github.com/lakehq/sail/issues/326) and [#327](https://github.com/lakehq/sail/issues/327)).
+- Supported PySpark UDTFs ([#329](https://github.com/lakehq/sail/issues/329)).
+- Improved literal and data type support ([#317](https://github.com/lakehq/sail/issues/317), [#328](https://github.com/lakehq/sail/issues/328), [#330](https://github.com/lakehq/sail/issues/330), and [#339](https://github.com/lakehq/sail/issues/339)).
+- Supported `ANTI JOIN` and `SEMI JOIN` ([#337](https://github.com/lakehq/sail/issues/337)).
+- Fixed a few PySpark UDF issues ([#343](https://github.com/lakehq/sail/issues/343)).
+- Supported nested fields in SQL ([#340](https://github.com/lakehq/sail/issues/340)).
+- Supported more queries in the derived TPC-DS benchmark ([#346](https://github.com/lakehq/sail/issues/346)).
+- Supported more datetime functions ([#349](https://github.com/lakehq/sail/issues/349)).
+
 ## 0.2.0
 
 _December 3, 2024_
