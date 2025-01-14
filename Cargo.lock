@@ -4607,7 +4607,7 @@ checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
 name = "sail-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "fastrace",
@@ -4623,7 +4623,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -4648,7 +4648,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow-flight",
  "datafusion",
@@ -4675,7 +4675,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -4724,7 +4724,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "fastrace",
  "futures",
@@ -4739,7 +4739,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -4757,7 +4757,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "log",
  "sail-common",
@@ -4773,7 +4773,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-recursion",
  "async-stream",
@@ -4820,7 +4820,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -4836,7 +4836,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "datafusion",
  "env_logger",
