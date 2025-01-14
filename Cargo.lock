@@ -4642,7 +4642,7 @@ dependencies = [
  "ryu",
  "serde",
  "serde_json",
- "sqlparser 0.53.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=69514bb)",
+ "sqlparser 0.53.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=9ade53d)",
  "thiserror 2.0.11",
 ]
 
@@ -4808,7 +4808,7 @@ dependencies = [
  "serde",
  "serde_arrow",
  "serde_json",
- "sqlparser 0.53.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=69514bb)",
+ "sqlparser 0.53.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=9ade53d)",
  "syn 2.0.96",
  "thiserror 2.0.11",
  "tokio",
@@ -4830,7 +4830,7 @@ dependencies = [
  "sail-common",
  "serde",
  "serde_json",
- "sqlparser 0.53.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=69514bb)",
+ "sqlparser 0.53.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=9ade53d)",
  "thiserror 2.0.11",
 ]
 
@@ -5157,11 +5157,12 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.53.0"
-source = "git+https://github.com/lakehq/sqlparser-rs.git?rev=69514bb#69514bb09c2e209ff916935399d241e9211cdcb4"
+source = "git+https://github.com/lakehq/sqlparser-rs.git?rev=9ade53d#9ade53d1bdf2fd56f3c5f93ba35db65cd3b1f709"
 dependencies = [
  "log",
+ "recursive",
  "serde",
- "sqlparser_derive 0.3.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=69514bb)",
+ "sqlparser_derive 0.3.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=9ade53d)",
 ]
 
 [[package]]
@@ -5178,7 +5179,7 @@ dependencies = [
 [[package]]
 name = "sqlparser_derive"
 version = "0.3.0"
-source = "git+https://github.com/lakehq/sqlparser-rs.git?rev=69514bb#69514bb09c2e209ff916935399d241e9211cdcb4"
+source = "git+https://github.com/lakehq/sqlparser-rs.git?rev=9ade53d#9ade53d1bdf2fd56f3c5f93ba35db65cd3b1f709"
 dependencies = [
  "proc-macro2",
  "quote",

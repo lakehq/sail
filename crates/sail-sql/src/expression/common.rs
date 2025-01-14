@@ -1,5 +1,6 @@
 use sail_common::spec;
 use sqlparser::ast;
+use sqlparser::ast::{AccessExpr, Subscript};
 use sqlparser::keywords::RESERVED_FOR_COLUMN_ALIAS;
 use sqlparser::parser::Parser;
 
@@ -123,6 +124,7 @@ fn from_ast_binary_operator(op: ast::BinaryOperator) -> SqlResult<String> {
         | BinaryOperator::Question
         | BinaryOperator::QuestionAnd
         | BinaryOperator::QuestionPipe
+        | BinaryOperator::Overlaps
         | BinaryOperator::PGBitwiseXor
         | BinaryOperator::PGBitwiseShiftLeft
         | BinaryOperator::PGBitwiseShiftRight
@@ -647,15 +649,42 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
                 function: Box::new(function),
             })
         }
-        Expr::MapAccess { column, keys } => {
-            let mut column = from_ast_expression(*column)?;
-            for key in keys {
-                column = spec::Expr::UnresolvedExtractValue {
-                    child: Box::new(column),
-                    extraction: Box::new(from_ast_expression(key.key)?),
-                };
+        Expr::CompoundFieldAccess { root, access_chain } => {
+            let mut expr = from_ast_expression(*root)?;
+            for access in access_chain {
+                match access {
+                    AccessExpr::Dot(Expr::Identifier(ident)) => {
+                        expr = match expr {
+                            spec::Expr::UnresolvedAttribute { name, plan_id } => {
+                                spec::Expr::UnresolvedAttribute {
+                                    name: name.child(from_ast_ident(&ident, true)?),
+                                    plan_id,
+                                }
+                            }
+                            _ => spec::Expr::UnresolvedExtractValue {
+                                child: Box::new(expr),
+                                extraction: Box::new(from_ast_expression(Expr::Identifier(ident))?),
+                            },
+                        }
+                    }
+                    AccessExpr::Dot(e) => {
+                        expr = spec::Expr::UnresolvedExtractValue {
+                            child: Box::new(expr),
+                            extraction: Box::new(from_ast_expression(e)?),
+                        };
+                    }
+                    AccessExpr::Subscript(Subscript::Index { index: e }) => {
+                        expr = spec::Expr::UnresolvedExtractValue {
+                            child: Box::new(expr),
+                            extraction: Box::new(from_ast_expression(e)?),
+                        };
+                    }
+                    AccessExpr::Subscript(Subscript::Slice { .. }) => {
+                        return Err(SqlError::unsupported("slice expression"));
+                    }
+                }
             }
-            Ok(column)
+            Ok(expr)
         }
         Expr::CompositeAccess {
             expr,
@@ -668,23 +697,6 @@ pub(crate) fn from_ast_expression(expr: ast::Expr) -> SqlResult<spec::Expr> {
             }),
         }),
         Expr::Map(_) => Err(SqlError::unsupported("map expression")),
-        Expr::Subscript { expr, subscript } => {
-            let mut expr = from_ast_expression(*expr)?;
-            expr = match *subscript {
-                ast::Subscript::Index { index } => spec::Expr::UnresolvedExtractValue {
-                    child: Box::new(expr),
-                    extraction: Box::new(from_ast_expression(index)?),
-                },
-                ast::Subscript::Slice {
-                    lower_bound: _,
-                    upper_bound: _,
-                    stride: _,
-                } => {
-                    return Err(SqlError::unsupported("Expr::Subscript::Slice"));
-                }
-            };
-            Ok(expr)
-        }
         Expr::IsDistinctFrom(a, b) => Ok(spec::Expr::IsDistinctFrom {
             left: Box::new(from_ast_expression(*a)?),
             right: Box::new(from_ast_expression(*b)?),
