@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.2.0"
+version = "0.2.1"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -162,7 +162,11 @@ packages = ["python/pysail"]
 
 [tool.pytest.ini_options]
 testpaths = ["python"]
-doctest_optionflags = "ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL NUMBER"
+# Do not add configuration here to modify the test behavior.
+# Instead, add the configuration using a hook in `conftest.py`.
+# The `pyproject.toml` file is not part of the installed package,
+# so the configuration here will not be available when testing the
+# installed package via `pytest --pyargs pysail`.
 
 [tool.maturin]
 python-source = "python"

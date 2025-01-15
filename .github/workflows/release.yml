@@ -107,7 +107,7 @@ jobs:
           - runner: windows-latest
             target: x64
             os: windows
-          - runner: macos-12
+          - runner: macos-13
             target: x86_64
             os: macos
           - runner: macos-14
@@ -203,7 +203,7 @@ jobs:
           # FIXME: sdist installation becomes slow on `ubuntu-24.04-arm`.
           #   We have skipped the ARM runner for now.
           #   We should investigate the issue.
-          - runner: macos-12
+          - runner: macos-13
           - runner: macos-14
           - runner: windows-latest
     needs:
@@ -252,7 +252,7 @@ jobs:
         platform:
           - runner: ubuntu-latest
           - runner: ubuntu-24.04-arm
-          - runner: macos-12
+          - runner: macos-13
           - runner: macos-14
           - runner: windows-latest
     needs:
