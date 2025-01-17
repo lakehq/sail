@@ -8,7 +8,7 @@ use crate::utils::normalize_ident;
 
 // Spark Syntax reference:
 //  https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-dml-insert-into.html
-//  https://spark.apache.org/docs/3.5.1/sql-ref-syntax-dml-insert-table.html#content
+//  https://spark.apache.org/docs/3.5.4/sql-ref-syntax-dml-insert-table.html#content
 // TODO: Custom parsing to fully sport Spark's INSERT syntax
 pub(crate) fn insert_statement_to_plan(insert: ast::Insert) -> SqlResult<spec::Plan> {
     let ast::Insert {
