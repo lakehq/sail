@@ -1,5 +1,5 @@
 diff --git a/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala b/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
-index 83e01330ce3..02a99df3253 100644
+index bd82ce962b8..958d26f224e 100644
 --- a/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
 +++ b/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
 @@ -193,6 +193,8 @@ private[spark] object Logging {
