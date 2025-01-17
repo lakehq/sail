@@ -2,6 +2,32 @@
   "tests": [
     {
       "input": {
+        "query": "SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b');",
+        "result": [
+          "[null,null,null]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "xpath(<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>, a/b)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: xpath"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b/text()');",
         "result": [
           "[\"b1\",\"b2\",\"b3\"]"
@@ -15,7 +41,7 @@
               "type": {
                 "type": "array",
                 "elementType": "string",
-                "containsNull": false
+                "containsNull": true
               },
               "metadata": {}
             }
