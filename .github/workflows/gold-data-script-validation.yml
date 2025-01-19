@@ -22,7 +22,7 @@ jobs:
         with:
           repository: apache/spark
           path: opt/spark
-          ref: v3.5.1
+          ref: v3.5.4
           fetch-depth: 1
 
       - uses: actions/setup-java@v4

@@ -17,7 +17,7 @@ source "${project_path}/scripts/shell-tools/git-patch.sh"
 
 cd "${project_path}"/opt/spark
 
-apply_git_patch "v3.5.1" "${scripts_path}"/spark-3.5.1.patch
+apply_git_patch "v3.5.4" "${scripts_path}"/spark-3.5.4.patch
 
 echo "Removing existing test logs..."
 rm -rf "${logs_path}"

@@ -1,8 +1,8 @@
 diff --git a/pom.xml b/pom.xml
-index 0f504dbee85..885e8e207ac 100644
+index 8dc47f391f9..485ed754e56 100644
 --- a/pom.xml
 +++ b/pom.xml
-@@ -3305,6 +3305,10 @@
+@@ -3351,6 +3351,10 @@
              <relocation>
                <pattern>com.google.common</pattern>
                <shadedPattern>${spark.shade.packageName}.guava</shadedPattern>
@@ -59,10 +59,10 @@ index 7b1aafbefeb..ed0883891c3 100644
          self._channel.close()
          self._closed = True
 diff --git a/python/pyspark/sql/tests/connect/test_connect_basic.py b/python/pyspark/sql/tests/connect/test_connect_basic.py
-index 2904eb42587..8fb660caff2 100644
+index d1f6994edba..7cacc6d7aa0 100644
 --- a/python/pyspark/sql/tests/connect/test_connect_basic.py
 +++ b/python/pyspark/sql/tests/connect/test_connect_basic.py
-@@ -110,6 +110,11 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
+@@ -111,6 +111,11 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
          cls.spark_connect_clean_up_test_data()
          # Load test data
          cls.spark_connect_load_test_data()
@@ -74,7 +74,7 @@ index 2904eb42587..8fb660caff2 100644
  
      @classmethod
      def tearDownClass(cls):
-@@ -144,8 +149,7 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
+@@ -145,8 +150,7 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
                  StructField("lastname", StringType(), True),
              ]
          )
@@ -85,7 +85,7 @@ index 2904eb42587..8fb660caff2 100644
  
      @classmethod
 diff --git a/python/pyspark/sql/tests/connect/test_connect_plan.py b/python/pyspark/sql/tests/connect/test_connect_plan.py
-index c39fb6be24c..a220467a76d 100644
+index 88ef37511a6..448a027e9e9 100644
 --- a/python/pyspark/sql/tests/connect/test_connect_plan.py
 +++ b/python/pyspark/sql/tests/connect/test_connect_plan.py
 @@ -740,7 +740,7 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
@@ -120,7 +120,7 @@ index e1ec97928f7..d960e391100 100644
          return cfg
  
 diff --git a/python/pyspark/testing/connectutils.py b/python/pyspark/testing/connectutils.py
-index ba81c783672..cf01853992b 100644
+index a063f27c9ea..784161bbade 100644
 --- a/python/pyspark/testing/connectutils.py
 +++ b/python/pyspark/testing/connectutils.py
 @@ -139,7 +139,6 @@ class PlanOnlyTestFixture(unittest.TestCase, PySparkErrorTestUtils):
@@ -145,7 +145,7 @@ index 077d854b1dd..513a8f5d516 100644
      @classmethod
      def scalaUDT(cls):
 diff --git a/python/setup.py b/python/setup.py
-index b8e4c9a40e0..48edf004d30 100755
+index ddd961d0412..f58d965e737 100755
 --- a/python/setup.py
 +++ b/python/setup.py
 @@ -183,6 +183,9 @@ try:
@@ -158,7 +158,7 @@ index b8e4c9a40e0..48edf004d30 100755
          # Construct the symlink farm - this is necessary since we can't refer to the path above the
          # package root and we need to copy the jars and scripts which are up above the python root.
          if _supports_symlinks():
-@@ -266,6 +269,7 @@ try:
+@@ -267,6 +270,7 @@ try:
              "pyspark.pandas.spark",
              "pyspark.pandas.typedef",
              "pyspark.pandas.usage_logging",
@@ -166,7 +166,7 @@ index b8e4c9a40e0..48edf004d30 100755
              "pyspark.python.pyspark",
              "pyspark.python.lib",
              "pyspark.testing",
-@@ -275,6 +279,42 @@ try:
+@@ -276,6 +280,42 @@ try:
              "pyspark.errors",
              "pyspark.errors.exceptions",
              "pyspark.examples.src.main.python",
@@ -209,7 +209,7 @@ index b8e4c9a40e0..48edf004d30 100755
          ],
          include_package_data=True,
          package_dir={
-@@ -295,10 +335,34 @@ try:
+@@ -296,10 +336,34 @@ try:
                  "start-history-server.sh",
                  "stop-history-server.sh",
              ],
