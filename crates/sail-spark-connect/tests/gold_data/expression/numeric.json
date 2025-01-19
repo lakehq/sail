@@ -151,6 +151,20 @@
       }
     },
     {
+      "input": "1.23E10BD",
+      "output": {
+        "success": {
+          "literal": {
+            "decimal128": {
+              "precision": 11,
+              "scale": 0,
+              "value": 12300000000
+            }
+          }
+        }
+      }
+    },
+    {
       "input": "1.8E308D",
       "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1.8E308 is outside the valid range for double with minimum value of -1.7976931348623157E+308 and maximum value of 1.7976931348623157E+308. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n1.8E308D\n^^^\n",
       "output": {

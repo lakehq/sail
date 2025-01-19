@@ -908,14 +908,8 @@ impl TryFrom<RelType> for RelationNode {
                 )))
             }
             RelType::CachedLocalRelation(local_relation) => {
-                let sc::CachedLocalRelation {
-                    user_id,
-                    session_id,
-                    hash,
-                } = local_relation;
+                let sc::CachedLocalRelation { hash } = local_relation;
                 Ok(RelationNode::Query(spec::QueryNode::CachedLocalRelation {
-                    user_id,
-                    session_id,
                     hash,
                 }))
             }

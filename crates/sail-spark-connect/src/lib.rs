@@ -10,7 +10,7 @@ mod service;
 mod session;
 mod session_manager;
 
-const SPARK_VERSION: &str = "3.5.1";
+const SPARK_VERSION: &str = "3.5.4";
 
 pub mod spark {
     #[allow(clippy::all)]
