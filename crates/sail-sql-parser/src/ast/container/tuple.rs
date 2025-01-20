@@ -12,13 +12,13 @@ macro_rules! nested {
 
 macro_rules! impl_tree_parser_for_tuple {
     ($T:ident $(,$Ts:ident)*) => {
-        impl<'a, $T $(,$Ts)*, D> TreeParser<'a, D> for ($T, $($Ts,)*)
+        impl<'a, $T $(,$Ts)*, A> TreeParser<'a, A> for ($T, $($Ts,)*)
         where
-            $T: TreeParser<'a, D>
-            $(,$Ts: TreeParser<'a, D>)*
-            , D: Clone
+            $T: TreeParser<'a, A>
+            $(,$Ts: TreeParser<'a, A>)*
+            , A: Clone
         {
-            fn parser(args: D) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone{
+            fn parser(args: A) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone{
                 let parser = T1::parser(args.clone())
                     $(.then($Ts::parser(args.clone())))*;
                 paste! {
