@@ -28,27 +28,7 @@ def data(sail, spark, duck):  # noqa: ARG001
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
 def test_derived_tpcds_query_execution(sail, query):
     # Skip unsupported queries to ensure continued support for the supported ones.
-    skip = {
-        "q12",
-        "q16",
-        "q20",
-        "q23",
-        "q36",
-        "q47",
-        "q51",
-        "q53",
-        "q57",
-        "q63",
-        "q70",
-        "q72",
-        "q86",
-        "q89",
-        "q91",
-        "q92",
-        "q94",
-        "q95",
-        "q98",
-    }
+    skip = {"q72"}
     if query in skip:
         pytest.skip(f"Derived TPC-DS queries are not yet fully supported Skipping unsupported query: {query}")
 
@@ -56,7 +36,7 @@ def test_derived_tpcds_query_execution(sail, query):
         try:
             sail.sql(sql).toPandas()
         except Exception as e:
-            err = f"Error executing query {query} with error: {e}\n SQL: {sql}"
+            err = f"Error executing query {query} with error: {e}\nSQL: {sql}"
             raise Exception(err) from e  # noqa: TRY002
 
 

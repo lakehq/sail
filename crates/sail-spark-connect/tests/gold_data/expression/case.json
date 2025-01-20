@@ -17,12 +17,16 @@
                         "arguments": [
                           {
                             "literal": {
-                              "string": "a"
+                              "utf8": {
+                                "value": "a"
+                              }
                             }
                           },
                           {
                             "literal": {
-                              "string": "a"
+                              "utf8": {
+                                "value": "a"
+                              }
                             }
                           }
                         ],
@@ -32,7 +36,9 @@
                     },
                     {
                       "literal": {
-                        "boolean": true
+                        "boolean": {
+                          "value": true
+                        }
                       }
                     }
                   ],
@@ -42,7 +48,9 @@
               },
               {
                 "literal": {
-                  "integer": 1
+                  "int32": {
+                    "value": 1
+                  }
                 }
               }
             ],
@@ -90,7 +98,9 @@
                     },
                     {
                       "literal": {
-                        "boolean": true
+                        "boolean": {
+                          "value": true
+                        }
                       }
                     }
                   ],
@@ -137,7 +147,9 @@
                     },
                     {
                       "literal": {
-                        "boolean": false
+                        "boolean": {
+                          "value": false
+                        }
                       }
                     }
                   ],
@@ -189,7 +201,9 @@
                     },
                     {
                       "literal": {
-                        "integer": 1
+                        "int32": {
+                          "value": 1
+                        }
                       }
                     }
                   ],
@@ -219,7 +233,9 @@
                     },
                     {
                       "literal": {
-                        "integer": 2
+                        "int32": {
+                          "value": 2
+                        }
                       }
                     }
                   ],
@@ -263,7 +279,9 @@
                   "arguments": [
                     {
                       "literal": {
-                        "integer": 1
+                        "int32": {
+                          "value": 1
+                        }
                       }
                     },
                     {
@@ -365,7 +383,9 @@
                     },
                     {
                       "literal": {
-                        "integer": 1
+                        "int32": {
+                          "value": 1
+                        }
                       }
                     }
                   ],
@@ -395,7 +415,9 @@
                     },
                     {
                       "literal": {
-                        "integer": 2
+                        "int32": {
+                          "value": 2
+                        }
                       }
                     }
                   ],

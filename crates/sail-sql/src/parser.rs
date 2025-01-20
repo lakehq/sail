@@ -156,6 +156,10 @@ impl Dialect for SparkDialect {
         true
     }
 
+    fn supports_nested_comments(&self) -> bool {
+        true
+    }
+
     fn parse_prefix(&self, parser: &mut Parser) -> Option<Result<ast::Expr, ParserError>> {
         match parser.peek_token().token {
             Token::ExclamationMark => Some(self.parse_exclamation_mark_unary(parser)),

@@ -32,9 +32,9 @@
               {
                 "literal": {
                   "decimal128": {
-                    "value": 12300000000,
                     "precision": 11,
-                    "scale": 0
+                    "scale": 0,
+                    "value": 12300000000
                   }
                 }
               }
@@ -62,9 +62,9 @@
               {
                 "literal": {
                   "decimal128": {
-                    "value": 90,
                     "precision": 2,
-                    "scale": 0
+                    "scale": 0,
+                    "value": 90
                   }
                 }
               }
@@ -103,9 +103,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 90,
               "precision": 2,
-              "scale": 0
+              "scale": 0,
+              "value": 90
             }
           }
         }
@@ -124,9 +124,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 90,
               "precision": 2,
-              "scale": 0
+              "scale": 0,
+              "value": 90
             }
           }
         }
@@ -139,12 +139,26 @@
         "success": {
           "literal": {
             "decimal256": {
+              "precision": 40,
+              "scale": 40,
               "value": {
                 "low": 120,
                 "high": 0
-              },
-              "precision": 40,
-              "scale": 40
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "input": "1.23E10BD",
+      "output": {
+        "success": {
+          "literal": {
+            "decimal128": {
+              "precision": 11,
+              "scale": 0,
+              "value": 12300000000
             }
           }
         }
@@ -162,7 +176,9 @@
       "output": {
         "success": {
           "literal": {
-            "double": 10.0
+            "float64": {
+              "value": 10.0
+            }
           }
         }
       }
@@ -179,7 +195,9 @@
       "output": {
         "success": {
           "literal": {
-            "long": 10
+            "int64": {
+              "value": 10
+            }
           }
         }
       }
@@ -189,7 +207,9 @@
       "output": {
         "success": {
           "literal": {
-            "short": 10
+            "int16": {
+              "value": 10
+            }
           }
         }
       }
@@ -199,7 +219,9 @@
       "output": {
         "success": {
           "literal": {
-            "byte": 10
+            "int8": {
+              "value": 10
+            }
           }
         }
       }
@@ -210,9 +232,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 12308,
               "precision": 5,
-              "scale": 2
+              "scale": 2,
+              "value": 12308
             }
           }
         }
@@ -224,9 +246,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 1230,
               "precision": 4,
-              "scale": 1
+              "scale": 1,
+              "value": 1230
             }
           }
         }
@@ -238,9 +260,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 1230,
               "precision": 29,
-              "scale": 29
+              "scale": 29,
+              "value": 1230
             }
           }
         }
@@ -252,9 +274,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 123,
               "precision": 3,
-              "scale": 0
+              "scale": 0,
+              "value": 123
             }
           }
         }
@@ -266,9 +288,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 1230000000000,
               "precision": 13,
-              "scale": 0
+              "scale": 0,
+              "value": 1230000000000
             }
           }
         }
@@ -280,9 +302,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 123,
               "precision": 10,
-              "scale": 10
+              "scale": 10,
+              "value": 123
             }
           }
         }
@@ -294,9 +316,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 1230000000000,
               "precision": 13,
-              "scale": 0
+              "scale": 0,
+              "value": 1230000000000
             }
           }
         }
@@ -326,7 +348,9 @@
       "output": {
         "success": {
           "literal": {
-            "integer": 787324
+            "int32": {
+              "value": 787324
+            }
           }
         }
       }
@@ -336,7 +360,9 @@
       "output": {
         "success": {
           "literal": {
-            "long": 7873247234798249234
+            "int64": {
+              "value": 7873247234798249234
+            }
           }
         }
       }
@@ -347,9 +373,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 78732472347982492793712334,
               "precision": 26,
-              "scale": 4
+              "scale": 4,
+              "value": 78732472347982492793712334
             }
           }
         }
@@ -361,9 +387,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 78732472347982492793712334,
               "precision": 26,
-              "scale": 0
+              "scale": 0,
+              "value": 78732472347982492793712334
             }
           }
         }
@@ -382,9 +408,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 90,
               "precision": 2,
-              "scale": 0
+              "scale": 0,
+              "value": 90
             }
           }
         }
@@ -393,7 +419,15 @@
     {
       "input": "9.e+1BD",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: ."
+        "success": {
+          "literal": {
+            "decimal128": {
+              "precision": 2,
+              "scale": 0,
+              "value": 90
+            }
+          }
+        }
       }
     },
     {
@@ -402,9 +436,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 9000,
               "precision": 4,
-              "scale": 2
+              "scale": 2,
+              "value": 9000
             }
           }
         }
@@ -416,9 +450,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 900,
               "precision": 3,
-              "scale": 1
+              "scale": 1,
+              "value": 900
             }
           }
         }
@@ -430,9 +464,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 90912830918230182310293801923652346786,
               "precision": 38,
-              "scale": 0
+              "scale": 0,
+              "value": 90912830918230182310293801923652346786
             }
           }
         }
@@ -444,9 +478,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 9,
               "precision": 1,
-              "scale": 1
+              "scale": 1,
+              "value": 9
             }
           }
         }
@@ -458,9 +492,9 @@
         "success": {
           "literal": {
             "decimal128": {
-              "value": 90,
               "precision": 2,
-              "scale": 0
+              "scale": 0,
+              "value": 90
             }
           }
         }

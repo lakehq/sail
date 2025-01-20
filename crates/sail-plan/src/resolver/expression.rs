@@ -7,23 +7,26 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion::functions::core::get_field;
 use datafusion::sql::unparser::expr_to_sql;
-use datafusion_common::{plan_err, Column, DFSchemaRef, DataFusionError};
-use datafusion_expr::expr::PlannedReplaceSelectItem;
+use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    expr, expr_fn, window_frame, AggregateUDF, ExprSchemable, Operator, ScalarUDF,
+    col, expr, expr_fn, lit, window_frame, AggregateUDF, BinaryExpr, ExprSchemable, Operator,
+    ScalarUDF,
 };
-use log::debug;
+use datafusion_functions_nested::expr_fn::array_element;
 use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
-use sail_python_udf::udf::get_udf_name;
+use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::drop_struct_field::DropStructField;
+use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::function::table_input::TableInput;
 use crate::extension::function::update_struct_field::UpdateStructField;
 use crate::function::common::{AggFunctionContext, FunctionContext};
@@ -71,8 +74,11 @@ impl NamedExpr {
     ) -> PlanResult<Self> {
         match expr {
             expr::Expr::Column(column) => {
-                let name = state.get_field_name(column.name())?;
-                Ok(Self::new(vec![name.clone()], expr::Expr::Column(column)))
+                let info = state.get_field_info(column.name())?;
+                Ok(Self::new(
+                    vec![info.name().to_string()],
+                    expr::Expr::Column(column),
+                ))
             }
             _ => Err(PlanError::invalid(
                 "column expected to create named expression",
@@ -116,8 +122,8 @@ impl PlanResolver<'_> {
             spec::Expr::Literal(literal) if resolve_literals => {
                 let num_fields = schema.fields().len();
                 let position = match literal {
-                    spec::Literal::Integer(value) => *value as usize,
-                    spec::Literal::Long(value) => *value as usize,
+                    spec::Literal::Int32 { value: Some(value) } => *value as usize,
+                    spec::Literal::Int64 { value: Some(value) } => *value as usize,
                     _ => {
                         return Ok(expr::Sort {
                             expr: self.resolve_expression(*child, schema, state).await?,
@@ -170,6 +176,7 @@ impl PlanResolver<'_> {
         frame: spec::WindowFrame,
         order_by: &[expr::Sort],
         schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<window_frame::WindowFrame> {
         use spec::WindowFrameType;
         use window_frame::WindowFrameUnits;
@@ -187,8 +194,8 @@ impl PlanResolver<'_> {
         };
         let (start, end) = match units {
             WindowFrameUnits::Rows | WindowFrameUnits::Groups => (
-                self.resolve_window_boundary_offset(lower, WindowBoundaryKind::Lower)?,
-                self.resolve_window_boundary_offset(upper, WindowBoundaryKind::Upper)?,
+                self.resolve_window_boundary_offset(lower, WindowBoundaryKind::Lower, state)?,
+                self.resolve_window_boundary_offset(upper, WindowBoundaryKind::Upper, state)?,
             ),
             WindowFrameUnits::Range => (
                 self.resolve_window_boundary_value(
@@ -196,12 +203,14 @@ impl PlanResolver<'_> {
                     WindowBoundaryKind::Lower,
                     order_by,
                     schema,
+                    state,
                 )?,
                 self.resolve_window_boundary_value(
                     upper,
                     WindowBoundaryKind::Upper,
                     order_by,
                     schema,
+                    state,
                 )?,
             ),
         };
@@ -212,6 +221,7 @@ impl PlanResolver<'_> {
         &self,
         value: spec::WindowFrameBoundary,
         kind: WindowBoundaryKind,
+        state: &mut PlanResolverState,
     ) -> PlanResult<window_frame::WindowFrameBound> {
         let unbounded = || match kind {
             WindowBoundaryKind::Lower => {
@@ -234,7 +244,7 @@ impl PlanResolver<'_> {
                         ))
                     }
                 };
-                let value = self.resolve_literal(value)?;
+                let value = self.resolve_literal(value, state)?;
                 match value {
                     ScalarValue::UInt32(None)
                     | ScalarValue::Int32(None)
@@ -271,6 +281,7 @@ impl PlanResolver<'_> {
         kind: WindowBoundaryKind,
         order_by: &[expr::Sort],
         schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<window_frame::WindowFrameBound> {
         let unbounded = || match kind {
             WindowBoundaryKind::Lower => {
@@ -293,7 +304,7 @@ impl PlanResolver<'_> {
                         ))
                     }
                 };
-                let value = self.resolve_literal(value)?;
+                let value = self.resolve_literal(value, state)?;
                 if value.is_null() {
                     Ok(unbounded())
                 } else {
@@ -321,7 +332,7 @@ impl PlanResolver<'_> {
         use spec::Expr;
 
         match expr {
-            Expr::Literal(literal) => self.resolve_expression_literal(literal),
+            Expr::Literal(literal) => self.resolve_expression_literal(literal, state),
             Expr::UnresolvedAttribute { name, plan_id } => {
                 self.resolve_expression_attribute(name, plan_id, schema, state)
             }
@@ -585,9 +596,17 @@ impl PlanResolver<'_> {
         Ok((names, exprs))
     }
 
-    fn resolve_expression_literal(&self, literal: spec::Literal) -> PlanResult<NamedExpr> {
-        let name = self.config.plan_formatter.literal_to_string(&literal)?;
-        let literal = self.resolve_literal(literal)?;
+    fn resolve_expression_literal(
+        &self,
+        literal: spec::Literal,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let name = self.config.plan_formatter.literal_to_string(
+            &literal,
+            self.config.system_timezone.as_str(),
+            &self.config.timestamp_type,
+        )?;
+        let literal = self.resolve_literal(literal, state)?;
         Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
     }
 
@@ -598,85 +617,124 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let candidates =
-            self.resolve_expression_attribute_candidates(&name, plan_id, schema, state)?;
-        if !candidates.is_empty() {
-            if candidates.len() > 1 {
-                // FIXME: This is a temporary hack to handle ambiguous attributes.
-                debug!("ambiguous attribute: name: {name:?}, candidates: {candidates:?}");
-            }
-            let ((name, _, column), _candidates) = candidates.at_least_one()?;
-            return Ok(NamedExpr::new(vec![name], expr::Expr::Column(column)));
+        if let Some((name, expr)) =
+            self.resolve_field_or_nested_field(&name, plan_id, schema, state)?
+        {
+            return Ok(NamedExpr::new(vec![name], expr));
         }
-        let candidates = if let Some(schema) = state.get_outer_query_schema().cloned() {
-            self.resolve_expression_attribute_candidates(&name, None, &schema, state)?
-        } else {
-            vec![]
+        let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
+            return Err(PlanError::AnalysisError(format!(
+                "cannot resolve attribute: {name:?}"
+            )));
         };
-        if candidates.len() > 1 {
-            return plan_err!("ambiguous outer attribute: {name:?}")?;
+        match self.resolve_outer_field(&name, &outer_schema, state)? {
+            Some((name, expr)) => Ok(NamedExpr::new(vec![name], expr)),
+            None => Err(PlanError::AnalysisError(format!(
+                "cannot resolve attribute or outer attribute: {name:?}"
+            ))),
         }
-        if !candidates.is_empty() {
-            let (name, dt, column) = candidates.one()?;
-            return Ok(NamedExpr::new(
-                vec![name],
-                expr::Expr::OuterReferenceColumn(dt, column),
-            ));
-        }
-        plan_err!("cannot resolve attribute: {name:?}")?
     }
 
-    fn resolve_expression_attribute_candidates(
+    fn resolve_field_or_nested_field(
         &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
-    ) -> PlanResult<Vec<(String, DataType, Column)>> {
-        // TODO: handle qualifier and nested fields
-        let name: Vec<String> = name.clone().into();
-        let first = name
-            .first()
-            .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;
-        let last = name
-            .last()
-            .ok_or_else(|| PlanError::invalid(format!("empty attribute: {:?}", name)))?;
-        let candidates = if let Some(plan_id) = plan_id {
-            let field = state.get_resolved_field_name_in_plan(plan_id, first)?;
-            schema
-                .qualified_fields_with_unqualified_name(field)
-                .iter()
-                .map(|(qualifier, field)| {
-                    (
-                        last.clone(),
-                        field.data_type().clone(),
-                        Column::new(qualifier.cloned(), field.name()),
-                    )
-                })
-                .collect::<Vec<_>>()
-        } else {
-            schema
-                .iter()
-                .filter_map(|(qualifier, field)| {
-                    if state
-                        .get_field_name(field.name())
-                        .is_ok_and(|f| f.eq_ignore_ascii_case(last))
-                        && (name.len() == 1
-                            || name.len() == 2
-                                && qualifier.is_some_and(|q| q.table().eq_ignore_ascii_case(first)))
-                    {
-                        Some((
-                            last.clone(),
-                            field.data_type().clone(),
-                            Column::new(qualifier.cloned(), field.name()),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-        };
-        Ok(candidates)
+    ) -> PlanResult<Option<(String, expr::Expr)>> {
+        let name: Vec<&str> = name.into();
+        let candidates = Self::generate_qualified_nested_field_candidates(&name);
+        let mut candidates = schema
+            .iter()
+            .flat_map(|(qualifier, field)| {
+                let Ok(info) = state.get_field_info(field.name()) else {
+                    return vec![];
+                };
+                candidates
+                    .iter()
+                    .filter_map(|(q, name, inner)| {
+                        if qualifier_matches(q.as_ref(), qualifier) && info.matches(name, plan_id) {
+                            let expr = Self::resolve_nested_field(
+                                col((qualifier, field)),
+                                field.data_type(),
+                                inner,
+                            )?;
+                            let name = inner.last().unwrap_or(name).to_string();
+                            Some((name, expr))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() > 1 {
+            return Err(PlanError::AnalysisError(format!(
+                "ambiguous outer attribute: {name:?}"
+            )));
+        }
+        Ok(candidates.pop())
+    }
+
+    fn resolve_outer_field(
+        &self,
+        name: &spec::ObjectName,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Option<(String, expr::Expr)>> {
+        let name: Vec<&str> = name.into();
+        let candidates = Self::generate_qualified_field_candidates(&name);
+        let mut candidates = schema
+            .iter()
+            .flat_map(|(qualifier, field)| {
+                let Ok(info) = state.get_field_info(field.name()) else {
+                    return vec![];
+                };
+                candidates
+                    .iter()
+                    .filter(|(q, name)| {
+                        qualifier_matches(q.as_ref(), qualifier) && info.matches(name, None)
+                    })
+                    .map(|(_, name)| {
+                        (
+                            name.to_string(),
+                            expr::Expr::OuterReferenceColumn(
+                                field.data_type().clone(),
+                                Column::new(qualifier.cloned(), field.name()),
+                            ),
+                        )
+                    })
+                    .collect()
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() > 1 {
+            return Err(PlanError::AnalysisError(format!(
+                "ambiguous outer attribute: {name:?}"
+            )));
+        }
+        Ok(candidates.pop())
+    }
+
+    fn resolve_nested_field(
+        expr: expr::Expr,
+        data_type: &DataType,
+        inner: &[&str],
+    ) -> Option<expr::Expr> {
+        match inner {
+            [] => Some(expr),
+            [name, remaining @ ..] => match data_type {
+                DataType::Struct(fields) => fields
+                    .iter()
+                    .find(|x| x.name().eq_ignore_ascii_case(name))
+                    .and_then(|field| {
+                        let args = vec![expr, lit(field.name().to_string())];
+                        let expr =
+                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                        Self::resolve_nested_field(expr, field.data_type(), remaining)
+                    }),
+                _ => None,
+            },
+        }
     }
 
     async fn resolve_expression_table_function(
@@ -717,13 +775,22 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        let canonical_function_name = function_name.to_ascii_lowercase();
+        if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
+            if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
+                state.config_mut().arrow_allow_large_var_types = true;
+            }
+        }
+
         let (argument_names, arguments) = self
             .resolve_expressions_and_names(arguments, schema, state)
             .await?;
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
-        let func = if let Ok(udf) = self.ctx.udf(function_name.as_str()) {
+        let func = if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
             if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
                 let function = PythonUdf {
                     python_version: f.python_version().to_string(),
@@ -738,18 +805,19 @@ impl PlanResolver<'_> {
                     &argument_names,
                     schema,
                     f.deterministic(),
+                    state,
                 )?
             } else {
-                expr::Expr::ScalarFunction(expr::ScalarFunction {
+                expr::Expr::ScalarFunction(ScalarFunction {
                     func: udf,
                     args: arguments,
                 })
             }
-        } else if let Ok(func) = get_built_in_function(function_name.as_str()) {
+        } else if let Ok(func) = get_built_in_function(&canonical_function_name) {
             let function_context =
                 FunctionContext::new(self.config.clone(), self.ctx, &argument_names);
             func(arguments.clone(), &function_context)?
-        } else if let Ok(func) = get_built_in_aggregate_function(function_name.as_str()) {
+        } else if let Ok(func) = get_built_in_aggregate_function(&canonical_function_name) {
             let agg_function_context = AggFunctionContext::new(is_distinct);
             func(arguments.clone(), agg_function_context)?
         } else {
@@ -795,7 +863,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let data_type = self.resolve_data_type(&cast_to_type)?;
+        let data_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
         let expr = expr::Expr::Cast(expr::Cast {
@@ -858,10 +926,11 @@ impl PlanResolver<'_> {
                     if is_distinct {
                         return Err(PlanError::unsupported("distinct window function"));
                     }
+                    let canonical_function_name = function_name.to_ascii_lowercase();
                     let (argument_names, arguments) = self
                         .resolve_expressions_and_names(arguments, schema, state)
                         .await?;
-                    let function = get_built_in_window_function(function_name.as_str())?;
+                    let function = get_built_in_window_function(&canonical_function_name)?;
                     (
                         function,
                         function_name,
@@ -871,6 +940,9 @@ impl PlanResolver<'_> {
                     )
                 }
                 spec::Expr::CommonInlineUserDefinedFunction(function) => {
+                    let mut scope = state.enter_config_scope();
+                    let state = scope.state();
+                    state.config_mut().arrow_allow_large_var_types = true;
                     let spec::CommonInlineUserDefinedFunction {
                         function_name,
                         deterministic,
@@ -884,13 +956,13 @@ impl PlanResolver<'_> {
                         .iter()
                         .map(|arg| arg.get_type(schema))
                         .collect::<Result<Vec<DataType>, DataFusionError>>()?;
-                    let function = self.resolve_python_udf(function)?;
+                    let function = self.resolve_python_udf(function, state)?;
                     let payload = PySparkUdfPayload::build(
                         &function.python_version,
                         &function.command,
                         function.eval_type,
                         &((0..arguments.len()).collect::<Vec<_>>()),
-                        &self.config.spark_udf_config,
+                        &self.config.pyspark_udf_config,
                     )?;
                     let function = match function.eval_type {
                         PySparkUdfType::GroupedAggPandas => {
@@ -901,6 +973,7 @@ impl PlanResolver<'_> {
                                 argument_names.clone(),
                                 input_types,
                                 function.output_type,
+                                self.config.pyspark_udf_config.clone(),
                             );
                             let udaf = AggregateUDF::from(udaf);
                             expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf))
@@ -928,7 +1001,7 @@ impl PlanResolver<'_> {
             .resolve_sort_orders(order_spec, false, schema, state)
             .await?;
         let window_frame = if let Some(frame) = frame_spec {
-            self.resolve_window_frame(frame, &order_by, schema)?
+            self.resolve_window_frame(frame, &order_by, schema, state)?
         } else {
             window_frame::WindowFrame::new(if order_by.is_empty() {
                 None
@@ -960,23 +1033,119 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let wildcard_options = self
-            .resolve_wildcard_options(wildcard_options, schema, state)
-            .await?;
-        // FIXME: column reference is parsed as qualifier
-        let expr = if let Some(target) = target {
-            let target: Vec<String> = target.into();
-            expr::Expr::Wildcard {
-                qualifier: Some(target.join(".").into()),
-                options: wildcard_options,
+        match target {
+            Some(target) if wildcard_options == Default::default() => {
+                self.resolve_wildcard_or_nested_field_wildcard(&target, schema, state)
             }
-        } else {
-            expr::Expr::Wildcard {
-                qualifier: None,
-                options: wildcard_options,
+            _ => {
+                let qualifier = target
+                    .map(|x| self.resolve_table_reference(&x))
+                    .transpose()?;
+                let options = self
+                    .resolve_wildcard_options(wildcard_options, schema, state)
+                    .await?;
+                Ok(NamedExpr::new(
+                    vec!["*".to_string()],
+                    expr::Expr::Wildcard {
+                        qualifier,
+                        options: Box::new(options),
+                    },
+                ))
             }
+        }
+    }
+
+    fn resolve_wildcard_or_nested_field_wildcard(
+        &self,
+        name: &spec::ObjectName,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let name: Vec<&str> = name.into();
+        let candidates = Self::generate_qualified_wildcard_candidates(&name)
+            .into_iter()
+            .flat_map(|(q, name)| match name {
+                [] => {
+                    if schema
+                        .iter()
+                        .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
+                    {
+                        vec![NamedExpr::new(
+                            vec!["*".to_string()],
+                            expr::Expr::Wildcard {
+                                qualifier: q,
+                                options: Default::default(),
+                            },
+                        )]
+                    } else {
+                        vec![]
+                    }
+                }
+                [column, inner @ ..] => schema
+                    .iter()
+                    .filter_map(|(qualifier, field)| {
+                        let Ok(info) = state.get_field_info(field.name()) else {
+                            return None;
+                        };
+                        if qualifier_matches(q.as_ref(), qualifier) && info.matches(column, None) {
+                            Self::resolve_nested_field_wildcard(
+                                col((q.as_ref(), field)),
+                                field.data_type(),
+                                inner,
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() > 1 {
+            return Err(PlanError::AnalysisError(format!(
+                "ambiguous wildcard: {name:?}"
+            )));
+        }
+        candidates
+            .one()
+            .map_err(|_| PlanError::AnalysisError(format!("cannot resolve wildcard: {name:?}")))
+    }
+
+    fn resolve_nested_field_wildcard(
+        expr: expr::Expr,
+        data_type: &DataType,
+        inner: &[&str],
+    ) -> Option<NamedExpr> {
+        let DataType::Struct(fields) = data_type else {
+            return None;
         };
-        Ok(NamedExpr::new(vec!["*".to_string()], expr))
+        match inner {
+            [] => {
+                let (names, exprs) = fields
+                    .iter()
+                    .map(|field| {
+                        let name = field.name().to_string();
+                        let args = vec![expr.clone(), lit(name.clone())];
+                        (
+                            name,
+                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args)),
+                        )
+                    })
+                    .unzip();
+                Some(NamedExpr::new(
+                    names,
+                    ScalarUDF::from(MultiExpr::new()).call(exprs),
+                ))
+            }
+            [name, remaining @ ..] => fields
+                .iter()
+                .find(|x| x.name().eq_ignore_ascii_case(name))
+                .and_then(|field| {
+                    let args = vec![expr, lit(field.name().to_string())];
+                    let expr =
+                        expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                    Self::resolve_nested_field_wildcard(expr, field.data_type(), remaining)
+                }),
+        }
     }
 
     async fn resolve_wildcard_options(
@@ -1049,7 +1218,7 @@ impl PlanResolver<'_> {
                     items.push(item);
                     planned_expressions.push(expression);
                 }
-                Some(PlannedReplaceSelectItem {
+                Some(expr::PlannedReplaceSelectItem {
                     items,
                     planned_expressions,
                 })
@@ -1097,32 +1266,67 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let extraction = match extraction {
-            spec::Expr::Literal(literal) => literal,
-            _ => {
-                return Err(PlanError::invalid("extraction must be a literal"));
-            }
+        let spec::Expr::Literal(extraction) = extraction else {
+            return Err(PlanError::invalid("extraction must be a literal"));
         };
-        let extraction_name = self.config.plan_formatter.literal_to_string(&extraction)?;
-        let extraction = self.resolve_literal(extraction)?;
+        let extraction_name = self.config.plan_formatter.literal_to_string(
+            &extraction,
+            self.config.system_timezone.as_str(),
+            &self.config.timestamp_type,
+        )?;
+        let extraction = self.resolve_literal(extraction, state)?;
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
-        let name = if let expr::Expr::Column(column) = &expr {
-            let data_type = schema
-                .field_with_unqualified_name(&column.name)?
-                .data_type();
-            match data_type {
-                DataType::Struct(_) => {
-                    format!("{}.{}", name.one()?, extraction_name)
-                }
-                _ => {
-                    format!("{}[{}]", name.one()?, extraction_name)
-                }
+        let data_type = expr.get_type(schema)?;
+        let name = match data_type {
+            DataType::Struct(_) => {
+                format!("{}.{}", name.one()?, extraction_name)
             }
-        } else {
-            format!("{}[{}]", name.one()?, extraction_name)
+            _ => {
+                format!("{}[{}]", name.one()?, extraction_name)
+            }
         };
-        Ok(NamedExpr::new(vec![name], expr.field(extraction)))
+        let expr = match data_type {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => array_element(
+                expr,
+                expr::Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(expr::Expr::Literal(extraction)),
+                    Operator::Plus,
+                    Box::new(lit(1i64)),
+                )),
+            ),
+            DataType::Struct(fields) => {
+                let ScalarValue::Utf8(Some(name)) = extraction else {
+                    return Err(PlanError::AnalysisError(format!(
+                        "invalid extraction value for struct: {extraction}"
+                    )));
+                };
+                let Ok(name) = fields
+                    .iter()
+                    .filter(|x| x.name().eq_ignore_ascii_case(&name))
+                    .map(|x| x.name().to_string())
+                    .collect::<Vec<_>>()
+                    .one()
+                else {
+                    return Err(PlanError::AnalysisError(format!(
+                        "missing or ambiguous field: {name}"
+                    )));
+                };
+                expr.field(name)
+            }
+            // TODO: support non-string map keys
+            DataType::Map(_, _) => expr.field(extraction),
+            _ => {
+                return Err(PlanError::AnalysisError(format!(
+                    "cannot extract value from data type: {data_type}"
+                )))
+            }
+        };
+        Ok(NamedExpr::new(vec![name], expr))
     }
 
     async fn resolve_expression_common_inline_udf(
@@ -1131,17 +1335,19 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.config_mut().arrow_allow_large_var_types = true;
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
             arguments,
             function,
         } = function;
-
         let (argument_names, arguments) = self
             .resolve_expressions_and_names(arguments, schema, state)
             .await?;
-        let function = self.resolve_python_udf(function)?;
+        let function = self.resolve_python_udf(function, state)?;
         let func = self.resolve_python_udf_expr(
             function,
             &function_name,
@@ -1149,6 +1355,7 @@ impl PlanResolver<'_> {
             &argument_names,
             schema,
             deterministic,
+            state,
         )?;
         let name = self.config.plan_formatter.function_to_string(
             &function_name,
@@ -1183,15 +1390,9 @@ impl PlanResolver<'_> {
             let value_expr = self
                 .resolve_expression(value_expression, schema, state)
                 .await?;
-            expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func: Arc::new(ScalarUDF::from(UpdateStructField::new(field_name))),
-                args: vec![expr, value_expr],
-            })
+            ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr])
         } else {
-            expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func: Arc::new(ScalarUDF::from(DropStructField::new(field_name))),
-                args: vec![expr],
-            })
+            ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr])
         };
         Ok(NamedExpr::new(vec![name], new_expr))
     }
@@ -1207,12 +1408,17 @@ impl PlanResolver<'_> {
 
     async fn resolve_expression_call_function(
         &self,
-        _function_name: String,
-        _arguments: Vec<spec::Expr>,
-        _schema: &DFSchemaRef,
-        _state: &mut PlanResolverState,
+        function_name: spec::ObjectName,
+        arguments: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        Err(PlanError::todo("call function"))
+        let function_name: Vec<String> = function_name.into();
+        let Ok(function_name) = function_name.one() else {
+            return Err(PlanError::todo("qualified function name"));
+        };
+        self.resolve_expression_function(function_name, arguments, false, schema, state)
+            .await
     }
 
     async fn resolve_expression_placeholder(&self, placeholder: String) -> PlanResult<NamedExpr> {
@@ -1479,17 +1685,17 @@ impl PlanResolver<'_> {
         let high = self.resolve_expression(high, schema, state).await?;
 
         // DataFusion's BETWEEN operator has a bug, so we construct the expression manually.
-        let greater_eq = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+        let greater_eq = expr::Expr::BinaryExpr(BinaryExpr::new(
             Box::new(expr.clone()),
             Operator::GtEq,
             Box::new(low),
         ));
-        let less_eq = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+        let less_eq = expr::Expr::BinaryExpr(BinaryExpr::new(
             Box::new(expr),
             Operator::LtEq,
             Box::new(high),
         ));
-        let between_expr = expr::Expr::BinaryExpr(expr::BinaryExpr::new(
+        let between_expr = expr::Expr::BinaryExpr(BinaryExpr::new(
             Box::new(greater_eq),
             Operator::And,
             Box::new(less_eq),
@@ -1513,7 +1719,7 @@ impl PlanResolver<'_> {
         let right = self.resolve_expression(right, schema, state).await?;
         Ok(NamedExpr::new(
             vec!["is_distinct_from".to_string()],
-            expr::Expr::BinaryExpr(expr::BinaryExpr {
+            expr::Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::IsDistinctFrom,
                 right: Box::new(right),
@@ -1532,7 +1738,7 @@ impl PlanResolver<'_> {
         let right = self.resolve_expression(right, schema, state).await?;
         Ok(NamedExpr::new(
             vec!["is_not_distinct_from".to_string()],
-            expr::Expr::BinaryExpr(expr::BinaryExpr {
+            expr::Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::IsNotDistinctFrom,
                 right: Box::new(right),
@@ -1562,6 +1768,86 @@ impl PlanResolver<'_> {
                 case_insensitive,
             )),
         ))
+    }
+
+    fn generate_qualified_field_candidates<'a>(
+        name: &'a [&'a str],
+    ) -> Vec<(Option<TableReference>, &'a str)> {
+        match name {
+            [n1] => vec![(None, *n1)],
+            [n1, n2] => vec![(Some(TableReference::bare(*n1)), *n2)],
+            [n1, n2, n3] => vec![(Some(TableReference::partial(*n1, *n2)), *n3)],
+            [n1, n2, n3, n4] => vec![(Some(TableReference::full(*n1, *n2, *n3)), *n4)],
+            _ => vec![],
+        }
+    }
+
+    fn generate_qualified_nested_field_candidates<'a>(
+        name: &'a [&'a str],
+    ) -> Vec<(Option<TableReference>, &'a str, &'a [&'a str])> {
+        let mut out = vec![];
+        if let [n1, x @ ..] = name {
+            out.push((None, *n1, x));
+        }
+        if let [n1, n2, x @ ..] = name {
+            out.push((Some(TableReference::bare(*n1)), *n2, x));
+        }
+        if let [n1, n2, n3, x @ ..] = name {
+            out.push((Some(TableReference::partial(*n1, *n2)), *n3, x));
+        }
+        if let [n1, n2, n3, n4, x @ ..] = name {
+            out.push((Some(TableReference::full(*n1, *n2, *n3)), *n4, x));
+        }
+        out
+    }
+
+    fn generate_qualified_wildcard_candidates<'a>(
+        name: &'a [&'a str],
+    ) -> Vec<(Option<TableReference>, &'a [&'a str])> {
+        let mut out = vec![(None, name)];
+        if let [n1, x @ ..] = name {
+            out.push((Some(TableReference::bare(*n1)), x));
+        }
+        if let [n1, n2, x @ ..] = name {
+            out.push((Some(TableReference::partial(*n1, *n2)), x));
+        }
+        if let [n1, n2, n3, x @ ..] = name {
+            out.push((Some(TableReference::full(*n1, *n2, *n3)), x));
+        }
+        out
+    }
+}
+
+/// Returns whether the qualifier matches the target qualifier.
+/// Identifiers are case-insensitive.
+/// Note that the match is not symmetric, so please ensure the arguments are in the correct order.
+fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableReference>) -> bool {
+    let table_matches = |table: &str| {
+        target
+            .map(|x| x.table())
+            .is_some_and(|x| x.eq_ignore_ascii_case(table))
+    };
+    let schema_matches = |schema: &str| {
+        target
+            .and_then(|x| x.schema())
+            .is_some_and(|x| x.eq_ignore_ascii_case(schema))
+    };
+    let catalog_matches = |catalog: &str| {
+        target
+            .and_then(|x| x.catalog())
+            .is_some_and(|x| x.eq_ignore_ascii_case(catalog))
+    };
+    match qualifier {
+        Some(TableReference::Bare { table }) => table_matches(table),
+        Some(TableReference::Partial { schema, table }) => {
+            schema_matches(schema) && table_matches(table)
+        }
+        Some(TableReference::Full {
+            catalog,
+            schema,
+            table,
+        }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
+        None => true,
     }
 }
 
@@ -1677,7 +1963,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_expression_with_name() -> PlanResult<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::default()));
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
         async fn resolve(resolver: &PlanResolver<'_>, expr: spec::Expr) -> PlanResult<NamedExpr> {
             resolver
@@ -1694,7 +1980,9 @@ mod tests {
                 &resolver,
                 spec::Expr::UnresolvedFunction {
                     function_name: "not".to_string(),
-                    arguments: vec![spec::Expr::Literal(spec::Literal::Boolean(true))],
+                    arguments: vec![spec::Expr::Literal(spec::Literal::Boolean {
+                        value: Some(true)
+                    })],
                     is_distinct: false,
                     is_user_defined_function: false,
                 }
@@ -1721,12 +2009,14 @@ mod tests {
                                 spec::Expr::Alias {
                                     // The resolver assigns a name "1" for the literal,
                                     // and is then overridden by the explicitly specified name.
-                                    expr: Box::new(spec::Expr::Literal(spec::Literal::Integer(1))),
+                                    expr: Box::new(spec::Expr::Literal(spec::Literal::Int32 {
+                                        value: Some(1)
+                                    })),
                                     name: vec!["a".to_string().into()],
                                     metadata: None,
                                 },
                                 // The resolver assigns a name "2" for the literal.
-                                spec::Expr::Literal(spec::Literal::Integer(2)),
+                                spec::Expr::Literal(spec::Literal::Int32 { value: Some(2) }),
                             ],
                             is_distinct: false,
                             is_user_defined_function: false,

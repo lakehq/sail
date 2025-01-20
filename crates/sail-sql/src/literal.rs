@@ -1,7 +1,9 @@
 use std::fmt::Debug;
-use std::ops::Neg;
+use std::ops::{Add, Neg};
 use std::str::FromStr;
 
+use chrono::{TimeDelta, Utc};
+use chrono_tz::Tz;
 use datafusion::arrow::datatypes::{
     i256, DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION,
     DECIMAL256_MAX_PRECISION as ARROW_DECIMAL256_MAX_PRECISION,
@@ -28,7 +30,7 @@ lazy_static! {
         regex::Regex::new(r"^\s*(?P<year>\d{4})(-(?P<month>\d{1,2})(-(?P<day>\d{1,2})T?)?)?\s*$")
             .unwrap();
     static ref TIMESTAMP_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<year>\d{4})(-(?P<month>\d{1,2})(-(?P<day>\d{1,2})((\s+|T)(?P<hour>\d{1,2})(:((?P<minute>\d{1,2})(:((?P<second>\d{1,2})([.]((?P<fraction>\d{1,6})?(?P<tz>.*))?)?)?)?)?)?)?)?)?\s*$")
+        regex::Regex::new(r"^\s*(?P<year>\d{4})(-(?P<month>\d{1,2})(-(?P<day>\d{1,2})((\s+|T)(?P<hour>\d{1,2})(:(?P<minute>\d{1,2})(:(?P<second>\d{1,2})(\.(?P<fraction>\d{1,9}))?(?P<tz>.*)?)?)?)?)?)?\s*$")
             .unwrap();
     static ref TIMEZONE_OFFSET_REGEX: regex::Regex =
         regex::Regex::new(r"^\s*(UTC|UT|GMT)?(?P<sign>[+-]?)(?P<hour>\d{1,2})(:(?P<minute>\d{1,2})(:(?P<second>\d{1,2}))?)?\s*$")
@@ -82,7 +84,9 @@ impl TryFrom<LiteralValue<bool>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<bool>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Boolean(literal.0))
+        Ok(spec::Literal::Boolean {
+            value: Some(literal.0),
+        })
     }
 }
 
@@ -90,7 +94,9 @@ impl TryFrom<LiteralValue<String>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<String>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::String(literal.0))
+        Ok(spec::Literal::Utf8 {
+            value: Some(literal.0),
+        })
     }
 }
 
@@ -98,7 +104,9 @@ impl TryFrom<LiteralValue<Vec<u8>>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<Vec<u8>>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Binary(literal.0))
+        Ok(spec::Literal::Binary {
+            value: Some(literal.0),
+        })
     }
 }
 
@@ -106,7 +114,9 @@ impl TryFrom<LiteralValue<i8>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<i8>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Byte(literal.0))
+        Ok(spec::Literal::Int8 {
+            value: Some(literal.0),
+        })
     }
 }
 
@@ -114,7 +124,9 @@ impl TryFrom<LiteralValue<i16>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<i16>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Short(literal.0))
+        Ok(spec::Literal::Int16 {
+            value: Some(literal.0),
+        })
     }
 }
 
@@ -122,7 +134,9 @@ impl TryFrom<LiteralValue<i32>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<i32>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Integer(literal.0))
+        Ok(spec::Literal::Int32 {
+            value: Some(literal.0),
+        })
     }
 }
 
@@ -130,7 +144,9 @@ impl TryFrom<LiteralValue<i64>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<i64>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Long(literal.0))
+        Ok(spec::Literal::Int64 {
+            value: Some(literal.0),
+        })
     }
 }
 
@@ -138,7 +154,9 @@ impl TryFrom<LiteralValue<f32>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<f32>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Float(literal.0))
+        Ok(spec::Literal::Float32 {
+            value: Some(literal.0),
+        })
     }
 }
 
@@ -146,23 +164,9 @@ impl TryFrom<LiteralValue<f64>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(literal: LiteralValue<f64>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Double(literal.0))
-    }
-}
-
-impl TryFrom<LiteralValue<spec::Decimal128>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<spec::Decimal128>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Decimal128(literal.0))
-    }
-}
-
-impl TryFrom<LiteralValue<spec::Decimal256>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<spec::Decimal256>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Decimal256(literal.0))
+        Ok(spec::Literal::Float64 {
+            value: Some(literal.0),
+        })
     }
 }
 
@@ -174,39 +178,51 @@ impl TryFrom<LiteralValue<chrono::NaiveDate>> for spec::Literal {
         let days = (value - chrono::NaiveDateTime::UNIX_EPOCH).num_days();
         let days = i32::try_from(days)
             .map_err(|_| SqlError::invalid(format!("date literal: {:?}", literal.0)))?;
-        Ok(spec::Literal::Date { days })
+        Ok(spec::Literal::Date32 { days: Some(days) })
     }
 }
 
-impl TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> for spec::Literal {
+impl TryFrom<LiteralValue<(chrono::DateTime<Utc>, TimeZoneVariant)>> for spec::Literal {
     type Error = SqlError;
 
     fn try_from(
-        literal: LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>,
+        literal: LiteralValue<(chrono::DateTime<Utc>, TimeZoneVariant)>,
     ) -> SqlResult<spec::Literal> {
         let (dt, ref tz) = literal.0;
-        let (delta, ntz) = match tz {
-            TimeZoneVariant::FixedOffset(tz) => {
-                (TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?, false)
-            }
-            TimeZoneVariant::Named(tz) => {
-                (TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?, false)
-            }
-            TimeZoneVariant::Utc => (dt - chrono::NaiveDateTime::UNIX_EPOCH, false),
-            TimeZoneVariant::None => (dt - chrono::NaiveDateTime::UNIX_EPOCH, true),
+        let (delta, timezone_info) = match tz {
+            TimeZoneVariant::FixedOffset(tz) => (
+                TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?,
+                spec::TimeZoneInfo::TimeZone {
+                    timezone: Some("UTC".into()),
+                },
+            ),
+            TimeZoneVariant::Named(tz) => (
+                TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?,
+                spec::TimeZoneInfo::TimeZone {
+                    timezone: Some("UTC".into()),
+                },
+            ),
+            TimeZoneVariant::Utc => (
+                dt - chrono::DateTime::UNIX_EPOCH,
+                spec::TimeZoneInfo::TimeZone {
+                    timezone: Some("UTC".into()),
+                },
+            ),
+            TimeZoneVariant::None => (
+                // FIXME: See FIXME in `PlanResolver::resolve_timezone` for more details.
+                dt - chrono::DateTime::UNIX_EPOCH,
+                spec::TimeZoneInfo::SQLConfigured,
+            ),
         };
-        let microseconds = delta
-            .num_microseconds()
-            .ok_or_else(|| SqlError::invalid(format!("datetime literal: {:?}", literal.0)))?;
-        if ntz {
-            Ok(spec::Literal::TimestampNtz { microseconds })
-        } else {
-            Ok(spec::Literal::TimestampMicrosecond {
-                microseconds,
-                // FIXME: This is wrong but replicates the previous logic when there was no timezone
-                timezone: None,
-            })
-        }
+        let microseconds = delta.num_microseconds().ok_or_else(|| {
+            SqlError::invalid(format!(
+                "TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> {literal:?}"
+            ))
+        })?;
+        Ok(spec::Literal::TimestampMicrosecond {
+            microseconds: Some(microseconds),
+            timezone_info,
+        })
     }
 }
 
@@ -230,32 +246,32 @@ impl TryFrom<LiteralValue<Signed<ast::Interval>>> for spec::Literal {
                 let negated = signed.1 ^ negated;
                 match (unit.leading_field, unit.last_field) {
                     (Some(DateTimeField::Year | DateTimeField::Years), None) => {
-                        parse_year_month_interval_string(&value, negated, &INTERVAL_YEAR_REGEX)
+                        parse_interval_year_month_string(&value, negated, &INTERVAL_YEAR_REGEX)
                     }
                     (
                         Some(DateTimeField::Year | DateTimeField::Years),
                         Some(DateTimeField::Month | DateTimeField::Months),
-                    ) => parse_year_month_interval_string(
+                    ) => parse_interval_year_month_string(
                         &value,
                         negated,
                         &INTERVAL_YEAR_TO_MONTH_REGEX,
                     ),
                     (Some(DateTimeField::Month | DateTimeField::Months), None) => {
-                        parse_year_month_interval_string(&value, negated, &INTERVAL_MONTH_REGEX)
+                        parse_interval_year_month_string(&value, negated, &INTERVAL_MONTH_REGEX)
                     }
                     (Some(DateTimeField::Day | DateTimeField::Days), None) => {
-                        parse_day_time_interval_string(&value, negated, &INTERVAL_DAY_REGEX)
+                        parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_REGEX)
                     }
                     (
                         Some(DateTimeField::Day | DateTimeField::Days),
                         Some(DateTimeField::Hour | DateTimeField::Hours),
                     ) => {
-                        parse_day_time_interval_string(&value, negated, &INTERVAL_DAY_TO_HOUR_REGEX)
+                        parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_TO_HOUR_REGEX)
                     }
                     (
                         Some(DateTimeField::Day | DateTimeField::Days),
                         Some(DateTimeField::Minute | DateTimeField::Minutes),
-                    ) => parse_day_time_interval_string(
+                    ) => parse_interval_day_time_string(
                         &value,
                         negated,
                         &INTERVAL_DAY_TO_MINUTE_REGEX,
@@ -263,18 +279,18 @@ impl TryFrom<LiteralValue<Signed<ast::Interval>>> for spec::Literal {
                     (
                         Some(DateTimeField::Day | DateTimeField::Days),
                         Some(DateTimeField::Second | DateTimeField::Seconds),
-                    ) => parse_day_time_interval_string(
+                    ) => parse_interval_day_time_string(
                         &value,
                         negated,
                         &INTERVAL_DAY_TO_SECOND_REGEX,
                     ),
                     (Some(DateTimeField::Hour | DateTimeField::Hours), None) => {
-                        parse_day_time_interval_string(&value, negated, &INTERVAL_HOUR_REGEX)
+                        parse_interval_day_time_string(&value, negated, &INTERVAL_HOUR_REGEX)
                     }
                     (
                         Some(DateTimeField::Hour | DateTimeField::Hours),
                         Some(DateTimeField::Minute | DateTimeField::Minutes),
-                    ) => parse_day_time_interval_string(
+                    ) => parse_interval_day_time_string(
                         &value,
                         negated,
                         &INTERVAL_HOUR_TO_MINUTE_REGEX,
@@ -282,24 +298,24 @@ impl TryFrom<LiteralValue<Signed<ast::Interval>>> for spec::Literal {
                     (
                         Some(DateTimeField::Hour | DateTimeField::Hours),
                         Some(DateTimeField::Second | DateTimeField::Seconds),
-                    ) => parse_day_time_interval_string(
+                    ) => parse_interval_day_time_string(
                         &value,
                         negated,
                         &INTERVAL_HOUR_TO_SECOND_REGEX,
                     ),
                     (Some(DateTimeField::Minute | DateTimeField::Minutes), None) => {
-                        parse_day_time_interval_string(&value, negated, &INTERVAL_MINUTE_REGEX)
+                        parse_interval_day_time_string(&value, negated, &INTERVAL_MINUTE_REGEX)
                     }
                     (
                         Some(DateTimeField::Minute | DateTimeField::Minutes),
                         Some(DateTimeField::Second | DateTimeField::Seconds),
-                    ) => parse_day_time_interval_string(
+                    ) => parse_interval_day_time_string(
                         &value,
                         negated,
                         &INTERVAL_MINUTE_TO_SECOND_REGEX,
                     ),
                     (Some(DateTimeField::Second | DateTimeField::Seconds), None) => {
-                        parse_day_time_interval_string(&value, negated, &INTERVAL_SECOND_REGEX)
+                        parse_interval_day_time_string(&value, negated, &INTERVAL_SECOND_REGEX)
                     }
                     (Some(x), None) => {
                         let value = ast::Expr::Value(ast::Value::SingleQuotedString(value));
@@ -343,12 +359,12 @@ impl TryFrom<LiteralValue<Signed<ast::Interval>>> for spec::Literal {
     }
 }
 
-impl TryFrom<String> for LiteralValue<Vec<u8>> {
+impl TryFrom<&str> for LiteralValue<Vec<u8>> {
     type Error = SqlError;
 
     /// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L285-L306>
-    fn try_from(value: String) -> SqlResult<Self> {
-        if !BINARY_REGEX.is_match(&value) {
+    fn try_from(value: &str) -> SqlResult<Self> {
+        if !BINARY_REGEX.is_match(value) {
             return Err(SqlError::invalid(format!("hex string: {value}")));
         }
 
@@ -378,10 +394,10 @@ impl TryFrom<String> for LiteralValue<Vec<u8>> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<i8> {
+impl TryFrom<&str> for LiteralValue<i8> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let value = value
             .parse::<i8>()
             .map_err(|_| SqlError::invalid(format!("tinyint: {:?}", value)))?;
@@ -389,10 +405,10 @@ impl TryFrom<String> for LiteralValue<i8> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<i16> {
+impl TryFrom<&str> for LiteralValue<i16> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let value = value
             .parse::<i16>()
             .map_err(|_| SqlError::invalid(format!("smallint: {:?}", value)))?;
@@ -400,10 +416,10 @@ impl TryFrom<String> for LiteralValue<i16> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<i32> {
+impl TryFrom<&str> for LiteralValue<i32> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let value = value
             .parse::<i32>()
             .map_err(|_| SqlError::invalid(format!("int: {:?}", value)))?;
@@ -411,10 +427,10 @@ impl TryFrom<String> for LiteralValue<i32> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<i64> {
+impl TryFrom<&str> for LiteralValue<i64> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let value = value
             .parse::<i64>()
             .map_err(|_| SqlError::invalid(format!("bigint: {:?}", value)))?;
@@ -422,10 +438,10 @@ impl TryFrom<String> for LiteralValue<i64> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<f32> {
+impl TryFrom<&str> for LiteralValue<f32> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let n = value
             .parse::<f32>()
             .map_err(|_| SqlError::invalid(format!("float: {:?}", value)))?;
@@ -439,10 +455,10 @@ impl TryFrom<String> for LiteralValue<f32> {
     }
 }
 
-impl TryFrom<String> for LiteralValue<f64> {
+impl TryFrom<&str> for LiteralValue<f64> {
     type Error = SqlError;
 
-    fn try_from(value: String) -> SqlResult<Self> {
+    fn try_from(value: &str) -> SqlResult<Self> {
         let n = value
             .parse::<f64>()
             .map_err(|_| SqlError::invalid(format!("double: {:?}", value)))?;
@@ -453,22 +469,6 @@ impl TryFrom<String> for LiteralValue<f64> {
             )));
         }
         Ok(LiteralValue(n))
-    }
-}
-
-impl TryFrom<String> for LiteralValue<spec::Decimal128> {
-    type Error = SqlError;
-
-    fn try_from(value: String) -> SqlResult<Self> {
-        Ok(LiteralValue(parse_decimal_128_string(value.as_str())?))
-    }
-}
-
-impl TryFrom<String> for LiteralValue<spec::Decimal256> {
-    type Error = SqlError;
-
-    fn try_from(value: String) -> SqlResult<Self> {
-        Ok(LiteralValue(parse_decimal_256_string(value.as_str())?))
     }
 }
 
@@ -589,23 +589,27 @@ where
         .map_err(|_| error())
 }
 
-pub fn parse_decimal_128_string(s: &str) -> SqlResult<spec::Decimal128> {
+pub fn parse_decimal_128_string(s: &str) -> SqlResult<spec::Literal> {
     let decimal_literal = parse_decimal_string(s)?;
     match decimal_literal {
-        spec::DecimalLiteral::Decimal128(decimal128) => Ok(decimal128),
-        _ => Err(SqlError::invalid(format!("Decimal128: {s}"))),
+        decimal128 @ spec::Literal::Decimal128 { .. } => Ok(decimal128),
+        _ => Err(SqlError::invalid(format!(
+            "Decimal128: {s} in parse_decimal_128_string"
+        ))),
     }
 }
 
-pub fn parse_decimal_256_string(s: &str) -> SqlResult<spec::Decimal256> {
+pub fn parse_decimal_256_string(s: &str) -> SqlResult<spec::Literal> {
     let decimal_literal = parse_decimal_string(s)?;
     match decimal_literal {
-        spec::DecimalLiteral::Decimal256(decimal256) => Ok(decimal256),
-        _ => Err(SqlError::invalid(format!("Decimal256: {s}"))),
+        decimal256 @ spec::Literal::Decimal256 { .. } => Ok(decimal256),
+        _ => Err(SqlError::invalid(format!(
+            "Decimal256: {s} in parse_decimal_256_string"
+        ))),
     }
 }
 
-pub fn parse_decimal_string(s: &str) -> SqlResult<spec::DecimalLiteral> {
+pub fn parse_decimal_string(s: &str) -> SqlResult<spec::Literal> {
     let error = || SqlError::invalid(format!("decimal: {s}"));
     let captures = DECIMAL_REGEX
         .captures(s)
@@ -648,14 +652,18 @@ pub fn parse_decimal_string(s: &str) -> SqlResult<spec::DecimalLiteral> {
         Err(error())
     } else if precision > ARROW_DECIMAL128_MAX_PRECISION {
         let value: i256 = value.parse().map_err(|_| error())?;
-        Ok(spec::DecimalLiteral::Decimal256(spec::Decimal256::new(
-            value, precision, scale,
-        )))
+        Ok(spec::Literal::Decimal256 {
+            precision,
+            scale,
+            value: Some(value),
+        })
     } else {
         let value: i128 = value.parse().map_err(|_| error())?;
-        Ok(spec::DecimalLiteral::Decimal128(spec::Decimal128::new(
-            value, precision, scale,
-        )))
+        Ok(spec::Literal::Decimal128 {
+            precision,
+            scale,
+            value: Some(value),
+        })
     }
 }
 
@@ -671,21 +679,27 @@ pub fn parse_date_string(s: &str) -> SqlResult<spec::Literal> {
 }
 
 pub fn parse_timestamp_string(s: &str) -> SqlResult<spec::Literal> {
-    let error = || SqlError::invalid(format!("timestamp: {s}"));
-    let captures = TIMESTAMP_REGEX.captures(s).ok_or_else(error)?;
-    let year = extract_match(&captures, "year", error)?.ok_or_else(error)?;
-    let month = extract_match(&captures, "month", error)?.unwrap_or(1);
-    let day = extract_match(&captures, "day", error)?.unwrap_or(1);
-    let hour = extract_match(&captures, "hour", error)?.unwrap_or(0);
-    let minute = extract_match(&captures, "minute", error)?.unwrap_or(0);
-    let second = extract_match(&captures, "second", error)?.unwrap_or(0);
-    let fraction = extract_second_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
+    let error = |msg: &str| SqlError::invalid(format!("{msg} error when parsing timestamp: {s}"));
+    let captures = TIMESTAMP_REGEX
+        .captures(s)
+        .ok_or_else(|| error("Invalid format"))?;
+    let year = extract_match(&captures, "year", || error("Invalid year"))?
+        .ok_or_else(|| error("Missing year"))?;
+    let month = extract_match(&captures, "month", || error("Invalid month"))?.unwrap_or(1);
+    let day = extract_match(&captures, "day", || error("Invalid day"))?.unwrap_or(1);
+    let hour = extract_match(&captures, "hour", || error("Invalid hour"))?.unwrap_or(0);
+    let minute = extract_match(&captures, "minute", || error("Invalid minute"))?.unwrap_or(0);
+    let second = extract_match(&captures, "second", || error("Invalid second"))?.unwrap_or(0);
+    let fraction =
+        extract_second_fraction_match(&captures, "fraction", 6, || error("Invalid fraction"))?
+            .unwrap_or(0);
     let tz = captures.name("tz").map(|tz| tz.as_str());
     let tz = parse_timezone_string(tz)?;
     let dt = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .and_then(|d| d.and_hms_opt(hour, minute, second))
         .and_then(|d| d.checked_add_signed(chrono::Duration::microseconds(fraction)))
-        .ok_or_else(error)?;
+        .ok_or_else(|| error("Invalid date/time values"))?;
+    let dt = chrono::DateTime::from_naive_utc_and_offset(dt, Utc);
     spec::Literal::try_from(LiteralValue((dt, tz)))
 }
 
@@ -694,23 +708,26 @@ pub(crate) enum TimeZoneVariant {
     None,
     Utc,
     FixedOffset(chrono::FixedOffset),
-    Named(chrono_tz::Tz),
+    Named(Tz),
 }
 
 impl TimeZoneVariant {
     fn time_delta_from_unix_epoch<Tz, O>(
-        dt: &chrono::NaiveDateTime,
+        dt: &chrono::DateTime<Utc>,
         tz: &Tz,
-    ) -> SqlResult<chrono::TimeDelta>
+    ) -> SqlResult<TimeDelta>
     where
         Tz: chrono::TimeZone<Offset = O> + Debug,
         O: chrono::Offset,
     {
-        let dt = tz
-            .from_local_datetime(dt)
-            .single()
-            .ok_or_else(|| SqlError::invalid(format!("datetime: {:?} {:?}", dt, tz)))?;
-        Ok(dt - chrono::DateTime::UNIX_EPOCH.with_timezone(tz))
+        let offset_seconds = tz
+            .offset_from_utc_datetime(&dt.naive_utc())
+            .fix()
+            .local_minus_utc() as i64;
+        let adjusted_dt = dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
+            SqlError::invalid("time_delta_from_unix_epoch: Invalid offset seconds")
+        })?);
+        Ok(adjusted_dt - chrono::DateTime::UNIX_EPOCH)
     }
 }
 
@@ -718,9 +735,9 @@ fn parse_timezone_string(tz: Option<&str>) -> SqlResult<TimeZoneVariant> {
     match tz {
         None => Ok(TimeZoneVariant::None),
         Some(tz) if tz.trim().is_empty() => Ok(TimeZoneVariant::None),
-        Some(tz) if tz.trim() == "Z" => Ok(TimeZoneVariant::Utc),
+        Some(tz) if tz.to_uppercase().trim() == "Z" => Ok(TimeZoneVariant::Utc),
         Some(tz) => {
-            let error = || SqlError::invalid(format!("timezone: {tz}"));
+            let error = || SqlError::invalid(format!("timezone in parse_timezone_string: {tz}"));
             let captures = TIMEZONE_OFFSET_REGEX
                 .captures(tz)
                 .or_else(|| TIMEZONE_OFFSET_COMPACT_REGEX.captures(tz));
@@ -733,14 +750,14 @@ fn parse_timezone_string(tz: Option<&str>) -> SqlResult<TimeZoneVariant> {
                 let offset = chrono::FixedOffset::east_opt(n).ok_or_else(error)?;
                 Ok(TimeZoneVariant::FixedOffset(offset))
             } else {
-                let tz = tz.parse::<chrono_tz::Tz>().map_err(|_| error())?;
+                let tz = tz.parse::<Tz>().map_err(|_| error())?;
                 Ok(TimeZoneVariant::Named(tz))
             }
         }
     }
 }
 
-fn parse_year_month_interval_string(
+fn parse_interval_year_month_string(
     s: &str,
     negated: Negated,
     interval_regex: &regex::Regex,
@@ -760,10 +777,10 @@ fn parse_year_month_interval_string(
     } else {
         n
     };
-    Ok(spec::Literal::YearMonthInterval { months: n })
+    Ok(spec::Literal::IntervalYearMonth { months: Some(n) })
 }
 
-fn parse_day_time_interval_string(
+fn parse_interval_day_time_string(
     s: &str,
     negated: Negated,
     interval_regex: &regex::Regex,
@@ -777,15 +794,15 @@ fn parse_day_time_interval_string(
     let seconds: i64 = extract_match(&captures, "second", error)?.unwrap_or(0);
     let microseconds: i64 =
         extract_second_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
-    let delta = chrono::TimeDelta::try_days(days)
+    let delta = TimeDelta::try_days(days)
         .ok_or_else(error)?
-        .checked_add(&chrono::TimeDelta::try_hours(hours).ok_or_else(error)?)
+        .checked_add(&TimeDelta::try_hours(hours).ok_or_else(error)?)
         .ok_or_else(error)?
-        .checked_add(&chrono::TimeDelta::try_minutes(minutes).ok_or_else(error)?)
+        .checked_add(&TimeDelta::try_minutes(minutes).ok_or_else(error)?)
         .ok_or_else(error)?
-        .checked_add(&chrono::TimeDelta::try_seconds(seconds).ok_or_else(error)?)
+        .checked_add(&TimeDelta::try_seconds(seconds).ok_or_else(error)?)
         .ok_or_else(error)?
-        .checked_add(&chrono::TimeDelta::microseconds(microseconds))
+        .checked_add(&TimeDelta::microseconds(microseconds))
         .ok_or_else(error)?;
     let microseconds = delta.num_microseconds().ok_or_else(error)?;
     let n = if negated {
@@ -793,7 +810,7 @@ fn parse_day_time_interval_string(
     } else {
         microseconds
     };
-    Ok(spec::Literal::DayTimeInterval { microseconds: n })
+    Ok(microseconds_to_interval(n))
 }
 
 fn parse_multi_unit_interval(
@@ -804,7 +821,7 @@ fn parse_multi_unit_interval(
 
     let error = || SqlError::invalid("multi-unit interval");
     let mut months = 0i32;
-    let mut delta = chrono::TimeDelta::zero();
+    let mut delta = TimeDelta::zero();
     for (expr, field) in values {
         match field {
             DateTimeField::Year | DateTimeField::Years => {
@@ -818,29 +835,29 @@ fn parse_multi_unit_interval(
             }
             DateTimeField::Week(None) | DateTimeField::Weeks => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let weeks = chrono::TimeDelta::try_weeks(value).ok_or_else(error)?;
+                let weeks = TimeDelta::try_weeks(value).ok_or_else(error)?;
                 delta = delta.checked_add(&weeks).ok_or_else(error)?;
             }
             DateTimeField::Day | DateTimeField::Days => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let days = chrono::TimeDelta::try_days(value).ok_or_else(error)?;
+                let days = TimeDelta::try_days(value).ok_or_else(error)?;
                 delta = delta.checked_add(&days).ok_or_else(error)?;
             }
             DateTimeField::Hour | DateTimeField::Hours => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let hours = chrono::TimeDelta::try_hours(value).ok_or_else(error)?;
+                let hours = TimeDelta::try_hours(value).ok_or_else(error)?;
                 delta = delta.checked_add(&hours).ok_or_else(error)?;
             }
             DateTimeField::Minute | DateTimeField::Minutes => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let minutes = chrono::TimeDelta::try_minutes(value).ok_or_else(error)?;
+                let minutes = TimeDelta::try_minutes(value).ok_or_else(error)?;
                 delta = delta.checked_add(&minutes).ok_or_else(error)?;
             }
             DateTimeField::Second | DateTimeField::Seconds => {
                 let Signed(value, negated) =
                     LiteralValue::<Signed<DecimalSecond>>::try_from(expr)?.0;
-                let seconds = chrono::TimeDelta::seconds(value.seconds as i64);
-                let microseconds = chrono::TimeDelta::microseconds(value.microseconds as i64);
+                let seconds = TimeDelta::seconds(value.seconds as i64);
+                let microseconds = TimeDelta::microseconds(value.microseconds as i64);
                 if negated {
                     delta = delta.checked_sub(&seconds).ok_or_else(error)?;
                     delta = delta.checked_sub(&microseconds).ok_or_else(error)?;
@@ -851,25 +868,25 @@ fn parse_multi_unit_interval(
             }
             DateTimeField::Millisecond | DateTimeField::Milliseconds => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let milliseconds = chrono::TimeDelta::try_milliseconds(value).ok_or_else(error)?;
+                let milliseconds = TimeDelta::try_milliseconds(value).ok_or_else(error)?;
                 delta = delta.checked_add(&milliseconds).ok_or_else(error)?;
             }
             DateTimeField::Microsecond | DateTimeField::Microseconds => {
                 let value = LiteralValue::<i64>::try_from(expr)?.0;
-                let microseconds = chrono::TimeDelta::microseconds(value);
+                let microseconds = TimeDelta::microseconds(value);
                 delta = delta.checked_add(&microseconds).ok_or_else(error)?;
             }
             _ => return Err(error()),
         }
     }
-    match (months != 0, delta != chrono::TimeDelta::zero()) {
+    match (months != 0, delta != TimeDelta::zero()) {
         (true, false) => {
             let n = if negated {
                 months.checked_mul(-1).ok_or_else(error)?
             } else {
                 months
             };
-            Ok(spec::Literal::YearMonthInterval { months: n })
+            Ok(spec::Literal::IntervalYearMonth { months: Some(n) })
         }
         (true, true) => {
             let days = delta.num_days();
@@ -894,11 +911,14 @@ fn parse_multi_unit_interval(
             } else {
                 microseconds
             };
+            let nanoseconds = microseconds * 1_000;
 
-            Ok(spec::Literal::CalendarInterval {
-                months,
-                days,
-                microseconds,
+            Ok(spec::Literal::IntervalMonthDayNano {
+                value: Some(spec::IntervalMonthDayNano {
+                    months,
+                    days,
+                    nanoseconds,
+                }),
             })
         }
         (false, _) => {
@@ -908,7 +928,28 @@ fn parse_multi_unit_interval(
             } else {
                 microseconds
             };
-            Ok(spec::Literal::DayTimeInterval { microseconds: n })
+            Ok(microseconds_to_interval(n))
+        }
+    }
+}
+
+pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
+    let total_days = microseconds / (24 * 60 * 60 * 1_000_000);
+    let remaining_micros = microseconds % (24 * 60 * 60 * 1_000_000);
+    if remaining_micros % 1000 == 0 {
+        spec::Literal::IntervalDayTime {
+            value: Some(spec::IntervalDayTime {
+                days: total_days as i32,
+                milliseconds: (remaining_micros / 1000) as i32,
+            }),
+        }
+    } else {
+        spec::Literal::IntervalMonthDayNano {
+            value: Some(spec::IntervalMonthDayNano {
+                months: 0,
+                days: total_days as i32,
+                nanoseconds: remaining_micros * 1000,
+            }),
         }
     }
 }
@@ -960,24 +1001,120 @@ mod tests {
 
     #[test]
     fn test_parse_decimal128() -> SqlResult<()> {
-        use sail_common::spec::Decimal128;
-        let parse = |x: &str| -> SqlResult<Decimal128> {
-            LiteralValue::<Decimal128>::try_from(x.to_string()).map(|x| x.0)
-        };
-        assert_eq!(parse("123.45")?, Decimal128::new(12345, 5, 2));
-        assert_eq!(parse("-123.45")?, Decimal128::new(-12345, 5, 2));
-        assert_eq!(parse("123.45e1")?, Decimal128::new(12345, 5, 1));
-        assert_eq!(parse("123.45E-2")?, Decimal128::new(12345, 5, 4));
-        assert_eq!(parse("1.23e10")?, Decimal128::new(12300000000, 11, 0));
-        assert_eq!(parse("1.23E-10")?, Decimal128::new(123, 12, 12));
-        assert_eq!(parse("0")?, Decimal128::new(0, 1, 0));
-        assert_eq!(parse("0.")?, Decimal128::new(0, 1, 0));
-        assert_eq!(parse("0.0")?, Decimal128::new(0, 1, 1));
-        assert_eq!(parse(".0")?, Decimal128::new(0, 1, 1));
-        assert_eq!(parse(".0e1")?, Decimal128::new(0, 1, 0));
-        assert_eq!(parse(".0e-1")?, Decimal128::new(0, 2, 2));
-        assert_eq!(parse("001.2")?, Decimal128::new(12, 2, 1));
-        assert_eq!(parse("001.20")?, Decimal128::new(120, 3, 2));
+        use sail_common::spec::Literal;
+        let parse = |x: &str| -> SqlResult<Literal> { parse_decimal_128_string(x) };
+        assert_eq!(
+            parse("123.45")?,
+            Literal::Decimal128 {
+                precision: 5,
+                scale: 2,
+                value: Some(12345)
+            }
+        );
+        assert_eq!(
+            parse("-123.45")?,
+            Literal::Decimal128 {
+                precision: 5,
+                scale: 2,
+                value: Some(-12345),
+            }
+        );
+        assert_eq!(
+            parse("123.45e1")?,
+            Literal::Decimal128 {
+                precision: 5,
+                scale: 1,
+                value: Some(12345),
+            }
+        );
+        assert_eq!(
+            parse("123.45E-2")?,
+            Literal::Decimal128 {
+                precision: 5,
+                scale: 4,
+                value: Some(12345),
+            }
+        );
+        assert_eq!(
+            parse("1.23e10")?,
+            Literal::Decimal128 {
+                precision: 11,
+                scale: 0,
+                value: Some(12300000000),
+            }
+        );
+        assert_eq!(
+            parse("1.23E-10")?,
+            Literal::Decimal128 {
+                precision: 12,
+                scale: 12,
+                value: Some(123),
+            }
+        );
+        assert_eq!(
+            parse("0")?,
+            Literal::Decimal128 {
+                precision: 1,
+                scale: 0,
+                value: Some(0),
+            }
+        );
+        assert_eq!(
+            parse("0.")?,
+            Literal::Decimal128 {
+                precision: 1,
+                scale: 0,
+                value: Some(0),
+            }
+        );
+        assert_eq!(
+            parse("0.0")?,
+            Literal::Decimal128 {
+                precision: 1,
+                scale: 1,
+                value: Some(0),
+            }
+        );
+        assert_eq!(
+            parse(".0")?,
+            Literal::Decimal128 {
+                precision: 1,
+                scale: 1,
+                value: Some(0),
+            }
+        );
+        assert_eq!(
+            parse(".0e1")?,
+            Literal::Decimal128 {
+                precision: 1,
+                scale: 0,
+                value: Some(0),
+            }
+        );
+        assert_eq!(
+            parse(".0e-1")?,
+            Literal::Decimal128 {
+                precision: 2,
+                scale: 2,
+                value: Some(0),
+            }
+        );
+        assert_eq!(
+            parse("001.2")?,
+            Literal::Decimal128 {
+                precision: 2,
+                scale: 1,
+                value: Some(12),
+            }
+        );
+        assert_eq!(
+            parse("001.20")?,
+            Literal::Decimal128 {
+                precision: 3,
+                scale: 2,
+                value: Some(120),
+            }
+        );
         assert!(parse(".").is_err());
         assert!(parse("123.456.789").is_err());
         assert!(parse("1E100").is_err());
@@ -989,29 +1126,27 @@ mod tests {
 
     #[test]
     fn test_parse_decimal256() -> SqlResult<()> {
-        use sail_common::spec::Decimal256;
-        let parse = |x: &str| -> SqlResult<Decimal256> {
-            LiteralValue::<Decimal256>::try_from(x.to_string()).map(|x| x.0)
-        };
+        use sail_common::spec::Literal;
+        let parse = |x: &str| -> SqlResult<Literal> { parse_decimal_256_string(x) };
         assert!(parse(".").is_err());
         assert!(parse("123.456.789").is_err());
         assert!(parse("1E100").is_err());
         assert!(parse("-.2E-100").is_err());
         assert_eq!(
             parse("120000000000000000000000000000000000000000")?,
-            Decimal256::new(
-                i256::from_string("120000000000000000000000000000000000000000").unwrap(),
-                42,
-                4,
-            )
+            Literal::Decimal256 {
+                precision: 42,
+                scale: 4,
+                value: i256::from_string("120000000000000000000000000000000000000000")
+            }
         );
         assert_eq!(
             parse("1200000000000000000000000000000000000.00000")?,
-            Decimal256::new(
-                i256::from_string("120000000000000000000000000000000000000000").unwrap(),
-                42,
-                5
-            )
+            Literal::Decimal256 {
+                precision: 42,
+                scale: 5,
+                value: i256::from_string("120000000000000000000000000000000000000000")
+            }
         );
         assert!(parse("123456789012345678901234567890123456789").is_ok());
         assert!(parse(

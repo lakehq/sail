@@ -95,7 +95,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
         ast::DataType::Float(_) | ast::DataType::Real | ast::DataType::Float32 => {
             Ok(spec::DataType::Float32)
         }
-        ast::DataType::Double | ast::DataType::DoublePrecision | ast::DataType::Float64 => {
+        ast::DataType::Double(_) | ast::DataType::DoublePrecision | ast::DataType::Float64 => {
             Ok(spec::DataType::Float64)
         }
         ast::DataType::Decimal(info) | ast::DataType::Dec(info) | ast::DataType::Numeric(info) => {
@@ -146,7 +146,7 @@ pub fn from_ast_data_type(sql_type: &ast::DataType) -> SqlResult<spec::DataType>
 
             let timezone_info = match tz_info {
                 TimezoneInfo::WithoutTimeZone => spec::TimeZoneInfo::NoTimeZone,
-                TimezoneInfo::None => spec::TimeZoneInfo::Configured,
+                TimezoneInfo::None => spec::TimeZoneInfo::SQLConfigured,
                 TimezoneInfo::WithLocalTimeZone | TimezoneInfo::WithTimeZone | TimezoneInfo::Tz => {
                     spec::TimeZoneInfo::LocalTimeZone
                 }

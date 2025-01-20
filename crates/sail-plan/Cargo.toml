@@ -10,6 +10,7 @@ sail-python-udf = { path = "../sail-python-udf" }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 datafusion-functions-json = { workspace = true }
 thiserror = { workspace = true }
@@ -27,6 +28,7 @@ futures = { workspace = true }
 comfy-table = { workspace = true }
 html-escape = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 ryu = { workspace = true }
 either = { workspace = true }
 num-traits = { workspace = true }
@@ -45,6 +47,7 @@ aes = { workspace = true }
 aes-gcm = { workspace = true }
 cbc = { workspace = true }
 base64 = { workspace = true }
+half = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]

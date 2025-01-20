@@ -95,7 +95,7 @@ impl TableMetadata {
     }
 }
 
-impl<'a> CatalogManager<'a> {
+impl CatalogManager<'_> {
     #[allow(dead_code)]
     pub(crate) async fn create_memory_table(
         &self,

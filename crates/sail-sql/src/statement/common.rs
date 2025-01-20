@@ -112,6 +112,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             cache_metadata: _,
             noscan: _,
             compute_statistics: _,
+            has_table_keyword: _,
         } => Err(SqlError::todo("SQL analyze")),
         Statement::CreateDatabase {
             db_name,
@@ -204,6 +205,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
             if_not_exists: _,
             temporary,
             to: _,
+            params: _,
         } => {
             // TODO: Parse Spark Syntax:
             //  https://spark.apache.org/docs/latest/sql-ref-syntax-ddl-create-view.html
@@ -373,9 +375,28 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
                 "Only `SHOW CREATE TABLE ...` is supported.",
             )),
         },
-        Statement::ShowDatabases { .. } => Err(SqlError::todo("SQL show databases")),
-        Statement::ShowViews { .. } => Err(SqlError::todo("SQL show views")),
-        Statement::ShowSchemas { .. } => Err(SqlError::todo("SQL show schemas")),
+        Statement::ShowDatabases {
+            terse: _,
+            history: _,
+            // TODO: show options
+            show_options: _,
+        }
+        | Statement::ShowSchemas {
+            terse: _,
+            history: _,
+            // TODO: show options
+            show_options: _,
+        } => {
+            // The usage of SCHEMAS and DATABASES are interchangeable and mean the same thing.
+            // https://spark.apache.org/docs/3.5.4/sql-ref-syntax-aux-show-databases.html
+            parse_sql_statement("SELECT * FROM information_schema.schemata;")
+        }
+        Statement::ShowViews {
+            terse: _,
+            materialized: _,
+            // TODO: show options
+            show_options: _,
+        } => parse_sql_statement("SELECT * FROM information_schema.views;"),
         Statement::ShowTables {
             terse: _,
             history: _,
@@ -394,9 +415,9 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         Statement::DropFunction {
             if_exists,
             func_desc,
-            option,
+            drop_behavior,
         } => {
-            if option.is_some() {
+            if drop_behavior.is_some() {
                 return Err(SqlError::unsupported(
                     "DROP FUNCTION with RESTRICT or CASCADE not supported.",
                 ));
@@ -442,6 +463,7 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         | Statement::DropSecret { .. }
         | Statement::Declare { .. }
         | Statement::CreateExtension { .. }
+        | Statement::DropExtension { .. }
         | Statement::Fetch { .. }
         | Statement::Flush { .. }
         | Statement::Discard { .. }
@@ -484,6 +506,10 @@ pub(crate) fn from_ast_statement(statement: ast::Statement) -> SqlResult<spec::P
         | Statement::UNLISTEN { .. }
         | Statement::NOTIFY { .. }
         | Statement::LoadData { .. }
+        | Statement::List(_)
+        | Statement::Remove(_)
+        | Statement::SetSessionParam(_)
+        | Statement::RenameTable(_)
         | Statement::CreatePolicy { .. }
         | Statement::AlterPolicy { .. }
         | Statement::DropPolicy { .. } => Err(SqlError::unsupported(format!(
@@ -504,8 +530,10 @@ pub(crate) fn from_ast_sql_options(
                 _ => return Err(SqlError::unsupported("SQL option")),
             };
             let value = match from_ast_expression(value)? {
-                spec::Expr::Literal(spec::Literal::String(s)) => s,
-                x => return Err(SqlError::invalid(format!("SQL option value: {:?}", x))),
+                spec::Expr::Literal(spec::Literal::Utf8 { value: Some(value) })
+                | spec::Expr::Literal(spec::Literal::LargeUtf8 { value: Some(value) })
+                | spec::Expr::Literal(spec::Literal::Utf8View { value: Some(value) }) => value,
+                x => return Err(SqlError::invalid(format!("SQL option value: {x:?}"))),
             };
             Ok((name.value, value))
         })

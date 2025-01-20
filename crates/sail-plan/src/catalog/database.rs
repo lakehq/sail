@@ -25,7 +25,7 @@ impl DatabaseMetadata {
     }
 }
 
-impl<'a> CatalogManager<'a> {
+impl CatalogManager<'_> {
     pub(crate) fn default_database(&self) -> Result<String> {
         let state = self.ctx.state_ref();
         let state = state.read();

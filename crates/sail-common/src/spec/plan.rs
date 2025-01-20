@@ -175,8 +175,6 @@ pub enum QueryNode {
     WithWatermark(WithWatermark),
     ApplyInPandasWithState(ApplyInPandasWithState),
     CachedLocalRelation {
-        user_id: String,
-        session_id: String,
         hash: String,
     },
     CachedRemoteRelation {
@@ -748,8 +746,10 @@ pub enum JoinType {
     FullOuter,
     LeftOuter,
     RightOuter,
-    LeftAnti,
     LeftSemi,
+    RightSemi,
+    LeftAnti,
+    RightAnti,
     Cross,
 }
 

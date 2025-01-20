@@ -12,8 +12,7 @@ use crate::error::{PlanError, PlanResult};
 pub(crate) fn get_built_in_window_function(
     name: &str,
 ) -> PlanResult<expr::WindowFunctionDefinition> {
-    let name = name.to_lowercase();
-    match name.as_str() {
+    match name {
         "avg" => Ok(expr::WindowFunctionDefinition::AggregateUDF(
             average::avg_udaf(),
         )),

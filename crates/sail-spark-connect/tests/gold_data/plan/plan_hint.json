@@ -1,7 +1,7 @@
 {
   "tests": [
     {
-      "input": "\nSELECT\n/*+ REPARTITION(100, c), BROADCASTJOIN(u), COALESCE(50), REPARTITION(300, c) */\n* FROM t\n        ",
+      "input": "\nSELECT\n/*+ REPARTITION(100, c), BROADCASTJOIN(u), COALESCE(50), REPARTITION(300, c) */\n* FROM t\n      ",
       "output": {
         "success": {
           "query": {
@@ -751,7 +751,9 @@
                       },
                       "condition": {
                         "literal": {
-                          "boolean": true
+                          "boolean": {
+                            "value": true
+                          }
                         }
                       }
                     },

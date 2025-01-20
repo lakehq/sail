@@ -1,38 +1,9 @@
-use chrono::{Offset, Utc};
-use chrono_tz::Tz;
 use datafusion::prelude::SessionContext;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
-use crate::error::{SparkError, SparkResult};
+use crate::error::SparkResult;
 use crate::session::SparkExtension;
-use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
 use crate::spark::connect::{ConfigResponse, KeyValue};
-
-fn config_set_timezone(ctx: &SessionContext, value: String) -> SparkResult<()> {
-    let state = ctx.state_ref();
-    let mut state = state.write();
-    let offset_string = if value.starts_with("+") || value.starts_with("-") {
-        value.clone()
-    } else if value.to_lowercase() == "z" {
-        "+00:00".to_string()
-    } else {
-        let tz: Tz = value
-            .parse()
-            .map_err(|e| SparkError::invalid(format!("invalid time zone: {e}")))?;
-        let local_time_offset = Utc::now()
-            .with_timezone(&tz)
-            .offset()
-            .fix()
-            .local_minus_utc();
-        format!(
-            "{:+03}:{:02}",
-            local_time_offset / 3600,
-            (local_time_offset.abs() % 3600) / 60
-        )
-    };
-    state.config_mut().options_mut().execution.time_zone = Some(offset_string);
-    Ok(())
-}
 
 pub(crate) fn handle_config_get(
     ctx: &SessionContext,
@@ -56,13 +27,6 @@ pub(crate) fn handle_config_set(
     let spark = SparkExtension::get(ctx)?;
     let kv: Vec<ConfigKeyValue> = kv.into_iter().map(Into::into).collect();
     let warnings = SparkRuntimeConfig::get_warnings(&kv);
-    for ConfigKeyValue { key, value } in &kv {
-        if key == SPARK_SQL_SESSION_TIME_ZONE {
-            if let Some(value) = value {
-                config_set_timezone(ctx, value.clone())?;
-            }
-        }
-    }
     spark.set_config(kv)?;
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),

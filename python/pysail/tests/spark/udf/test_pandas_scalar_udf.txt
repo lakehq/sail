@@ -1,0 +1,28 @@
+>>> from typing import Iterator
+>>> import pandas as pd
+>>> from pyspark.sql.functions import pandas_udf
+>>>
+>>> @pandas_udf("string")
+... def upper(s):
+...     return s.str.upper()
+...
+>>> spark.sql("SELECT 'hello' as v").select(upper("v")).show()
++--------+
+|upper(v)|
++--------+
+|   HELLO|
++--------+
+
+>>> @pandas_udf("long")
+... def square(iterator: Iterator[pd.Series]) -> Iterator[pd.Series]:
+...     for s in iterator:
+...         yield s**2
+...
+>>> spark.range(3).select(square("id")).show()
++----------+
+|square(id)|
++----------+
+|         0|
+|         1|
+|         4|
++----------+

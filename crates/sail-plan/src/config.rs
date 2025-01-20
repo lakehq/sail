@@ -2,8 +2,10 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use sail_python_udf::config::SparkUdfConfig;
+use sail_common::datetime::get_system_timezone;
+use sail_python_udf::config::PySparkUdfConfig;
 
+use crate::error::PlanResult;
 use crate::formatter::{DefaultPlanFormatter, PlanFormatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
@@ -17,7 +19,9 @@ pub enum TimestampType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     /// The time zone of the session.
-    pub timezone: String,
+    pub session_timezone: String,
+    /// The time zone of the system.
+    pub system_timezone: String,
     /// The default timestamp type.
     pub timestamp_type: TimestampType,
     /// Whether to use large variable types in Arrow.
@@ -25,8 +29,7 @@ pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     /// The plan formatter.
     pub plan_formatter: Arc<F>,
     /// The Spark UDF configuration.
-    // TODO: use `Arc` for cheap cloning.
-    pub spark_udf_config: SparkUdfConfig,
+    pub pyspark_udf_config: Arc<PySparkUdfConfig>,
     /// The default file format for bounded tables.
     pub default_bounded_table_file_format: String,
     /// The default file format for unbounded tables.
@@ -38,14 +41,25 @@ pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     pub session_user_id: String,
 }
 
+impl PlanConfig {
+    pub fn new() -> PlanResult<Self> {
+        Ok(Self {
+            system_timezone: get_system_timezone()?,
+            pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
+            ..Default::default()
+        })
+    }
+}
+
 impl Default for PlanConfig {
     fn default() -> Self {
         Self {
-            timezone: "UTC".to_string(),
+            session_timezone: "UTC".to_string(),
+            system_timezone: "UTC".to_string(),
             timestamp_type: TimestampType::TimestampLtz,
             arrow_use_large_var_types: false,
             plan_formatter: Arc::new(DefaultPlanFormatter),
-            spark_udf_config: SparkUdfConfig::default(),
+            pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
             default_bounded_table_file_format: "PARQUET".to_string(),
             default_unbounded_table_file_format: "ARROW".to_string(),
             default_warehouse_directory: "spark-warehouse".to_string(),

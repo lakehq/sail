@@ -1,0 +1,20 @@
+>>> from pyspark.sql.functions import lit, udtf
+>>>
+>>> class Fibonacci:
+...     def eval(self, n: int):
+...         a, b = 0, 1
+...         for _ in range(n):
+...             a, b = b, a + b
+...             yield (a,)
+...
+>>> fibonacci = udtf(Fibonacci, returnType="value: integer")
+>>> fibonacci(lit(5)).show()
++-----+
+|value|
++-----+
+|    1|
+|    1|
+|    2|
+|    3|
+|    5|
++-----+

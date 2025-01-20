@@ -90,20 +90,20 @@
     {
       "input": "ANALYZE TABLES FROM a COMPUTE STATISTICS NOSCAN",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: TABLE, found: TABLES at Line: 1, Column: 9"
+        "failure": "invalid argument: extra tokens after statement: FROM"
       }
     },
     {
       "input": "ANALYZE TABLES IN a.b.c COMPUTE STATISTICS",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: TABLE, found: TABLES at Line: 1, Column: 9"
+        "failure": "invalid argument: extra tokens after statement: IN"
       }
     },
     {
       "input": "ANALYZE TABLES IN a.b.c COMPUTE STATISTICS xxxx",
       "exception": "\n[INVALID_SQL_SYNTAX.ANALYZE_TABLE_UNEXPECTED_NOSCAN] Invalid SQL syntax: ANALYZE TABLE(S) ... COMPUTE STATISTICS ... XXXX must be either NOSCAN or empty.(line 1, pos 43)\n\n== SQL ==\nANALYZE TABLES IN a.b.c COMPUTE STATISTICS xxxx\n-------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: TABLE, found: TABLES at Line: 1, Column: 9"
+        "failure": "invalid argument: extra tokens after statement: IN"
       }
     },
     {

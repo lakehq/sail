@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use datafusion::arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
@@ -8,20 +6,24 @@ use datafusion_expr::Expr;
 
 use crate::error::PlanResult;
 use crate::function::common::{Function, FunctionContext};
+use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 fn timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<Expr> {
     if args.len() == 1 {
         let arg = args.one()?;
         match arg {
-            // FIXME: Sail's SQL parser should parse the timestamp string into a timestamp
             Expr::Literal(ScalarValue::Utf8(Some(timestamp_string))) => {
                 let timestamp_micros =
                     string_to_timestamp_nanos(&timestamp_string).map(|x| x / 1_000)?;
-                let timezone: Arc<str> = function_context.plan_config().timezone.clone().into();
+                let timezone = PlanResolver::resolve_timezone(
+                    &sail_common::spec::TimeZoneInfo::SQLConfigured,
+                    function_context.plan_config().system_timezone.as_str(),
+                    &function_context.plan_config().timestamp_type,
+                )?;
                 Ok(Expr::Literal(ScalarValue::TimestampMicrosecond(
                     Some(timestamp_micros),
-                    Some(timezone),
+                    timezone,
                 )))
             }
             _ => Ok(expr_fn::to_timestamp_micros(vec![arg])),

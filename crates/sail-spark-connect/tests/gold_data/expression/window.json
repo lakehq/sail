@@ -309,7 +309,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 0
+                    "int32": {
+                      "value": 0
+                    }
                   }
                 }
               },
@@ -374,7 +376,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 0
+                    "int32": {
+                      "value": 0
+                    }
                   }
                 }
               },
@@ -439,7 +443,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 10
+                    "int32": {
+                      "value": 10
+                    }
                   }
                 }
               },
@@ -504,7 +510,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 10
+                    "int32": {
+                      "value": 10
+                    }
                   }
                 }
               },
@@ -569,7 +577,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "long": 2147483648
+                    "int64": {
+                      "value": 2147483648
+                    }
                   }
                 }
               },
@@ -634,7 +644,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "long": 2147483649
+                    "int64": {
+                      "value": 2147483649
+                    }
                   }
                 }
               },
@@ -703,12 +715,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -782,12 +798,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -857,7 +877,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 0
+                    "int32": {
+                      "value": 0
+                    }
                   }
                 }
               },
@@ -922,7 +944,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 0
+                    "int32": {
+                      "value": 0
+                    }
                   }
                 }
               },
@@ -987,14 +1011,18 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 10
+                    "int32": {
+                      "value": 10
+                    }
                   }
                 }
               },
               "upper": {
                 "value": {
                   "literal": {
-                    "integer": 5
+                    "int32": {
+                      "value": 5
+                    }
                   }
                 }
               }
@@ -1058,7 +1086,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 10
+                    "int32": {
+                      "value": 10
+                    }
                   }
                 }
               },
@@ -1123,7 +1153,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 10
+                    "int32": {
+                      "value": 10
+                    }
                   }
                 }
               },
@@ -1188,7 +1220,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "long": 2147483648
+                    "int64": {
+                      "value": 2147483648
+                    }
                   }
                 }
               },
@@ -1253,7 +1287,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "long": 2147483648
+                    "int64": {
+                      "value": 2147483648
+                    }
                   }
                 }
               },
@@ -1322,12 +1358,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -1401,12 +1441,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -1477,7 +1521,9 @@
               "upper": {
                 "value": {
                   "literal": {
-                    "integer": 0
+                    "int32": {
+                      "value": 0
+                    }
                   }
                 }
               }
@@ -1542,7 +1588,9 @@
               "upper": {
                 "value": {
                   "literal": {
-                    "long": 2147483649
+                    "int64": {
+                      "value": 2147483649
+                    }
                   }
                 }
               }
@@ -1611,12 +1659,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -1686,7 +1738,9 @@
               "upper": {
                 "value": {
                   "literal": {
-                    "integer": 5
+                    "int32": {
+                      "value": 5
+                    }
                   }
                 }
               }
@@ -1869,7 +1923,9 @@
               "upper": {
                 "value": {
                   "literal": {
-                    "long": 2147483649
+                    "int64": {
+                      "value": 2147483649
+                    }
                   }
                 }
               }
@@ -1938,12 +1994,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -2013,7 +2073,9 @@
               "upper": {
                 "value": {
                   "literal": {
-                    "integer": 5
+                    "int32": {
+                      "value": 5
+                    }
                   }
                 }
               }
@@ -2372,7 +2434,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 0
+                    "int32": {
+                      "value": 0
+                    }
                   }
                 }
               },
@@ -2437,7 +2501,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 0
+                    "int32": {
+                      "value": 0
+                    }
                   }
                 }
               },
@@ -2502,7 +2568,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 10
+                    "int32": {
+                      "value": 10
+                    }
                   }
                 }
               },
@@ -2567,7 +2635,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 10
+                    "int32": {
+                      "value": 10
+                    }
                   }
                 }
               },
@@ -2632,7 +2702,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "long": 2147483648
+                    "int64": {
+                      "value": 2147483648
+                    }
                   }
                 }
               },
@@ -2697,7 +2769,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "long": 2147483649
+                    "int64": {
+                      "value": 2147483649
+                    }
                   }
                 }
               },
@@ -2766,12 +2840,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -2845,12 +2923,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -2920,7 +3002,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 0
+                    "int32": {
+                      "value": 0
+                    }
                   }
                 }
               },
@@ -2985,7 +3069,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 0
+                    "int32": {
+                      "value": 0
+                    }
                   }
                 }
               },
@@ -3050,14 +3136,18 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 10
+                    "int32": {
+                      "value": 10
+                    }
                   }
                 }
               },
               "upper": {
                 "value": {
                   "literal": {
-                    "integer": 5
+                    "int32": {
+                      "value": 5
+                    }
                   }
                 }
               }
@@ -3121,7 +3211,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 10
+                    "int32": {
+                      "value": 10
+                    }
                   }
                 }
               },
@@ -3186,7 +3278,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "integer": 10
+                    "int32": {
+                      "value": 10
+                    }
                   }
                 }
               },
@@ -3251,7 +3345,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "long": 2147483648
+                    "int64": {
+                      "value": 2147483648
+                    }
                   }
                 }
               },
@@ -3316,7 +3412,9 @@
               "lower": {
                 "value": {
                   "literal": {
-                    "long": 2147483648
+                    "int64": {
+                      "value": 2147483648
+                    }
                   }
                 }
               },
@@ -3385,12 +3483,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -3464,12 +3566,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -3540,7 +3646,9 @@
               "upper": {
                 "value": {
                   "literal": {
-                    "integer": 0
+                    "int32": {
+                      "value": 0
+                    }
                   }
                 }
               }
@@ -3605,7 +3713,9 @@
               "upper": {
                 "value": {
                   "literal": {
-                    "long": 2147483649
+                    "int64": {
+                      "value": 2147483649
+                    }
                   }
                 }
               }
@@ -3674,12 +3784,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -3749,7 +3863,9 @@
               "upper": {
                 "value": {
                   "literal": {
-                    "integer": 5
+                    "int32": {
+                      "value": 5
+                    }
                   }
                 }
               }
@@ -3932,7 +4048,9 @@
               "upper": {
                 "value": {
                   "literal": {
-                    "long": 2147483649
+                    "int64": {
+                      "value": 2147483649
+                    }
                   }
                 }
               }
@@ -4001,12 +4119,16 @@
                     "arguments": [
                       {
                         "literal": {
-                          "integer": 3
+                          "int32": {
+                            "value": 3
+                          }
                         }
                       },
                       {
                         "literal": {
-                          "integer": 1
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
                     ],
@@ -4076,7 +4198,9 @@
               "upper": {
                 "value": {
                   "literal": {
-                    "integer": 5
+                    "int32": {
+                      "value": 5
+                    }
                   }
                 }
               }
@@ -4658,7 +4782,9 @@
                         },
                         {
                           "literal": {
-                            "integer": 1
+                            "int32": {
+                              "value": 1
+                            }
                           }
                         }
                       ],
@@ -4690,7 +4816,9 @@
                           },
                           {
                             "literal": {
-                              "integer": 2
+                              "int32": {
+                                "value": 2
+                              }
                             }
                           }
                         ],
@@ -4700,7 +4828,9 @@
                     },
                     {
                       "literal": {
-                        "integer": 1
+                        "int32": {
+                          "value": 1
+                        }
                       }
                     }
                   ],
@@ -4713,7 +4843,9 @@
               {
                 "child": {
                   "literal": {
-                    "integer": 2
+                    "int32": {
+                      "value": 2
+                    }
                   }
                 },
                 "direction": "unspecified",
@@ -4748,7 +4880,9 @@
                         },
                         {
                           "literal": {
-                            "integer": 1
+                            "int32": {
+                              "value": 1
+                            }
                           }
                         }
                       ],
@@ -4776,7 +4910,9 @@
                     },
                     {
                       "literal": {
-                        "integer": 1
+                        "int32": {
+                          "value": 1
+                        }
                       }
                     }
                   ],
@@ -4789,7 +4925,9 @@
               {
                 "child": {
                   "literal": {
-                    "integer": 2
+                    "int32": {
+                      "value": 2
+                    }
                   }
                 },
                 "direction": "unspecified",

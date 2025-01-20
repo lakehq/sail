@@ -29,7 +29,7 @@ impl PlanResolver<'_> {
         let columns: Vec<Column> = if columns.is_empty() {
             input.schema().columns()
         } else {
-            self.get_resolved_columns(
+            self.resolve_columns(
                 input.schema(),
                 columns.iter().map(|x| x.into()).collect(),
                 state,
@@ -64,7 +64,7 @@ impl PlanResolver<'_> {
                     order_by: None,
                     null_treatment: None,
                 })
-                .alias(state.register_field(format!("count_{}", column.name())));
+                .alias(state.register_field_name(format!("count_{}", column.name())));
                 all_aggregates.push(count);
             }
 
@@ -79,7 +79,7 @@ impl PlanResolver<'_> {
                             order_by: None,
                             null_treatment: None,
                         })
-                        .alias(state.register_field(format!("mean_{}", column.name())));
+                        .alias(state.register_field_name(format!("mean_{}", column.name())));
                         all_aggregates.push(mean);
                     }
                     if statistics.contains("stddev") {
@@ -91,7 +91,7 @@ impl PlanResolver<'_> {
                             order_by: None,
                             null_treatment: None,
                         })
-                        .alias(state.register_field(format!("stddev_{}", column.name())));
+                        .alias(state.register_field_name(format!("stddev_{}", column.name())));
                         all_aggregates.push(stddev);
                     }
                     if statistics.contains("25%") {
@@ -106,7 +106,7 @@ impl PlanResolver<'_> {
                             order_by: None,
                             null_treatment: None,
                         })
-                        .alias(state.register_field(format!("25%_{}", column.name())));
+                        .alias(state.register_field_name(format!("25%_{}", column.name())));
                         all_aggregates.push(percentile_25);
                     }
                     if statistics.contains("50%") {
@@ -118,7 +118,7 @@ impl PlanResolver<'_> {
                             order_by: None,
                             null_treatment: None,
                         })
-                        .alias(state.register_field(format!("50%_{}", column.name())));
+                        .alias(state.register_field_name(format!("50%_{}", column.name())));
                         all_aggregates.push(percentile_50);
                     }
                     if statistics.contains("75%") {
@@ -133,7 +133,7 @@ impl PlanResolver<'_> {
                             order_by: None,
                             null_treatment: None,
                         })
-                        .alias(state.register_field(format!("75%_{}", column.name())));
+                        .alias(state.register_field_name(format!("75%_{}", column.name())));
                         all_aggregates.push(percentile_75);
                     }
                 }
@@ -148,7 +148,7 @@ impl PlanResolver<'_> {
                     order_by: None,
                     null_treatment: None,
                 })
-                .alias(state.register_field(format!("min_{}", column.name())));
+                .alias(state.register_field_name(format!("min_{}", column.name())));
                 all_aggregates.push(min);
             }
 
@@ -161,7 +161,7 @@ impl PlanResolver<'_> {
                     order_by: None,
                     null_treatment: None,
                 })
-                .alias(state.register_field(format!("max_{}", column.name())));
+                .alias(state.register_field_name(format!("max_{}", column.name())));
                 all_aggregates.push(max);
             }
         }
@@ -170,14 +170,14 @@ impl PlanResolver<'_> {
             .aggregate(Vec::<Expr>::new(), all_aggregates)?
             .build()?;
 
-        let summary_column = state.register_field("summary");
+        let summary_alias = state.register_field_name("summary");
         let create_stat_row =
             |stat_name: &str, stats_by_column: Vec<(String, Expr)>| -> PlanResult<LogicalPlan> {
                 let stats_plan_clone = stats_plan.clone();
                 let mut projections =
                     vec![
                         Expr::Literal(ScalarValue::Utf8(Some(stat_name.to_string())))
-                            .alias(&summary_column),
+                            .alias(&summary_alias),
                     ];
                 for (col_name, expr) in stats_by_column {
                     let expr = expr.cast_to(&adt::DataType::Utf8, stats_plan_clone.schema())?;
@@ -196,46 +196,48 @@ impl PlanResolver<'_> {
             for column in &columns {
                 let column_name = column.name().to_string();
                 let stat_expr = match stat_type {
-                    "count" => Some(Expr::Column(self.get_resolved_column(
+                    "count" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("count_{}", column_name),
                         state,
                     )?)),
                     "mean" => self
-                        .maybe_get_resolved_column(
+                        .resolve_optional_column(
                             stats_plan.schema(),
                             &format!("mean_{}", column_name),
+                            None,
                             state,
                         )?
                         .map(Expr::Column),
                     "stddev" => self
-                        .maybe_get_resolved_column(
+                        .resolve_optional_column(
                             stats_plan.schema(),
                             &format!("stddev_{}", column_name),
+                            None,
                             state,
                         )?
                         .map(Expr::Column),
-                    "min" => Some(Expr::Column(self.get_resolved_column(
+                    "min" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("min_{}", column_name),
                         state,
                     )?)),
-                    "25%" => Some(Expr::Column(self.get_resolved_column(
+                    "25%" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("25%_{}", column_name),
                         state,
                     )?)),
-                    "50%" => Some(Expr::Column(self.get_resolved_column(
+                    "50%" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("50%_{}", column_name),
                         state,
                     )?)),
-                    "75%" => Some(Expr::Column(self.get_resolved_column(
+                    "75%" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("75%_{}", column_name),
                         state,
                     )?)),
-                    "max" => Some(Expr::Column(self.get_resolved_column(
+                    "max" => Some(Expr::Column(self.resolve_one_column(
                         stats_plan.schema(),
                         &format!("max_{}", column_name),
                         state,
@@ -269,9 +271,9 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(input, state).await?;
         let left_column: &str = (&left_column).into();
         let right_column: &str = (&right_column).into();
-        let cross_tab_column = state.register_field(format!("{left_column}_{right_column}"));
-        let left_column = self.get_resolved_column(input.schema(), left_column, state)?;
-        let right_column = self.get_resolved_column(input.schema(), right_column, state)?;
+        let cross_tab_alias = state.register_field_name(format!("{left_column}_{right_column}"));
+        let left_column = self.resolve_one_column(input.schema(), left_column, state)?;
+        let right_column = self.resolve_one_column(input.schema(), right_column, state)?;
 
         let projected_plan = LogicalPlanBuilder::from(input.clone())
             .project(vec![Expr::Cast(expr::Cast {
@@ -306,7 +308,7 @@ impl PlanResolver<'_> {
             for i in 0..array.len() {
                 if array.is_valid(i) {
                     let value = array.value(i).to_string();
-                    let alias = state.register_field(&value);
+                    let alias = state.register_field_name(&value);
                     unique_values.push((value, alias));
                 }
             }
@@ -341,16 +343,34 @@ impl PlanResolver<'_> {
                     order_by: None,
                     null_treatment: None,
                 })
-                .alias(state.register_field(value)))
+                .alias(state.register_field_name(value)))
             })
             .collect::<PlanResult<Vec<Expr>>>()?;
 
         let plan = LogicalPlanBuilder::from(projected_counts_plan)
             .aggregate(
-                vec![col(left_column).alias(cross_tab_column)],
+                vec![col(left_column).alias(cross_tab_alias.as_str())],
                 aggregate_exprs,
             )?
             .build()?;
-        Ok(plan)
+        let expr: Vec<Expr> = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .map(|column| {
+                if column.name() == cross_tab_alias {
+                    Expr::Cast(expr::Cast {
+                        expr: Box::new(Expr::Column(column.clone())),
+                        data_type: adt::DataType::Utf8,
+                    })
+                } else {
+                    Expr::Column(column)
+                }
+            })
+            .collect();
+        LogicalPlanBuilder::from(plan)
+            .project(expr)?
+            .build()
+            .map_err(Into::into)
     }
 }

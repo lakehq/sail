@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.2.0"
+version = "0.2.1"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -64,7 +64,7 @@ path = ".venvs/default"
 python = "3.11"
 installer = "pip"
 dependencies = [
-    "pyspark[connect]==3.5.1",
+    "pyspark[connect]==3.5.4",
     # We do not specify the extra dependencies for Ibis since we install PySpark explicitly.
     "ibis-framework~=9.4",
     "pyarrow-hotfix>=0.4,<1", # (required by Ibis PySpark)
@@ -141,7 +141,7 @@ PYTHONPATH = "{root}/scripts/spark-tests"
 IBIS_TESTING_DATA_DIR = "{root}/opt/ibis-testing-data"
 
 [tool.hatch.envs.test.scripts]
-install-pyspark = "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.1.tar.gz"
+install-pyspark = "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.4.tar.gz"
 install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"
 
 [tool.hatch.envs.test.overrides]
@@ -162,6 +162,11 @@ packages = ["python/pysail"]
 
 [tool.pytest.ini_options]
 testpaths = ["python"]
+# Do not add configuration here to modify the test behavior.
+# Instead, add the configuration using a hook in `conftest.py`.
+# The `pyproject.toml` file is not part of the installed package,
+# so the configuration here will not be available when testing the
+# installed package via `pytest --pyargs pysail`.
 
 [tool.maturin]
 python-source = "python"

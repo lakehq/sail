@@ -9,7 +9,7 @@ use sail_common::spec;
 use sail_common::udf::StreamUDF;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::cereal::pyspark_udtf::PySparkUdtfPayload;
-use sail_python_udf::udf::get_udf_name;
+use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
@@ -40,7 +40,12 @@ impl PlanResolver<'_> {
     pub(super) fn resolve_python_udf(
         &self,
         function: spec::FunctionDefinition,
+        state: &mut PlanResolverState,
     ) -> PlanResult<PythonUdf> {
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.config_mut().arrow_allow_large_var_types = true;
+
         let (output_type, eval_type, command, python_version) = match function {
             spec::FunctionDefinition::PythonUdf {
                 output_type,
@@ -55,7 +60,7 @@ impl PlanResolver<'_> {
                 return plan_err!("Can not load class {class_name}")?;
             }
         };
-        let output_type = self.resolve_data_type(&output_type)?;
+        let output_type = self.resolve_data_type(&output_type, state)?;
         Ok(PythonUdf {
             python_version,
             eval_type,
@@ -67,7 +72,12 @@ impl PlanResolver<'_> {
     pub(super) fn resolve_python_udtf(
         &self,
         function: spec::TableFunctionDefinition,
+        state: &mut PlanResolverState,
     ) -> PlanResult<PythonUdtf> {
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.config_mut().arrow_allow_large_var_types = true;
+
         let (return_type, eval_type, command, python_version) = match function {
             spec::TableFunctionDefinition::PythonUdtf {
                 return_type,
@@ -76,7 +86,7 @@ impl PlanResolver<'_> {
                 python_version,
             } => (return_type, eval_type, command, python_version),
         };
-        let return_type = self.resolve_data_type(&return_type)?;
+        let return_type = self.resolve_data_type(&return_type, state)?;
         Ok(PythonUdtf {
             python_version,
             eval_type,
@@ -93,8 +103,13 @@ impl PlanResolver<'_> {
         argument_names: &[String],
         schema: &DFSchemaRef,
         deterministic: bool,
+        state: &mut PlanResolverState,
     ) -> PlanResult<Expr> {
         use spec::PySparkUdfType;
+
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.config_mut().arrow_allow_large_var_types = true;
 
         let input_types: Vec<DataType> = arguments
             .iter()
@@ -105,7 +120,7 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &((0..arguments.len()).collect::<Vec<_>>()),
-            &self.config.spark_udf_config,
+            &self.config.pyspark_udf_config,
         )?;
 
         match function.eval_type {
@@ -129,6 +144,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
@@ -143,6 +159,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
@@ -157,6 +174,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
@@ -171,6 +189,7 @@ impl PlanResolver<'_> {
                     deterministic,
                     input_types,
                     function.output_type,
+                    self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
@@ -185,6 +204,7 @@ impl PlanResolver<'_> {
                     argument_names.to_vec(),
                     input_types,
                     function.output_type,
+                    self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::AggregateFunction(expr::AggregateFunction {
                     func: Arc::new(AggregateUDF::from(udaf)),
@@ -210,13 +230,17 @@ impl PlanResolver<'_> {
         deterministic: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.config_mut().arrow_allow_large_var_types = true;
+
         let payload = PySparkUdtfPayload::build(
             &function.python_version,
             &function.command,
             function.eval_type,
             arguments.len(),
             &function.return_type,
-            &self.config.spark_udf_config,
+            &self.config.pyspark_udf_config,
         )?;
         let kind = match function.eval_type {
             spec::PySparkUdfType::Table => PySparkUdtfKind::Table,
@@ -237,7 +261,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|col| {
                 Ok(NamedExpr::new(
-                    vec![state.get_field_name(col.name())?.clone()],
+                    vec![state.get_field_info(col.name())?.name().to_string()],
                     Expr::Column(col),
                 ))
             })
@@ -264,9 +288,9 @@ impl PlanResolver<'_> {
             function.return_type,
             function_output_names,
             deterministic,
-            (&self.config.spark_udf_config).into(),
+            self.config.pyspark_udf_config.clone(),
         )?;
-        let output_names = state.register_fields(&udtf.output_schema());
+        let output_names = state.register_fields(udtf.output_schema().fields());
         let output_qualifiers = (0..output_names.len())
             .map(|i| {
                 if i < passthrough_columns {

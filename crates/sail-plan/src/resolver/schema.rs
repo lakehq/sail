@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef};
-use datafusion::datasource::TableProvider;
-use datafusion_common::{Column, DFSchema, DFSchemaRef, SchemaReference, TableReference};
+use datafusion_common::{Column, DFSchemaRef, SchemaReference, TableReference};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::{FieldName, PlanResolverState};
+use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
@@ -50,128 +49,107 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(super) async fn resolve_table_schema(
+    pub(super) async fn resolve_schema_projection(
         &self,
-        table_reference: &TableReference,
-        table_provider: &Arc<dyn TableProvider>,
+        schema: SchemaRef,
         columns: &[spec::Identifier],
     ) -> PlanResult<SchemaRef> {
-        let columns: Vec<&str> = columns.iter().map(|c| c.into()).collect();
-        let schema = table_provider.schema();
-        if columns.is_empty() {
-            Ok(schema)
-        } else {
-            let df_schema =
-                DFSchema::try_from_qualified_schema(table_reference.clone(), schema.as_ref())?;
-            let fields = columns
-                .into_iter()
-                .map(|c| {
-                    let column_index = df_schema
-                        .index_of_column_by_name(None, c)
-                        .ok_or_else(|| PlanError::invalid(format!("Column {c} not found")))?;
-                    Ok(schema.field(column_index).clone())
-                })
-                .collect::<PlanResult<Vec<_>>>()?;
-            Ok(SchemaRef::new(Schema::new(Fields::from(fields))))
-        }
-    }
-
-    pub(super) fn get_resolved_columns(
-        &self,
-        schema: &DFSchemaRef,
-        unresolved: Vec<&str>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<Vec<Column>> {
-        unresolved
+        let fields = columns
             .iter()
-            .map(|unresolved_name| self.get_resolved_column(schema, unresolved_name, state))
-            .collect::<PlanResult<Vec<Column>>>()
+            .map(|column| {
+                let column: &str = column.into();
+                let matches = schema
+                    .fields()
+                    .iter()
+                    .filter(|f| f.name().eq_ignore_ascii_case(column))
+                    .collect::<Vec<_>>();
+                if matches.is_empty() {
+                    Err(PlanError::invalid(format!("column {column} not found")))
+                } else {
+                    matches
+                        .one()
+                        .map_err(|_| PlanError::invalid(format!("ambiguous column {column}")))
+                        .cloned()
+                }
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(SchemaRef::new(Schema::new(Fields::from(fields))))
     }
 
-    pub(super) fn maybe_get_resolved_column(
+    pub(super) fn resolve_column_candidates(
         &self,
         schema: &DFSchemaRef,
-        unresolved: &str,
+        name: &str,
+        plan_id: Option<i64>,
+        state: &mut PlanResolverState,
+    ) -> Vec<Column> {
+        schema
+            .iter()
+            .filter(|(_, field)| {
+                state
+                    .get_field_info(field.name())
+                    .is_ok_and(|info| info.matches(name, plan_id))
+            })
+            .map(|x| x.into())
+            .collect()
+    }
+
+    pub(super) fn resolve_optional_column(
+        &self,
+        schema: &DFSchemaRef,
+        name: &str,
+        plan_id: Option<i64>,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<Column>> {
-        let cols = schema.columns();
-        let matches: Vec<_> = cols
-            .iter()
-            .filter(|column| {
-                state
-                    .get_field_name(column.name())
-                    .ok()
-                    .map_or(false, |n| n.eq_ignore_ascii_case(unresolved))
-            })
-            .collect();
-        if matches.len() > 1 {
+        let columns = self.resolve_column_candidates(schema, name, plan_id, state);
+        if columns.len() > 1 {
             return Err(PlanError::AnalysisError(format!(
-                "[AMBIGUOUS_REFERENCE] Reference `{unresolved}` is ambiguous, found: {} matches",
-                matches.len()
+                "[AMBIGUOUS_REFERENCE] Reference {name} is ambiguous, found: {} matches",
+                columns.len()
             )));
         }
-        if matches.is_empty() {
+        if columns.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(matches.one()?.clone()))
+            Ok(Some(columns.one()?.clone()))
         }
     }
 
-    pub(super) fn get_resolved_column(
+    pub(super) fn resolve_one_column(
         &self,
         schema: &DFSchemaRef,
-        unresolved: &str,
+        name: &str,
         state: &mut PlanResolverState,
     ) -> PlanResult<Column> {
-        let resolved = self.maybe_get_resolved_column(schema, unresolved, state)?;
-        if let Some(column) = resolved {
+        if let Some(column) = self.resolve_optional_column(schema, name, None, state)? {
             Ok(column)
         } else {
             Err(PlanError::AnalysisError(format!(
-                "[AMBIGUOUS_REFERENCE] Reference `{unresolved}` is ambiguous, found: 0 matches"
+                "[UNRESOLVED_COLUMN] Cannot find column {name}"
             )))
         }
     }
 
-    #[allow(dead_code)]
-    pub(super) fn get_unresolved_field_index(
+    pub(super) fn resolve_columns(
         &self,
-        field_names: &[FieldName],
-        unresolved: &str,
-    ) -> PlanResult<usize> {
-        let idx = field_names
+        schema: &DFSchemaRef,
+        names: Vec<&str>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<Column>> {
+        names
             .iter()
-            .position(|field_name| field_name.eq_ignore_ascii_case(unresolved))
-            .ok_or_else(|| {
-                PlanError::AnalysisError(format!(
-                    "[AMBIGUOUS_REFERENCE] Reference `{unresolved}` is ambiguous, found: 0 matches"
-                ))
-            })?;
-        Ok(idx)
+            .map(|name| self.resolve_one_column(schema, name, state))
+            .collect::<PlanResult<Vec<Column>>>()
     }
 
-    #[allow(dead_code)]
-    pub(super) fn get_unresolved_schema_index(
-        &self,
+    pub(super) fn get_field_names(
         schema: &DFSchemaRef,
-        unresolved: &str,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<usize> {
-        let field_names = state.get_field_names(schema.inner())?;
-        self.get_unresolved_field_index(&field_names, unresolved)
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn get_unresolved_schema_indices(
-        &self,
-        schema: &DFSchemaRef,
-        unresolved: Vec<&str>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<Vec<usize>> {
-        let field_names = state.get_field_names(schema.inner())?;
-        unresolved
-            .into_iter()
-            .map(|unresolved_name| self.get_unresolved_field_index(&field_names, unresolved_name))
-            .collect::<PlanResult<Vec<usize>>>()
+        state: &PlanResolverState,
+    ) -> PlanResult<Vec<String>> {
+        schema
+            .fields()
+            .iter()
+            .map(|field| Ok(state.get_field_info(field.name())?.name().to_string()))
+            .collect::<PlanResult<Vec<_>>>()
     }
 }

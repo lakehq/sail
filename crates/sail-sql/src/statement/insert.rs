@@ -8,26 +8,29 @@ use crate::utils::normalize_ident;
 
 // Spark Syntax reference:
 //  https://docs.databricks.com/en/sql/language-manual/sql-ref-syntax-dml-insert-into.html
-//  https://spark.apache.org/docs/3.5.1/sql-ref-syntax-dml-insert-table.html#content
+//  https://spark.apache.org/docs/3.5.4/sql-ref-syntax-dml-insert-table.html#content
 // TODO: Custom parsing to fully sport Spark's INSERT syntax
 pub(crate) fn insert_statement_to_plan(insert: ast::Insert) -> SqlResult<spec::Plan> {
     let ast::Insert {
         or,
         ignore,
         into: _,
-        table_name,
         table_alias,
         columns,
         overwrite,
         source,
+        assignments: _,
         partitioned,
         after_columns,
-        table: _,
+        table,
+        has_table_keyword: _,
         on,
         returning,
         replace_into,
         priority,
         insert_alias,
+        settings: _,
+        format_clause: _,
     } = insert;
 
     let Some(source) = source else {
@@ -70,6 +73,11 @@ pub(crate) fn insert_statement_to_plan(insert: ast::Insert) -> SqlResult<spec::P
         return Err(SqlError::invalid("INSERT with an alias is not supported."));
     }
 
+    let ast::TableObject::TableName(table_name) = table else {
+        return Err(SqlError::invalid(
+            "INSERT without table name is not supported.",
+        ));
+    };
     let table_name = from_ast_object_name_normalized(&table_name)?;
     let columns: Vec<spec::Identifier> = columns
         .iter()

@@ -9,6 +9,7 @@ use crate::extension::function::struct_function::StructFunction;
 use crate::extension::function::table_input::TableInput;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
+use crate::resolver::PlanResolver;
 
 /// Rewrites table input expression as cross join in UDTF lateral view.
 pub(crate) struct TableInputRewriter<'s> {
@@ -37,9 +38,7 @@ impl TreeNodeRewriter for TableInputRewriter<'_> {
             return Ok(Transformed::no(node));
         };
         let plan = mem::replace(&mut self.plan, empty_logical_plan());
-        let field_names = self
-            .state
-            .get_field_names(table.plan().schema().inner())
+        let field_names = PlanResolver::get_field_names(table.plan().schema(), self.state)
             .map_err(|e| plan_datafusion_err!("{e}"))?;
         let columns = table
             .plan()

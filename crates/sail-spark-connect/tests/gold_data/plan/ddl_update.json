@@ -36,7 +36,9 @@
                   ],
                   {
                     "literal": {
-                      "string": "Robert"
+                      "utf8": {
+                        "value": "Robert"
+                      }
                     }
                   }
                 ],
@@ -46,7 +48,9 @@
                   ],
                   {
                     "literal": {
-                      "integer": 32
+                      "int32": {
+                        "value": 32
+                      }
                     }
                   }
                 ]
@@ -105,7 +109,9 @@
                         },
                         {
                           "literal": {
-                            "integer": 2
+                            "int32": {
+                              "value": 2
+                            }
                           }
                         }
                       ],
@@ -132,7 +138,9 @@
                   ],
                   {
                     "literal": {
-                      "string": "Robert"
+                      "utf8": {
+                        "value": "Robert"
+                      }
                     }
                   }
                 ],
@@ -143,7 +151,9 @@
                   ],
                   {
                     "literal": {
-                      "integer": 32
+                      "int32": {
+                        "value": 32
+                      }
                     }
                   }
                 ]

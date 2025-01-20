@@ -8,6 +8,7 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 ryu = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
@@ -19,3 +20,6 @@ num_enum = { workspace = true }
 sqlparser = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
+half = { workspace = true }
+log = { workspace = true }
+iana-time-zone = { workspace = true }

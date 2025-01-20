@@ -5,7 +5,7 @@
       "output": {
         "success": {
           "literal": {
-            "date": {
+            "date32": {
               "days": 17897
             }
           }
@@ -17,7 +17,7 @@
       "output": {
         "success": {
           "literal": {
-            "date": {
+            "date32": {
               "days": 17897
             }
           }
@@ -29,7 +29,7 @@
       "output": {
         "success": {
           "literal": {
-            "date": {
+            "date32": {
               "days": 17910
             }
           }
@@ -48,7 +48,7 @@
       "output": {
         "success": {
           "literal": {
-            "date": {
+            "date32": {
               "days": 16871
             }
           }

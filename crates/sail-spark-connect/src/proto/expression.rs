@@ -35,12 +35,12 @@ impl TryFrom<Expression> for spec::Expr {
                 unparsed_identifier,
                 plan_id,
             }) => {
-                // TODO: Revisit heuristic for parsing object names.
-                let name = if unparsed_identifier.contains('.') {
-                    parse_object_name(unparsed_identifier.as_str())?
-                } else {
-                    spec::ObjectName::new_unqualified(unparsed_identifier.into())
-                };
+                // The unparsed identifier such as `a.b` is supposed to be parsed as nested
+                // object names. However, there may be raw identifier such as `array(1)` which
+                // cannot be parsed. Therefore, when parsing fails, we create an object name
+                // containing the single raw identifier.
+                let name = parse_object_name(unparsed_identifier.as_str())
+                    .unwrap_or_else(|_| spec::ObjectName::from(vec![unparsed_identifier]));
                 Ok(spec::Expr::UnresolvedAttribute { name, plan_id })
             }
             ExprType::UnresolvedFunction(UnresolvedFunction {
@@ -185,13 +185,16 @@ impl TryFrom<Expression> for spec::Expr {
             ExprType::CallFunction(CallFunction {
                 function_name,
                 arguments,
-            }) => Ok(spec::Expr::CallFunction {
-                function_name,
-                arguments: arguments
-                    .into_iter()
-                    .map(|x| x.try_into())
-                    .collect::<SparkResult<_>>()?,
-            }),
+            }) => {
+                let function_name = parse_object_name(function_name.as_str())?;
+                Ok(spec::Expr::CallFunction {
+                    function_name,
+                    arguments: arguments
+                        .into_iter()
+                        .map(|x| x.try_into())
+                        .collect::<SparkResult<_>>()?,
+                })
+            }
             ExprType::Extension(_) => Err(SparkError::todo("extension expression")),
         }
     }
@@ -448,16 +451,16 @@ mod tests {
     fn test_sql_to_expression() -> Result<(), Box<dyn std::error::Error>> {
         // Run the test in a separate thread with a large stack size
         // so that it can handle deeply nested expressions.
-        let builder = thread::Builder::new().stack_size(128 * 1024 * 1024);
+        let builder = thread::Builder::new().stack_size(160 * 1024 * 1024);
         let handle = builder.spawn(|| {
             test_gold_set(
                 "tests/gold_data/expression/*.json",
                 |sql: String| {
                     let expr = parse_wildcard_expression(&sql)?;
                     if sql.len() > 128 {
-                        Ok(spec::Expr::Literal(spec::Literal::String(
-                            "Result omitted for long expression.".to_string(),
-                        )))
+                        Ok(spec::Expr::Literal(spec::Literal::Utf8 {
+                            value: Some("Result omitted for long expression.".to_string()),
+                        }))
                     } else {
                         Ok(expr)
                     }
