@@ -36,7 +36,7 @@ using the following heuristics.
 
 ::: info
 
-If you have previously checked out the Spark repository and encounter the error `unknown revision or path not in the working tree` when running the `build-pyspark.sh` script, please run `git fetch` in the `opt/spark` directory to update the repository.
+If you have previously cloned the Spark repository and encounter the error `unknown revision or path not in the working tree` when running the `build-pyspark.sh` script, please run `git fetch` in the `opt/spark` directory to update the repository.
 
 :::
 
