@@ -14,7 +14,7 @@ pub enum Expr {
     ObjectName(ObjectName),
     Parenthesized(
         LeftParenthesis,
-        #[parser(function = |(e, _)| boxed(e))] Box<Expr>,
+        #[parser(function = |(e, _), _| boxed(e))] Box<Expr>,
         RightParenthesis,
     ),
 }

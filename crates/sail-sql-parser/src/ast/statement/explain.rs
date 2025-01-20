@@ -10,7 +10,7 @@ use crate::container::boxed;
 pub struct ExplainStatement {
     pub explain: Explain,
     pub format: Option<ExplainFormat>,
-    #[parser(function = boxed)]
+    #[parser(function = |s, _| boxed(s))]
     pub statement: Box<Statement>,
 }
 

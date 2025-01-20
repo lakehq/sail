@@ -7,11 +7,10 @@ use crate::ast::keywords::{
     Integer, Interval, Local, Long, Map, Minute, Month, Not, Null, Second, Short, Smallint, Struct,
     Time, Timestamp, Tinyint, To, Unsigned, Varchar, Void, With, Without, Year, Zone,
 };
-use crate::ast::literal::StringLiteral;
+use crate::ast::literal::{IntegerLiteral, StringLiteral};
 use crate::ast::operator::{
     Colon, Comma, GreaterThan, LeftParenthesis, LessThan, RightParenthesis,
 };
-use crate::ast::value::IntegerValue;
 use crate::container::{boxed, sequence, Sequence};
 
 #[allow(unused)]
@@ -45,24 +44,24 @@ pub enum DataType {
         Decimal,
         Option<(
             LeftParenthesis,
-            IntegerValue,
-            Option<(Comma, IntegerValue)>,
+            IntegerLiteral,
+            Option<(Comma, IntegerLiteral)>,
             RightParenthesis,
         )>,
     ),
     Char(
         Char,
-        Option<(LeftParenthesis, IntegerValue, RightParenthesis)>,
+        Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
     ),
     Character(
         Character,
-        Option<(LeftParenthesis, IntegerValue, RightParenthesis)>,
+        Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
     ),
-    Varchar(Varchar, LeftParenthesis, IntegerValue, RightParenthesis),
+    Varchar(Varchar, LeftParenthesis, IntegerLiteral, RightParenthesis),
     String(crate::ast::keywords::String),
     Timestamp(
         Timestamp,
-        Option<(LeftParenthesis, IntegerValue, RightParenthesis)>,
+        Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
         Option<TimezoneType>,
     ),
     Date(Date),
@@ -72,22 +71,23 @@ pub enum DataType {
     Array(
         Array,
         LessThan,
-        #[parser(function = |x| boxed(x))] Box<DataType>,
+        #[parser(function = |x, _| boxed(x))] Box<DataType>,
         GreaterThan,
     ),
     Struct(
         Struct,
         LessThan,
-        #[parser(function = |x| boxed(sequence(StructField::parser(x), Comma::parser(()))))]
+        #[parser(function = |x, o|
+            boxed(sequence(StructField::parser(x, o), Comma::parser((), o))))]
         Box<Sequence<StructField, Comma>>,
         GreaterThan,
     ),
     Map(
         Map,
         LessThan,
-        #[parser(function = |x| boxed(x))] Box<DataType>,
+        #[parser(function = |x, _| boxed(x))] Box<DataType>,
         Comma,
-        #[parser(function = |x| boxed(x))] Box<DataType>,
+        #[parser(function = |x, _| boxed(x))] Box<DataType>,
         GreaterThan,
     ),
 }
@@ -138,7 +138,7 @@ pub enum TimezoneType {
 pub struct StructField {
     pub identifier: Ident,
     pub colon: Option<Colon>,
-    #[parser(function = |x| x)]
+    #[parser(function = |x, _| x)]
     pub data_type: DataType,
     pub not_null: Option<(Not, Null)>,
     pub comment: Option<(Comment, StringLiteral)>,

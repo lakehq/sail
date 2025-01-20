@@ -49,6 +49,22 @@ pub enum TokenValue<'a> {
     MultiLineComment { raw: &'a str },
     /// A punctuation character.
     Punctuation(Punctuation),
+    /// A placeholder used to represent a class of expected token values in errors.
+    /// This token value will not be present in the lexer output.
+    Placeholder(TokenClass),
+}
+
+/// A class of SQL token values.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenClass {
+    /// An identifier.
+    Identifier,
+    /// A numeric literal.
+    Number,
+    /// An integer literal without sign or suffix.
+    Integer,
+    /// A string.
+    String,
 }
 
 /// A style of SQL string literal.
@@ -119,7 +135,7 @@ macro_rules! for_all_punctuations {
 
 macro_rules! punctuation_enum {
     ([$(($ascii:literal, $ch:literal, $p:ident)),* $(,)?]) => {
-        #[derive(Debug, Clone, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Punctuation {
             $(
                 #[doc = concat!("The `", $ch, "` character (ASCII ", stringify!($ascii), ").")]
@@ -136,7 +152,7 @@ macro_rules! punctuation_enum {
             }
 
             #[allow(unused)]
-            pub fn to_char(&self) -> char {
+            pub fn to_char(self) -> char {
                 match self {
                     $(Self::$p => $ch,)*
                 }

@@ -12,27 +12,35 @@ use crate::tree::TreeParser;
 use crate::SqlParserOptions;
 
 #[allow(unused)]
-pub fn parser<'a>(_options: &SqlParserOptions) -> impl Parser<'a, &'a [Token<'a>], Vec<Statement>> {
+pub fn parser<'a, 'opt>(
+    options: &'opt SqlParserOptions,
+) -> impl Parser<'a, &'a [Token<'a>], Vec<Statement>>
+where
+    'opt: 'a,
+{
     let mut statement = Recursive::declare();
     let mut query = Recursive::declare();
     let mut expression = Recursive::declare();
     let mut data_type = Recursive::declare();
 
-    statement.define(Statement::parser((
-        statement.clone(),
-        query.clone(),
-        expression.clone(),
-        data_type.clone(),
-    )));
-    query.define(Query::parser((query.clone(), expression.clone())));
-    expression.define(Expr::parser((expression.clone(), query.clone())));
-    data_type.define(DataType::parser(data_type.clone()));
+    statement.define(Statement::parser(
+        (
+            statement.clone(),
+            query.clone(),
+            expression.clone(),
+            data_type.clone(),
+        ),
+        options,
+    ));
+    query.define(Query::parser((query.clone(), expression.clone()), options));
+    expression.define(Expr::parser((expression.clone(), query.clone()), options));
+    data_type.define(DataType::parser(data_type.clone(), options));
 
     statement
         .padded_by(
             whitespace()
                 .ignored()
-                .or(Semicolon::parser(()).ignored())
+                .or(Semicolon::parser((), options).ignored())
                 .repeated(),
         )
         .repeated()

@@ -1,8 +1,10 @@
+use chumsky::extra::ParserExtra;
 use chumsky::Parser;
 use paste::paste;
 
 use crate::token::Token;
 use crate::tree::TreeParser;
+use crate::SqlParserOptions;
 
 macro_rules! nested {
     (@fold $acc:tt) => { $acc };
@@ -12,15 +14,19 @@ macro_rules! nested {
 
 macro_rules! impl_tree_parser_for_tuple {
     ($T:ident $(,$Ts:ident)*) => {
-        impl<'a, $T $(,$Ts)*, A> TreeParser<'a, A> for ($T, $($Ts,)*)
+        impl<'a, $T $(,$Ts)*, E, A> TreeParser<'a, E, A> for ($T, $($Ts,)*)
         where
-            $T: TreeParser<'a, A>
-            $(,$Ts: TreeParser<'a, A>)*
+            $T: TreeParser<'a, E, A>
+            $(,$Ts: TreeParser<'a, E, A>)*
+            , E: ParserExtra<'a, &'a [Token<'a>]>
             , A: Clone
         {
-            fn parser(args: A) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone{
-                let parser = T1::parser(args.clone())
-                    $(.then($Ts::parser(args.clone())))*;
+            fn parser(
+                args: A,
+                options: &SqlParserOptions,
+            ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
+                let parser = T1::parser(args.clone(), options)
+                    $(.then($Ts::parser(args.clone(), options)))*;
                 paste! {
                     parser.map(|nested!([<$T:lower>] $([<$Ts:lower>])*)| ([<$T:lower>], $([<$Ts:lower>],)*))
                 }

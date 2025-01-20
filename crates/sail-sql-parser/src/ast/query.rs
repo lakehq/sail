@@ -11,7 +11,7 @@ use crate::Sequence;
 #[parser(dependency = "(Query, Expr)")]
 pub struct Query {
     pub with_clause: Option<WithClause>,
-    #[parser(function = |(q, e)| SelectClause::parser((q, e)))]
+    #[parser(function = |(q, e), o| SelectClause::parser((q, e), o))]
     pub select_clause: SelectClause,
 }
 
@@ -26,6 +26,6 @@ pub struct WithClause {
 #[parser(dependency = "(Query, Expr)")]
 pub struct SelectClause {
     pub select: Select,
-    #[parser(function = |(q, e)| sequence(Expr::parser((e, q)), Comma::parser(())))]
+    #[parser(function = |(q, e), o| sequence(Expr::parser((e, q), o), Comma::parser((), o)))]
     pub expressions: Sequence<Expr, Comma>,
 }
