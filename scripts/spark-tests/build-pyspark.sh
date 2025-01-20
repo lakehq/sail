@@ -8,9 +8,9 @@ scripts_path="${project_path}/scripts/spark-tests"
 
 source "${project_path}/scripts/shell-tools/git-patch.sh"
 
-cd "${project_path}"/opt/spark
+apply_git_patch "${project_path}"/opt/spark "v3.5.4" "${scripts_path}"/spark-3.5.4.patch
 
-apply_git_patch "v3.5.4" "${scripts_path}"/spark-3.5.4.patch
+cd "${project_path}"/opt/spark
 
 ./build/mvn \
   --batch-mode \

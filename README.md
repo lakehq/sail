@@ -13,7 +13,7 @@ Currently, Sail features a drop-in replacement for Spark SQL and the Spark DataF
 Sail is available as a Python package on PyPI. You can install it using `pip`.
 
 ```bash
-pip install pysail
+pip install "pysail[spark]"
 ```
 
 Alternatively, you can install Sail from source for better performance for your hardware architecture.
@@ -54,7 +54,7 @@ No changes are needed in your PySpark code!
 ```python
 from pyspark.sql import SparkSession
 
-spark = SparkSession.builder.remote(f"sc://localhost:50051").getOrCreate()
+spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()
 spark.sql("SELECT 1 + 1").show()
 ```
 
