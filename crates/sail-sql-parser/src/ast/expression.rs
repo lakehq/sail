@@ -1,7 +1,7 @@
 use chumsky::extra::ParserExtra;
 use chumsky::pratt::{infix, left, postfix, prefix};
 use chumsky::prelude::choice;
-use chumsky::{IterParser, Parser};
+use chumsky::Parser;
 use either::Either;
 use sail_sql_macro::TreeParser;
 
@@ -53,7 +53,7 @@ pub enum AtomExpr {
         case: Case,
         #[parser(function = |(e, _), _| boxed(e).or_not())]
         operand: Option<Box<Expr>>,
-        #[parser(function = |(e, _), o| compose(e, o).repeated().collect())]
+        #[parser(function = |(e, _), o| compose(e, o))]
         conditions: Vec<CaseWhen>,
         #[parser(function = |(e, _), o| compose(e, o))]
         r#else: Option<CaseElse>,

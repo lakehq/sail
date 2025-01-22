@@ -14,6 +14,8 @@ pub struct Sequence<T, S> {
     pub tail: Vec<(S, T)>,
 }
 
+/// Given an item parser [`P`] for type [`T`] and a separator parser [`S`] for type [`S`],
+/// return a parser for type [`Sequence<T,S>`].
 pub fn sequence<'a, I, T, S, PT, PS, E>(
     item: PT,
     seperator: PS,
@@ -32,6 +34,7 @@ where
         })
 }
 
+/// Given a parser [`P`] for type [`O`], return a parser for type [`Box<O>`].
 pub fn boxed<'a, I, O, P, E>(parser: P) -> impl Parser<'a, I, Box<O>, E> + Clone
 where
     P: Parser<'a, I, O, E> + Clone,
@@ -41,6 +44,8 @@ where
     parser.map(Box::new)
 }
 
+/// Given a parser [`PL`] for type [`L`] and a parser [`PR`] for type [`R`],
+/// return a parser for type [`Either<L,R>`].
 pub fn either_or<'a, I, L, R, PL, PR, E>(
     left: PL,
     right: PR,
@@ -54,6 +59,7 @@ where
     left.map(Either::Left).or(right.map(Either::Right))
 }
 
+/// Create a parser for type [`T`] with arguments [`A`].
 pub fn compose<'a, T, I, E, A>(
     args: A,
     options: &ParserOptions,
@@ -66,6 +72,7 @@ where
     T::parser(args, options)
 }
 
+/// Create a parser for type [`T`] with unit arguments.
 pub fn unit<'a, T, I, E>(
     options: &ParserOptions,
 ) -> impl Parser<'a, I, T, E> + Clone + use<'a, '_, T, I, E>

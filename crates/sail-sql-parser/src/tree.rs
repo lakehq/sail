@@ -19,5 +19,8 @@ where
     /// of the input is part of the type's AST, but the parser should consume all
     /// whitespace tokens **after** the AST. This contract must be respected by
     /// all implementations of this trait.
+    // TODO: avoid capturing `'_` in the return type once the `precise_capturing_in_traits` feature
+    //   is stabilized.
+    //   https://github.com/rust-lang/rust/issues/130044
     fn parser(args: A, options: &ParserOptions) -> impl Parser<'a, I, Self, E> + Clone;
 }
