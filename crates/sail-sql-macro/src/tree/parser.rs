@@ -78,9 +78,9 @@ fn derive_fields_inner<'a>(
                 .unwrap_or_else(|| format_ident!("v{}", i));
             let field_type = &field.ty;
             let field_parser = if let Some(function) = field_function {
-                quote! { { let f = #function; f(args.clone()) } }
+                quote! { { let f = #function; f(args.clone(), options) } }
             } else {
-                quote! { <#field_type>::parser(()) }
+                quote! { <#field_type>::parser((), options) }
             };
             match acc {
                 Some(ParseFields {
@@ -202,12 +202,11 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
         extractor.expect_empty()?;
         dep
     };
-    let (generics, trait_generics, args, where_clause) = match dependency {
+    let (generics, args_type, args_bounds) = match dependency {
         ParserDependency::One(t) => (
-            quote! { <'a, P> },
-            quote! { <'a, P> },
+            quote! { E, P },
             quote! { P },
-            quote! { where P: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t> + Clone},
+            quote! { P: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t, E> + Clone },
         ),
         ParserDependency::Tuple(t) => {
             let params = (0..t.len())
@@ -216,23 +215,33 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
             let bounds = t
                 .iter()
                 .zip(params.iter())
-                .map(|(t, p)| quote! { #p: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t> + Clone })
+                .map(|(t, p)| {
+                    quote! {
+                        #p: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t, E> + Clone
+                    }
+                })
                 .collect::<Vec<_>>();
             (
-                quote! { <'a, #(#params),*> },
-                quote! { <'a, (#(#params),*,)> },
+                quote! { E, #(#params),* },
                 quote! { (#(#params),*,) },
-                quote! { where #(#bounds),* },
+                quote! { #(#bounds),* },
             )
         }
-        ParserDependency::None => (quote! { <'a> }, quote! { <'a> }, quote! { () }, quote! {}),
+        ParserDependency::None => (quote! { E }, quote! { () }, quote! {}),
     };
 
     let trait_name = format_ident!("{TRAIT}");
 
     Ok(quote! {
-        impl #generics crate::tree::#trait_name #trait_generics for #name #where_clause {
-            fn parser(args: #args) -> impl chumsky::Parser<'a, &'a [crate::token::Token<'a>], Self> + Clone {
+        impl <'a, #generics> crate::tree::#trait_name <'a, &'a [crate::token::Token<'a>], E, #args_type> for #name
+        where
+            E: chumsky::extra::ParserExtra<'a, &'a [crate::token::Token<'a>]>,
+            #args_bounds
+        {
+            fn parser(
+                args: #args_type,
+                options: &crate::ParserOptions
+            ) -> impl chumsky::Parser<'a, &'a [crate::token::Token<'a>], Self, E> + Clone {
                 use chumsky::Parser;
 
                 #parser

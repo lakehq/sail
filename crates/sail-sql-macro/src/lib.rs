@@ -43,11 +43,12 @@ pub(crate) mod utils;
 ///
 ///     This can be specified for individual fields (named or unnamed fields in
 ///     enum variants or structs), where `expr` is a function that takes the argument (one or a tuple
-///     of declared parsers) and returns the parser for the field.
+///     of declared parsers) and SQL parser options, and returns the parser for the field.
 ///
 ///     By default, the parser for the field is derived by calling the `parser()`
-///     method of the field type with unit argument (`()`). Such unit argument is accepted for terminal
-///     parsers or derived parsers without the `parser(dependency = "...")` attribute.
+///     method of the field type with unit argument (`()`) and SQL parser options.
+///     Such unit argument is accepted for terminal parsers or derived parsers without the
+///     `parser(dependency = "...")` attribute.
 ///
 /// The `parser` attribute is not allowed for at the enum variant level.
 #[proc_macro_derive(TreeParser, attributes(parser))]
