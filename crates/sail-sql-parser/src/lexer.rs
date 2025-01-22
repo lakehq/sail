@@ -2,7 +2,7 @@ use chumsky::error::EmptyErr;
 use chumsky::prelude::{any, choice, custom, end, just, none_of, one_of, SimpleSpan};
 use chumsky::{ConfigParser, IterParser, Parser};
 
-use crate::options::{QuoteEscape, SqlParserOptions};
+use crate::options::{ParserOptions, QuoteEscape};
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenSpan, TokenValue};
 
 macro_rules! token {
@@ -223,7 +223,7 @@ fn punctuation<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
     })
 }
 
-fn string<'a>(options: &SqlParserOptions) -> impl Parser<'a, &'a str, Token<'a>> {
+fn string<'a>(options: &ParserOptions) -> impl Parser<'a, &'a str, Token<'a>> {
     let text = match options.quote_escape {
         QuoteEscape::None => |d| none_quote_escaped_text(d).boxed(),
         QuoteEscape::Dual => |d| dual_quote_escaped_text(d).boxed(),
@@ -259,7 +259,7 @@ fn string<'a>(options: &SqlParserOptions) -> impl Parser<'a, &'a str, Token<'a>>
 }
 
 #[allow(unused)]
-pub fn lexer<'a>(options: &SqlParserOptions) -> impl Parser<'a, &'a str, Vec<Token<'a>>> {
+pub fn lexer<'a>(options: &ParserOptions) -> impl Parser<'a, &'a str, Vec<Token<'a>>> {
     choice((
         // When the parsers can parse the same prefix, more specific parsers must come before
         // more general parsers to avoid ambiguity.

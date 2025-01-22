@@ -1,13 +1,15 @@
-use chumsky::error::EmptyErr;
+use chumsky::error::Error;
+use chumsky::extra::ParserExtra;
 use chumsky::prelude::any;
 use chumsky::Parser;
 use sail_sql_macro::TreeParser;
 
-use crate::ast::operator::Comma;
+use crate::ast::operator::Period;
 use crate::ast::whitespace::whitespace;
-use crate::container::Sequence;
-use crate::token::{Token, TokenSpan, TokenValue};
+use crate::combinator::Sequence;
+use crate::token::{StringStyle, Token, TokenClass, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
+use crate::ParserOptions;
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
@@ -16,20 +18,52 @@ pub struct Ident {
     pub value: String,
 }
 
-impl<'a> TreeParser<'a> for Ident {
-    fn parser(_: ()) -> impl Parser<'a, &'a [Token<'a>], Self> + Clone {
+impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for Ident
+where
+    E: ParserExtra<'a, &'a [Token<'a>]>,
+{
+    fn parser(
+        _args: (),
+        _options: &ParserOptions,
+    ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
         any()
-            .try_map(|t: Token<'a>, _| match t {
-                Token {
+            .try_map(|t: Token<'a>, s| {
+                if let Token {
                     value: TokenValue::Word { keyword: _, raw },
                     span,
-                } => Ok(Ident {
+                } = t
+                {
+                    return Ok(Ident {
+                        span,
+                        value: raw.to_string(),
+                    });
+                };
+                if let Token {
+                    value:
+                        TokenValue::String {
+                            raw,
+                            style: StringStyle::BacktickQuoted,
+                        },
                     span,
-                    // FIXME: handle delimited identifiers
-                    // FIXME: handle escape strings
-                    value: raw.to_string(),
-                }),
-                _ => Err(EmptyErr::default()),
+                } = t
+                {
+                    return Ok(Ident {
+                        span,
+                        // TODO: support backtick escape
+                        value: raw.to_string(),
+                    });
+                };
+                Err(Error::expected_found(
+                    vec![Some(
+                        Token::new(
+                            TokenValue::Placeholder(TokenClass::Identifier),
+                            TokenSpan::default(),
+                        )
+                        .into(),
+                    )],
+                    Some(t.into()),
+                    s,
+                ))
             })
             .then_ignore(whitespace().repeated())
     }
@@ -37,4 +71,4 @@ impl<'a> TreeParser<'a> for Ident {
 
 #[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
-pub struct ObjectName(pub Sequence<Ident, Comma>);
+pub struct ObjectName(pub Sequence<Ident, Period>);

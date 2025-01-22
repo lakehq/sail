@@ -13,7 +13,7 @@ pub enum QuoteEscape {
 
 /// Options for the SQL parser.
 #[derive(Debug, Clone)]
-pub struct SqlParserOptions {
+pub struct ParserOptions {
     /// The quote (delimiter) escape strategy for string.
     pub quote_escape: QuoteEscape,
     /// Whether a string can be delimited by triple quote characters.
