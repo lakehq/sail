@@ -6,7 +6,7 @@ use sail_sql_macro::TreeParser;
 
 use crate::ast::operator::Period;
 use crate::ast::whitespace::whitespace;
-use crate::container::Sequence;
+use crate::combinator::Sequence;
 use crate::token::{StringStyle, Token, TokenClass, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
 use crate::ParserOptions;
@@ -18,7 +18,7 @@ pub struct Ident {
     pub value: String,
 }
 
-impl<'a, E> TreeParser<'a, E> for Ident
+impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for Ident
 where
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {

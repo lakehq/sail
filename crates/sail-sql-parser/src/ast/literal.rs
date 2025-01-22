@@ -16,7 +16,7 @@ pub struct NumberLiteral {
     pub suffix: String,
 }
 
-impl<'a, E> TreeParser<'a, E> for NumberLiteral
+impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for NumberLiteral
 where
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {
@@ -57,7 +57,7 @@ pub struct IntegerLiteral {
     pub value: u64,
 }
 
-impl<'a, E> TreeParser<'a, E> for IntegerLiteral
+impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for IntegerLiteral
 where
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {
@@ -100,7 +100,7 @@ pub struct StringLiteral {
     pub style: StringStyle,
 }
 
-impl<'a, E> TreeParser<'a, E> for StringLiteral
+impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for StringLiteral
 where
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {

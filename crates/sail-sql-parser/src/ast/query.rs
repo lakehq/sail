@@ -4,7 +4,7 @@ use crate::ast::data_type::DataType;
 use crate::ast::expression::Expr;
 use crate::ast::keywords::{Select, With};
 use crate::ast::operator::Comma;
-use crate::container::{compose, sequence, unit};
+use crate::combinator::{compose, sequence, unit};
 use crate::Sequence;
 
 #[allow(unused)]

@@ -233,7 +233,7 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
     let trait_name = format_ident!("{TRAIT}");
 
     Ok(quote! {
-        impl <'a, #generics> crate::tree::#trait_name <'a, E, #args_type> for #name
+        impl <'a, #generics> crate::tree::#trait_name <'a, &'a [crate::token::Token<'a>], E, #args_type> for #name
         where
             E: chumsky::extra::ParserExtra<'a, &'a [crate::token::Token<'a>]>,
             #args_bounds

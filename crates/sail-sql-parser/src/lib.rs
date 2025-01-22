@@ -6,6 +6,7 @@ mod keywords {
 }
 
 pub mod ast;
+mod combinator;
 mod container;
 mod lexer;
 pub mod location;
@@ -14,6 +15,6 @@ mod parser;
 pub mod token;
 pub mod tree;
 
-pub use container::Sequence;
+pub use combinator::Sequence;
 pub use lexer::lexer;
 pub use options::ParserOptions;

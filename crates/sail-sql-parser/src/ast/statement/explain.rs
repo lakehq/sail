@@ -2,7 +2,7 @@ use sail_sql_macro::TreeParser;
 
 use crate::ast::keywords::{Codegen, Cost, Explain, Extended, Formatted, Logical};
 use crate::ast::statement::Statement;
-use crate::container::boxed;
+use crate::combinator::boxed;
 
 #[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]

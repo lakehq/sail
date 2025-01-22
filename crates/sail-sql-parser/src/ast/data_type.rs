@@ -11,7 +11,7 @@ use crate::ast::literal::{IntegerLiteral, StringLiteral};
 use crate::ast::operator::{
     Colon, Comma, GreaterThan, LeftParenthesis, LessThan, RightParenthesis,
 };
-use crate::container::{boxed, compose, sequence, unit, Sequence};
+use crate::combinator::{boxed, compose, sequence, unit, Sequence};
 
 #[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]

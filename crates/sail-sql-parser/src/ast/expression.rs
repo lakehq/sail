@@ -19,7 +19,7 @@ use crate::ast::operator::{
     Comma, DoubleColon, LeftBracket, LeftParenthesis, Period, RightBracket, RightParenthesis,
 };
 use crate::ast::query::Query;
-use crate::container::{boxed, compose, sequence, unit};
+use crate::combinator::{boxed, compose, sequence, unit};
 use crate::token::Token;
 use crate::tree::TreeParser;
 use crate::{ParserOptions, Sequence};
@@ -341,7 +341,7 @@ pub enum ExprPredicate {
     ),
 }
 
-impl<'a, E, P1, P2, P3> TreeParser<'a, E, (P1, P2, P3)> for Expr
+impl<'a, E, P1, P2, P3> TreeParser<'a, &'a [Token<'a>], E, (P1, P2, P3)> for Expr
 where
     E: ParserExtra<'a, &'a [Token<'a>]>,
     P1: Parser<'a, &'a [Token<'a>], Expr, E> + Clone,

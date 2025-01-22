@@ -4,7 +4,7 @@ use crate::ast::data_type::DataType;
 use crate::ast::expression::Expr;
 use crate::ast::query::Query;
 use crate::ast::statement::explain::ExplainStatement;
-use crate::container::compose;
+use crate::combinator::compose;
 
 pub mod explain;
 

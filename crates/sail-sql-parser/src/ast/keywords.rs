@@ -44,7 +44,7 @@ macro_rules! keyword_types {
                 }
             }
 
-            impl<'a, E> TreeParser<'a, E> for $identifier
+            impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for $identifier
             where
                 E: ParserExtra<'a, &'a [Token<'a>]>,
             {

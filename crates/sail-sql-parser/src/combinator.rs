@@ -3,7 +3,6 @@ use chumsky::input::Input;
 use chumsky::{IterParser, Parser};
 use either::Either;
 
-use crate::token::Token;
 use crate::tree::TreeParser;
 use crate::ParserOptions;
 
@@ -55,24 +54,25 @@ where
     left.map(Either::Left).or(right.map(Either::Right))
 }
 
-pub fn compose<'a, A, T, E>(
+pub fn compose<'a, T, I, E, A>(
     args: A,
     options: &ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], T, E> + Clone + use<'a, '_, A, T, E>
+) -> impl Parser<'a, I, T, E> + Clone + use<'a, '_, T, I, E, A>
 where
-    A: Clone,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    T: TreeParser<'a, E, A>,
+    I: Input<'a>,
+    E: ParserExtra<'a, I>,
+    T: TreeParser<'a, I, E, A>,
 {
     T::parser(args, options)
 }
 
-pub fn unit<'a, T, E>(
+pub fn unit<'a, T, I, E>(
     options: &ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], T, E> + Clone + use<'a, '_, T, E>
+) -> impl Parser<'a, I, T, E> + Clone + use<'a, '_, T, I, E>
 where
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    T: TreeParser<'a, E>,
+    I: Input<'a>,
+    E: ParserExtra<'a, I>,
+    T: TreeParser<'a, I, E>,
 {
     T::parser((), options)
 }
