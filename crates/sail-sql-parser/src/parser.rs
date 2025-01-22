@@ -9,11 +9,11 @@ use crate::ast::statement::Statement;
 use crate::ast::whitespace::whitespace;
 use crate::token::Token;
 use crate::tree::TreeParser;
-use crate::SqlParserOptions;
+use crate::ParserOptions;
 
 #[allow(unused)]
 pub fn parser<'a, 'opt>(
-    options: &'opt SqlParserOptions,
+    options: &'opt ParserOptions,
 ) -> impl Parser<'a, &'a [Token<'a>], Vec<Statement>>
 where
     'opt: 'a,
@@ -32,8 +32,14 @@ where
         ),
         options,
     ));
-    query.define(Query::parser((query.clone(), expression.clone()), options));
-    expression.define(Expr::parser((expression.clone(), query.clone()), options));
+    query.define(Query::parser(
+        (query.clone(), expression.clone(), data_type.clone()),
+        options,
+    ));
+    expression.define(Expr::parser(
+        (expression.clone(), query.clone(), data_type.clone()),
+        options,
+    ));
     data_type.define(DataType::parser(data_type.clone(), options));
 
     statement
@@ -53,12 +59,12 @@ mod tests {
 
     use crate::ast::query::Query;
     use crate::ast::statement::Statement;
-    use crate::options::{QuoteEscape, SqlParserOptions};
+    use crate::options::{ParserOptions, QuoteEscape};
 
     #[test]
     fn test_parse() {
         let sql = "/* */ ; SELECT 1;;; SELECT 2";
-        let options = SqlParserOptions {
+        let options = ParserOptions {
             quote_escape: QuoteEscape::None,
             allow_triple_quote_string: false,
         };

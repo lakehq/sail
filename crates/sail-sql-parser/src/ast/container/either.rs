@@ -5,7 +5,7 @@ use either::Either;
 use crate::container::either_or;
 use crate::token::Token;
 use crate::tree::TreeParser;
-use crate::SqlParserOptions;
+use crate::ParserOptions;
 
 impl<'a, L, R, E, A> TreeParser<'a, E, A> for Either<L, R>
 where
@@ -16,7 +16,7 @@ where
 {
     fn parser(
         args: A,
-        options: &SqlParserOptions,
+        options: &ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
         either_or(L::parser(args.clone(), options), R::parser(args, options))
     }

@@ -240,7 +240,7 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
         {
             fn parser(
                 args: #args_type,
-                options: &crate::SqlParserOptions
+                options: &crate::ParserOptions
             ) -> impl chumsky::Parser<'a, &'a [crate::token::Token<'a>], Self, E> + Clone {
                 use chumsky::Parser;
 

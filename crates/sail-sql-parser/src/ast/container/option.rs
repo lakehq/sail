@@ -3,7 +3,7 @@ use chumsky::Parser;
 
 use crate::token::Token;
 use crate::tree::TreeParser;
-use crate::SqlParserOptions;
+use crate::ParserOptions;
 
 impl<'a, T, E, A> TreeParser<'a, E, A> for Option<T>
 where
@@ -12,7 +12,7 @@ where
 {
     fn parser(
         args: A,
-        options: &SqlParserOptions,
+        options: &ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
         T::parser(args, options).or_not()
     }

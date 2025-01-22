@@ -6,7 +6,7 @@ use chumsky::Parser;
 use crate::ast::whitespace::whitespace;
 use crate::token::{StringStyle, Token, TokenClass, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
-use crate::SqlParserOptions;
+use crate::ParserOptions;
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
@@ -22,7 +22,7 @@ where
 {
     fn parser(
         _args: (),
-        _options: &SqlParserOptions,
+        _options: &ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
         any()
             .try_map(|t: Token, s| match t {
@@ -63,7 +63,7 @@ where
 {
     fn parser(
         _args: (),
-        _options: &SqlParserOptions,
+        _options: &ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
         any()
             .try_map(|t: Token<'a>, s| {
@@ -106,7 +106,7 @@ where
 {
     fn parser(
         _args: (),
-        _options: &SqlParserOptions,
+        _options: &ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
         any()
             .try_map(|t: Token<'a>, s| match t {

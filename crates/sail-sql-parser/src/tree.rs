@@ -2,7 +2,7 @@ use chumsky::extra::ParserExtra;
 use chumsky::Parser;
 
 use crate::token::Token;
-use crate::SqlParserOptions;
+use crate::ParserOptions;
 
 /// A trait for defining a parser that can be used to parse the type.
 pub trait TreeParser<'a, E, A = ()>: Sized
@@ -20,6 +20,6 @@ where
     /// all implementations of this trait.
     fn parser(
         args: A,
-        options: &SqlParserOptions,
+        options: &ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone;
 }

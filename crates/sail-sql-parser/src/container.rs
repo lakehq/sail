@@ -3,11 +3,15 @@ use chumsky::input::Input;
 use chumsky::{IterParser, Parser};
 use either::Either;
 
+use crate::token::Token;
+use crate::tree::TreeParser;
+use crate::ParserOptions;
+
 /// A sequence of item type `T` and separator type `S`.
 #[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct Sequence<T, S> {
-    pub head: T,
+    pub head: Box<T>,
     pub tail: Vec<(S, T)>,
 }
 
@@ -23,7 +27,10 @@ where
 {
     item.clone()
         .then(seperator.then(item).repeated().collect())
-        .map(|(head, tail)| Sequence { head, tail })
+        .map(|(head, tail)| Sequence {
+            head: Box::new(head),
+            tail,
+        })
 }
 
 pub fn boxed<'a, I, O, P, E>(parser: P) -> impl Parser<'a, I, Box<O>, E> + Clone
@@ -46,4 +53,26 @@ where
     PR: Parser<'a, I, R, E> + Clone,
 {
     left.map(Either::Left).or(right.map(Either::Right))
+}
+
+pub fn compose<'a, A, T, E>(
+    args: A,
+    options: &ParserOptions,
+) -> impl Parser<'a, &'a [Token<'a>], T, E> + Clone + use<'a, '_, A, T, E>
+where
+    A: Clone,
+    E: ParserExtra<'a, &'a [Token<'a>]>,
+    T: TreeParser<'a, E, A>,
+{
+    T::parser(args, options)
+}
+
+pub fn unit<'a, T, E>(
+    options: &ParserOptions,
+) -> impl Parser<'a, &'a [Token<'a>], T, E> + Clone + use<'a, '_, T, E>
+where
+    E: ParserExtra<'a, &'a [Token<'a>]>,
+    T: TreeParser<'a, E>,
+{
+    T::parser((), options)
 }

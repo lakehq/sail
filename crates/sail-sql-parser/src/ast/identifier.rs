@@ -4,12 +4,12 @@ use chumsky::prelude::any;
 use chumsky::Parser;
 use sail_sql_macro::TreeParser;
 
-use crate::ast::operator::Comma;
+use crate::ast::operator::Period;
 use crate::ast::whitespace::whitespace;
 use crate::container::Sequence;
 use crate::token::{StringStyle, Token, TokenClass, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
-use crate::SqlParserOptions;
+use crate::ParserOptions;
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
@@ -24,7 +24,7 @@ where
 {
     fn parser(
         _args: (),
-        _options: &SqlParserOptions,
+        _options: &ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
         any()
             .try_map(|t: Token<'a>, s| {
@@ -49,6 +49,7 @@ where
                 {
                     return Ok(Ident {
                         span,
+                        // TODO: support backtick escape
                         value: raw.to_string(),
                     });
                 };
@@ -70,4 +71,4 @@ where
 
 #[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
-pub struct ObjectName(pub Sequence<Ident, Comma>);
+pub struct ObjectName(pub Sequence<Ident, Period>);

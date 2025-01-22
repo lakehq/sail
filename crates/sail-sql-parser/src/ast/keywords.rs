@@ -5,7 +5,7 @@ use chumsky::Parser;
 use crate::ast::whitespace::whitespace;
 use crate::token::{Keyword, Token, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
-use crate::SqlParserOptions;
+use crate::ParserOptions;
 
 fn keyword_parser<'a, K, F, E>(
     keyword: Keyword,
@@ -50,7 +50,7 @@ macro_rules! keyword_types {
             {
                 fn parser(
                     _args: (),
-                    _options: &SqlParserOptions,
+                    _options: &ParserOptions,
                 ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
                     keyword_parser(Self::keyword(), |span| Self { span })
                 }

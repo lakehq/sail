@@ -16,4 +16,4 @@ pub mod tree;
 
 pub use container::Sequence;
 pub use lexer::lexer;
-pub use options::SqlParserOptions;
+pub use options::ParserOptions;

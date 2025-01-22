@@ -11,7 +11,7 @@ use crate::ast::literal::{IntegerLiteral, StringLiteral};
 use crate::ast::operator::{
     Colon, Comma, GreaterThan, LeftParenthesis, LessThan, RightParenthesis,
 };
-use crate::container::{boxed, sequence, Sequence};
+use crate::container::{boxed, compose, sequence, unit, Sequence};
 
 #[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
@@ -77,9 +77,7 @@ pub enum DataType {
     Struct(
         Struct,
         LessThan,
-        #[parser(function = |x, o|
-            boxed(sequence(StructField::parser(x, o), Comma::parser((), o))))]
-        Box<Sequence<StructField, Comma>>,
+        #[parser(function = |x, o| sequence(compose(x, o), unit(o)))] Sequence<StructField, Comma>,
         GreaterThan,
     ),
     Map(

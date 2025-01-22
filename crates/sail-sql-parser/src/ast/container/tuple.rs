@@ -4,7 +4,7 @@ use paste::paste;
 
 use crate::token::Token;
 use crate::tree::TreeParser;
-use crate::SqlParserOptions;
+use crate::ParserOptions;
 
 macro_rules! nested {
     (@fold $acc:tt) => { $acc };
@@ -23,7 +23,7 @@ macro_rules! impl_tree_parser_for_tuple {
         {
             fn parser(
                 args: A,
-                options: &SqlParserOptions,
+                options: &ParserOptions,
             ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
                 let parser = T1::parser(args.clone(), options)
                     $(.then($Ts::parser(args.clone(), options)))*;

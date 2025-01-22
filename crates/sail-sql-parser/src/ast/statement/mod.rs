@@ -4,6 +4,7 @@ use crate::ast::data_type::DataType;
 use crate::ast::expression::Expr;
 use crate::ast::query::Query;
 use crate::ast::statement::explain::ExplainStatement;
+use crate::container::compose;
 
 pub mod explain;
 
@@ -11,8 +12,6 @@ pub mod explain;
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Statement, Query, Expr, DataType)")]
 pub enum Statement {
-    Query(#[parser(function = |(_, q, e, _), o| Query::parser((q, e), o))] Query),
-    Explain(
-        #[parser(function = |(s, _, _, _), o| ExplainStatement::parser(s, o))] ExplainStatement,
-    ),
+    Query(#[parser(function = |(_, q, _, _), _| q)] Query),
+    Explain(#[parser(function = |(s, _, _, _), o| compose(s, o))] ExplainStatement),
 }
