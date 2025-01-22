@@ -1,0 +1,17 @@
+[package]
+name = "sail-sql-parser"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+sail-sql-macro = { path = "../sail-sql-macro" }
+
+chumsky = { workspace = true }
+phf = { workspace = true }
+either = { workspace = true }
+paste = { workspace = true }
+
+[build-dependencies]
+prettyplease = { workspace = true }
+syn = { workspace = true }
+quote = { workspace = true }

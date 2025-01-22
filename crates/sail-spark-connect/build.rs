@@ -152,8 +152,6 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Vec<_>>();
 
     let tokens = quote! {
-        use phf::phf_map;
-
         #[derive(Debug, Clone, PartialEq)]
         pub struct SparkConfigEntry<'a> {
             pub key: &'a str,
@@ -176,16 +174,17 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
         // We define the map in a separate macro to avoid slowing down the IDE
         // when previewing the definition of `SPARK_CONFIG`.
         macro_rules! spark_config_map {
-            () => { phf_map! { #(#entries)* } }
+            () => { phf::phf_map! { #(#entries)* } }
         }
 
         pub static SPARK_CONFIG: phf::Map<&'static str, SparkConfigEntry<'static>> = spark_config_map!();
     };
 
-    let tree = syn::parse2(tokens)?;
-    let formatted = prettyplease::unparse(&tree);
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
-    std::fs::write(out_dir.join("spark_config.rs"), formatted)?;
+    std::fs::write(
+        out_dir.join("spark_config.rs"),
+        prettyplease::unparse(&syn::parse2(tokens)?),
+    )?;
     Ok(())
 }
 

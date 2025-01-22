@@ -1,33 +1,36 @@
 function apply_git_patch() {
-  local tag="$1"
-  local file="$2"
+  local directory="$1"
+  local tag="$2"
+  local file="$3"
 
-  status="$(git status --porcelain)"
+  export __GIT_PATCH_DIRECTORY="${directory}"
+
+  status="$(git -C "${__GIT_PATCH_DIRECTORY}" status --porcelain)"
   if [ -n "${status}" ]; then
     echo "The working directory is not clean: $(pwd)"
     exit 1
   fi
 
-  head_commit="$(git rev-parse HEAD)"
-  tag_commit="$(git rev-parse "${tag}")"
+  head_commit="$(git -C "${__GIT_PATCH_DIRECTORY}" rev-parse HEAD)"
+  tag_commit="$(git -C "${__GIT_PATCH_DIRECTORY}" rev-parse "${tag}")"
   if [ "${head_commit}" != "${tag_commit}" ]; then
     export __GIT_PATCH_PREVIOUS_COMMIT="${head_commit}"
-    git checkout "${tag}"
+    git -C "${__GIT_PATCH_DIRECTORY}" checkout "${tag}"
   else
     export __GIT_PATCH_PREVIOUS_COMMIT=""
   fi
   export __GIT_PATCH_FILE="${file}"
 
   echo "Applying the patch..."
-  git apply "${file}"
+  git -C "${__GIT_PATCH_DIRECTORY}" apply "${file}"
 
   trap 'revert_git_patch' EXIT
 }
 
 function revert_git_patch() {
-  git apply -R "${__GIT_PATCH_FILE}"
+  git -C "${__GIT_PATCH_DIRECTORY}" apply -R "${__GIT_PATCH_FILE}"
   if [ -n "${__GIT_PATCH_PREVIOUS_COMMIT}" ]; then
-    git checkout "${__GIT_PATCH_PREVIOUS_COMMIT}"
+    git -C "${__GIT_PATCH_DIRECTORY}" checkout "${__GIT_PATCH_PREVIOUS_COMMIT}"
   fi
   echo "Reverted the patch."
 }
