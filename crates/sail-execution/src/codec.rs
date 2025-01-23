@@ -16,6 +16,7 @@ use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
+#[allow(deprecated)]
 use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
@@ -234,6 +235,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
                 let schema = self.try_decode_schema(&schema)?;
                 let data = read_record_batches(&data)?;
+                #[allow(deprecated)]
                 Ok(Arc::new(ValuesExec::try_new_from_batches(
                     Arc::new(schema),
                     data,
@@ -334,7 +336,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             })
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Some(JoinFilter::new(expression, column_indices, schema))
+                    Some(JoinFilter::new(
+                        expression,
+                        column_indices,
+                        Arc::new(schema),
+                    ))
                 } else {
                     None
                 };
@@ -364,6 +370,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
+        #[allow(deprecated)]
         let node_kind = if let Some(range) = node.as_any().downcast_ref::<RangeExec>() {
             let schema = self.try_encode_schema(range.schema().as_ref())?;
             NodeKind::Range(gen::RangeExecNode {
