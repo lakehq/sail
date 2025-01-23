@@ -117,7 +117,7 @@ datafusion-doc = { git = "https://github.com/lakehq/datafusion.git", rev = "4e4c
 datafusion-execution = { git = "https://github.com/lakehq/datafusion.git", rev = "4e4cb02" }
 datafusion-expr = { git = "https://github.com/lakehq/datafusion.git", rev = "4e4cb02" }
 datafusion-expr-common = { git = "https://github.com/lakehq/datafusion.git", rev = "4e4cb02" }
-datafusion-ffi = { git = "https://github.com/lakehq/datafusion.git", rev = "4e4cb02" }
+#datafusion-ffi = { git = "https://github.com/lakehq/datafusion.git", rev = "4e4cb02" }
 datafusion-functions = { git = "https://github.com/lakehq/datafusion.git", rev = "4e4cb02" }
 datafusion-functions-aggregate = { git = "https://github.com/lakehq/datafusion.git", rev = "4e4cb02" }
 datafusion-functions-aggregate-common = { git = "https://github.com/lakehq/datafusion.git", rev = "4e4cb02" }
