@@ -286,7 +286,7 @@ impl From<SparkError> for Status {
             | SparkError::DataFusionError(DataFusionError::External(e)) => {
                 if let Some(e) = extract_py_err(e.as_ref()) {
                     let info = Python::with_gil(|py| -> PyResult<Vec<String>> {
-                        let traceback = PyModule::import_bound(py, intern!(py, "traceback"))?;
+                        let traceback = PyModule::import(py, intern!(py, "traceback"))?;
                         let format_exception =
                             traceback.getattr(intern!(py, "format_exception"))?;
                         format_exception.call1((e,))?.extract()

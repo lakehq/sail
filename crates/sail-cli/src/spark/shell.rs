@@ -1,3 +1,4 @@
+use std::ffi::CString;
 use std::net::Ipv4Addr;
 
 use pyo3::prelude::PyAnyMethods;
@@ -32,7 +33,12 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     runtime.spawn(server_task);
     Python::with_gil(|py| -> PyResult<_> {
-        let shell = PyModule::from_code_bound(py, SHELL_SOURCE_CODE, "shell.py", "shell")?;
+        let shell = PyModule::from_code(
+            py,
+            CString::new(SHELL_SOURCE_CODE)?.as_c_str(),
+            CString::new("shell.py")?.as_c_str(),
+            CString::new("shell")?.as_c_str(),
+        )?;
         shell
             .getattr("run_pyspark_shell")?
             .call((server_port,), None)?;
