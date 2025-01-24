@@ -589,7 +589,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Unsupported data type (Utf8, Utf8View) for function `contains`."
+        "success": "ok"
       }
     },
     {
@@ -853,7 +853,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Invalid argument error: Invalid string operation: Utf8 ENDS_WITH Utf8View"
+        "success": "ok"
       }
     },
     {
@@ -2659,7 +2659,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Invalid argument error: Invalid string operation: Utf8 STARTS_WITH Utf8View"
+        "success": "ok"
       }
     },
     {
