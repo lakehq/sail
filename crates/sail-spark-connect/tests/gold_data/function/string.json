@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(String), String)) but received Int32.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker No function matches the given name and argument types 'ascii(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tascii(TypeSignatureClass::Native(LogicalType(Native(String), String)))"
+        "success": "ok"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The signature expected NativeType::String but received NativeType::Binary No function matches the given name and argument types 'bit_length(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbit_length(String(1))"
+        "success": "ok"
       }
     },
     {
@@ -589,7 +589,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: Unsupported data type (Utf8, Utf8View) for function `contains`."
       }
     },
     {
@@ -611,7 +611,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The signature expected NativeType::String but received NativeType::Binary No function matches the given name and argument types 'contains(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tcontains(String(2))"
+        "success": "ok"
       }
     },
     {
@@ -853,7 +853,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Invalid string operation: Utf8 ENDS_WITH Utf8View"
       }
     },
     {
@@ -875,7 +875,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The signature expected NativeType::String but received NativeType::Binary No function matches the given name and argument types 'ends_with(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tends_with(String(2))"
+        "success": "ok"
       }
     },
     {
@@ -897,7 +897,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The signature expected NativeType::String but received NativeType::Binary No function matches the given name and argument types 'ends_with(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tends_with(String(2))"
+        "success": "ok"
       }
     },
     {
@@ -1865,7 +1865,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The signature expected NativeType::String but received NativeType::Binary No function matches the given name and argument types 'octet_length(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\toctet_length(String(1))"
+        "success": "ok"
       }
     },
     {
@@ -2659,7 +2659,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Arrow error: Invalid argument error: Invalid string operation: Utf8 STARTS_WITH Utf8View"
       }
     },
     {
@@ -2681,7 +2681,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The signature expected NativeType::String but received NativeType::Binary No function matches the given name and argument types 'starts_with(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tstarts_with(String(2))"
+        "success": "ok"
       }
     },
     {
@@ -2703,7 +2703,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The signature expected NativeType::String but received NativeType::Binary No function matches the given name and argument types 'starts_with(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tstarts_with(String(2))"
+        "success": "ok"
       }
     },
     {
