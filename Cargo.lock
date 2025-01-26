@@ -630,9 +630,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssooidc"
-version = "1.57.0"
+version = "1.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aba487b6a05de9858f83c05133ddd1b465be60b95460491f96c5c7b761823a04"
+checksum = "a120ade4a44691b3c5c2ff2fa61b14ed331fdc218397f61ab48d66593012ae2a"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -1307,9 +1307,9 @@ dependencies = [
 
 [[package]]
 name = "cpufeatures"
-version = "0.2.16"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16b80225097f2e5ae4e7179dd2266824648f3e2f49d9134d584b76389d31c4c3"
+checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
 dependencies = [
  "libc",
 ]
@@ -1446,7 +1446,7 @@ dependencies = [
 [[package]]
 name = "datafusion"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -1499,7 +1499,7 @@ dependencies = [
 [[package]]
 name = "datafusion-catalog"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -1513,7 +1513,7 @@ dependencies = [
 [[package]]
 name = "datafusion-common"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1541,7 +1541,7 @@ dependencies = [
 [[package]]
 name = "datafusion-common-runtime"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "log",
  "tokio",
@@ -1550,12 +1550,12 @@ dependencies = [
 [[package]]
 name = "datafusion-doc"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 
 [[package]]
 name = "datafusion-execution"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "dashmap",
@@ -1573,7 +1573,7 @@ dependencies = [
 [[package]]
 name = "datafusion-expr"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "chrono",
@@ -1593,17 +1593,18 @@ dependencies = [
 [[package]]
 name = "datafusion-expr-common"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "datafusion-common",
  "itertools 0.14.0",
+ "paste",
 ]
 
 [[package]]
 name = "datafusion-functions"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -1632,7 +1633,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-aggregate"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "ahash",
  "arrow",
@@ -1654,7 +1655,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-aggregate-common"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "ahash",
  "arrow",
@@ -1677,7 +1678,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-nested"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1700,7 +1701,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-table"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1715,7 +1716,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-window"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "datafusion-common",
  "datafusion-doc",
@@ -1731,7 +1732,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-window-common"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -1740,7 +1741,7 @@ dependencies = [
 [[package]]
 name = "datafusion-macros"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "datafusion-expr",
  "quote",
@@ -1750,7 +1751,7 @@ dependencies = [
 [[package]]
 name = "datafusion-optimizer"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "chrono",
@@ -1768,7 +1769,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-expr"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "ahash",
  "arrow",
@@ -1792,7 +1793,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-expr-common"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "ahash",
  "arrow",
@@ -1805,7 +1806,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-optimizer"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1827,7 +1828,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-plan"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "ahash",
  "arrow",
@@ -1858,7 +1859,7 @@ dependencies = [
 [[package]]
 name = "datafusion-proto"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "chrono",
@@ -1873,7 +1874,7 @@ dependencies = [
 [[package]]
 name = "datafusion-proto-common"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1883,7 +1884,7 @@ dependencies = [
 [[package]]
 name = "datafusion-sql"
 version = "44.0.0"
-source = "git+https://github.com/lakehq/datafusion.git?rev=1a27626#1a27626805005db71dd77cbecef54fb3647c8d90"
+source = "git+https://github.com/lakehq/datafusion.git?rev=3f0c870#3f0c8700cc65ab2c5a834f70a324642555eb7826"
 dependencies = [
  "arrow",
  "arrow-array",
