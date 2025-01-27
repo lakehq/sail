@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use sqlparser::ast::AlterTableOperation as ASTAlterTableOperation;
 
 use crate::spec::data_type::Schema;
 use crate::spec::expression::{
@@ -261,7 +260,8 @@ pub enum QueryNode {
     },
     LateralView {
         input: Option<Box<QueryPlan>>,
-        expression: Expr,
+        function: ObjectName,
+        arguments: Vec<Expr>,
         table_alias: Option<ObjectName>,
         column_aliases: Option<Vec<Identifier>>,
         outer: bool,
@@ -414,9 +414,7 @@ pub enum CommandNode {
     AlterTable {
         table: ObjectName,
         if_exists: bool,
-        // TODO: When we implement a `AlterTable` Extension in DataFusion, create spec equivalent of `AlterTableOperation`
-        operations: Vec<ASTAlterTableOperation>,
-        location: Option<AlterTableLocation>,
+        actions: Vec<AlterTableAction>,
     },
 }
 
@@ -849,7 +847,6 @@ pub enum ExplainMode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AlterTableLocation {
-    pub location: Identifier,
-    pub set_location: bool,
+pub enum AlterTableAction {
+    RenameColumn { from: Identifier, to: Identifier },
 }

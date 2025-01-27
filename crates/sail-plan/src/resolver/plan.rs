@@ -364,14 +364,16 @@ impl PlanResolver<'_> {
             }
             QueryNode::LateralView {
                 input,
-                expression,
+                function,
+                arguments,
                 table_alias,
                 column_aliases,
                 outer,
             } => {
                 self.resolve_query_lateral_view(
                     input.map(|x| *x),
-                    expression,
+                    function,
+                    arguments,
                     table_alias,
                     column_aliases,
                     outer,
@@ -2217,21 +2219,16 @@ impl PlanResolver<'_> {
     async fn resolve_query_lateral_view(
         &self,
         input: Option<spec::QueryPlan>,
-        expression: spec::Expr,
+        function: spec::ObjectName,
+        arguments: Vec<spec::Expr>,
         table_alias: Option<spec::ObjectName>,
         column_aliases: Option<Vec<spec::Identifier>>,
         outer: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let spec::Expr::UnresolvedFunction {
-            function_name,
-            arguments,
-            is_distinct,
-            is_user_defined_function,
-        } = expression
-        else {
-            return Err(PlanError::invalid(
-                "a generator function is expected for lateral view",
+        let Ok(function_name) = <Vec<String>>::from(function).one() else {
+            return Err(PlanError::unsupported(
+                "qualified lateral view function name",
             ));
         };
         let canonical_function_name = function_name.to_ascii_lowercase();
@@ -2290,8 +2287,8 @@ impl PlanResolver<'_> {
         let expression = spec::Expr::UnresolvedFunction {
             function_name,
             arguments,
-            is_distinct,
-            is_user_defined_function,
+            is_distinct: false,
+            is_user_defined_function: false,
         };
         let expression = if let Some(aliases) = column_aliases {
             spec::Expr::Alias {

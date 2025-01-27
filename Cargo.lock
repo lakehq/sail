@@ -4835,13 +4835,12 @@ version = "0.2.1"
 dependencies = [
  "chrono",
  "chrono-tz",
+ "chumsky",
  "datafusion",
  "lazy_static",
  "regex",
  "sail-common",
- "serde",
- "serde_json",
- "sqlparser 0.53.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=9ade53d)",
+ "sail-sql-parser",
  "thiserror 2.0.11",
 ]
 

@@ -1,3 +1,5 @@
+use std::fmt;
+
 /// A token in the SQL lexer output.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token<'a> {
@@ -11,6 +13,13 @@ impl<'a> Token<'a> {
             value,
             span: span.into(),
         }
+    }
+}
+
+impl fmt::Display for Token<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: implement token display
+        write!(f, "{:?} ({:?})", self.value, self.span)
     }
 }
 
@@ -59,9 +68,11 @@ pub enum TokenValue<'a> {
 pub enum TokenClass {
     /// An identifier.
     Identifier,
+    /// A variable consisting of `$` followed by an identifier.
+    Variable,
     /// A numeric literal.
     Number,
-    /// An integer literal without sign or suffix.
+    /// A possibly signed integer literal without suffix.
     Integer,
     /// A string.
     String,
@@ -96,6 +107,18 @@ pub enum StringStyle {
     /// with tag `$tag$`). The text of the tag can be an empty string (e.g., `$$hello$$`
     /// with an empty tag `$$`).
     DollarQuoted { tag: String },
+}
+
+impl StringStyle {
+    pub fn prefix(&self) -> Option<char> {
+        match self {
+            Self::SingleQuoted { prefix }
+            | Self::DoubleQuoted { prefix }
+            | Self::TripleSingleQuoted { prefix }
+            | Self::TripleDoubleQuoted { prefix } => *prefix,
+            _ => None,
+        }
+    }
 }
 
 macro_rules! for_all_punctuations {
@@ -203,12 +226,20 @@ impl TokenSpan {
 }
 
 macro_rules! keyword_enum {
-    ([$(($_:expr, $identifier:ident),)* $(,)?]) => {
+    ([$(($string:expr, $identifier:ident),)* $(,)?]) => {
         /// A SQL keyword.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         #[allow(unused)]
         pub enum Keyword {
             $($identifier,)*
+        }
+
+        impl Keyword {
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $(Self::$identifier => $string,)*
+                }
+            }
         }
     };
 }

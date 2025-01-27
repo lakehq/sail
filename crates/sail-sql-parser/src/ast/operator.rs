@@ -4,9 +4,9 @@ use chumsky::prelude::custom;
 use chumsky::Parser;
 
 use crate::ast::whitespace::whitespace;
+use crate::options::ParserOptions;
 use crate::token::{Punctuation, Token, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
-use crate::ParserOptions;
 
 fn operator_parser<'a, O, F, E>(
     punctuations: &'static [Punctuation],
@@ -59,13 +59,14 @@ macro_rules! define_operator {
             }
         }
 
-        impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for $identifier
+        impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for $identifier
         where
+            'opt: 'a,
             E: ParserExtra<'a, &'a [Token<'a>]>,
         {
             fn parser(
                 _args: (),
-                _options: &ParserOptions,
+                _options: &'opt ParserOptions,
             ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
                 operator_parser(Self::punctuations(), |span| Self { span })
             }
@@ -102,6 +103,7 @@ define_operator!(DoubleGreaterThan, [GreaterThan, GreaterThan]);
 define_operator!(GreaterThanEquals, [GreaterThan, Equals]);
 define_operator!(LessThanEquals, [LessThan, Equals]);
 define_operator!(LessThanGreaterThan, [LessThan, GreaterThan]);
+define_operator!(Spaceship, [LessThan, Equals, GreaterThan]);
 define_operator!(NotEquals, [ExclamationMark, Equals]);
 define_operator!(Arrow, [Minus, GreaterThan]);
 define_operator!(FatArrow, [Equals, GreaterThan]);

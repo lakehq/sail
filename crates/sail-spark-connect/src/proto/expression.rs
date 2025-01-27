@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use sail_common::spec;
-use sail_sql::data_type::parse_data_type;
-use sail_sql::expression::common::{
-    parse_expression, parse_object_name, parse_qualified_wildcard, parse_wildcard_expression,
+use sail_sql::parser::{
+    parse_data_type, parse_expression, parse_object_name, parse_qualified_wildcard,
+    parse_wildcard_expression,
 };
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -443,7 +443,7 @@ mod tests {
 
     use sail_common::spec;
     use sail_common::tests::test_gold_set;
-    use sail_sql::expression::common::parse_wildcard_expression;
+    use sail_sql::parser::parse_wildcard_expression;
 
     use crate::error::SparkError;
 

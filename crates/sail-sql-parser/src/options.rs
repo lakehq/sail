@@ -1,9 +1,10 @@
 /// The strategy for quote escape in a string, where
 /// the single-character quote is used as the delimiter for the string.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[allow(unused)]
 pub enum QuoteEscape {
     /// No escape is supported.
+    #[default]
     None,
     /// The quote character is escaped by repeating it twice.
     Dual,
@@ -12,7 +13,7 @@ pub enum QuoteEscape {
 }
 
 /// Options for the SQL parser.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ParserOptions {
     /// The quote (delimiter) escape strategy for string.
     pub quote_escape: QuoteEscape,

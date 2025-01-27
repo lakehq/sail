@@ -1,54 +1,122 @@
 use sail_common::spec;
-use sqlparser::ast;
+use sail_sql_parser::ast::expression::{AtomExpr, DuplicateTreatment, Expr, NestedExpr};
+use sail_sql_parser::ast::operator::Comma;
+use sail_sql_parser::ast::query::{
+    AliasClause, ClusterByClause, DistributeByClause, FromClause, GroupByClause, GroupByModifier,
+    HavingClause, IdentList, JoinCriteria, JoinOperator, LateralViewClause, LimitClause,
+    LimitValue, NamedExpr, NamedExprList, NamedQuery, OffsetClause, OrderByClause, PivotClause,
+    Query, QueryBody, QueryModifier, QuerySelect, QueryTerm, SelectClause, SetOperator,
+    SetQuantifier, SortByClause, TableFactor, TableFunction, TableJoin, TableModifier,
+    TableWithJoins, UnpivotClause, UnpivotColumns, UnpivotNulls, ValuesClause, WhereClause,
+    WindowClause, WithClause,
+};
+use sail_sql_parser::common::Sequence;
 
 use crate::error::{SqlError, SqlResult};
-use crate::expression::common::{
-    from_ast_expression, from_ast_ident, from_ast_object_name, from_ast_order_by,
+use crate::expression::{
+    from_ast_expression, from_ast_function_argument, from_ast_object_name, from_ast_order_by,
 };
 use crate::literal::LiteralValue;
-use crate::utils::normalize_ident;
 
-pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
-    let ast::Query {
+#[derive(Default)]
+struct QueryModifiers {
+    sort_by: Option<SortByClause>,
+    order_by: Option<OrderByClause>,
+    cluster_by: Option<ClusterByClause>,
+    distribute_by: Option<DistributeByClause>,
+    offset: Option<OffsetClause>,
+    limit: Option<LimitClause>,
+    window: Vec<WindowClause>,
+}
+
+impl TryFrom<Vec<QueryModifier>> for QueryModifiers {
+    type Error = SqlError;
+
+    fn try_from(value: Vec<QueryModifier>) -> SqlResult<Self> {
+        let mut output = QueryModifiers::default();
+        for modifier in value {
+            match modifier {
+                QueryModifier::Window(x) => output.window.push(x),
+                QueryModifier::OrderBy(x) => {
+                    if output.order_by.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicated ORDER BY clause"));
+                    }
+                }
+                QueryModifier::SortBy(x) => {
+                    if output.sort_by.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicated SORT BY clause"));
+                    }
+                }
+                QueryModifier::ClusterBy(x) => {
+                    if output.cluster_by.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicated CLUSTER BY clause"));
+                    }
+                }
+                QueryModifier::DistributeBy(x) => {
+                    if output.distribute_by.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicated DISTRIBUTE BY clause"));
+                    }
+                }
+                QueryModifier::Limit(x) => {
+                    if output.limit.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicated LIMIT clause"));
+                    }
+                }
+                QueryModifier::Offset(x) => {
+                    if output.offset.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicated OFFSET clause"));
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+}
+
+pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
+    let Query {
         with,
         body,
-        order_by,
-        limit,
-        limit_by,
-        offset,
-        fetch,
-        locks,
-        for_clause,
-        settings,
-        format_clause,
+        modifiers,
     } = query;
-    if !limit_by.is_empty() {
-        return Err(SqlError::unsupported("LIMIT BY clause"));
-    }
-    if fetch.is_some() {
-        return Err(SqlError::unsupported("FETCH clause"));
-    }
-    if !locks.is_empty() {
-        return Err(SqlError::unsupported("LOCKS clause"));
-    }
-    if for_clause.is_some() {
-        return Err(SqlError::unsupported("FOR clause"));
-    }
-    if settings.is_some() {
-        return Err(SqlError::unsupported("SETTINGS clause"));
-    }
-    if format_clause.is_some() {
-        return Err(SqlError::unsupported("FORMAT clause"));
+
+    let plan = from_ast_query_body(*body)?;
+
+    let QueryModifiers {
+        sort_by,
+        order_by,
+        cluster_by,
+        distribute_by,
+        offset,
+        limit,
+        window: _, // TODO: support window
+    } = modifiers.try_into()?;
+
+    if cluster_by.is_some() {
+        return Err(SqlError::unsupported("CLUSTER BY"));
     }
 
-    let plan = from_ast_set_expr(*body)?;
+    if distribute_by.is_some() {
+        return Err(SqlError::unsupported("DISTRIBUTE BY"));
+    }
 
-    let plan = if let Some(ast::OrderBy { exprs, interpolate }) = order_by {
-        if interpolate.is_some() {
-            return Err(SqlError::unsupported("INTERPOLATE in ORDER BY"));
-        }
-        let order_by = exprs
-            .into_iter()
+    let plan = if let Some(SortByClause { sort_by: _, items }) = sort_by {
+        let sort_by = items
+            .into_items()
+            .map(from_ast_order_by)
+            .collect::<SqlResult<_>>()?;
+        spec::QueryPlan::new(spec::QueryNode::Sort {
+            input: Box::new(plan),
+            order: sort_by,
+            is_global: false,
+        })
+    } else {
+        plan
+    };
+
+    let plan = if let Some(OrderByClause { order_by: _, items }) = order_by {
+        let order_by = items
+            .into_items()
             .map(from_ast_order_by)
             .collect::<SqlResult<_>>()?;
         spec::QueryPlan::new(spec::QueryNode::Sort {
@@ -60,7 +128,7 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
-    let plan = if let Some(ast::Offset { value, rows: _ }) = offset {
+    let plan = if let Some(OffsetClause { offset: _, value }) = offset {
         let offset = LiteralValue::<i128>::try_from(value)?.0;
         let offset = usize::try_from(offset).map_err(|e| SqlError::invalid(e.to_string()))?;
         spec::QueryPlan::new(spec::QueryNode::Offset {
@@ -71,8 +139,12 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
-    let plan = if let Some(limit) = limit {
-        let limit = LiteralValue::<i128>::try_from(limit)?.0;
+    let plan = if let Some(LimitClause {
+        limit: _,
+        value: LimitValue::Value(value),
+    }) = limit
+    {
+        let limit = LiteralValue::<i128>::try_from(value)?.0;
         let limit = usize::try_from(limit).map_err(|e| SqlError::invalid(e.to_string()))?;
         spec::QueryPlan::new(spec::QueryNode::Limit {
             input: Box::new(plan),
@@ -83,12 +155,16 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
-    if let Some(with) = with {
-        let recursive = with.recursive;
-        let ctes = from_ast_with(with)?;
+    if let Some(WithClause {
+        with: _,
+        recursive,
+        ctes,
+    }) = with
+    {
+        let ctes = from_ast_with(ctes)?;
         Ok(spec::QueryPlan::new(spec::QueryNode::WithCtes {
             input: Box::new(plan),
-            recursive,
+            recursive: recursive.is_some(),
             ctes,
         }))
     } else {
@@ -96,120 +172,94 @@ pub(crate) fn from_ast_query(query: ast::Query) -> SqlResult<spec::QueryPlan> {
     }
 }
 
-fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
-    use ast::{Distinct, GroupByExpr, SelectItem};
+fn from_ast_query_term(term: QueryTerm) -> SqlResult<spec::QueryPlan> {
+    match term {
+        QueryTerm::Select(select) => from_ast_query_select(select),
+        QueryTerm::Values(values) => from_ast_values(values),
+        QueryTerm::Nested(_, query, _) => from_ast_query(query),
+    }
+}
 
-    let ast::Select {
-        select_token: _,
-        distinct,
-        top,
-        top_before_distinct: _,
-        projection,
-        into,
+fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
+    let QuerySelect {
+        select:
+            SelectClause {
+                select: _,
+                quantifier,
+                projection,
+            },
         from,
         lateral_views,
-        prewhere,
-        selection,
+        r#where,
         group_by,
-        cluster_by,
-        distribute_by,
-        sort_by,
         having,
-        named_window,
-        qualify,
-        window_before_qualify: _,
-        value_table_mode,
-        connect_by,
     } = select;
-    if top.is_some() {
-        return Err(SqlError::unsupported("TOP clause in SELECT"));
-    }
-    if into.is_some() {
-        return Err(SqlError::unsupported("INTO clause in SELECT"));
-    }
-    if prewhere.is_some() {
-        return Err(SqlError::unsupported("PREWHERE clause in SELECT"));
-    }
-    if !cluster_by.is_empty() {
-        return Err(SqlError::unsupported("CLUSTER BY clause in SELECT"));
-    }
-    if !distribute_by.is_empty() {
-        return Err(SqlError::unsupported("DISTRIBUTE BY clause in SELECT"));
-    }
-    if !named_window.is_empty() {
-        return Err(SqlError::todo("named window in SELECT"));
-    }
-    if qualify.is_some() {
-        return Err(SqlError::unsupported("QUALIFY clause in SELECT"));
-    }
-    if value_table_mode.is_some() {
-        return Err(SqlError::unsupported("value table mode in SELECT"));
-    }
-    if connect_by.is_some() {
-        return Err(SqlError::unsupported("CONNECT BY clause in SELECT"));
-    }
 
-    let plan = from_ast_tables(from)?;
-    let plan = query_plan_with_filter(plan, selection)?;
+    let tables = from
+        .map(|FromClause { from: _, tables }| tables.into_items().collect())
+        .unwrap_or_default();
+    let plan = from_ast_tables(tables)?;
+
+    let condition = r#where.map(
+        |WhereClause {
+             r#where: _,
+             condition,
+         }| condition,
+    );
+    let plan = if let Some(condition) = condition {
+        query_plan_with_filter(plan, condition)?
+    } else {
+        plan
+    };
+
     let plan = query_plan_with_lateral_views(plan, lateral_views)?;
 
     let projection = projection
-        .into_iter()
-        .map(|p| match p {
-            SelectItem::UnnamedExpr(expr) => from_ast_expression(expr),
-            SelectItem::ExprWithAlias {
-                expr,
-                alias: ast::Ident { value, .. },
-            } => {
-                let expr = from_ast_expression(expr)?;
+        .into_items()
+        .map(|p| {
+            let NamedExpr { expr, alias } = p;
+            let expr = from_ast_expression(expr)?;
+            if let Some((_, name)) = alias {
                 Ok(spec::Expr::Alias {
                     expr: Box::new(expr),
-                    name: vec![value.into()],
+                    name: vec![name.value.into()],
                     metadata: None,
                 })
-            }
-            SelectItem::QualifiedWildcard(name, options) => {
-                let wildcard_options = from_ast_wildcard_options(options)?;
-                Ok(spec::Expr::UnresolvedStar {
-                    target: Some(from_ast_object_name(name)?),
-                    wildcard_options,
-                })
-            }
-            SelectItem::Wildcard(options) => {
-                let wildcard_options = from_ast_wildcard_options(options)?;
-                Ok(spec::Expr::UnresolvedStar {
-                    target: None,
-                    wildcard_options,
-                })
+            } else {
+                Ok(expr)
             }
         })
         .collect::<SqlResult<_>>()?;
 
-    let group_by = match group_by {
-        GroupByExpr::All(_) => return Err(SqlError::unsupported("GROUP BY ALL")),
-        GroupByExpr::Expressions(expr, modifiers) => {
-            let expr = expr
-                .into_iter()
+    let group_by = group_by
+        .map(|x| -> SqlResult<_> {
+            let GroupByClause {
+                group_by: _,
+                expressions,
+                modifier,
+            } = x;
+            let expr = expressions
+                .into_items()
                 .map(from_ast_expression)
                 .collect::<SqlResult<Vec<spec::Expr>>>()?;
-            match modifiers.as_slice() {
-                [] => expr,
-                [ast::GroupByWithModifier::Rollup] => vec![spec::Expr::Rollup(expr)],
-                [ast::GroupByWithModifier::Cube] => vec![spec::Expr::Cube(expr)],
-                _ => {
-                    return Err(SqlError::unsupported(format!(
-                        "GROUP BY modifiers {:?}",
-                        modifiers
-                    )))
-                }
-            }
-        }
-    };
+            let expr = match modifier {
+                None => expr,
+                Some(GroupByModifier::WithRollup(_, _)) => vec![spec::Expr::Rollup(expr)],
+                Some(GroupByModifier::WithCube(_, _)) => vec![spec::Expr::Cube(expr)],
+            };
+            Ok(expr)
+        })
+        .transpose()?
+        .unwrap_or_default();
 
-    let having = match having {
-        None => None,
-        Some(having) => Some(from_ast_expression(having)?),
-    };
+    let having = having
+        .map(
+            |HavingClause {
+                 having: _,
+                 condition,
+             }| from_ast_expression(condition),
+        )
+        .transpose()?;
 
     let plan = if group_by.is_empty() && having.is_none() {
         spec::QueryPlan::new(spec::QueryNode::Project {
@@ -226,31 +276,9 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
         }))
     };
 
-    let plan = if !sort_by.is_empty() {
-        let sort_by = sort_by
-            .into_iter()
-            .map(|expr| {
-                let expr = ast::OrderByExpr {
-                    expr,
-                    asc: None,
-                    nulls_first: None,
-                    with_fill: None,
-                };
-                from_ast_order_by(expr)
-            })
-            .collect::<SqlResult<_>>()?;
-        spec::QueryPlan::new(spec::QueryNode::Sort {
-            input: Box::new(plan),
-            order: sort_by,
-            is_global: false,
-        })
-    } else {
-        plan
-    };
-
-    let plan = match distinct {
-        None => plan,
-        Some(Distinct::Distinct) => {
+    let plan = match quantifier {
+        None | Some(DuplicateTreatment::All(_)) => plan,
+        Some(DuplicateTreatment::Distinct(_)) => {
             spec::QueryPlan::new(spec::QueryNode::Deduplicate(spec::Deduplicate {
                 input: Box::new(plan),
                 column_names: vec![],
@@ -258,36 +286,33 @@ fn from_ast_select(select: ast::Select) -> SqlResult<spec::QueryPlan> {
                 within_watermark: false,
             }))
         }
-        Some(Distinct::On(_)) => return Err(SqlError::unsupported("DISTINCT ON")),
     };
 
     Ok(plan)
 }
 
-fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
-    use ast::{SetExpr, SetOperator, SetQuantifier};
-
-    match set_expr {
-        SetExpr::Select(select) => from_ast_select(*select),
-        SetExpr::Query(query) => from_ast_query(*query),
-        SetExpr::SetOperation {
-            op,
-            set_quantifier,
+fn from_ast_query_body(body: QueryBody) -> SqlResult<spec::QueryPlan> {
+    match body {
+        QueryBody::Term(term) => from_ast_query_term(term),
+        QueryBody::SetOperation {
             left,
+            operator,
+            quantifier,
             right,
         } => {
-            let left = from_ast_set_expr(*left)?;
-            let right = from_ast_set_expr(*right)?;
-            let (is_all, by_name) = match set_quantifier {
-                SetQuantifier::All => (true, false),
-                SetQuantifier::Distinct | SetQuantifier::None => (false, false),
-                SetQuantifier::AllByName => (true, true),
-                SetQuantifier::ByName | SetQuantifier::DistinctByName => (false, true),
+            let left = from_ast_query_body(*left)?;
+            let right = from_ast_query_body(*right)?;
+            let (is_all, by_name) = match quantifier {
+                Some(SetQuantifier::All(_)) => (true, false),
+                Some(SetQuantifier::Distinct(_)) | None => (false, false),
+                Some(SetQuantifier::AllByName(_, _, _)) => (true, true),
+                Some(SetQuantifier::ByName(_, _))
+                | Some(SetQuantifier::DistinctByName(_, _, _)) => (false, true),
             };
-            let set_op_type = match op {
-                SetOperator::Union => spec::SetOpType::Union,
-                SetOperator::Except | SetOperator::Minus => spec::SetOpType::Except,
-                SetOperator::Intersect => spec::SetOpType::Intersect,
+            let set_op_type = match operator {
+                SetOperator::Union(_) => spec::SetOpType::Union,
+                SetOperator::Except(_) | SetOperator::Minus(_) => spec::SetOpType::Except,
+                SetOperator::Intersect(_) => spec::SetOpType::Intersect,
             };
             Ok(spec::QueryPlan::new(spec::QueryNode::SetOperation(
                 spec::SetOperation {
@@ -300,54 +325,51 @@ fn from_ast_set_expr(set_expr: ast::SetExpr) -> SqlResult<spec::QueryPlan> {
                 },
             )))
         }
-        SetExpr::Values(values) => {
-            let ast::Values {
-                explicit_row: _,
-                rows,
-            } = values;
-            let rows = rows
-                .into_iter()
-                .map(|row| {
-                    row.into_iter()
-                        .map(from_ast_expression)
-                        .collect::<SqlResult<Vec<_>>>()
-                })
-                .collect::<SqlResult<Vec<_>>>()?;
-            Ok(spec::QueryPlan::new(spec::QueryNode::Values(rows)))
-        }
-        SetExpr::Insert(_) => Err(SqlError::unsupported("INSERT statement in set expression")),
-        SetExpr::Update(_) => Err(SqlError::unsupported("UPDATE statement in set expression")),
-        SetExpr::Table(table) => {
-            let ast::Table {
-                table_name,
-                schema_name,
-            } = *table;
-            let names: Vec<ast::Ident> = match (schema_name, table_name) {
-                (Some(s), Some(t)) => vec![s.as_str().into(), t.as_str().into()],
-                (None, Some(t)) => vec![t.as_str().into()],
-                (_, None) => return Err(SqlError::invalid("missing table name in set expression")),
-            };
-            Ok(spec::QueryPlan::new(spec::QueryNode::Read {
-                is_streaming: false,
-                read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
-                    name: from_ast_object_name(ast::ObjectName(names))?,
-                    options: Default::default(),
-                }),
-            }))
-        }
     }
 }
 
-pub fn from_ast_tables(tables: Vec<ast::TableWithJoins>) -> SqlResult<spec::QueryPlan> {
+fn from_ast_values(values: ValuesClause) -> SqlResult<spec::QueryPlan> {
+    let ValuesClause {
+        values: _,
+        expressions,
+        alias,
+    } = values;
+    let rows = expressions
+        .into_items()
+        .map(|row| match row {
+            Expr::Atom(AtomExpr::Nested(NestedExpr {
+                left: _,
+                expressions,
+                right: _,
+            })) => expressions
+                .into_items()
+                .map(from_ast_expression)
+                .collect::<SqlResult<Vec<_>>>(),
+            x => Ok(vec![from_ast_expression(x)?]),
+        })
+        .collect::<SqlResult<Vec<_>>>()?;
+    let plan = spec::QueryPlan::new(spec::QueryNode::Values(rows));
+    query_plan_with_table_alias(plan, alias)
+}
+
+pub fn from_ast_tables(tables: Vec<TableWithJoins>) -> SqlResult<spec::QueryPlan> {
     let plan = tables
         .into_iter()
         .try_fold(
             None,
             |plan: Option<spec::QueryPlan>, table| -> SqlResult<Option<spec::QueryPlan>> {
-                let plan = if is_lateral_view(&table.relation) {
-                    query_plan_with_lateral_table(plan, table)?
+                let TableWithJoins {
+                    lateral,
+                    table,
+                    joins,
+                } = table;
+                let plan = if lateral.is_some() {
+                    if !joins.is_empty() {
+                        return Err(SqlError::unsupported("lateral table with join"));
+                    }
+                    query_plan_with_lateral_table_factor(plan, table, true)?
                 } else {
-                    query_plan_with_table(plan, table)?
+                    query_plan_with_table_factor(plan, table, joins)?
                 };
                 Ok(Some(plan))
             },
@@ -360,338 +382,324 @@ pub fn from_ast_tables(tables: Vec<ast::TableWithJoins>) -> SqlResult<spec::Quer
     Ok(plan)
 }
 
-pub fn from_ast_table_with_joins(table: ast::TableWithJoins) -> SqlResult<spec::QueryPlan> {
-    let ast::TableWithJoins { relation, joins } = table;
-    let plan = from_ast_table_factor(relation)?;
-    let plan = joins
-        .into_iter()
-        .try_fold(plan, |left, join| -> SqlResult<_> {
-            if is_lateral_view(&join.relation) {
-                query_plan_with_lateral_join(left, join)
-            } else {
-                query_plan_with_join(left, join)
-            }
-        })?;
+pub fn from_ast_table_factor_with_joins(
+    table: TableFactor,
+    joins: Vec<TableJoin>,
+) -> SqlResult<spec::QueryPlan> {
+    let plan = from_ast_table_factor(table)?;
+    let plan = joins.into_iter().try_fold(plan, query_plan_with_join)?;
     Ok(plan)
 }
 
-fn from_ast_table_factor(table: ast::TableFactor) -> SqlResult<spec::QueryPlan> {
-    use ast::TableFactor;
-
+fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
     match table {
-        TableFactor::Table {
+        TableFactor::Name {
             name,
+            modifier,
             alias,
-            args,
-            with_hints,
-            version,
-            with_ordinality,
-            partitions,
-            json_path,
-            sample,
         } => {
-            if !with_hints.is_empty() {
-                return Err(SqlError::unsupported("table hints"));
-            }
-            if version.is_some() {
-                return Err(SqlError::unsupported("table version"));
-            }
-            if with_ordinality {
-                return Err(SqlError::unsupported("table with ordinality"));
-            }
-            if !partitions.is_empty() {
-                return Err(SqlError::unsupported("table partitions"));
-            }
-            if json_path.is_some() {
-                return Err(SqlError::unsupported("table JSON path"));
-            }
-            if sample.is_some() {
-                return Err(SqlError::unsupported("table sample"));
-            }
+            let plan = spec::QueryPlan::new(spec::QueryNode::Read {
+                is_streaming: false,
+                read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+                    name: from_ast_object_name(name)?,
+                    options: Default::default(),
+                }),
+            });
+            let plan = query_plan_with_table_modifier(plan, modifier)?;
+            query_plan_with_table_alias(plan, alias)
+        }
+        TableFactor::Query {
+            left: _,
+            query,
+            right: _,
+            modifier,
+            alias,
+        } => {
+            let plan = from_ast_query(query)?;
+            let plan = query_plan_with_table_modifier(plan, modifier)?;
+            query_plan_with_table_alias(plan, alias)
+        }
+        TableFactor::TableFunction { function, alias } => {
+            let TableFunction {
+                name,
+                left: _,
+                arguments,
+                right: _,
+            } = function;
+            let arguments = arguments
+                .into_items()
+                .map(from_ast_function_argument)
+                .collect::<SqlResult<Vec<_>>>()?;
+            let plan = spec::QueryPlan::new(spec::QueryNode::Read {
+                is_streaming: false,
+                read_type: spec::ReadType::Udtf(spec::ReadUdtf {
+                    name: from_ast_object_name(name)?,
+                    arguments,
+                    options: Default::default(),
+                }),
+            });
+            query_plan_with_table_alias(plan, alias)
+        }
+        TableFactor::Values { values, alias } => {
+            let plan = from_ast_values(values)?;
+            query_plan_with_table_alias(plan, alias)
+        }
+    }
+}
 
-            let plan = if let Some(ast::TableFunctionArgs { args, settings }) = args {
-                if settings.is_some() {
-                    return Err(SqlError::unsupported("table function settings"));
-                }
-                let args: Vec<spec::Expr> = args
-                    .into_iter()
-                    .map(|arg| {
-                        if let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)) = arg {
-                            from_ast_expression(expr)
-                        } else {
-                            Err(SqlError::invalid("unsupported function argument type"))
-                        }
-                    })
-                    .collect::<SqlResult<Vec<_>>>()?;
-                spec::QueryPlan::new(spec::QueryNode::Read {
-                    is_streaming: false,
-                    read_type: spec::ReadType::Udtf(spec::ReadUdtf {
-                        name: from_ast_object_name(name)?,
-                        arguments: args,
-                        options: Default::default(),
-                    }),
-                })
-            } else {
-                spec::QueryPlan::new(spec::QueryNode::Read {
-                    is_streaming: false,
-                    read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
-                        name: from_ast_object_name(name)?,
-                        options: Default::default(),
-                    }),
-                })
-            };
-            query_plan_with_table_alias(plan, alias)
-        }
-        TableFactor::Derived {
-            lateral,
-            subquery,
-            alias,
-        } => {
-            if lateral {
-                return Err(SqlError::unsupported("LATERAL in derived table factor"));
-            }
-            let plan = from_ast_query(*subquery)?;
-            query_plan_with_table_alias(plan, alias)
-        }
-        TableFactor::TableFunction { .. } => Err(SqlError::todo("table function in table factor")),
-        TableFactor::Function { .. } => Err(SqlError::invalid("function in table factor")),
-        TableFactor::UNNEST { .. } => Err(SqlError::todo("UNNEST")),
-        TableFactor::JsonTable { .. } => Err(SqlError::todo("JSON_TABLE")),
-        TableFactor::NestedJoin { .. } => Err(SqlError::todo("nested join")),
-        TableFactor::Pivot {
-            table,
-            aggregate_functions,
-            value_column,
-            value_source,
-            default_on_null,
-            alias,
-        } => {
-            let plan = from_ast_table_factor(*table)?;
-            if default_on_null.is_some() {
-                return Err(SqlError::unsupported("PIVOT default on null"));
-            }
-            let aggregate = aggregate_functions
-                .into_iter()
+fn query_plan_with_table_modifier(
+    plan: spec::QueryPlan,
+    modifier: Option<TableModifier>,
+) -> SqlResult<spec::QueryPlan> {
+    match modifier {
+        Some(TableModifier::Pivot(pivot)) => {
+            let PivotClause {
+                pivot: _,
+                left: _,
+                aggregates,
+                r#for: _,
+                columns,
+                r#in: _,
+                values,
+                right: _,
+            } = pivot;
+            let aggregate = aggregates
+                .into_items()
                 .map(|expr| {
-                    let ast::ExprWithAlias { expr, alias } = expr;
+                    let NamedExpr { expr, alias } = expr;
                     let expr = from_ast_expression(expr)?;
                     match alias {
-                        Some(ast::Ident { value, .. }) => Ok(spec::Expr::Alias {
+                        Some((_, value)) => Ok(spec::Expr::Alias {
                             expr: Box::new(expr),
-                            name: vec![value.into()],
+                            name: vec![value.value.into()],
                             metadata: None,
                         }),
                         None => Ok(expr),
                     }
                 })
                 .collect::<SqlResult<Vec<_>>>()?;
-            let columns = value_column
-                .into_iter()
+            let IdentList {
+                left: _,
+                columns,
+                right: _,
+            } = columns;
+            let columns = columns
+                .into_items()
                 .map(|c| spec::Expr::UnresolvedAttribute {
                     name: spec::ObjectName::new_unqualified(c.value.into()),
                     plan_id: None,
                 })
                 .collect();
-            let values = match value_source {
-                ast::PivotValueSource::List(expr) => expr
-                    .into_iter()
-                    .map(|e| {
-                        let ast::ExprWithAlias { expr, alias } = e;
-                        let expr = match expr {
-                            ast::Expr::Tuple(expr) => expr,
-                            _ => vec![expr],
-                        };
-                        let values = expr
-                            .into_iter()
-                            .map(|x| match from_ast_expression(x)? {
-                                spec::Expr::Literal(literal) => Ok(literal),
-                                _ => Err(SqlError::invalid("non-literal value in PIVOT")),
-                            })
-                            .collect::<SqlResult<Vec<_>>>()?;
-                        let alias = alias.map(|ast::Ident { value, .. }| value.into());
-                        Ok(spec::PivotValue { values, alias })
-                    })
-                    .collect::<SqlResult<Vec<_>>>()?,
-                ast::PivotValueSource::Any(_) => return Err(SqlError::unsupported("PIVOT ANY")),
-                ast::PivotValueSource::Subquery(_) => {
-                    return Err(SqlError::unsupported("PIVOT subquery"))
-                }
-            };
-            let plan = spec::QueryPlan::new(spec::QueryNode::Pivot(spec::Pivot {
+            let NamedExprList {
+                left: _,
+                items: values,
+                right: _,
+            } = values;
+            let values = values
+                .into_items()
+                .map(|e| {
+                    let NamedExpr { expr, alias } = e;
+                    let expr = match expr {
+                        Expr::Atom(AtomExpr::Nested(NestedExpr {
+                            left: _,
+                            expressions,
+                            right: _,
+                        })) => expressions.into_items().collect(),
+                        _ => vec![expr],
+                    };
+                    let values = expr
+                        .into_iter()
+                        .map(|x| match from_ast_expression(x)? {
+                            spec::Expr::Literal(literal) => Ok(literal),
+                            _ => Err(SqlError::invalid("non-literal value in PIVOT")),
+                        })
+                        .collect::<SqlResult<Vec<_>>>()?;
+                    let alias = alias.map(|(_, alias)| alias.value.into());
+                    Ok(spec::PivotValue { values, alias })
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::QueryPlan::new(spec::QueryNode::Pivot(spec::Pivot {
                 input: Box::new(plan),
                 grouping: vec![],
                 aggregate,
                 columns,
                 values,
-            }));
-            query_plan_with_table_alias(plan, alias)
+            })))
         }
-        TableFactor::Unpivot {
-            table,
-            value,
-            name,
-            columns,
-            alias,
-        } => {
-            let plan = from_ast_table_factor(*table)?;
+        Some(TableModifier::Unpivot(unpivot)) => {
+            let UnpivotClause {
+                unpivot: _,
+                nulls,
+                left: _,
+                columns,
+                right: _,
+            } = unpivot;
+            let include_nulls = match nulls {
+                Some(UnpivotNulls::IncludeNulls(_, _)) => true,
+                None | Some(UnpivotNulls::ExcludeNulls(_, _)) => false,
+            };
+            let (values, name, columns) = match columns {
+                UnpivotColumns::SingleValue {
+                    values,
+                    r#for: _,
+                    name,
+                    r#in: _,
+                    left: _,
+                    columns,
+                    right: _,
+                } => {
+                    let columns = columns
+                        .into_items()
+                        .map(|(item, alias)| (vec![item], alias.map(|(_, alias)| alias)))
+                        .collect::<Vec<_>>();
+                    (vec![values], name, columns)
+                }
+                UnpivotColumns::MultiValue {
+                    values:
+                        IdentList {
+                            left: _,
+                            columns: values,
+                            right: _,
+                        },
+                    r#for: _,
+                    name,
+                    r#in: _,
+                    left: _,
+                    columns,
+                    right: _,
+                } => {
+                    let values = values.into_items().collect();
+                    let columns = columns
+                        .into_items()
+                        .map(|(item, alias)| {
+                            let IdentList {
+                                left: _,
+                                columns: items,
+                                right: _,
+                            } = item;
+                            (items.into_items().collect(), alias.map(|(_, alias)| alias))
+                        })
+                        .collect::<Vec<_>>();
+                    (values, name, columns)
+                }
+            };
+            let variable_column_name = name.value.into();
+            let value_column_names = values.into_iter().map(|x| x.value.into()).collect();
             let values = columns
                 .into_iter()
-                .map(|c| spec::UnpivotValue {
-                    columns: vec![spec::Expr::UnresolvedAttribute {
-                        name: spec::ObjectName::new_unqualified(c.value.into()),
-                        plan_id: None,
-                    }],
-                    alias: None,
+                .map(|(columns, alias)| {
+                    let columns = columns
+                        .into_iter()
+                        .map(|col| spec::Expr::UnresolvedAttribute {
+                            name: spec::ObjectName::new_unqualified(col.value.into()),
+                            plan_id: None,
+                        })
+                        .collect();
+                    let alias = alias.map(|alias| alias.value.into());
+                    spec::UnpivotValue { columns, alias }
                 })
                 .collect::<Vec<_>>();
-            let plan = spec::QueryPlan::new(spec::QueryNode::Unpivot(spec::Unpivot {
-                input: Box::new(plan),
-                ids: None,
-                values,
-                variable_column_name: name.value.into(),
-                value_column_names: vec![value.value.into()],
-                include_nulls: false,
-            }));
-            query_plan_with_table_alias(plan, alias)
+            Ok(spec::QueryPlan::new(spec::QueryNode::Unpivot(
+                spec::Unpivot {
+                    input: Box::new(plan),
+                    ids: None,
+                    values,
+                    variable_column_name,
+                    value_column_names,
+                    include_nulls,
+                },
+            )))
         }
-        TableFactor::MatchRecognize { .. } => Err(SqlError::todo("MATCH_RECOGNIZE")),
-        TableFactor::OpenJsonTable { .. } => Err(SqlError::unsupported("OPENJSON")),
+        None => Ok(plan),
     }
 }
 
-pub fn from_ast_with(with: ast::With) -> SqlResult<Vec<(spec::Identifier, spec::QueryPlan)>> {
-    let mut ctes: Vec<(spec::Identifier, spec::QueryPlan)> = Vec::new();
-    for cte in with.cte_tables {
-        let cte_name = spec::Identifier::from(normalize_ident(&cte.alias.name));
-        let plan = from_ast_query(*cte.query)?;
-        ctes.push((cte_name, plan));
-    }
-    Ok(ctes)
-}
-
-pub fn from_ast_wildcard_options(
-    wildcard_options: ast::WildcardAdditionalOptions,
-) -> SqlResult<spec::WildcardOptions> {
-    let exclude_columns = wildcard_options
-        .opt_exclude
-        .map(|x| -> SqlResult<Vec<spec::Identifier>> {
-            match x {
-                ast::ExcludeSelectItem::Single(ident) => Ok(vec![from_ast_ident(&ident, true)?]),
-                ast::ExcludeSelectItem::Multiple(idents) => Ok(idents
-                    .into_iter()
-                    .map(|x| from_ast_ident(&x, true))
-                    .collect::<SqlResult<Vec<spec::Identifier>>>()?),
-            }
+pub fn from_ast_with(
+    ctes: Sequence<NamedQuery, Comma>,
+) -> SqlResult<Vec<(spec::Identifier, spec::QueryPlan)>> {
+    ctes.into_items()
+        .map(|cte| {
+            let NamedQuery {
+                name,
+                columns,
+                r#as: _,
+                left: _,
+                query,
+                right: _,
+            } = cte;
+            let plan = from_ast_query(query)?;
+            let name = spec::Identifier::from(name.value);
+            let columns = if let Some(columns) = columns {
+                let IdentList {
+                    left: _,
+                    columns,
+                    right: _,
+                } = columns;
+                columns
+                    .into_items()
+                    .map(|c| Ok(c.value.into()))
+                    .collect::<SqlResult<Vec<_>>>()?
+            } else {
+                vec![]
+            };
+            let plan = spec::QueryPlan::new(spec::QueryNode::TableAlias {
+                input: Box::new(plan),
+                name: name.clone(),
+                columns,
+            });
+            Ok((name, plan))
         })
-        .transpose()?;
-    let except_columns = wildcard_options
-        .opt_except
-        .map(|x| -> SqlResult<Vec<spec::Identifier>> {
-            let mut elements = vec![from_ast_ident(&x.first_element, true)?];
-            let additional_elements = x
-                .additional_elements
-                .into_iter()
-                .map(|x| from_ast_ident(&x, true))
-                .collect::<SqlResult<Vec<spec::Identifier>>>()?;
-            elements.extend(additional_elements);
-            Ok(elements)
-        })
-        .transpose()?;
-    let replace_columns = wildcard_options
-        .opt_replace
-        .map(|x| -> SqlResult<Vec<spec::WildcardReplaceColumn>> {
-            let replace_columns = x
-                .items
-                .iter()
-                .map(|item| {
-                    Ok(spec::WildcardReplaceColumn {
-                        expression: Box::new(from_ast_expression(item.expr.clone())?),
-                        column_name: from_ast_ident(&item.column_name, true)?,
-                        as_keyword: item.as_keyword,
-                    })
-                })
-                .collect::<SqlResult<Vec<spec::WildcardReplaceColumn>>>()?;
-            Ok(replace_columns)
-        })
-        .transpose()?;
-    let rename_columns = wildcard_options
-        .opt_rename
-        .map(|x| -> SqlResult<Vec<spec::IdentifierWithAlias>> {
-            match x {
-                ast::RenameSelectItem::Single(ident_with_alias) => {
-                    Ok(vec![spec::IdentifierWithAlias {
-                        identifier: from_ast_ident(&ident_with_alias.ident, true)?,
-                        alias: from_ast_ident(&ident_with_alias.alias, true)?,
-                    }])
-                }
-                ast::RenameSelectItem::Multiple(ident_with_aliases) => Ok(ident_with_aliases
-                    .into_iter()
-                    .map(|x| {
-                        Ok(spec::IdentifierWithAlias {
-                            identifier: from_ast_ident(&x.ident, true)?,
-                            alias: from_ast_ident(&x.alias, true)?,
-                        })
-                    })
-                    .collect::<SqlResult<Vec<spec::IdentifierWithAlias>>>()?),
-            }
-        })
-        .transpose()?;
-    let wildcard_options = spec::WildcardOptions {
-        ilike_pattern: wildcard_options.opt_ilike.map(|x| x.pattern),
-        exclude_columns,
-        except_columns,
-        replace_columns,
-        rename_columns,
-    };
-    Ok(wildcard_options)
+        .collect::<SqlResult<Vec<_>>>()
 }
 
 pub fn query_plan_with_filter(
     plan: spec::QueryPlan,
-    selection: Option<ast::Expr>,
+    condition: Expr,
 ) -> SqlResult<spec::QueryPlan> {
-    let plan = if let Some(selection) = selection {
-        let selection = from_ast_expression(selection)?;
-        spec::QueryPlan::new(spec::QueryNode::Filter {
-            input: Box::new(plan),
-            condition: selection,
-        })
-    } else {
-        plan
-    };
-    Ok(plan)
+    let condition = from_ast_expression(condition)?;
+    Ok(spec::QueryPlan::new(spec::QueryNode::Filter {
+        input: Box::new(plan),
+        condition,
+    }))
 }
 
 fn query_plan_with_table_alias(
     plan: spec::QueryPlan,
-    alias: Option<ast::TableAlias>,
+    alias: Option<AliasClause>,
 ) -> SqlResult<spec::QueryPlan> {
     match alias {
         None => Ok(plan),
-        Some(ast::TableAlias { name, columns }) => {
+        Some(AliasClause {
+            r#as: _,
+            table,
+            columns,
+        }) => {
+            let columns = match columns {
+                Some(IdentList {
+                    left: _,
+                    columns,
+                    right: _,
+                }) => columns
+                    .into_items()
+                    .map(|c| Ok(c.value.into()))
+                    .collect::<SqlResult<Vec<_>>>()?,
+                None => vec![],
+            };
             Ok(spec::QueryPlan::new(spec::QueryNode::TableAlias {
                 input: Box::new(plan),
-                name: spec::Identifier::from(normalize_ident(&name)),
-                columns: columns
-                    .into_iter()
-                    .map(|c| {
-                        let ast::TableAliasColumnDef { name, data_type } = c;
-                        if data_type.is_some() {
-                            return Err(SqlError::unsupported("data type in table alias column"));
-                        }
-                        Ok(name.value.into())
-                    })
-                    .collect::<SqlResult<Vec<_>>>()?,
+                name: spec::Identifier::from(table.value),
+                columns,
             }))
         }
     }
 }
 
-fn query_plan_with_table(
+fn query_plan_with_table_factor(
     left: Option<spec::QueryPlan>,
-    table: ast::TableWithJoins,
+    table: TableFactor,
+    joins: Vec<TableJoin>,
 ) -> SqlResult<spec::QueryPlan> {
-    let right = from_ast_table_with_joins(table)?;
+    let right = from_ast_table_factor_with_joins(table, joins)?;
     match left {
         Some(left) => Ok(spec::QueryPlan::new(spec::QueryNode::Join(spec::Join {
             left: Box::new(left),
@@ -705,61 +713,61 @@ fn query_plan_with_table(
     }
 }
 
-fn query_plan_with_lateral_table(
-    plan: Option<spec::QueryPlan>,
-    table: ast::TableWithJoins,
-) -> SqlResult<spec::QueryPlan> {
-    let ast::TableWithJoins { relation, joins } = table;
-    if !joins.is_empty() {
-        return Err(SqlError::unsupported("joins in lateral table"));
-    }
-    query_plan_with_lateral_table_factor(plan, relation, true)
-}
-
-fn query_plan_with_join(left: spec::QueryPlan, join: ast::Join) -> SqlResult<spec::QueryPlan> {
-    use sqlparser::ast::{JoinConstraint, JoinOperator};
-
-    let ast::Join {
-        relation: right,
-        global,
-        join_operator,
+fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spec::QueryPlan> {
+    let TableJoin {
+        natural,
+        operator,
+        join: _,
+        lateral,
+        other: right,
+        criteria,
     } = join;
-    if global {
-        return Err(SqlError::unsupported("global join"));
+    if natural.is_some() {
+        return Err(SqlError::unsupported("NATURAL JOIN"));
+    }
+    if lateral.is_some() {
+        if criteria.is_some() {
+            return Err(SqlError::unsupported("LATERAL JOIN with criteria"));
+        }
+        let outer = match operator {
+            None | Some(JoinOperator::Inner(_)) => false,
+            Some(JoinOperator::LeftOuter(_, _)) => true,
+            Some(JoinOperator::Cross(_)) => true,
+            _ => return Err(SqlError::invalid("LATERAL JOIN operator")),
+        };
+        return query_plan_with_lateral_table_factor(Some(left), right, outer);
     }
     let right = from_ast_table_factor(right)?;
-    let (join_type, constraint) = match join_operator {
-        JoinOperator::Inner(constraint) => (spec::JoinType::Inner, Some(constraint)),
-        JoinOperator::LeftOuter(constraint) => (spec::JoinType::LeftOuter, Some(constraint)),
-        JoinOperator::RightOuter(constraint) => (spec::JoinType::RightOuter, Some(constraint)),
-        JoinOperator::FullOuter(constraint) => (spec::JoinType::FullOuter, Some(constraint)),
-        JoinOperator::CrossJoin => (spec::JoinType::Cross, None),
-        JoinOperator::Semi(constraint) | JoinOperator::LeftSemi(constraint) => {
-            (spec::JoinType::LeftSemi, Some(constraint))
+    let join_type = match operator {
+        None | Some(JoinOperator::Inner(_)) => spec::JoinType::Inner,
+        Some(JoinOperator::LeftOuter(_, _)) => spec::JoinType::LeftOuter,
+        Some(JoinOperator::RightOuter(_, _)) => spec::JoinType::RightOuter,
+        Some(JoinOperator::FullOuter(_, _)) => spec::JoinType::FullOuter,
+        Some(JoinOperator::Cross(_)) => spec::JoinType::Cross,
+        Some(JoinOperator::Semi(_)) | Some(JoinOperator::LeftSemi(_, _)) => {
+            spec::JoinType::LeftSemi
         }
-        JoinOperator::RightSemi(constraint) => (spec::JoinType::RightSemi, Some(constraint)),
-        JoinOperator::Anti(constraint) | JoinOperator::LeftAnti(constraint) => {
-            (spec::JoinType::LeftAnti, Some(constraint))
+        Some(JoinOperator::RightSemi(_, _)) => spec::JoinType::RightSemi,
+        Some(JoinOperator::Anti(_)) | Some(JoinOperator::LeftAnti(_, _)) => {
+            spec::JoinType::LeftAnti
         }
-        JoinOperator::RightAnti(constraint) => (spec::JoinType::RightAnti, Some(constraint)),
-        JoinOperator::CrossApply | JoinOperator::OuterApply => {
-            return Err(SqlError::unsupported("APPLY join"))
-        }
-        JoinOperator::AsOf { .. } => {
-            return Err(SqlError::unsupported("AS OF join"));
-        }
+        Some(JoinOperator::RightAnti(_, _)) => spec::JoinType::RightAnti,
     };
-    let (join_condition, using_columns) = match constraint {
-        Some(JoinConstraint::On(expr)) => {
+    let (join_condition, using_columns) = match criteria {
+        Some(JoinCriteria::On(_, expr)) => {
             let expr = from_ast_expression(expr)?;
             (Some(expr), vec![])
         }
-        Some(JoinConstraint::Using(columns)) => {
-            let columns = columns.into_iter().map(|c| c.to_string()).collect();
+        Some(JoinCriteria::Using(_, columns)) => {
+            let IdentList {
+                left: _,
+                columns,
+                right: _,
+            } = columns;
+            let columns = columns.into_items().map(|c| c.value).collect();
             (None, columns)
         }
-        Some(JoinConstraint::Natural) => return Err(SqlError::unsupported("natural join")),
-        Some(JoinConstraint::None) | None => (None, vec![]),
+        None => (None, vec![]),
     };
     Ok(spec::QueryPlan::new(spec::QueryNode::Join(spec::Join {
         left: Box::new(left),
@@ -771,75 +779,47 @@ fn query_plan_with_join(left: spec::QueryPlan, join: ast::Join) -> SqlResult<spe
     })))
 }
 
-fn query_plan_with_lateral_join(
-    left: spec::QueryPlan,
-    join: ast::Join,
-) -> SqlResult<spec::QueryPlan> {
-    let ast::Join {
-        relation: right,
-        global,
-        join_operator,
-    } = join;
-    if global {
-        return Err(SqlError::invalid("global lateral join"));
-    }
-    let outer = match join_operator {
-        ast::JoinOperator::Inner(_) => false,
-        ast::JoinOperator::LeftOuter(_) => true,
-        ast::JoinOperator::CrossJoin => true,
-        _ => return Err(SqlError::invalid("lateral join type")),
-    };
-    query_plan_with_lateral_table_factor(Some(left), right, outer)
-}
-
 fn query_plan_with_lateral_table_factor(
     input: Option<spec::QueryPlan>,
-    factor: ast::TableFactor,
+    table: TableFactor,
     outer: bool,
 ) -> SqlResult<spec::QueryPlan> {
-    let ast::TableFactor::Function {
-        lateral: _,
-        name,
-        args,
+    let TableFactor::TableFunction {
+        function:
+            TableFunction {
+                name,
+                left: _,
+                arguments,
+                right: _,
+            },
         alias,
-    } = factor
+    } = table
     else {
         return Err(SqlError::invalid(
             "expected function for lateral table factor",
         ));
     };
-    let expression = ast::Expr::Function(ast::Function {
-        name,
-        uses_odbc_syntax: false,
-        parameters: ast::FunctionArguments::None,
-        args: ast::FunctionArguments::List(ast::FunctionArgumentList {
-            duplicate_treatment: None,
-            args,
-            clauses: vec![],
-        }),
-        filter: None,
-        null_treatment: None,
-        over: None,
-        within_group: vec![],
-    });
+    let function = from_ast_object_name(name)?;
+    let arguments = arguments
+        .into_items()
+        .map(from_ast_function_argument)
+        .collect::<SqlResult<Vec<_>>>()?;
     let (table_alias, column_aliases) = if let Some(alias) = alias {
-        let ast::TableAlias { name, columns } = alias;
-        let table_alias = Some(from_ast_object_name(ast::ObjectName(vec![name]))?);
-        let column_aliases = if columns.is_empty() {
-            None
+        let AliasClause {
+            r#as: _,
+            table,
+            columns,
+        } = alias;
+        let table_alias = Some(spec::ObjectName::new_unqualified(table.value.into()));
+        let column_aliases = if let Some(IdentList {
+            left: _,
+            columns,
+            right: _,
+        }) = columns
+        {
+            Some(columns.into_items().map(|x| x.value.into()).collect())
         } else {
-            Some(
-                columns
-                    .iter()
-                    .map(|x| {
-                        let ast::TableAliasColumnDef { name, data_type } = x;
-                        if data_type.is_some() {
-                            return Err(SqlError::invalid("data type in column alias"));
-                        }
-                        from_ast_ident(name, true)
-                    })
-                    .collect::<SqlResult<_>>()?,
-            )
+            None
         };
         (table_alias, column_aliases)
     } else {
@@ -847,7 +827,8 @@ fn query_plan_with_lateral_table_factor(
     };
     Ok(spec::QueryPlan::new(spec::QueryNode::LateralView {
         input: input.map(Box::new),
-        expression: from_ast_expression(expression)?,
+        function,
+        arguments,
         table_alias,
         column_aliases,
         outer,
@@ -856,38 +837,47 @@ fn query_plan_with_lateral_table_factor(
 
 fn query_plan_with_lateral_views(
     plan: spec::QueryPlan,
-    lateral_views: Vec<ast::LateralView>,
+    lateral_views: Vec<LateralViewClause>,
 ) -> SqlResult<spec::QueryPlan> {
     lateral_views
         .into_iter()
         .try_fold(plan, |plan, lateral_view| -> SqlResult<_> {
-            let ast::LateralView {
-                lateral_view,
-                lateral_view_name,
-                lateral_col_alias,
+            let LateralViewClause {
+                lateral_view: _,
                 outer,
+                function,
+                left: _,
+                arguments,
+                right: _,
+                table,
+                columns,
             } = lateral_view;
-            let table_alias = Some(from_ast_object_name(lateral_view_name)?);
-            let column_aliases = if lateral_col_alias.is_empty() {
-                None
+            let function = from_ast_object_name(function)?;
+            let arguments = arguments
+                .into_items()
+                .map(from_ast_expression)
+                .collect::<SqlResult<Vec<_>>>()?;
+            let table_alias = Some(from_ast_object_name(table)?);
+            let column_aliases = if let Some((
+                _,
+                IdentList {
+                    left: _,
+                    columns,
+                    right: _,
+                },
+            )) = columns
+            {
+                Some(columns.into_items().map(|x| x.value.into()).collect())
             } else {
-                Some(
-                    lateral_col_alias
-                        .iter()
-                        .map(|x| from_ast_ident(x, true))
-                        .collect::<SqlResult<_>>()?,
-                )
+                None
             };
             Ok(spec::QueryPlan::new(spec::QueryNode::LateralView {
                 input: Some(Box::new(plan)),
-                expression: from_ast_expression(lateral_view)?,
+                function,
+                arguments,
                 table_alias,
                 column_aliases,
-                outer,
+                outer: outer.is_some(),
             }))
         })
-}
-
-fn is_lateral_view(table_factor: &ast::TableFactor) -> bool {
-    matches!(table_factor, ast::TableFactor::Function { .. })
 }

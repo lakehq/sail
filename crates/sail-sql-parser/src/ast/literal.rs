@@ -4,9 +4,9 @@ use chumsky::prelude::any;
 use chumsky::Parser;
 
 use crate::ast::whitespace::whitespace;
-use crate::token::{StringStyle, Token, TokenClass, TokenSpan, TokenValue};
+use crate::options::ParserOptions;
+use crate::token::{Punctuation, StringStyle, Token, TokenClass, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
-use crate::ParserOptions;
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
@@ -16,13 +16,14 @@ pub struct NumberLiteral {
     pub suffix: String,
 }
 
-impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for NumberLiteral
+impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for NumberLiteral
 where
+    'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {
     fn parser(
         _args: (),
-        _options: &ParserOptions,
+        _options: &'opt ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
         any()
             .try_map(|t: Token, s| match t {
@@ -54,24 +55,37 @@ where
 #[derive(Debug, Clone)]
 pub struct IntegerLiteral {
     pub span: TokenSpan,
-    pub value: u64,
+    pub value: i64,
 }
 
-impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for IntegerLiteral
+impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for IntegerLiteral
 where
+    'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {
     fn parser(
         _args: (),
-        _options: &ParserOptions,
+        _options: &'opt ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        any()
-            .try_map(|t: Token<'a>, s| {
+        let negative = any().filter(|t: &Token<'a>| {
+            matches!(
+                t,
+                Token {
+                    value: TokenValue::Punctuation(Punctuation::Minus),
+                    ..
+                }
+            )
+        });
+        negative
+            .or_not()
+            .then(any())
+            .try_map(|(negative, token), s| {
                 if let Token {
                     value: TokenValue::Number { value, suffix: "" },
                     span,
-                } = t
+                } = token
                 {
+                    let value = format!("{}{}", negative.map_or("", |_| "-"), value);
                     if let Ok(value) = value.parse() {
                         return Ok(IntegerLiteral { span, value });
                     }
@@ -84,7 +98,7 @@ where
                         )
                         .into(),
                     )],
-                    Some(t.into()),
+                    Some(From::from(token)),
                     s,
                 ))
             })
@@ -100,13 +114,14 @@ pub struct StringLiteral {
     pub style: StringStyle,
 }
 
-impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for StringLiteral
+impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for StringLiteral
 where
+    'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {
     fn parser(
         _args: (),
-        _options: &ParserOptions,
+        _options: &'opt ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
         any()
             .try_map(|t: Token<'a>, s| match t {

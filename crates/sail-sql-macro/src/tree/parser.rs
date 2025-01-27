@@ -202,11 +202,18 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
         extractor.expect_empty()?;
         dep
     };
+    // Use boxed parser to reduce compile times for large parsers.
+    // There may be a better heuristic to detect large parsers,
+    // but for now we consider the parser "large" if it has a dependency.
+    let parser = match dependency {
+        ParserDependency::None => parser,
+        _ => quote! { #parser.boxed() },
+    };
     let (generics, args_type, args_bounds) = match dependency {
         ParserDependency::One(t) => (
             quote! { E, P },
             quote! { P },
-            quote! { P: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t, E> + Clone },
+            quote! { P: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t, E> + Clone + 'a },
         ),
         ParserDependency::Tuple(t) => {
             let params = (0..t.len())
@@ -217,7 +224,7 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
                 .zip(params.iter())
                 .map(|(t, p)| {
                     quote! {
-                        #p: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t, E> + Clone
+                        #p: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t, E> + Clone + 'a
                     }
                 })
                 .collect::<Vec<_>>();
@@ -233,14 +240,15 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
     let trait_name = format_ident!("{TRAIT}");
 
     Ok(quote! {
-        impl <'a, #generics> crate::tree::#trait_name <'a, &'a [crate::token::Token<'a>], E, #args_type> for #name
+        impl <'a, 'opt, #generics> crate::tree::#trait_name <'a, 'opt, &'a [crate::token::Token<'a>], E, #args_type> for #name
         where
+            'opt: 'a,
             E: chumsky::extra::ParserExtra<'a, &'a [crate::token::Token<'a>]>,
             #args_bounds
         {
             fn parser(
                 args: #args_type,
-                options: &crate::ParserOptions
+                options: &'opt crate::options::ParserOptions
             ) -> impl chumsky::Parser<'a, &'a [crate::token::Token<'a>], Self, E> + Clone {
                 use chumsky::Parser;
 

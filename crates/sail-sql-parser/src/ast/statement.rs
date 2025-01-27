@@ -5,17 +5,18 @@ use crate::ast::data_type::DataType;
 use crate::ast::expression::Expr;
 use crate::ast::identifier::{Ident, ObjectName};
 use crate::ast::keywords::{
-    Add, Alter, Always, As, Cache, Cascade, Catalog, Clear, Codegen, Column, Columns, Comment,
-    Cost, Create, Database, Databases, Dbproperties, Default, Drop, Exists, Explain, Extended,
-    External, False, Formatted, From, Generated, If, In, Lazy, Like, Local, Location, Logical, Not,
-    Null, Options, Or, Properties, Purge, Rename, Replace, Restrict, Schema, Schemas, Set, Show,
-    Table, Tblproperties, Temporary, Time, To, True, Uncache, Use, Using, With, Zone,
+    Add, Alter, Always, Analyze, As, Cache, Cascade, Catalog, Clear, Codegen, Column, Columns,
+    Comment, Cost, Create, Database, Databases, Dbproperties, Default, Drop, Exists, Explain,
+    Extended, External, False, Formatted, From, Generated, If, In, Lazy, Like, Local, Location,
+    Not, Null, Options, Or, Properties, Purge, Rename, Replace, Restrict, Schema, Schemas, Set,
+    Show, Table, Tblproperties, Temporary, Time, To, True, Uncache, Use, Using, Verbose, With,
+    Zone,
 };
 use crate::ast::literal::StringLiteral;
 use crate::ast::operator::{Comma, Equals, LeftParenthesis, RightParenthesis};
 use crate::ast::query::Query;
-use crate::combinator::{boxed, compose, sequence, unit};
-use crate::Sequence;
+use crate::combinator::{compose, sequence, unit};
+use crate::common::Sequence;
 
 #[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
@@ -98,8 +99,8 @@ pub enum Statement {
     Explain {
         explain: Explain,
         format: Option<ExplainFormat>,
-        #[parser(function = |(s, _, _, _), _| boxed(s))]
-        statement: Box<Statement>,
+        #[parser(function = |(_, q, _, _), _| q)]
+        query: Query,
     },
     CacheTable {
         cache: Cache,
@@ -116,7 +117,10 @@ pub enum Statement {
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
     },
-    ClearCache(Clear, Cache),
+    ClearCache {
+        clear: Clear,
+        cache: Cache,
+    },
     SetTimeZone {
         set: (Set, Time, Zone),
         timezone: Either<Local, StringLiteral>,
@@ -126,11 +130,12 @@ pub enum Statement {
 #[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum ExplainFormat {
-    Logical(Logical),
-    Formatted(Formatted),
     Extended(Extended),
     Codegen(Codegen),
     Cost(Cost),
+    Formatted(Formatted),
+    Analyze(Analyze),
+    Verbose(Verbose),
 }
 
 #[allow(unused)]

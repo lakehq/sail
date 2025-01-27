@@ -5,13 +5,15 @@ use crate::ast::keywords::{
     Array, Bigint, Binary, Bool, Boolean, Byte, Bytea, Char, Character, Comment, Date, Date32,
     Date64, Decimal, Double, Float, Float32, Float64, Hour, Int, Int16, Int32, Int64, Int8,
     Integer, Interval, Local, Long, Map, Minute, Month, Not, Null, Second, Short, Smallint, Struct,
-    Time, Timestamp, Tinyint, To, Unsigned, Varchar, Void, With, Without, Year, Zone,
+    Text, Time, Timestamp, Tinyint, To, Uint16, Uint32, Uint64, Uint8, Unsigned, Varchar, Void,
+    With, Without, Year, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, StringLiteral};
 use crate::ast::operator::{
     Colon, Comma, GreaterThan, LeftParenthesis, LessThan, RightParenthesis,
 };
-use crate::combinator::{boxed, compose, sequence, unit, Sequence};
+use crate::combinator::{boxed, compose, sequence, unit};
+use crate::common::Sequence;
 
 #[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
@@ -29,10 +31,14 @@ pub enum DataType {
     Short(Option<Unsigned>, Short),
     Integer(Option<Unsigned>, Integer),
     Long(Option<Unsigned>, Long),
-    Int8(Option<Unsigned>, Int8),
-    Int16(Option<Unsigned>, Int16),
-    Int32(Option<Unsigned>, Int32),
-    Int64(Option<Unsigned>, Int64),
+    Int8(Int8),
+    Int16(Int16),
+    Int32(Int32),
+    Int64(Int64),
+    UInt8(Uint8),
+    UInt16(Uint16),
+    UInt32(Uint32),
+    UInt64(Uint64),
     Binary(Binary),
     Bytea(Bytea),
     Float(Float),
@@ -59,6 +65,7 @@ pub enum DataType {
     ),
     Varchar(Varchar, LeftParenthesis, IntegerLiteral, RightParenthesis),
     String(crate::ast::keywords::String),
+    Text(Text),
     Timestamp(
         Timestamp,
         Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
@@ -93,6 +100,7 @@ pub enum DataType {
 #[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalType {
+    Default(Interval),
     YearMonth(
         Interval,
         IntervalYearMonthUnit,

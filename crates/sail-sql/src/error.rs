@@ -1,3 +1,5 @@
+use std::fmt;
+
 use datafusion::common::DataFusionError;
 use sail_common::error::CommonError;
 use thiserror::Error;
@@ -9,7 +11,7 @@ pub enum SqlError {
     #[error("error in DataFusion: {0}")]
     DataFusionError(#[from] DataFusionError),
     #[error("error in SQL parser: {0}")]
-    SqlParserError(#[from] sqlparser::parser::ParserError),
+    SqlParserError(String),
     #[error("missing argument: {0}")]
     MissingArgument(String),
     #[error("invalid argument: {0}")]
@@ -37,6 +39,19 @@ impl SqlError {
 
     pub fn invalid(message: impl Into<String>) -> Self {
         SqlError::InvalidArgument(message.into())
+    }
+
+    pub fn parser<E>(errors: Vec<E>) -> Self
+    where
+        E: fmt::Display,
+    {
+        SqlError::SqlParserError(
+            errors
+                .into_iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
     }
 }
 

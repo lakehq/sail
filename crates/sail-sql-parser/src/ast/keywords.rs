@@ -1,11 +1,12 @@
+use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
 use chumsky::primitive::any;
 use chumsky::Parser;
 
 use crate::ast::whitespace::whitespace;
+use crate::options::ParserOptions;
 use crate::token::{Keyword, Token, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
-use crate::ParserOptions;
 
 fn keyword_parser<'a, K, F, E>(
     keyword: Keyword,
@@ -16,17 +17,26 @@ where
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {
     any()
-        .filter(move |t| match t {
+        .try_map(move |t: Token<'a>, s| match t {
             Token {
                 value: TokenValue::Word {
                     keyword: Some(k), ..
                 },
-                ..
-            } => *k == keyword,
-            _ => false,
+                span,
+            } if k == keyword => Ok(builder(span)),
+            x => Err(Error::expected_found(
+                vec![Some(std::convert::From::from(Token::new(
+                    TokenValue::Word {
+                        keyword: Some(keyword),
+                        raw: keyword.as_str(),
+                    },
+                    <TokenSpan as std::default::Default>::default(),
+                )))],
+                Some(std::convert::From::from(x)),
+                s,
+            )),
         })
         .then_ignore(whitespace().repeated())
-        .map(move |t| builder(t.span))
 }
 
 macro_rules! keyword_types {
@@ -44,13 +54,14 @@ macro_rules! keyword_types {
                 }
             }
 
-            impl<'a, E> TreeParser<'a, &'a [Token<'a>], E> for $identifier
+            impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for $identifier
             where
+                'opt: 'a,
                 E: ParserExtra<'a, &'a [Token<'a>]>,
             {
                 fn parser(
                     _args: (),
-                    _options: &ParserOptions,
+                    _options: &'opt ParserOptions,
                 ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
                     keyword_parser(Self::keyword(), |span| Self { span })
                 }

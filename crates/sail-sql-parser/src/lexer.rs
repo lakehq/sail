@@ -1,4 +1,4 @@
-use chumsky::error::EmptyErr;
+use chumsky::extra::ParserExtra;
 use chumsky::prelude::{any, choice, custom, end, just, none_of, one_of, SimpleSpan};
 use chumsky::{ConfigParser, IterParser, Parser};
 
@@ -20,7 +20,10 @@ impl From<SimpleSpan> for TokenSpan {
     }
 }
 
-fn word<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn word<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     any()
         .filter(|c: &char| c.is_ascii_alphabetic() || *c == '_')
         .ignore_then(
@@ -40,7 +43,10 @@ fn word<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
         })
 }
 
-fn number<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn number<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     let digit = any().filter(|c: &char| c.is_ascii_digit());
     let suffix = any().filter(|c: &char| c.is_ascii_alphabetic()).repeated();
 
@@ -64,29 +70,47 @@ fn number<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
         .map_with(|(value, suffix), e| token!(TokenValue::Number { value, suffix }, e))
 }
 
-fn single_line_comment<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn single_line_comment<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     just("--")
         .ignore_then(none_of("\n\r").repeated())
         .map_with(|(), e| token!(TokenValue::SingleLineComment { raw: e.slice() }, e))
 }
 
-fn multi_line_comment<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn multi_line_comment<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     // The delimiter of a multi-line comment can be nested.
     // We implement a custom parser to handle this.
     // This avoids the overhead of creating a `recursive` parser in the lexer.
     custom(|input| {
         let mut last = None;
         let mut level = 0;
+        let mut expected = None;
+        let mut found = None;
+        #[allow(unused_assignments)]
+        let mut span = input.span_since(input.offset());
         loop {
+            let offset = input.offset();
             let c = input.next();
             match (last, c) {
                 (None, Some('/')) => {}
-                (None, _) => break,
+                (None, _) => {
+                    expected = Some('/');
+                    found = c;
+                    span = input.span_since(offset);
+                    break;
+                }
                 (Some('/'), Some('*')) => {
                     level += 1;
                 }
                 (Some('/'), Some(_)) => {
                     if level == 0 {
+                        found = c;
+                        span = input.span_since(offset);
                         break;
                     }
                 }
@@ -97,20 +121,33 @@ fn multi_line_comment<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
                     }
                 }
                 (Some(_), Some(_)) => {}
-                (_, None) => break,
+                (_, None) => {
+                    span = input.span_since(offset);
+                    break;
+                }
             }
             last = c;
         }
-        Err(EmptyErr::default())
+        Err(chumsky::error::Error::expected_found(
+            vec![expected.map(From::from)],
+            found.map(From::from),
+            span,
+        ))
     })
     .map_with(|(), e| token!(TokenValue::MultiLineComment { raw: e.slice() }, e))
 }
 
-fn none_quote_escaped_text<'a>(delimiter: char) -> impl Parser<'a, &'a str, ()> {
+fn none_quote_escaped_text<'a, E>(delimiter: char) -> impl Parser<'a, &'a str, (), E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     none_of(delimiter).repeated().padded_by(just(delimiter))
 }
 
-fn dual_quote_escaped_text<'a>(delimiter: char) -> impl Parser<'a, &'a str, ()> {
+fn dual_quote_escaped_text<'a, E>(delimiter: char) -> impl Parser<'a, &'a str, (), E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     none_of(delimiter)
         .ignored()
         .or(just(delimiter).repeated().exactly(2))
@@ -118,7 +155,10 @@ fn dual_quote_escaped_text<'a>(delimiter: char) -> impl Parser<'a, &'a str, ()> 
         .padded_by(just(delimiter))
 }
 
-fn backslash_quote_escaped_text<'a>(delimiter: char) -> impl Parser<'a, &'a str, ()> {
+fn backslash_quote_escaped_text<'a, E>(delimiter: char) -> impl Parser<'a, &'a str, (), E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     any()
         .filter(move |c: &char| *c != '\\' && *c != delimiter)
         .ignored()
@@ -127,16 +167,20 @@ fn backslash_quote_escaped_text<'a>(delimiter: char) -> impl Parser<'a, &'a str,
         .padded_by(just(delimiter))
 }
 
-fn multi_quoted_text<'a>(delimiter: &'static str) -> impl Parser<'a, &'a str, ()> {
+fn multi_quoted_text<'a, E>(delimiter: &'static str) -> impl Parser<'a, &'a str, (), E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     any()
         .and_is(just(delimiter).not())
         .repeated()
         .padded_by(just(delimiter))
 }
 
-fn quoted_string<'a, P, S>(text: P, style: S) -> impl Parser<'a, &'a str, Token<'a>>
+fn quoted_string<'a, E, P, S>(text: P, style: S) -> impl Parser<'a, &'a str, Token<'a>, E>
 where
-    P: Parser<'a, &'a str, ()>,
+    E: ParserExtra<'a, &'a str>,
+    P: Parser<'a, &'a str, (), E>,
     S: Fn(Option<char>) -> StringStyle + 'static,
 {
     any()
@@ -154,7 +198,10 @@ where
         })
 }
 
-fn backtick_quoted_string<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn backtick_quoted_string<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     // TODO: Should we support escaping backticks?
     none_of('`')
         .repeated()
@@ -170,9 +217,13 @@ fn backtick_quoted_string<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
         })
 }
 
-fn unicode_escape_string<'a, P>(text: P, style: StringStyle) -> impl Parser<'a, &'a str, Token<'a>>
+fn unicode_escape_string<'a, E, P>(
+    text: P,
+    style: StringStyle,
+) -> impl Parser<'a, &'a str, Token<'a>, E>
 where
-    P: Parser<'a, &'a str, ()>,
+    E: ParserExtra<'a, &'a str>,
+    P: Parser<'a, &'a str, (), E>,
 {
     just("U&").ignore_then(text).map_with(move |(), e| {
         token!(
@@ -185,7 +236,10 @@ where
     })
 }
 
-fn dollar_quoted_string<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn dollar_quoted_string<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     // TODO: Should we restrict the characters allowed in the tag?
     let start = none_of('$').repeated().padded_by(just('$')).to_slice();
     let tag = just("").configure(|cfg, ctx| cfg.seq(*ctx));
@@ -205,8 +259,9 @@ fn dollar_quoted_string<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
         })
 }
 
-fn whitespace<'a, T>(c: char, token: T) -> impl Parser<'a, &'a str, Token<'a>>
+fn whitespace<'a, E, T>(c: char, token: T) -> impl Parser<'a, &'a str, Token<'a>, E>
 where
+    E: ParserExtra<'a, &'a str>,
     T: Fn(usize) -> TokenValue<'a> + 'static,
 {
     just(c)
@@ -216,14 +271,24 @@ where
         .map_with(move |count, e| token!(token(count), e))
 }
 
-fn punctuation<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn punctuation<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     any().try_map_with(|c: char, e| match Punctuation::from_char(c) {
         Some(p) => Ok(token!(TokenValue::Punctuation(p), e)),
-        None => Err(EmptyErr::default()),
+        None => Err(chumsky::error::Error::expected_found(
+            vec![],
+            Some(c.into()),
+            e.span(),
+        )),
     })
 }
 
-fn string<'a>(options: &ParserOptions) -> impl Parser<'a, &'a str, Token<'a>> {
+fn string<'a, E>(options: &ParserOptions) -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     let text = match options.quote_escape {
         QuoteEscape::None => |d| none_quote_escaped_text(d).boxed(),
         QuoteEscape::Dual => |d| dual_quote_escaped_text(d).boxed(),
@@ -258,8 +323,10 @@ fn string<'a>(options: &ParserOptions) -> impl Parser<'a, &'a str, Token<'a>> {
     string
 }
 
-#[allow(unused)]
-pub fn lexer<'a>(options: &ParserOptions) -> impl Parser<'a, &'a str, Vec<Token<'a>>> {
+pub fn create_lexer<'a, E>(options: &ParserOptions) -> impl Parser<'a, &'a str, Vec<Token<'a>>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     choice((
         // When the parsers can parse the same prefix, more specific parsers must come before
         // more general parsers to avoid ambiguity.
