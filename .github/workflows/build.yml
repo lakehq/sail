@@ -31,18 +31,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
-
-      - name: Show available memory
-        run: |
-          free -h
-          df -h
-
-      - name: Build with debug info
-        run: |
-          export CARGO_LOG=debug
-          export RUST_BACKTRACE=1
-          cargo build -v
-
       - name: Cargo Test
         run: cargo test
 

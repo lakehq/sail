@@ -113,7 +113,7 @@ datafusion = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0"
 datafusion-catalog = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
 datafusion-common = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
 datafusion-common-runtime = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
-datafusion-doc = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
+#datafusion-doc = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
 datafusion-execution = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
 datafusion-expr = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
 datafusion-expr-common = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
@@ -125,7 +125,7 @@ datafusion-functions-nested = { git = "https://github.com/lakehq/datafusion.git"
 datafusion-functions-table = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
 datafusion-functions-window = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
 datafusion-functions-window-common = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
-datafusion-macros = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
+#datafusion-macros = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
 datafusion-optimizer = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
 datafusion-physical-expr = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
 datafusion-physical-expr-common = { git = "https://github.com/lakehq/datafusion.git", rev = "97c7db0" }
