@@ -31,6 +31,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
+
+      - name: Cargo Build
+        env:
+          CARGO_BUILD_JOBS: 1
+        run: cargo build
+
       - name: Cargo Test
         run: cargo test
 
