@@ -45,10 +45,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Build Python package
+      - name: Build Python Package
         uses: PyO3/maturin-action@v1
 
-      - name: Upload Python package
+      - name: Upload Python Package
         uses: actions/upload-artifact@v4
         with:
           name: python-package
@@ -56,19 +56,19 @@ jobs:
           retention-days: 1
 
   spark-tests:
-    name: Spark tests
+    name: Spark Tests
     uses: ./.github/workflows/spark-tests.yml
     needs:
       - build
 
   python-build:
-    name: Python build
+    name: Python Build
     uses: ./.github/workflows/python-build.yml
     needs:
       - build
 
   docs-build:
-    name: Docs build
+    name: Docs Build
     uses: ./.github/workflows/docs-build.yml
     strategy:
       matrix:
@@ -80,7 +80,7 @@ jobs:
       version: main
 
   docs-deploy:
-    name: Docs deploy
+    name: Docs Deploy
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     uses: ./.github/workflows/docs-deploy.yml
     strategy:
