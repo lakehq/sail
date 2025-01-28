@@ -27,7 +27,7 @@ jobs:
 
       - name: Run Cargo Test
         env:
-          CARGO_BUILD_JOBS: -1
+          CARGO_BUILD_JOBS: 1
         run: cargo test
 
       - name: Build Python Package
