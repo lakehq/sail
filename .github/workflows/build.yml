@@ -7,26 +7,43 @@ on:
     branches: [main]
 
 jobs:
-  build:
-    name: Build
+  format:
+    name: Format Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - uses: ./.github/actions/setup-rust
-
       - name: Format check
         run: cargo +nightly fmt -- --check
 
-      - name: Run Clippy
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Test
-        run: cargo clean && cargo test
+  cargo-test:
+    name: Cargo Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - name: Cargo Test
+        run: cargo test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [cargo-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Build Python package
         uses: PyO3/maturin-action@v1
