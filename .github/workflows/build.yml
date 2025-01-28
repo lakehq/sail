@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
-      - name: Format check
+      - name: Format Check
         run: cargo +nightly fmt -- --check
 
   clippy:
