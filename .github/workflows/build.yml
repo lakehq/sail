@@ -28,16 +28,14 @@ jobs:
   cargo-test:
     name: Cargo Test
     runs-on: ubuntu-latest
+    needs: [clippy]
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
 
-      - name: Cargo Build
+      - name: Cargo Test
         env:
           CARGO_BUILD_JOBS: 1
-        run: cargo build
-
-      - name: Cargo Test
         run: cargo test
 
   build:
