@@ -26,7 +26,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo test
+        run: cargo clean && cargo test
 
       - name: Build Python package
         uses: PyO3/maturin-action@v1
