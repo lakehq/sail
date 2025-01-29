@@ -4,9 +4,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{exec_err, internal_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{
-    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
+use datafusion_expr_common::signature::{Signature, TypeSignature, TIMEZONE_WILDCARD};
 
 use crate::utils::ItemTaker;
 
@@ -19,7 +18,107 @@ pub struct SparkFromUtcTimestamp {
 impl SparkFromUtcTimestamp {
     pub fn new(time_unit: TimeUnit) -> Self {
         Self {
-            signature: Signature::nullary(Volatility::Stable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Second, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::Utf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Second, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::Utf8View,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Second, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::LargeUtf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Second, None),
+                        DataType::Utf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Second, None),
+                        DataType::Utf8View,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Second, None),
+                        DataType::LargeUtf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::Utf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::Utf8View,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Millisecond, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::LargeUtf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Millisecond, None),
+                        DataType::Utf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Millisecond, None),
+                        DataType::Utf8View,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Millisecond, None),
+                        DataType::LargeUtf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::Utf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::Utf8View,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Microsecond, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::LargeUtf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        DataType::Utf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        DataType::Utf8View,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Microsecond, None),
+                        DataType::LargeUtf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::Utf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::Utf8View,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                        DataType::LargeUtf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        DataType::Utf8,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        DataType::Utf8View,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        DataType::LargeUtf8,
+                    ]),
+                ],
+                Volatility::Immutable,
+            ),
             time_unit,
         }
     }
@@ -84,7 +183,7 @@ impl ScalarUDFImpl for SparkFromUtcTimestamp {
             );
         }
         let (timestamp, timezone) = args.two()?;
-        match &timezone {
+        match timezone {
             Expr::Literal(ScalarValue::Utf8(tz))
             | Expr::Literal(ScalarValue::Utf8View(tz))
             | Expr::Literal(ScalarValue::LargeUtf8(tz)) => {
@@ -92,7 +191,7 @@ impl ScalarUDFImpl for SparkFromUtcTimestamp {
                     expr: Box::new(timestamp),
                     data_type: DataType::Timestamp(
                         *self.time_unit(),
-                        tz.as_ref().map(|tz| Arc::from(tz.to_string())),
+                        tz.map(|tz| Arc::from(tz.to_string())),
                     ),
                 });
                 Ok(ExprSimplifyResult::Simplified(expr))
