@@ -9,9 +9,10 @@ use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
-use crate::extension::function::spark_weekofyear::SparkWeekOfYear;
-use crate::extension::function::timestamp_now::TimestampNow;
+use crate::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
+use crate::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
+use crate::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
+use crate::extension::function::datetime::timestamp_now::TimestampNow;
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
 
@@ -354,6 +355,15 @@ fn current_localtimestamp_microseconds(
     Ok(expr_fn::to_local_time(vec![expr]))
 }
 
+fn from_utc_timestamp(timestamp: Expr, timezone: Expr) -> Expr {
+    Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(SparkFromUtcTimestamp::new(
+            TimeUnit::Microsecond,
+        ))),
+        args: vec![timestamp, timezone],
+    })
+}
+
 // FIXME: Spark displays dates and timestamps according to the session time zone.
 //  We should be setting the DataFusion config `datafusion.execution.time_zone`
 //  and casting any datetime functions that don't use the DataFusion config.
@@ -421,7 +431,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("dayofyear", F::unary(|arg| integer_part(arg, "DOY"))),
         ("extract", F::binary(expr_fn::date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
-        ("from_utc_timestamp", F::unknown("from_utc_timestamp")),
+        ("from_utc_timestamp", F::binary(from_utc_timestamp)),
         ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),
         ("last_day", F::unknown("last_day")),
         (

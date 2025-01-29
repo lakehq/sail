@@ -1,6 +1,6 @@
 pub mod array;
 pub mod array_min_max;
-mod datetime_utils;
+pub mod datetime;
 pub mod drop_struct_field;
 pub mod explode;
 mod functions_nested_utils;
@@ -25,10 +25,7 @@ mod spark_hash_utils;
 pub mod spark_hex_unhex;
 pub mod spark_murmur3_hash;
 pub mod spark_reverse;
-pub mod spark_unix_timestamp;
-pub mod spark_weekofyear;
 pub mod spark_xxhash64;
 pub mod struct_function;
 pub mod table_input;
-pub mod timestamp_now;
 pub mod update_struct_field;
