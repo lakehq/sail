@@ -3005,24 +3005,22 @@ dependencies = [
 
 [[package]]
 name = "jsonpath-rust"
-version = "0.5.1"
+version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19d8fe85bd70ff715f31ce8c739194b423d79811a19602115d611a3ec85d6200"
+checksum = "0c00ae348f9f8fd2d09f82a98ca381c60df9e0820d8d79fce43e649b4dc3128b"
 dependencies = [
- "lazy_static",
- "once_cell",
  "pest",
  "pest_derive",
  "regex",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.11",
 ]
 
 [[package]]
 name = "k8s-openapi"
-version = "0.23.0"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c8847402328d8301354c94d605481f25a6bdc1ed65471fd96af8eca71141b13"
+checksum = "2c75b990324f09bef15e791606b7b7a296d02fc88a344f6eba9390970a870ad5"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3033,9 +3031,9 @@ dependencies = [
 
 [[package]]
 name = "kube"
-version = "0.96.0"
+version = "0.98.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efffeb3df0bd4ef3e5d65044573499c0e4889b988070b08c50b25b1329289a1f"
+checksum = "32053dc495efad4d188c7b33cc7c02ef4a6e43038115348348876efd39a53cba"
 dependencies = [
  "k8s-openapi",
  "kube-client",
@@ -3044,9 +3042,9 @@ dependencies = [
 
 [[package]]
 name = "kube-client"
-version = "0.96.0"
+version = "0.98.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bf471ece8ff8d24735ce78dac4d091e9fcb8d74811aeb6b75de4d1c3f5de0f1"
+checksum = "9d34ad38cdfbd1fa87195d42569f57bb1dda6ba5f260ee32fef9570b7937a0c9"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -3072,7 +3070,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "thiserror 1.0.69",
+ "thiserror 2.0.11",
  "tokio",
  "tokio-util",
  "tower 0.5.2",
@@ -3082,9 +3080,9 @@ dependencies = [
 
 [[package]]
 name = "kube-core"
-version = "0.96.0"
+version = "0.98.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f42346d30bb34d1d7adc5c549b691bce7aa3a1e60254e68fab7e2d7b26fe3d77"
+checksum = "97aa830b288a178a90e784d1b0f1539f2d200d2188c7b4a3146d9dc983d596f3"
 dependencies = [
  "chrono",
  "form_urlencoded",
@@ -3093,7 +3091,7 @@ dependencies = [
  "serde",
  "serde-value",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.11",
 ]
 
 [[package]]
