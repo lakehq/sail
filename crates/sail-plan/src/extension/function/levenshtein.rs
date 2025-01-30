@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::extension::function::functions_utils::{make_scalar_function, utf8_to_int_type};
 use datafusion::arrow::array::{ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array};
@@ -10,6 +9,8 @@ use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{TypeSignature, TypeSignatureClass};
+
+use crate::extension::function::functions_utils::{make_scalar_function, utf8_to_int_type};
 
 #[derive(Debug)]
 pub struct Levenshtein {

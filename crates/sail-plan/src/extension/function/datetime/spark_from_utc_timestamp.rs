@@ -171,6 +171,8 @@ impl ScalarUDFImpl for SparkFromUtcTimestamp {
         }
     }
 
+    // TODO: When DataFusion 45 is released, implement this method so we can accept array input.
+    //  DataFusion 45 introduces `return_type_from_args` which is required for array input.
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("`invoke` should not be called on a simplified `from_utc_timestamp` function")
     }
