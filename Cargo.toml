@@ -70,8 +70,8 @@ opentelemetry_sdk = "0.26.0"
 opentelemetry-otlp = { version = "0.26.0", features = ["tls", "tls-roots"] }
 hdfs-native-object-store = "0.12.1"
 figment = { version = "0.10.19", features = ["toml", "env"] }
-kube = "0.96.0"
-k8s-openapi = { version = "0.23.0", features = ["latest"] }
+kube = "0.98.0"
+k8s-openapi = { version = "0.24.0", features = ["latest"] }
 twox-hash = "2.1.0"
 aes = "0.8.4"
 aes-gcm = "0.10.3"
