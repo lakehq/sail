@@ -101,6 +101,7 @@ impl ScalarUDFImpl for SparkWeekOfYear {
                 if int_array.len() != 1 {
                     return exec_err!("Spark `weekofyear` function expected single value array, got array {int_array:?}");
                 }
+                // CHECK HERE
                 let value = int_array.value(0);
                 let datetime = DateTime::from_timestamp_nanos(value);
                 let week_of_year = datetime.iso_week().week();
