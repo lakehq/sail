@@ -4,7 +4,7 @@ on:
   # When this workflow is triggered, the workflow definition comes from the `main` branch.
   # If a pull request modifies this file, it will have an effect only after the pull request is merged.
   workflow_run:
-    workflows: ["Spark Tests", "Gold Data"]
+    workflows: ["Build", "Gold Data"]
     types:
       - completed
 
@@ -14,13 +14,13 @@ permissions:
 jobs:
   report:
     name: Report
-    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/pull-request-report
-        if: github.event.workflow_run.name == 'Spark Tests'
+        if: github.event.workflow_run.name == 'Build'
         # The Spark tests are not always run,
         # so we ignore the error if the artifact is not found.
         continue-on-error: true
@@ -30,7 +30,7 @@ jobs:
           report_name: spark-tests
 
       - uses: ./.github/actions/pull-request-report
-        if: github.event.workflow_run.name == 'Gold Data'
+        if: github.event.workflow_run.name == 'Gold Data' && github.event.workflow_run.conclusion == 'success'
         with:
           workflow_run_id: ${{ github.event.workflow_run.id }}
           artifact_name: gold-data-report
