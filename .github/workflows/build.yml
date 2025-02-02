@@ -19,21 +19,19 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
 
-      - name: Run Format Check
+      - name: Format check
         run: cargo +nightly fmt -- --check
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Run Cargo Test
-        env:
-          CARGO_BUILD_JOBS: 1
+      - name: Test
         run: cargo test
 
-      - name: Build Python Package
+      - name: Build Python package
         uses: PyO3/maturin-action@v1
 
-      - name: Upload Python Package
+      - name: Upload Python package
         uses: actions/upload-artifact@v4
         with:
           name: python-package
@@ -41,19 +39,19 @@ jobs:
           retention-days: 1
 
   spark-tests:
-    name: Spark Tests
+    name: Spark tests
     uses: ./.github/workflows/spark-tests.yml
     needs:
       - build
 
   python-build:
-    name: Python Build
+    name: Python build
     uses: ./.github/workflows/python-build.yml
     needs:
       - build
 
   docs-build:
-    name: Docs Build
+    name: Docs build
     uses: ./.github/workflows/docs-build.yml
     strategy:
       matrix:
@@ -65,7 +63,7 @@ jobs:
       version: main
 
   docs-deploy:
-    name: Docs Deploy
+    name: Docs deploy
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     uses: ./.github/workflows/docs-deploy.yml
     strategy:
