@@ -1,4 +1,4 @@
-name: Release Python package
+name: Release Python Package
 
 on:
   push:
@@ -29,14 +29,14 @@ jobs:
       - name: Install Hatch
         uses: pypa/hatch@install
 
-      - name: Get version
+      - name: Get Version
         id: version
         shell: bash
         run: |
           version="$(hatch version)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify version
+      - name: Verify Version
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         shell: bash
@@ -51,7 +51,7 @@ jobs:
             echo "Please ignore the pip error messages above."
           fi
 
-      - name: Verify tag
+      - name: Verify Tag
         if: ${{ github.event_name == 'push' }}
         env:
           RELEASE_TAG: ${{ github.ref }}
@@ -91,7 +91,7 @@ jobs:
           retention-days: 7
 
   build-wheel:
-    name: Build wheel
+    name: Build Wheel
     runs-on: ${{ matrix.platform.runner }}
     needs:
       - setup
@@ -136,7 +136,7 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build wheels
+      - name: Build Wheels
         uses: PyO3/maturin-action@v1
         with:
           command: build
@@ -172,7 +172,7 @@ jobs:
             rm /tmp/protoc.zip
             protoc --version
 
-      - name: Upload wheels
+      - name: Upload Wheels
         uses: actions/upload-artifact@v4
         with:
           name: package-wheel-${{ matrix.platform.os }}-${{ matrix.platform.target }}
@@ -226,24 +226,24 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install package
+      - name: Install Package
         shell: bash
         run: |
           pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --no-binary pysail
           pip install pytest
 
-      - name: Verify package
+      - name: Verify Package
         shell: python
         run: |
           import os, pysail
           assert pysail.__version__ == os.environ["RELEASE_VERSION"]
 
-      - name: Run tests
+      - name: Run Tests
         shell: bash
         run: pytest --pyargs pysail
 
   test-wheel:
-    name: Test wheel
+    name: Test Wheel
     runs-on: ${{ matrix.platform.runner }}
     env:
       RELEASE_VERSION: ${{ needs.setup.outputs.version }}
@@ -268,19 +268,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install package
+      - name: Install Package
         shell: bash
         run: |
           pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --only-binary pysail
           pip install pytest
 
-      - name: Verify package
+      - name: Verify Package
         shell: python
         run: |
           import os, pysail
           assert pysail.__version__ == os.environ["RELEASE_VERSION"]
 
-      - name: Run tests
+      - name: Run Tests
         shell: bash
         run: pytest --pyargs pysail
 
@@ -296,7 +296,7 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Show release artifacts
+      - name: Show Release Artifacts
         shell: bash
         run: |
           find dist -name '*.tar.gz' -exec echo '{}' \; -exec tar -tvf '{}' \;

@@ -1,4 +1,4 @@
-name: Docs tag push
+name: Docs Tag Push
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
     outputs:
       version: ${{ steps.info.outputs.version }}
     steps:
-      - name: Collect release information
+      - name: Collect Release Information
         id: info
         env:
           GIT_TAG_REF: ${{ github.ref }}
@@ -52,10 +52,10 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
 
-      - name: Build Python package
+      - name: Build Python Package
         uses: PyO3/maturin-action@v1
 
-      - name: Upload Python package
+      - name: Upload Python Package
         uses: actions/upload-artifact@v4
         with:
           name: python-package
@@ -63,7 +63,7 @@ jobs:
           retention-days: 1
 
   docs-build:
-    name: Build
+    name: Docs Build
     uses: ./.github/workflows/docs-build.yml
     strategy:
       matrix:
@@ -76,7 +76,7 @@ jobs:
       version: ${{ needs.setup.outputs.version }}
 
   docs-deploy:
-    name: Deploy
+    name: Docs Deploy
     uses: ./.github/workflows/docs-deploy.yml
     strategy:
       max-parallel: 1

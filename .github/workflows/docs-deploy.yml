@@ -1,4 +1,4 @@
-name: Docs deploy
+name: Docs Deploy
 
 # This workflow uses the following variable(s) from the environment:
 # - AWS_REGION
@@ -19,26 +19,26 @@ on:
         required: true
 
 jobs:
-  deploy:
-    name: Deploy
+  docs-deploy:
+    name: Docs Deploy
     runs-on: ubuntu-latest
     environment: docs/${{ inputs.stage }}
     permissions:
       id-token: write
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Download artifact
+      - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
           name: docs-dist-${{ inputs.stage }}-${{ inputs.version }}
           path: docs/.vitepress/dist
 
-      - name: Display artifact directory structure
+      - name: Display Artifact Directory Structure
         run: find . -type f
         working-directory: docs/.vitepress/dist
 
@@ -48,7 +48,7 @@ jobs:
         run: |
           aws s3 sync docs/.vitepress/dist "${S3_URI}" --delete
 
-      - name: Invalidate CloudFront cache
+      - name: Invalidate CloudFront Cache
         env:
           CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.AWS_CLOUDFRONT_DISTRIBUTION_ID }}
           CLOUDFRONT_PATH: /sail/${{ inputs.version }}/*

@@ -1,4 +1,4 @@
-name: Docs build
+name: Docs Build
 
 # This workflow uses the following variable(s) from the environment:
 # - FATHOM_SITE_ID (optional)
@@ -16,8 +16,8 @@ on:
         required: true
 
 jobs:
-  build:
-    name: Build
+  docs-build:
+    name: Docs Build
     runs-on: ubuntu-latest
     environment: ${{ inputs.stage != 'test' && format('docs/{0}', inputs.stage) || '' }}
     steps:
@@ -38,30 +38,30 @@ jobs:
           node-version: "22"
           cache: pnpm
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: pnpm install
 
-      - name: Run code formatter
+      - name: Run Code Formatter
         env:
           FORMAT_OPTIONS: --check
         run: pnpm run format
 
-      - name: Run code linter
+      - name: Run Code Linter
         run: pnpm run lint
 
-      - name: Download Python package
+      - name: Download Python Package
         uses: actions/download-artifact@v4
         with:
           name: python-package
           path: target/wheels
 
-      - name: Build Python documentation
+      - name: Build Python Documentation
         run: |
           hatch env create docs
           hatch run docs:install-pysail
           hatch run docs:build
 
-      - name: Build VitePress site
+      - name: Build VitePress Site
         env:
           SAIL_SITE_URL: "https://${{ inputs.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/${{ inputs.version }}/"
           # The Fathom Analytics script will not be added if the site ID is not set.
@@ -76,7 +76,7 @@ jobs:
           pnpm run docs:build
         shell: bash
 
-      - name: Upload artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: docs-dist-${{ inputs.stage }}-${{ inputs.version }}
