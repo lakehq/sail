@@ -3,10 +3,10 @@ use sail_sql_macro::TreeParser;
 use crate::ast::identifier::Ident;
 use crate::ast::keywords::{
     Array, Bigint, Binary, Bool, Boolean, Byte, Bytea, Char, Character, Comment, Date, Date32,
-    Date64, Decimal, Double, Float, Float32, Float64, Hour, Int, Int16, Int32, Int64, Int8,
-    Integer, Interval, Local, Long, Map, Minute, Month, Not, Null, Second, Short, Smallint, Struct,
-    Text, Time, Timestamp, Tinyint, To, Uint16, Uint32, Uint64, Uint8, Unsigned, Varchar, Void,
-    With, Without, Year, Zone,
+    Date64, Day, Dec, Decimal, Double, Float, Float32, Float64, Hour, Int, Int16, Int32, Int64,
+    Int8, Integer, Interval, Local, Long, Map, Minute, Month, Not, Null, Numeric, Second, Short,
+    Smallint, Struct, Text, Time, Timestamp, TimestampLtz, TimestampNtz, Tinyint, To, Uint16,
+    Uint32, Uint64, Uint8, Unsigned, Varchar, Void, With, Without, Year, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -46,7 +46,7 @@ pub enum DataType {
     Float64(Float64),
     #[allow(clippy::type_complexity)]
     Decimal(
-        Decimal,
+        DecimalType,
         Option<(
             LeftParenthesis,
             IntegerLiteral,
@@ -70,6 +70,14 @@ pub enum DataType {
         Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
         Option<TimezoneType>,
     ),
+    TimestampNtz(
+        TimestampNtz,
+        Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
+    ),
+    TimestampLtz(
+        TimestampLtz,
+        Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
+    ),
     Date(Date),
     Date32(Date32),
     Date64(Date64),
@@ -83,7 +91,8 @@ pub enum DataType {
     Struct(
         Struct,
         LessThan,
-        #[parser(function = |x, o| sequence(compose(x, o), unit(o)))] Sequence<StructField, Comma>,
+        #[parser(function = |x, o| sequence(compose(x, o), unit(o)).or_not())]
+        Option<Sequence<StructField, Comma>>,
         GreaterThan,
     ),
     Map(
@@ -97,8 +106,14 @@ pub enum DataType {
 }
 
 #[derive(Debug, Clone, TreeParser)]
+pub enum DecimalType {
+    Decimal(Decimal),
+    Dec(Dec),
+    Numeric(Numeric),
+}
+
+#[derive(Debug, Clone, TreeParser)]
 pub enum IntervalType {
-    Default(Interval),
     YearMonth(
         Interval,
         IntervalYearMonthUnit,
@@ -109,6 +124,7 @@ pub enum IntervalType {
         IntervalDayTimeUnit,
         Option<(To, IntervalDayTimeUnit)>,
     ),
+    Default(Interval),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -119,7 +135,7 @@ pub enum IntervalYearMonthUnit {
 
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalDayTimeUnit {
-    Day(Year),
+    Day(Day),
     Hour(Hour),
     Minute(Minute),
     Second(Second),

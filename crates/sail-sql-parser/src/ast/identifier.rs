@@ -42,15 +42,14 @@ where
                     value:
                         TokenValue::String {
                             raw,
-                            style: StringStyle::BacktickQuoted,
+                            style: style @ StringStyle::BacktickQuoted,
                         },
                     span,
                 } = t
                 {
                     return Ok(Ident {
                         span,
-                        // TODO: support backtick escape
-                        value: raw.to_string(),
+                        value: style.parse(raw),
                     });
                 };
                 Err(Error::expected_found(

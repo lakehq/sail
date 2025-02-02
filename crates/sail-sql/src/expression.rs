@@ -347,10 +347,12 @@ pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> 
             is_distinct: false,
             is_user_defined_function: false,
         }),
-        AtomExpr::Timestamp(_, _, value, _) => {
+        AtomExpr::Timestamp(_, _, value, _) | AtomExpr::TimestampLiteral(_, value) => {
             Ok(spec::Expr::Literal(parse_timestamp_string(&value.value)?))
         }
-        AtomExpr::Date(_, _, value, _) => Ok(spec::Expr::Literal(parse_date_string(&value.value)?)),
+        AtomExpr::Date(_, _, value, _) | AtomExpr::DateLiteral(_, value) => {
+            Ok(spec::Expr::Literal(parse_date_string(&value.value)?))
+        }
         AtomExpr::Function(function) => {
             let FunctionExpr {
                 name: ObjectName(name),
@@ -369,9 +371,13 @@ pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> 
                 Some(DuplicateTreatment::Distinct(_)) => true,
             };
             let arguments = arguments
-                .into_items()
-                .map(from_ast_function_argument)
-                .collect::<SqlResult<Vec<_>>>()?;
+                .map(|x| {
+                    x.into_items()
+                        .map(from_ast_function_argument)
+                        .collect::<SqlResult<Vec<_>>>()
+                })
+                .transpose()?
+                .unwrap_or_default();
             if let Some(over_clause) = over_clause {
                 let OverClause { over: _, window } = over_clause;
                 match window {

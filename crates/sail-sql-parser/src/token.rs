@@ -1,4 +1,8 @@
 use std::fmt;
+use std::fmt::{Display, Formatter};
+
+use chumsky::prelude::{end, just, none_of};
+use chumsky::Parser;
 
 /// A token in the SQL lexer output.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,10 +20,14 @@ impl<'a> Token<'a> {
     }
 }
 
-impl fmt::Display for Token<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // TODO: implement token display
-        write!(f, "{:?} ({:?})", self.value, self.span)
+impl Display for Token<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)?;
+        if !self.span.is_empty() {
+            // TODO: show token span as location
+            write!(f, " at {}:{}", self.span.start, self.span.end)?
+        }
+        Ok(())
     }
 }
 
@@ -63,6 +71,46 @@ pub enum TokenValue<'a> {
     Placeholder(TokenClass),
 }
 
+impl Display for TokenValue<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenValue::Word { raw, .. } => {
+                write!(f, "{raw}")
+            }
+            TokenValue::Number { value, suffix } => {
+                write!(f, "{value}{suffix}")
+            }
+            TokenValue::String { raw, .. } => {
+                write!(f, "{raw}")
+            }
+            TokenValue::Tab { count } => {
+                write!(f, "{}", "<tab>".repeat(*count))
+            }
+            TokenValue::LineFeed { count } => {
+                write!(f, "{}", "<lf>".repeat(*count))
+            }
+            TokenValue::CarriageReturn { count } => {
+                write!(f, "{}", "<cr>".repeat(*count))
+            }
+            TokenValue::Space { count } => {
+                write!(f, "{}", "<space>".repeat(*count))
+            }
+            TokenValue::SingleLineComment { raw, .. } => {
+                write!(f, "{raw}")
+            }
+            TokenValue::MultiLineComment { raw, .. } => {
+                write!(f, "{raw}")
+            }
+            TokenValue::Punctuation(p) => {
+                write!(f, "{}", p.to_char())
+            }
+            TokenValue::Placeholder(c) => {
+                write!(f, "{c}")
+            }
+        }
+    }
+}
+
 /// A class of SQL token values.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenClass {
@@ -76,6 +124,18 @@ pub enum TokenClass {
     Integer,
     /// A string.
     String,
+}
+
+impl Display for TokenClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identifier => write!(f, "<identifier>"),
+            Self::Variable => write!(f, "<variable>"),
+            Self::Number => write!(f, "<number>"),
+            Self::Integer => write!(f, "<integer>"),
+            Self::String => write!(f, "<string>"),
+        }
+    }
 }
 
 /// A style of SQL string literal.
@@ -118,6 +178,91 @@ impl StringStyle {
             | Self::TripleDoubleQuoted { prefix } => *prefix,
             _ => None,
         }
+    }
+
+    pub fn parse(&self, raw: &str) -> String {
+        // FIXME: handle escape sequences
+        // FIXME: `none_of` is overly restrictive
+        let output = match self {
+            Self::SingleQuoted { prefix: None } => none_of::<_, _, chumsky::extra::Default>('\'')
+                .repeated()
+                .to_slice()
+                .padded_by(just('\''))
+                .then_ignore(end())
+                .parse(raw),
+            Self::SingleQuoted {
+                prefix: Some(prefix),
+            } => just::<_, _, chumsky::extra::Default>(prefix)
+                .ignore_then(none_of('\'').repeated().to_slice().padded_by(just('\'')))
+                .then_ignore(end())
+                .parse(raw),
+            Self::DoubleQuoted { prefix: None } => none_of::<_, _, chumsky::extra::Default>('"')
+                .repeated()
+                .to_slice()
+                .padded_by(just('"'))
+                .then_ignore(end())
+                .parse(raw),
+            Self::DoubleQuoted {
+                prefix: Some(prefix),
+            } => just::<_, _, chumsky::extra::Default>(prefix)
+                .ignore_then(none_of('"').repeated().to_slice().padded_by(just('"')))
+                .then_ignore(end())
+                .parse(raw),
+            Self::TripleSingleQuoted { prefix: None } => {
+                none_of::<_, _, chumsky::extra::Default>('\'')
+                    .repeated()
+                    .to_slice()
+                    .padded_by(just("'''"))
+                    .then_ignore(end())
+                    .parse(raw)
+            }
+            Self::TripleSingleQuoted {
+                prefix: Some(prefix),
+            } => just::<_, _, chumsky::extra::Default>(prefix)
+                .ignore_then(none_of('\'').repeated().to_slice().padded_by(just("'''")))
+                .then_ignore(end())
+                .parse(raw),
+            Self::TripleDoubleQuoted { prefix: None } => {
+                none_of::<_, _, chumsky::extra::Default>('"')
+                    .repeated()
+                    .to_slice()
+                    .padded_by(just("\"\"\""))
+                    .then_ignore(end())
+                    .parse(raw)
+            }
+            Self::TripleDoubleQuoted {
+                prefix: Some(prefix),
+            } => just::<_, _, chumsky::extra::Default>(prefix)
+                .ignore_then(none_of('"').repeated().to_slice().padded_by(just("\"\"\"")))
+                .then_ignore(end())
+                .parse(raw),
+            Self::UnicodeSingleQuoted => none_of::<_, _, chumsky::extra::Default>('\'')
+                .repeated()
+                .to_slice()
+                .delimited_by(just("U&'"), just("'"))
+                .then_ignore(end())
+                .parse(raw),
+            Self::UnicodeDoubleQuoted => none_of::<_, _, chumsky::extra::Default>('"')
+                .repeated()
+                .to_slice()
+                .delimited_by(just("U&\""), just("\""))
+                .then_ignore(end())
+                .parse(raw),
+            Self::BacktickQuoted => none_of::<_, _, chumsky::extra::Default>('`')
+                .repeated()
+                .to_slice()
+                .padded_by(just('`'))
+                .then_ignore(end())
+                .parse(raw),
+            Self::DollarQuoted { tag } => none_of::<_, _, chumsky::extra::Default>('$')
+                .repeated()
+                .to_slice()
+                .padded_by(just(tag.as_str()))
+                .then_ignore(end())
+                .parse(raw),
+        };
+        // TODO: propagate error
+        output.into_output().unwrap_or_default().to_string()
     }
 }
 

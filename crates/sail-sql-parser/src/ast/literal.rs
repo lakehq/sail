@@ -127,8 +127,7 @@ where
                     span,
                 } => Ok(StringLiteral {
                     span,
-                    // FIXME: handle escape strings
-                    value: raw.to_string(),
+                    value: style.parse(raw),
                     style,
                 }),
                 x => Err(Error::expected_found(

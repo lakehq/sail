@@ -72,7 +72,7 @@ pub enum AtomExpr {
     ),
     Case {
         case: Case,
-        #[parser(function = |(e, _, _), _| boxed(e).or_not())]
+        #[parser(function = |(e, _, _), o| When::parser((), o).not().rewind().ignore_then(boxed(e)).or_not())]
         operand: Option<Box<Expr>>,
         #[parser(function = |(e, _, _), o| compose(e, o))]
         conditions: (CaseWhen, Vec<CaseWhen>),
@@ -161,6 +161,8 @@ pub enum AtomExpr {
     StringLiteral(StringLiteral),
     NumberLiteral(NumberLiteral),
     BooleanLiteral(BooleanLiteral),
+    TimestampLiteral(Timestamp, StringLiteral),
+    DateLiteral(Date, StringLiteral),
     Null(Null),
     Interval(
         Interval,
@@ -288,8 +290,8 @@ pub struct FunctionExpr {
     pub name: ObjectName,
     pub left: LeftParenthesis,
     pub duplicate_treatment: Option<DuplicateTreatment>,
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
-    pub arguments: Sequence<FunctionArgument, Comma>,
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o)).or_not())]
+    pub arguments: Option<Sequence<FunctionArgument, Comma>>,
     pub right: RightParenthesis,
     #[parser(function = |e, o| compose(e, o))]
     pub over_clause: Option<OverClause>,
@@ -612,12 +614,12 @@ where
             infix(
                 left(22),
                 choice((
-                    operator::DoubleLessThan::parser((), options)
-                        .map(BinaryOperator::BitwiseShiftLeft),
-                    operator::DoubleGreaterThan::parser((), options)
-                        .map(BinaryOperator::BitwiseShiftRight),
                     operator::TripleGreaterThan::parser((), options)
                         .map(BinaryOperator::BitwiseShiftRightUnsigned),
+                    operator::DoubleGreaterThan::parser((), options)
+                        .map(BinaryOperator::BitwiseShiftRight),
+                    operator::DoubleLessThan::parser((), options)
+                        .map(BinaryOperator::BitwiseShiftLeft),
                 )),
                 |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
             ),
@@ -639,15 +641,15 @@ where
             infix(
                 left(18),
                 choice((
-                    operator::Equals::parser((), options).map(BinaryOperator::Eq),
-                    operator::DoubleEquals::parser((), options).map(BinaryOperator::EqEq),
                     operator::NotEquals::parser((), options).map(BinaryOperator::NotEq),
+                    operator::DoubleEquals::parser((), options).map(BinaryOperator::EqEq),
+                    operator::Equals::parser((), options).map(BinaryOperator::Eq),
+                    operator::GreaterThanEquals::parser((), options).map(BinaryOperator::GtEq),
+                    operator::GreaterThan::parser((), options).map(BinaryOperator::Gt),
+                    operator::Spaceship::parser((), options).map(BinaryOperator::Spaceship),
+                    operator::LessThanEquals::parser((), options).map(BinaryOperator::LtEq),
                     operator::LessThanGreaterThan::parser((), options).map(BinaryOperator::LtGt),
                     operator::LessThan::parser((), options).map(BinaryOperator::Lt),
-                    operator::LessThanEquals::parser((), options).map(BinaryOperator::LtEq),
-                    operator::GreaterThan::parser((), options).map(BinaryOperator::Gt),
-                    operator::GreaterThanEquals::parser((), options).map(BinaryOperator::GtEq),
-                    operator::Spaceship::parser((), options).map(BinaryOperator::Spaceship),
                 )),
                 |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
             ),

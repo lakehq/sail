@@ -4,6 +4,7 @@ use sail_sql_parser::ast::data_type::{
     DataType, IntervalDayTimeUnit, IntervalType, IntervalYearMonthUnit, StructField, TimezoneType,
 };
 use sail_sql_parser::ast::literal::IntegerLiteral;
+use sail_sql_parser::ast::operator::{LeftParenthesis, RightParenthesis};
 
 use crate::error::{SqlError, SqlResult};
 
@@ -41,6 +42,19 @@ fn from_ast_day_time_interval_field(
         IntervalDayTimeUnit::Hour(_) => Ok(spec::IntervalFieldType::Hour),
         IntervalDayTimeUnit::Minute(_) => Ok(spec::IntervalFieldType::Minute),
         IntervalDayTimeUnit::Second(_) => Ok(spec::IntervalFieldType::Second),
+    }
+}
+
+fn from_ast_timestamp_precision(
+    precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
+) -> SqlResult<spec::TimeUnit> {
+    let precision = precision.as_ref().map(|(_, p, _)| p.value);
+    match precision {
+        Some(0) => Ok(spec::TimeUnit::Second),
+        Some(3) => Ok(spec::TimeUnit::Millisecond),
+        None | Some(6) => Ok(spec::TimeUnit::Microsecond),
+        Some(9) => Ok(spec::TimeUnit::Nanosecond),
+        _ => Err(SqlError::invalid("timestamp precision"))?,
     }
 }
 
@@ -127,27 +141,29 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                 | Some(TimezoneType::WithTimeZone(_, _, _)) => spec::TimeZoneInfo::LocalTimeZone,
                 None => spec::TimeZoneInfo::SQLConfigured,
             };
-            let precision = precision.as_ref().map(|(_, p, _)| p.value);
-            let time_unit = match precision {
-                Some(0) => spec::TimeUnit::Second,
-                Some(3) => spec::TimeUnit::Millisecond,
-                None | Some(6) => spec::TimeUnit::Microsecond,
-                Some(9) => spec::TimeUnit::Nanosecond,
-                _ => Err(SqlError::invalid("timestamp precision"))?,
-            };
+            let time_unit = from_ast_timestamp_precision(precision)?;
             Ok(spec::DataType::Timestamp {
                 time_unit,
                 timezone_info,
             })
         }
+        DataType::TimestampNtz(_, precision) => {
+            let time_unit = from_ast_timestamp_precision(precision)?;
+            Ok(spec::DataType::Timestamp {
+                time_unit,
+                timezone_info: spec::TimeZoneInfo::NoTimeZone,
+            })
+        }
+        DataType::TimestampLtz(_, precision) => {
+            let time_unit = from_ast_timestamp_precision(precision)?;
+            Ok(spec::DataType::Timestamp {
+                time_unit,
+                timezone_info: spec::TimeZoneInfo::LocalTimeZone,
+            })
+        }
         DataType::Date(_) | DataType::Date32(_) => Ok(spec::DataType::Date32),
         DataType::Date64(_) => Ok(spec::DataType::Date64),
         DataType::Interval(ref interval) => match interval {
-            IntervalType::Default(_) => Ok(spec::DataType::Interval {
-                interval_unit: spec::IntervalUnit::MonthDayNano,
-                start_field: None,
-                end_field: None,
-            }),
             IntervalType::YearMonth(_, start, end) => {
                 let start = from_ast_year_month_interval_field(start)?;
                 let end = end
@@ -183,6 +199,11 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                     time_unit: spec::TimeUnit::Microsecond,
                 })
             }
+            IntervalType::Default(_) => Ok(spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::MonthDayNano,
+                start_field: None,
+                end_field: None,
+            }),
         },
         DataType::Array(_, _, inner, _) => {
             let inner = from_ast_data_type(*inner)?;
@@ -193,29 +214,33 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
         }
         DataType::Struct(_, _, fields, _) => {
             let fields = fields
-                .into_items()
-                .map(|f| {
-                    let StructField {
-                        identifier,
-                        colon: _,
-                        data_type,
-                        not_null,
-                        comment,
-                    } = f;
-                    let name = identifier.value.clone();
-                    let data_type = from_ast_data_type(data_type)?;
-                    let mut metadata = vec![];
-                    if let Some((_, comment)) = comment {
-                        metadata.push(("comment".to_string(), comment.value.clone()));
-                    };
-                    Ok(spec::Field {
-                        name,
-                        data_type,
-                        nullable: not_null.is_none(),
-                        metadata,
-                    })
+                .map(|x| {
+                    x.into_items()
+                        .map(|f| {
+                            let StructField {
+                                identifier,
+                                colon: _,
+                                data_type,
+                                not_null,
+                                comment,
+                            } = f;
+                            let name = identifier.value.clone();
+                            let data_type = from_ast_data_type(data_type)?;
+                            let mut metadata = vec![];
+                            if let Some((_, comment)) = comment {
+                                metadata.push(("comment".to_string(), comment.value.clone()));
+                            };
+                            Ok(spec::Field {
+                                name,
+                                data_type,
+                                nullable: not_null.is_none(),
+                                metadata,
+                            })
+                        })
+                        .collect::<SqlResult<Vec<_>>>()
                 })
-                .collect::<SqlResult<Vec<_>>>()?;
+                .transpose()?
+                .unwrap_or_default();
             Ok(spec::DataType::Struct {
                 fields: spec::Fields::from(fields),
             })
