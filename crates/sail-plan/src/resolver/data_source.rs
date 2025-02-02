@@ -81,8 +81,8 @@ impl PlanResolver<'_> {
                 .join(", ");
             return plan_err!("No files found in the specified paths: {urls}")?;
         }
-        match schema {
-            Some(schema) => Ok(self.resolve_schema(schema, state)?),
+        let schema = match schema {
+            Some(schema) => self.resolve_schema(schema, state)?,
             None => {
                 let mut schemas = vec![];
                 for (store, files) in file_groups.iter() {
@@ -97,28 +97,28 @@ impl PlanResolver<'_> {
                     }
                     schemas.push(schema.as_ref().clone());
                 }
-                Ok(adt::Schema::try_merge(schemas)?)
+                adt::Schema::try_merge(schemas)?
             }
-        }
+        };
 
         // FIXME: DataFusion 43.0.0 suddenly doesn't support Utf8View
-        // let new_fields: Vec<adt::Field> = schema
-        //     .fields()
-        //     .iter()
-        //     .map(|field| {
-        //         if matches!(field.data_type(), &adt::DataType::Utf8View) {
-        //             let mut new_field = field.as_ref().clone();
-        //             new_field = new_field.with_data_type(adt::DataType::Utf8);
-        //             new_field
-        //         } else {
-        //             field.as_ref().clone()
-        //         }
-        //     })
-        //     .collect();
-        // Ok(adt::Schema::new_with_metadata(
-        //     new_fields,
-        //     schema.metadata().clone(),
-        // ))
+        let new_fields: Vec<adt::Field> = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if matches!(field.data_type(), &adt::DataType::Utf8View) {
+                    let mut new_field = field.as_ref().clone();
+                    new_field = new_field.with_data_type(adt::DataType::Utf8);
+                    new_field
+                } else {
+                    field.as_ref().clone()
+                }
+            })
+            .collect();
+        Ok(adt::Schema::new_with_metadata(
+            new_fields,
+            schema.metadata().clone(),
+        ))
     }
 }
 
