@@ -1,5 +1,4 @@
 /// A sequence of item type `T` and separator type `S`.
-#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct Sequence<T, S> {
     pub head: Box<T>,

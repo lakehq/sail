@@ -8,11 +8,12 @@ use sail_sql_macro::TreeParser;
 use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit};
 use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
-    All, And, Any, As, Asc, Between, By, Case, Cube, Current, Day, Days, Desc, Distinct,
-    Distribute, Div, Else, End, Escape, Exists, False, First, Following, From, Grouping, Hour,
-    Hours, Ilike, In, Interval, Is, Last, Like, Microsecond, Microseconds, Millisecond,
-    Milliseconds, Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Partition,
-    Preceding, Range, Rlike, Rollup, Row, Rows, Second, Seconds, Sets, Similar, Sort, Then, To,
+    All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, Date, Day, Days, Desc,
+    Distinct, Distribute, Div, Else, End, Escape, Exists, Extract, False, First, Following, For,
+    From, Grouping, Hour, Hours, Ilike, In, Interval, Is, Last, Leading, Like, Microsecond,
+    Microseconds, Millisecond, Milliseconds, Minute, Minutes, Month, Months, Not, Null, Nulls, Or,
+    Order, Over, Overlay, Partition, Placing, Position, Preceding, Range, Rlike, Rollup, Row, Rows,
+    Second, Seconds, Sets, Similar, Sort, Struct, Substring, Then, Timestamp, To, Trailing, Trim,
     True, Unbounded, Unknown, Week, Weeks, When, Year, Years,
 };
 use crate::ast::literal::{NumberLiteral, StringLiteral};
@@ -20,7 +21,7 @@ use crate::ast::operator;
 use crate::ast::operator::{
     Comma, DoubleColon, LeftBracket, LeftParenthesis, Period, RightBracket, RightParenthesis,
 };
-use crate::ast::query::Query;
+use crate::ast::query::{NamedExpr, Query};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
 use crate::options::ParserOptions;
@@ -37,29 +38,45 @@ pub enum Expr {
     Named(Box<Expr>, As, Ident),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Expr, Query)")]
+#[parser(dependency = "(Expr, Query, DataType)")]
 pub enum AtomExpr {
     SubqueryExpr(
         LeftParenthesis,
-        #[parser(function = |(_, q), _| q)] Query,
+        #[parser(function = |(_, q, _), _| q)] Query,
         RightParenthesis,
     ),
     ExistsExpr(
         Exists,
         LeftParenthesis,
-        #[parser(function = |(_, q), _| q)] Query,
+        #[parser(function = |(_, q, _), _| q)] Query,
         RightParenthesis,
     ),
-    Nested(#[parser(function = |(e, _), o| compose(e, o))] NestedExpr),
+    Nested(
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        RightParenthesis,
+    ),
+    Tuple(
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), o| sequence(compose(e, o), unit(o)))]
+        Sequence<NamedExpr, Comma>,
+        RightParenthesis,
+    ),
+    Struct(
+        Struct,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), o| sequence(compose(e, o), unit(o)))]
+        Sequence<NamedExpr, Comma>,
+        RightParenthesis,
+    ),
     Case {
         case: Case,
-        #[parser(function = |(e, _), _| boxed(e).or_not())]
+        #[parser(function = |(e, _, _), _| boxed(e).or_not())]
         operand: Option<Box<Expr>>,
-        #[parser(function = |(e, _), o| compose(e, o))]
+        #[parser(function = |(e, _, _), o| compose(e, o))]
         conditions: (CaseWhen, Vec<CaseWhen>),
-        #[parser(function = |(e, _), o| compose(e, o))]
+        #[parser(function = |(e, _, _), o| compose(e, o))]
         r#else: Option<CaseElse>,
         end: End,
     },
@@ -67,23 +84,77 @@ pub enum AtomExpr {
         Grouping,
         Sets,
         LeftParenthesis,
-        #[parser(function = |(e, _), o| sequence(compose(e, o), unit(o)))]
-        Sequence<NestedExpr, Comma>,
+        #[parser(function = |(e, _, _), o| sequence(compose(e, o), unit(o)))]
+        Sequence<ExprList, Comma>,
         RightParenthesis,
     ),
     Cube(
         Cube,
-        #[parser(function = |(e, _), o| compose(e, o))] NestedExpr,
+        #[parser(function = |(e, _, _), o| compose(e, o))] ExprList,
     ),
     Rollup(
         Rollup,
-        #[parser(function = |(e, _), o| compose(e, o))] NestedExpr,
+        #[parser(function = |(e, _, _), o| compose(e, o))] ExprList,
     ),
-    Function(#[parser(function = |(e, _), o| compose(e, o))] FunctionExpr),
+    Cast(
+        Cast,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        As,
+        #[parser(function = |(_, _, t), _| t)] DataType,
+        RightParenthesis,
+    ),
+    Extract(
+        Extract,
+        LeftParenthesis,
+        Ident,
+        From,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        RightParenthesis,
+    ),
+    Substring(
+        Substring,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        #[parser(function = |(e, _, _), o| unit(o).then(boxed(e)).or_not())]
+        Option<(From, Box<Expr>)>,
+        #[parser(function = |(e, _, _), o| unit(o).then(boxed(e)).or_not())]
+        Option<(For, Box<Expr>)>,
+        RightParenthesis,
+    ),
+    Trim(
+        Trim,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), o| compose(e, o))] TrimExpr,
+        RightParenthesis,
+    ),
+    Overlay(
+        Overlay,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        Placing,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        From,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        #[parser(function = |(e, _, _), o| unit(o).then(boxed(e)).or_not())]
+        Option<(For, Box<Expr>)>,
+        RightParenthesis,
+    ),
+    Position(
+        Position,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        In,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        RightParenthesis,
+    ),
+    Timestamp(Timestamp, LeftParenthesis, StringLiteral, RightParenthesis),
+    Date(Date, LeftParenthesis, StringLiteral, RightParenthesis),
+    Function(#[parser(function = |(e, _, _), o| compose(e, o))] FunctionExpr),
     LambdaFunction {
         params: LambdaFunctionParameters,
         arrow: operator::Arrow,
-        #[parser(function = |(e, _), _| boxed(e))]
+        #[parser(function = |(e, _, _), _| boxed(e))]
         body: Box<Expr>,
     },
     Wildcard(operator::Asterisk),
@@ -93,7 +164,7 @@ pub enum AtomExpr {
     Null(Null),
     Interval(
         Interval,
-        #[parser(function = |(e, _), o| compose(e, o))] IntervalExpr,
+        #[parser(function = |(e, _, _), o| compose(e, o))] IntervalExpr,
     ),
     Placeholder(Variable),
     Identifier(Ident),
@@ -168,17 +239,49 @@ pub enum IntervalQualifier {
     DayTime(IntervalDayTimeUnit, Option<(To, IntervalDayTimeUnit)>),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
-pub struct NestedExpr {
+pub struct ExprList {
     pub left: LeftParenthesis,
     #[parser(function = |e, o| sequence(e, unit(o)))]
     pub expressions: Sequence<Expr, Comma>,
     pub right: RightParenthesis,
 }
 
-#[allow(unused)]
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum TrimExpr {
+    LeadingSpace(
+        Leading,
+        From,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+    ),
+    Leading(
+        Leading,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        From,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+    ),
+    TrailingSpace(
+        Trailing,
+        From,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+    ),
+    Trailing(
+        Trailing,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        From,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+    ),
+    BothSpace(Both, From, #[parser(function = |e, _| boxed(e))] Box<Expr>),
+    Both(
+        Option<Both>,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        From,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+    ),
+}
+
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct FunctionExpr {
@@ -209,7 +312,6 @@ pub enum DuplicateTreatment {
     Distinct(Distinct),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct OverClause {
@@ -228,12 +330,11 @@ pub enum WindowSpec {
         #[parser(function = |e, o| compose(e, o))]
         order_by: Option<OrderBy>,
         #[parser(function = |e, o| compose(e, o))]
-        window_frame: WindowFrame,
+        window_frame: Option<WindowFrame>,
         right: RightParenthesis,
     },
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub struct PartitionBy {
     pub partition: Either<Partition, Distribute>,
@@ -241,7 +342,6 @@ pub struct PartitionBy {
     pub columns: Sequence<Ident, Comma>,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct OrderBy {
@@ -346,7 +446,6 @@ pub enum BinaryOperator {
     BitwiseOr(operator::VerticalBar),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct CaseWhen {
@@ -358,7 +457,6 @@ pub struct CaseWhen {
     pub result: Box<Expr>,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct CaseElse {
@@ -376,6 +474,7 @@ pub enum LambdaFunctionParameters {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Expr, DataType)")]
 pub enum ExprModifier {
+    Wildcard(Period, operator::Asterisk),
     FieldAccess(Period, Ident),
     SubscriptAccess(
         LeftBracket,
@@ -473,7 +572,8 @@ where
         (expr, query, data_type): (P1, P2, P3),
         options: &'opt ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        let atom = AtomExpr::parser((expr.clone(), query.clone()), options).map(Expr::Atom);
+        let atom = AtomExpr::parser((expr.clone(), query.clone(), data_type.clone()), options)
+            .map(Expr::Atom);
         atom.pratt((
             postfix(
                 26,

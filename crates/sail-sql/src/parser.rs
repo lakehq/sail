@@ -1,16 +1,19 @@
 use chumsky::Parser;
 use sail_common::spec;
 use sail_sql_parser::ast::expression::IntervalExpr;
+use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
 use sail_sql_parser::lexer::create_lexer;
 use sail_sql_parser::options::ParserOptions;
 use sail_sql_parser::parser::{
     create_data_type_parser, create_expression_parser, create_interval_expression_parser,
+    create_named_expression_parser, create_object_name_parser, create_qualified_wildcard_parser,
     create_statement_parser,
 };
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
 use crate::expression::from_ast_expression;
+use crate::query::from_ast_named_expression;
 use crate::statement::from_ast_statements;
 
 macro_rules! parse {
@@ -25,19 +28,19 @@ macro_rules! parse {
         parser
             .parse(&tokens)
             .into_result()
-            .map_err(SqlError::parser)
+            .map_err(SqlError::parser)?
     }};
 }
 pub fn parse_data_type(s: &str) -> SqlResult<spec::DataType> {
-    from_ast_data_type(parse!(s, create_data_type_parser)?)
+    from_ast_data_type(parse!(s, create_data_type_parser))
 }
 
 pub fn parse_expression(s: &str) -> SqlResult<spec::Expr> {
-    from_ast_expression(parse!(s, create_expression_parser)?)
+    from_ast_expression(parse!(s, create_expression_parser))
 }
 
 pub fn parse_statements(s: &str) -> SqlResult<Vec<spec::Plan>> {
-    from_ast_statements(parse!(s, create_statement_parser)?)
+    from_ast_statements(parse!(s, create_statement_parser))
 }
 
 pub fn parse_one_statement(s: &str) -> SqlResult<spec::Plan> {
@@ -48,18 +51,24 @@ pub fn parse_one_statement(s: &str) -> SqlResult<spec::Plan> {
     }
 }
 
-pub fn parse_object_name(_s: &str) -> SqlResult<spec::ObjectName> {
-    todo!()
+pub fn parse_object_name(s: &str) -> SqlResult<spec::ObjectName> {
+    let ObjectName(parts) = parse!(s, create_object_name_parser);
+    Ok(spec::ObjectName::from(
+        parts.into_items().map(|x| x.value).collect::<Vec<_>>(),
+    ))
 }
 
-pub fn parse_qualified_wildcard(_s: &str) -> SqlResult<spec::ObjectName> {
-    todo!()
+pub fn parse_qualified_wildcard(s: &str) -> SqlResult<spec::ObjectName> {
+    let QualifiedWildcard(qualifier, _, _) = parse!(s, create_qualified_wildcard_parser);
+    Ok(spec::ObjectName::from(
+        qualifier.into_items().map(|x| x.value).collect::<Vec<_>>(),
+    ))
 }
 
-pub fn parse_wildcard_expression(_s: &str) -> SqlResult<spec::Expr> {
-    todo!()
+pub fn parse_named_expression(s: &str) -> SqlResult<spec::Expr> {
+    from_ast_named_expression(parse!(s, create_named_expression_parser))
 }
 
 pub(crate) fn parse_interval_expression(s: &str) -> SqlResult<IntervalExpr> {
-    parse!(s, create_interval_expression_parser)
+    Ok(parse!(s, create_interval_expression_parser))
 }

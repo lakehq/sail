@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use sail_common::spec;
 use sail_sql::parser::{
-    parse_data_type, parse_expression, parse_object_name, parse_qualified_wildcard,
-    parse_wildcard_expression,
+    parse_data_type, parse_expression, parse_named_expression, parse_object_name,
+    parse_qualified_wildcard,
 };
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -59,7 +59,7 @@ impl TryFrom<Expression> for spec::Expr {
             }),
             ExprType::ExpressionString(ExpressionString { expression }) => {
                 let expr = parse_expression(expression.as_str())
-                    .or_else(|_| parse_wildcard_expression(expression.as_str()))?;
+                    .or_else(|_| parse_named_expression(expression.as_str()))?;
                 Ok(expr)
             }
             ExprType::UnresolvedStar(UnresolvedStar { unparsed_target }) => {
@@ -443,7 +443,7 @@ mod tests {
 
     use sail_common::spec;
     use sail_common::tests::test_gold_set;
-    use sail_sql::parser::parse_wildcard_expression;
+    use sail_sql::parser::parse_named_expression;
 
     use crate::error::SparkError;
 
@@ -456,7 +456,7 @@ mod tests {
             test_gold_set(
                 "tests/gold_data/expression/*.json",
                 |sql: String| {
-                    let expr = parse_wildcard_expression(&sql)?;
+                    let expr = parse_named_expression(&sql)?;
                     if sql.len() > 128 {
                         Ok(spec::Expr::Literal(spec::Literal::Utf8 {
                             value: Some("Result omitted for long expression.".to_string()),

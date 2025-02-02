@@ -47,7 +47,6 @@ where
 
 macro_rules! define_operator {
     ($identifier:ident, [$($punctuation:ident),*]) => {
-        #[allow(unused)]
         #[derive(Debug, Clone)]
         pub struct $identifier {
             pub span: TokenSpan,

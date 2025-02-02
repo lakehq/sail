@@ -15,7 +15,6 @@ use crate::ast::operator::{
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "DataType")]
 pub enum DataType {
@@ -97,7 +96,6 @@ pub enum DataType {
     ),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalType {
     Default(Interval),
@@ -113,14 +111,12 @@ pub enum IntervalType {
     ),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalYearMonthUnit {
     Year(Year),
     Month(Month),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalDayTimeUnit {
     Day(Year),
@@ -129,7 +125,6 @@ pub enum IntervalDayTimeUnit {
     Second(Second),
 }
 
-#[allow(unused)]
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum TimezoneType {
@@ -138,7 +133,6 @@ pub enum TimezoneType {
     WithLocalTimeZone(With, Local, Time, Zone),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "DataType")]
 pub struct StructField {

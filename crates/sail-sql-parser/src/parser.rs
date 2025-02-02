@@ -4,8 +4,9 @@ use chumsky::{IterParser, Parser};
 
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{Expr, IntervalExpr};
+use crate::ast::identifier::{ObjectName, QualifiedWildcard};
 use crate::ast::operator::Semicolon;
-use crate::ast::query::Query;
+use crate::ast::query::{NamedExpr, Query};
 use crate::ast::statement::Statement;
 use crate::ast::whitespace::whitespace;
 use crate::options::ParserOptions;
@@ -67,6 +68,26 @@ where
     data_type.then_ignore(end())
 }
 
+pub fn create_object_name_parser<'a, 'opt, E>(
+    options: &'opt ParserOptions,
+) -> impl Parser<'a, &'a [Token<'a>], ObjectName, E> + Clone
+where
+    'opt: 'a,
+    E: ParserExtra<'a, &'a [Token<'a>]>,
+{
+    ObjectName::parser((), options).then_ignore(end())
+}
+
+pub fn create_qualified_wildcard_parser<'a, 'opt, E>(
+    options: &'opt ParserOptions,
+) -> impl Parser<'a, &'a [Token<'a>], QualifiedWildcard, E> + Clone
+where
+    'opt: 'a,
+    E: ParserExtra<'a, &'a [Token<'a>]>,
+{
+    QualifiedWildcard::parser((), options).then_ignore(end())
+}
+
 pub fn create_expression_parser<'a, 'opt, E>(
     options: &'opt ParserOptions,
 ) -> impl Parser<'a, &'a [Token<'a>], Expr, E> + Clone
@@ -89,6 +110,17 @@ where
     data_type.define(DataType::parser(data_type.clone(), options));
 
     expression.then_ignore(end())
+}
+
+pub fn create_named_expression_parser<'a, 'opt, E>(
+    options: &'opt ParserOptions,
+) -> impl Parser<'a, &'a [Token<'a>], NamedExpr, E> + Clone
+where
+    'opt: 'a,
+    E: ParserExtra<'a, &'a [Token<'a>]>,
+{
+    let expression = create_expression_parser(options);
+    NamedExpr::parser(expression, options).then_ignore(end())
 }
 
 pub fn create_interval_expression_parser<'a, 'opt, E>(

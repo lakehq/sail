@@ -18,7 +18,6 @@ use crate::ast::query::Query;
 use crate::combinator::{compose, sequence, unit};
 use crate::common::Sequence;
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Statement, Query, Expr, DataType)")]
 pub enum Statement {
@@ -127,7 +126,6 @@ pub enum Statement {
     },
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum ExplainFormat {
     Extended(Extended),
@@ -138,7 +136,6 @@ pub enum ExplainFormat {
     Verbose(Verbose),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum CreateDatabaseClause {
     Comment(Comment, StringLiteral),
@@ -146,7 +143,6 @@ pub enum CreateDatabaseClause {
     Properties(With, Either<Dbproperties, Properties>, PropertyList),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub struct PropertyList {
     pub left: LeftParenthesis,
@@ -154,14 +150,12 @@ pub struct PropertyList {
     pub right: LeftParenthesis,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub struct PropertyKeyValue {
     pub key: Either<ObjectName, StringLiteral>,
     pub value: Option<(Option<Equals>, PropertyValue)>,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum PropertyValue {
     String(StringLiteral),
@@ -169,7 +163,6 @@ pub enum PropertyValue {
     Boolean(Either<True, False>),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum AlterDatabaseAction {
     SetProperties(Set, Either<Dbproperties, Properties>, PropertyList),
@@ -186,7 +179,6 @@ pub struct TableColumns {
     right: LeftParenthesis,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Expr, DataType)")]
 pub struct TableColumn {
@@ -197,7 +189,6 @@ pub struct TableColumn {
     pub options: Vec<TableColumnOption>,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub enum TableColumnOption {
@@ -214,7 +205,6 @@ pub enum TableColumnOption {
     Comment(Comment, StringLiteral),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum CreateOrReplaceTableClause {
     Options(Options),
@@ -223,14 +213,12 @@ pub enum CreateOrReplaceTableClause {
     Properties(Tblproperties, PropertyList),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub struct TableProvider {
     pub using: Using,
     pub name: ObjectName,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum AlterTableAction {
     AddColumns {

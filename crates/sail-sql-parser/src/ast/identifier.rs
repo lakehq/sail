@@ -4,7 +4,7 @@ use chumsky::prelude::any;
 use chumsky::Parser;
 use sail_sql_macro::TreeParser;
 
-use crate::ast::operator::Period;
+use crate::ast::operator::{Asterisk, Period};
 use crate::ast::whitespace::whitespace;
 use crate::common::Sequence;
 use crate::options::ParserOptions;
@@ -71,6 +71,9 @@ where
 
 #[derive(Debug, Clone, TreeParser)]
 pub struct ObjectName(pub Sequence<Ident, Period>);
+
+#[derive(Debug, Clone, TreeParser)]
+pub struct QualifiedWildcard(pub Sequence<Ident, Period>, pub Period, pub Asterisk);
 
 /// An identifier with the `$` prefix.
 #[derive(Debug, Clone)]

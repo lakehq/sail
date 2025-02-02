@@ -174,7 +174,6 @@ macro_rules! punctuation_enum {
                 }
             }
 
-            #[allow(unused)]
             pub fn to_char(self) -> char {
                 match self {
                     $(Self::$p => $ch,)*
@@ -197,7 +196,6 @@ pub struct TokenSpan {
     pub end: usize,
 }
 
-#[allow(unused)]
 impl TokenSpan {
     pub fn is_empty(&self) -> bool {
         self.start >= self.end
@@ -229,7 +227,6 @@ macro_rules! keyword_enum {
     ([$(($string:expr, $identifier:ident),)* $(,)?]) => {
         /// A SQL keyword.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        #[allow(unused)]
         pub enum Keyword {
             $($identifier,)*
         }

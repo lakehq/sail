@@ -1,7 +1,6 @@
 /// The strategy for quote escape in a string, where
 /// the single-character quote is used as the delimiter for the string.
 #[derive(Debug, Clone, Default)]
-#[allow(unused)]
 pub enum QuoteEscape {
     /// No escape is supported.
     #[default]

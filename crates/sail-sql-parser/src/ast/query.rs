@@ -20,7 +20,6 @@ use crate::options::ParserOptions;
 use crate::token::Token;
 use crate::tree::TreeParser;
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Query, Expr, DataType)")]
 pub struct Query {
@@ -44,7 +43,6 @@ pub enum QueryModifier {
     Offset(#[parser(function = |e, o| compose(e, o))] OffsetClause),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Query")]
 pub struct WithClause {
@@ -54,7 +52,6 @@ pub struct WithClause {
     pub ctes: Sequence<NamedQuery, Comma>,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Query")]
 pub struct NamedQuery {

@@ -8,7 +8,6 @@ use crate::options::ParserOptions;
 use crate::token::{Punctuation, StringStyle, Token, TokenClass, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
 
-#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct NumberLiteral {
     pub span: TokenSpan,
@@ -51,7 +50,6 @@ where
     }
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct IntegerLiteral {
     pub span: TokenSpan,
@@ -106,7 +104,6 @@ where
     }
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct StringLiteral {
     pub span: TokenSpan,

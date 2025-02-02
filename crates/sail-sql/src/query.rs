@@ -1,5 +1,5 @@
 use sail_common::spec;
-use sail_sql_parser::ast::expression::{AtomExpr, DuplicateTreatment, Expr, NestedExpr};
+use sail_sql_parser::ast::expression::{AtomExpr, DuplicateTreatment, Expr};
 use sail_sql_parser::ast::operator::Comma;
 use sail_sql_parser::ast::query::{
     AliasClause, ClusterByClause, DistributeByClause, FromClause, GroupByClause, GroupByModifier,
@@ -70,6 +70,20 @@ impl TryFrom<Vec<QueryModifier>> for QueryModifiers {
             }
         }
         Ok(output)
+    }
+}
+
+pub(crate) fn from_ast_named_expression(expr: NamedExpr) -> SqlResult<spec::Expr> {
+    let NamedExpr { expr, alias } = expr;
+    let expr = from_ast_expression(expr)?;
+    if let Some((_, name)) = alias {
+        Ok(spec::Expr::Alias {
+            expr: Box::new(expr),
+            name: vec![name.value.into()],
+            metadata: None,
+        })
+    } else {
+        Ok(expr)
     }
 }
 
@@ -216,19 +230,7 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
 
     let projection = projection
         .into_items()
-        .map(|p| {
-            let NamedExpr { expr, alias } = p;
-            let expr = from_ast_expression(expr)?;
-            if let Some((_, name)) = alias {
-                Ok(spec::Expr::Alias {
-                    expr: Box::new(expr),
-                    name: vec![name.value.into()],
-                    metadata: None,
-                })
-            } else {
-                Ok(expr)
-            }
-        })
+        .map(from_ast_named_expression)
         .collect::<SqlResult<_>>()?;
 
     let group_by = group_by
@@ -337,13 +339,9 @@ fn from_ast_values(values: ValuesClause) -> SqlResult<spec::QueryPlan> {
     let rows = expressions
         .into_items()
         .map(|row| match row {
-            Expr::Atom(AtomExpr::Nested(NestedExpr {
-                left: _,
-                expressions,
-                right: _,
-            })) => expressions
+            Expr::Atom(AtomExpr::Tuple(_, expressions, _)) => expressions
                 .into_items()
-                .map(from_ast_expression)
+                .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>(),
             x => Ok(vec![from_ast_expression(x)?]),
         })
@@ -500,16 +498,15 @@ fn query_plan_with_table_modifier(
                 .map(|e| {
                     let NamedExpr { expr, alias } = e;
                     let expr = match expr {
-                        Expr::Atom(AtomExpr::Nested(NestedExpr {
-                            left: _,
-                            expressions,
-                            right: _,
-                        })) => expressions.into_items().collect(),
-                        _ => vec![expr],
+                        Expr::Atom(AtomExpr::Tuple(_, expressions, _)) => expressions
+                            .into_items()
+                            .map(from_ast_named_expression)
+                            .collect::<SqlResult<Vec<_>>>()?,
+                        _ => vec![from_ast_expression(expr)?],
                     };
                     let values = expr
                         .into_iter()
-                        .map(|x| match from_ast_expression(x)? {
+                        .map(|x| match x {
                             spec::Expr::Literal(literal) => Ok(literal),
                             _ => Err(SqlError::invalid("non-literal value in PIVOT")),
                         })
