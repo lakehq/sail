@@ -1,11 +1,11 @@
-name: Python build
+name: Python Build
 
 on:
   workflow_call:
 
 jobs:
-  build:
-    name: Build
+  python-build:
+    name: Python Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,21 +17,21 @@ jobs:
       - name: Install Hatch
         uses: pypa/hatch@install
 
-      - name: Format check
+      - name: Format Check
         run: hatch fmt --check
 
-      - name: Download Python package
+      - name: Download Python Package
         uses: actions/download-artifact@v4
         with:
           name: python-package
           path: target/wheels
 
-      - name: Set up Hatch environment
+      - name: Set Up Hatch Environment
         run: |
           hatch env create
           hatch run install-pysail
 
-      - name: Verify package version
+      - name: Verify Package Version
         run: |
           declared_version="$(hatch version)"
           actual_version="$(hatch run python -c 'import pysail; print(pysail.__version__)')"
@@ -42,5 +42,5 @@ jobs:
             exit 1
           fi
 
-      - name: Run tests
+      - name: Run Tests
         run: hatch run pytest --pyargs pysail
