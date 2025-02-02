@@ -14,6 +14,7 @@ use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
 use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
 use sail_plan::new_query_planner;
 use sail_plan::object_store::DynamicObjectStoreRegistry;
+use sail_plan::table_factory::register_table_factories;
 use sail_plan::temp_view::TemporaryViewManager;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
@@ -121,12 +122,13 @@ impl SessionManager {
                 .build()?;
             Arc::new(config)
         };
-        let state = SessionStateBuilder::new()
+        let mut state = SessionStateBuilder::new()
             .with_config(session_config)
             .with_runtime_env(runtime)
             .with_default_features()
             .with_query_planner(new_query_planner())
             .build();
+        register_table_factories(&mut state);
         let context = SessionContext::new_with_state(state);
 
         // TODO: This is a temp workaround to deregister all built-in functions that we define.

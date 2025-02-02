@@ -100,6 +100,7 @@ arrow-flight = { version = "53.3.0" }
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
 sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "9ade53d", features = ["serde", "visitor"] }
+iceberg-datafusion = { git = "https://github.com/apache/iceberg-rust.git", rev = "430498d" }
 
 ######
 # This is the end of the manually managed dependencies.
