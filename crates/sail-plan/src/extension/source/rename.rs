@@ -49,22 +49,13 @@ impl RenameTableProvider {
 
     fn to_inner_expr(&self, expr: &Expr) -> Result<Expr> {
         let rewrite = |e: Expr| -> Result<Transformed<Expr>> {
-            if let Expr::Column(Column {
-                name,
-                relation,
-                spans,
-            }) = e
-            {
+            if let Expr::Column(Column { name, relation }) = e {
                 let name = self
                     .names
                     .get(&name)
                     .ok_or_else(|| plan_datafusion_err!("column {name} not found"))?
                     .clone();
-                Ok(Transformed::yes(Expr::Column(Column {
-                    name,
-                    relation,
-                    spans,
-                })))
+                Ok(Transformed::yes(Expr::Column(Column { name, relation })))
             } else {
                 Ok(Transformed::no(e))
             }
