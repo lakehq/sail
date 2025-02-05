@@ -1,4 +1,4 @@
-name: Spark tests
+name: Spark Tests
 
 on:
   workflow_call:
@@ -76,7 +76,7 @@ jobs:
         run: |
           scripts/spark-tests/build-pyspark.sh
 
-      - name: Download Python package
+      - name: Download Python Package
         uses: actions/download-artifact@v4
         with:
           name: python-package
@@ -84,21 +84,21 @@ jobs:
 
       # We do not cache the environments since package installation via `uv` is fast, while downloading
       # the environments from the cache still takes time.
-      - name: Set up Hatch environment
+      - name: Set Up Hatch Environment
         run: |
           hatch env create test
           hatch run test:install-pyspark
           hatch run test:install-pysail
 
-      - name: Run Spark Connect server
+      - name: Run Spark Connect Server
         run: |
           nohup hatch run test:sail spark server -C opt/spark > /dev/null 2>&1 < /dev/null &
 
-      - name: Wait for Spark Connect server to start
+      - name: Wait for Spark Connect Server to Start
         run: |
           scripts/spark-tests/wait-for-server.sh
 
-      - name: Run Spark tests
+      - name: Run Spark Tests
         # We set a timeout to prevent the tests from hanging indefinitely,
         # which can happen occasionally for unknown reasons.
         # The timeout value should be adjusted as we add more tests.
@@ -109,7 +109,7 @@ jobs:
         run: |
           scripts/spark-tests/run-tests.sh
 
-      - name: Upload test logs
+      - name: Upload Test Logs
         uses: actions/upload-artifact@v4
         with:
           name: spark-tests-logs
@@ -134,13 +134,13 @@ jobs:
           workflow_name: Build
           artifact_name: spark-tests-logs
 
-      - name: Download test logs
+      - name: Download Test Logs
         uses: actions/download-artifact@v4
         with:
           name: spark-tests-logs
           path: /tmp/test-after
 
-      - name: Download test logs (baseline)
+      - name: Download Test Logs (Baseline)
         if: ${{ steps.baseline-workflow.outputs.workflow_run_id != '' }}
         uses: actions/download-artifact@v4
         with:
@@ -149,12 +149,12 @@ jobs:
           run-id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download test logs (no baseline)
+      - name: Download Test Logs (No Baseline)
         if: ${{ steps.baseline-workflow.outputs.workflow_run_id == '' }}
         run: |
           cp -r /tmp/test-after /tmp/test-before
 
-      - name: Generate test report
+      - name: Generate Test Report
         env:
           BASELINE_WORKFLOW_RUN_ID: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
         run: |
@@ -166,14 +166,14 @@ jobs:
           scripts/spark-tests/generate-test-report.sh /tmp/test-after /tmp/test-before >> "$report"
           cat "$report" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Save pull request number
+      - name: Save Pull Request Number
         if: github.event_name == 'pull_request'
         env:
           NUMBER: ${{ github.event.number }}
         run: |
           echo "$NUMBER" > /tmp/report/pull-request.txt
 
-      - name: Upload test report
+      - name: Upload Test Report
         uses: actions/upload-artifact@v4
         with:
           name: spark-tests-report
