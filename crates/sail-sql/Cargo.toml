@@ -14,3 +14,4 @@ lazy_static = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 chumsky = { workspace = true }
+either = { workspace = true }

@@ -8,13 +8,14 @@ use sail_sql_macro::TreeParser;
 use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit};
 use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
-    All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, Date, Day, Days, Desc,
-    Distinct, Distribute, Div, Else, End, Escape, Exists, Extract, False, First, Following, For,
-    From, Grouping, Hour, Hours, Ilike, In, Interval, Is, Last, Leading, Like, Microsecond,
-    Microseconds, Millisecond, Milliseconds, Minute, Minutes, Month, Months, Not, Null, Nulls, Or,
-    Order, Over, Overlay, Partition, Placing, Position, Preceding, Range, Rlike, Rollup, Row, Rows,
-    Second, Seconds, Sets, Similar, Sort, Struct, Substring, Then, Timestamp, To, Trailing, Trim,
-    True, Unbounded, Unknown, Week, Weeks, When, Year, Years,
+    All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate,
+    CurrentTimestamp, Date, Day, Days, Desc, Distinct, Distribute, Div, Else, End, Escape, Exists,
+    Extract, False, First, Following, For, From, Grouping, Hour, Hours, Ilike, In, Interval, Is,
+    Last, Leading, Like, Microsecond, Microseconds, Millisecond, Milliseconds, Minute, Minutes,
+    Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay, Partition, Placing, Position,
+    Preceding, Range, Rlike, Rollup, Row, Rows, Second, Seconds, Sets, Similar, Sort, Struct,
+    Substr, Substring, Then, Timestamp, To, Trailing, Trim, True, Unbounded, Unknown, Week, Weeks,
+    When, Year, Years,
 };
 use crate::ast::literal::{NumberLiteral, StringLiteral};
 use crate::ast::operator;
@@ -35,7 +36,6 @@ pub enum Expr {
     UnaryOperator(UnaryOperator, Box<Expr>),
     BinaryOperator(Box<Expr>, BinaryOperator, Box<Expr>),
     Predicate(Box<Expr>, ExprPredicate),
-    Named(Box<Expr>, As, Ident),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -52,6 +52,12 @@ pub enum AtomExpr {
         #[parser(function = |(_, q, _), _| q)] Query,
         RightParenthesis,
     ),
+    LambdaFunction {
+        params: LambdaFunctionParameters,
+        arrow: operator::Arrow,
+        #[parser(function = |(e, _, _), _| boxed(e))]
+        body: Box<Expr>,
+    },
     Nested(
         LeftParenthesis,
         #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
@@ -113,7 +119,7 @@ pub enum AtomExpr {
         RightParenthesis,
     ),
     Substring(
-        Substring,
+        Either<Substring, Substr>,
         LeftParenthesis,
         #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
         #[parser(function = |(e, _, _), o| unit(o).then(boxed(e)).or_not())]
@@ -148,15 +154,11 @@ pub enum AtomExpr {
         #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
         RightParenthesis,
     ),
+    CurrentTimestamp(CurrentTimestamp),
+    CurrentDate(CurrentDate),
     Timestamp(Timestamp, LeftParenthesis, StringLiteral, RightParenthesis),
     Date(Date, LeftParenthesis, StringLiteral, RightParenthesis),
     Function(#[parser(function = |(e, _, _), o| compose(e, o))] FunctionExpr),
-    LambdaFunction {
-        params: LambdaFunctionParameters,
-        arrow: operator::Arrow,
-        #[parser(function = |(e, _, _), _| boxed(e))]
-        body: Box<Expr>,
-    },
     Wildcard(operator::Asterisk),
     StringLiteral(StringLiteral),
     NumberLiteral(NumberLiteral),
@@ -176,6 +178,14 @@ pub enum AtomExpr {
 pub enum BooleanLiteral {
     True(True),
     False(False),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct IntervalLiteral {
+    pub interval: Option<Interval>,
+    #[parser(function = |e, o| compose(e, o))]
+    pub value: IntervalExpr,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -328,6 +338,7 @@ pub enum WindowSpec {
     Named(Ident),
     Detailed {
         left: LeftParenthesis,
+        #[parser(function = |e, o| compose(e, o))]
         partition_by: Option<PartitionBy>,
         #[parser(function = |e, o| compose(e, o))]
         order_by: Option<OrderBy>,
@@ -338,10 +349,12 @@ pub enum WindowSpec {
 }
 
 #[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
 pub struct PartitionBy {
     pub partition: Either<Partition, Distribute>,
     pub by: By,
-    pub columns: Sequence<Ident, Comma>,
+    #[parser(function = |e, o| sequence(e, unit(o)))]
+    pub columns: Sequence<Expr, Comma>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -407,8 +420,8 @@ pub enum WindowFrameBound {
     UnboundedPreceding(Unbounded, Preceding),
     Preceding(#[parser(function = |e, _| boxed(e))] Box<Expr>, Preceding),
     CurrentRow(Current, Row),
-    Following(#[parser(function = |e, _| boxed(e))] Box<Expr>, Following),
     UnboundedFollowing(Unbounded, Following),
+    Following(#[parser(function = |e, _| boxed(e))] Box<Expr>, Following),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -675,11 +688,6 @@ where
                 left(14),
                 Or::parser((), options).map(BinaryOperator::Or),
                 |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
-            ),
-            postfix(
-                1,
-                As::parser((), options).then(Ident::parser((), options)),
-                |e, (r#as, ident)| Expr::Named(Box::new(e), r#as, ident),
             ),
         ))
     }

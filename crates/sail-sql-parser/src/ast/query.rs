@@ -1,12 +1,14 @@
+use std::iter::Iterator;
+
 use chumsky::extra::ParserExtra;
 use chumsky::pratt::{infix, left};
 use chumsky::prelude::choice;
-use chumsky::Parser;
+use chumsky::{IterParser, Parser};
 use sail_sql_macro::TreeParser;
 
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{DuplicateTreatment, Expr, FunctionArgument, OrderByExpr, WindowSpec};
-use crate::ast::identifier::{Ident, ObjectName};
+use crate::ast::identifier::{ColumnIdent, Ident, ObjectName, TableIdent};
 use crate::ast::keywords::{
     All, Anti, As, By, Cluster, Cross, Cube, Distinct, Except, Exclude, For, From, Full, Group,
     Having, In, Include, Inner, Intersect, Join, Lateral, Left, Limit, Minus, Name, Natural, Nulls,
@@ -185,7 +187,7 @@ pub struct ValuesClause {
 #[derive(Debug, Clone, TreeParser)]
 pub struct AliasClause {
     pub r#as: Option<As>,
-    pub table: Ident,
+    pub table: TableIdent,
     pub columns: Option<IdentList>,
 }
 
@@ -195,7 +197,15 @@ pub struct SelectClause {
     pub select: Select,
     pub quantifier: Option<DuplicateTreatment>,
     #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
-    pub projection: Sequence<NamedExpr, Comma>,
+    pub projection: Sequence<SelectExpr, Comma>,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct SelectExpr {
+    #[parser(function = |e, _| e)]
+    pub expr: Expr,
+    pub alias: Option<(Option<As>, ColumnIdent)>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -276,7 +286,7 @@ pub enum TableModifier {
 pub struct PivotClause {
     pub pivot: Pivot,
     pub left: LeftParenthesis,
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    #[parser(function = |e, o| PivotAggregateSequence::parser(e, o).map(|x| x.into()))]
     pub aggregates: Sequence<NamedExpr, Comma>,
     pub r#for: For,
     pub columns: IdentList,
@@ -284,6 +294,46 @@ pub struct PivotClause {
     #[parser(function = |e, o| compose(e, o))]
     pub values: NamedExprList,
     pub right: RightParenthesis,
+}
+
+/// A comma-separated sequence of named expressions to be used in the `PIVOT` clause,
+/// where the last expression alias cannot be the `FOR` keyword.
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+struct PivotAggregateSequence {
+    #[parser(function = |e, o| compose(e, o).then(unit(o)).repeated().collect())]
+    items: Vec<(NamedExpr, Comma)>,
+    #[parser(function = |e, _| e)]
+    last: Expr,
+    alias: Option<PivotAggregateLastAlias>,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+struct PivotAggregateLastAlias(
+    Option<As>,
+    #[parser(function = |(), o| For::parser((), o).not().rewind())] (),
+    Ident,
+);
+
+impl std::convert::From<PivotAggregateSequence> for Sequence<NamedExpr, Comma> {
+    fn from(value: PivotAggregateSequence) -> Self {
+        let PivotAggregateSequence { items, last, alias } = value;
+        let reminder = NamedExpr {
+            expr: last,
+            alias: alias.map(|PivotAggregateLastAlias(r#as, (), ident)| (r#as, ident)),
+        };
+        let (head, tail) =
+            items
+                .into_iter()
+                .rfold((reminder, Vec::new()), |(head, mut tail), (expr, comma)| {
+                    tail.push((comma, head));
+                    (expr, tail)
+                });
+        Self {
+            head: Box::new(head),
+            tail: tail.into_iter().rev().collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, TreeParser)]

@@ -5,7 +5,7 @@ use sail_sql_parser::ast::query::{
     AliasClause, ClusterByClause, DistributeByClause, FromClause, GroupByClause, GroupByModifier,
     HavingClause, IdentList, JoinCriteria, JoinOperator, LateralViewClause, LimitClause,
     LimitValue, NamedExpr, NamedExprList, NamedQuery, OffsetClause, OrderByClause, PivotClause,
-    Query, QueryBody, QueryModifier, QuerySelect, QueryTerm, SelectClause, SetOperator,
+    Query, QueryBody, QueryModifier, QuerySelect, QueryTerm, SelectClause, SelectExpr, SetOperator,
     SetQuantifier, SortByClause, TableFactor, TableFunction, TableJoin, TableModifier,
     TableWithJoins, UnpivotClause, UnpivotColumns, UnpivotNulls, ValuesClause, WhereClause,
     WindowClause, WithClause,
@@ -230,7 +230,13 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
 
     let projection = projection
         .into_items()
-        .map(from_ast_named_expression)
+        .map(|x| {
+            let SelectExpr { expr, alias } = x;
+            from_ast_named_expression(NamedExpr {
+                expr,
+                alias: alias.map(|(r#as, ident)| (r#as, ident.into())),
+            })
+        })
         .collect::<SqlResult<_>>()?;
 
     let group_by = group_by

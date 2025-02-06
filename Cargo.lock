@@ -4837,6 +4837,7 @@ dependencies = [
  "chrono-tz",
  "chumsky",
  "datafusion",
+ "either",
  "lazy_static",
  "regex",
  "sail-common",

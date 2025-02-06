@@ -7,12 +7,12 @@ use crate::ast::identifier::{Ident, ObjectName};
 use crate::ast::keywords::{
     Add, Alter, Always, Analyze, As, Cache, Cascade, Catalog, Clear, Codegen, Column, Columns,
     Comment, Cost, Create, Database, Databases, Dbproperties, Default, Drop, Exists, Explain,
-    Extended, External, False, Formatted, From, Generated, If, In, Lazy, Like, Local, Location,
-    Not, Null, Options, Or, Properties, Purge, Rename, Replace, Restrict, Schema, Schemas, Set,
-    Show, Table, Tblproperties, Temporary, Time, To, True, Uncache, Use, Using, Verbose, With,
-    Zone,
+    Extended, External, False, Formatted, From, Functions, Generated, If, In, Lazy, Like, Local,
+    Location, Not, Null, Options, Or, Properties, Purge, Rename, Replace, Restrict, Schema,
+    Schemas, Set, Show, Table, Tblproperties, Temporary, Time, To, True, Uncache, Use, Using,
+    Verbose, View, With, Zone,
 };
-use crate::ast::literal::StringLiteral;
+use crate::ast::literal::{NumberLiteral, StringLiteral};
 use crate::ast::operator::{Comma, Equals, LeftParenthesis, RightParenthesis};
 use crate::ast::query::Query;
 use crate::combinator::{compose, sequence, unit};
@@ -95,11 +95,32 @@ pub enum Statement {
         name: ObjectName,
         purge: Option<Purge>,
     },
+    CreateView {
+        create: Create,
+        view: View,
+    },
+    DropView {
+        drop: Drop,
+        view: View,
+        if_exists: Option<(If, Exists)>,
+        name: ObjectName,
+    },
+    DropFunction {
+        drop: Drop,
+        temporary: Option<Temporary>,
+        function: Functions,
+        if_exists: Option<(If, Exists)>,
+        name: ObjectName,
+    },
     Explain {
         explain: Explain,
         format: Option<ExplainFormat>,
         #[parser(function = |(_, q, _, _), _| q)]
         query: Query,
+    },
+    ShowFunctions {
+        show: Show,
+        functions: Functions,
     },
     CacheTable {
         cache: Cache,
@@ -159,7 +180,7 @@ pub struct PropertyKeyValue {
 #[derive(Debug, Clone, TreeParser)]
 pub enum PropertyValue {
     String(StringLiteral),
-    Number(StringLiteral),
+    Number(NumberLiteral),
     Boolean(Either<True, False>),
 }
 

@@ -125,7 +125,7 @@ where
                 Token {
                     value: TokenValue::String { raw, style },
                     span,
-                } => Ok(StringLiteral {
+                } if !matches!(style, StringStyle::BacktickQuoted) => Ok(StringLiteral {
                     span,
                     value: style.parse(raw),
                     style,

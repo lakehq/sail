@@ -171,11 +171,6 @@ pub(crate) fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             })
         }
         Expr::Predicate(expr, predicate) => from_ast_expression_predicate(*expr, predicate),
-        Expr::Named(expr, _, alias) => Ok(spec::Expr::Alias {
-            expr: Box::new(from_ast_expression(*expr)?),
-            name: vec![alias.value.into()],
-            metadata: None,
-        }),
     }
 }
 
@@ -188,6 +183,27 @@ pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> 
             subquery: Box::new(from_ast_query(query)?),
             negated: false,
         }),
+        AtomExpr::LambdaFunction {
+            params,
+            arrow: _,
+            body,
+        } => {
+            let arguments = match params {
+                LambdaFunctionParameters::Single(ident) => vec![ident],
+                LambdaFunctionParameters::Multiple(_, idents, _) => idents.into_items().collect(),
+            };
+            let arguments = arguments
+                .into_iter()
+                .map(|arg| spec::UnresolvedNamedLambdaVariable {
+                    name: spec::ObjectName::new_unqualified(arg.value.into()),
+                })
+                .collect();
+            let function = from_ast_expression(*body)?;
+            Ok(spec::Expr::LambdaFunction {
+                arguments,
+                function: Box::new(function),
+            })
+        }
         AtomExpr::Nested(_, e, _) => from_ast_expression(*e),
         AtomExpr::Tuple(_, expressions, _) => {
             let arguments = expressions
@@ -347,6 +363,18 @@ pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> 
             is_distinct: false,
             is_user_defined_function: false,
         }),
+        AtomExpr::CurrentTimestamp(_) => Ok(spec::Expr::UnresolvedFunction {
+            function_name: "current_timestamp".to_string(),
+            arguments: vec![],
+            is_distinct: false,
+            is_user_defined_function: false,
+        }),
+        AtomExpr::CurrentDate(_) => Ok(spec::Expr::UnresolvedFunction {
+            function_name: "current_date".to_string(),
+            arguments: vec![],
+            is_distinct: false,
+            is_user_defined_function: false,
+        }),
         AtomExpr::Timestamp(_, _, value, _) | AtomExpr::TimestampLiteral(_, value) => {
             Ok(spec::Expr::Literal(parse_timestamp_string(&value.value)?))
         }
@@ -398,12 +426,10 @@ pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> 
                                 } = x;
                                 partition_by
                                     .into_items()
-                                    .map(|x| spec::Expr::UnresolvedAttribute {
-                                        name: spec::ObjectName::new_unqualified(x.value.into()),
-                                        plan_id: None,
-                                    })
-                                    .collect::<Vec<_>>()
+                                    .map(from_ast_expression)
+                                    .collect::<SqlResult<Vec<_>>>()
                             })
+                            .transpose()?
                             .unwrap_or_default();
                         let order_spec = order_by
                             .map(|x| {
@@ -442,27 +468,6 @@ pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> 
                     is_user_defined_function: false,
                 })
             }
-        }
-        AtomExpr::LambdaFunction {
-            params,
-            arrow: _,
-            body,
-        } => {
-            let arguments = match params {
-                LambdaFunctionParameters::Single(ident) => vec![ident],
-                LambdaFunctionParameters::Multiple(_, idents, _) => idents.into_items().collect(),
-            };
-            let arguments = arguments
-                .into_iter()
-                .map(|arg| spec::UnresolvedNamedLambdaVariable {
-                    name: spec::ObjectName::new_unqualified(arg.value.into()),
-                })
-                .collect();
-            let function = from_ast_expression(*body)?;
-            Ok(spec::Expr::LambdaFunction {
-                arguments,
-                function: Box::new(function),
-            })
         }
         AtomExpr::Wildcard(_) => Ok(spec::Expr::UnresolvedStar {
             target: None,

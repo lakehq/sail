@@ -1,7 +1,11 @@
+use either::Either;
 use sail_common::spec;
+use sail_sql_parser::ast::identifier::ObjectName;
+use sail_sql_parser::ast::keywords::{Cascade, Restrict};
 use sail_sql_parser::ast::statement::{ExplainFormat, Statement};
 
-use crate::error::SqlResult;
+use crate::error::{SqlError, SqlResult};
+use crate::expression::from_ast_object_name;
 use crate::query::from_ast_query;
 
 pub(crate) fn from_ast_statements(statements: Vec<Statement>) -> SqlResult<Vec<spec::Plan>> {
@@ -14,16 +18,121 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             let plan = from_ast_query(query)?;
             Ok(spec::Plan::Query(plan))
         }
-        Statement::SetCatalog { .. } => todo!(),
-        Statement::UseDatabase { .. } => todo!(),
-        Statement::CreateDatabase { .. } => todo!(),
-        Statement::AlterDatabase { .. } => todo!(),
-        Statement::DropDatabase { .. } => todo!(),
-        Statement::ShowDatabases { .. } => todo!(),
-        Statement::CreateTable { .. } => todo!(),
-        Statement::ReplaceTable { .. } => todo!(),
-        Statement::AlterTable { .. } => todo!(),
-        Statement::DropTable { .. } => todo!(),
+        Statement::SetCatalog {
+            set: _,
+            catalog: _,
+            name,
+        } => {
+            let name = match name {
+                Either::Left(x) => x.value,
+                Either::Right(x) => x.value,
+            };
+            let node = spec::CommandNode::SetCurrentCatalog {
+                catalog_name: name.into(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::UseDatabase {
+            r#use: _,
+            database: _,
+            name,
+        } => {
+            let ObjectName(name) = name;
+            if !name.tail.is_empty() {
+                return Err(SqlError::unsupported("qualified name for USE DATABASE"));
+            }
+            let node = spec::CommandNode::SetCurrentDatabase {
+                database_name: name.head.value.into(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::CreateDatabase {
+            create: _,
+            database: _,
+            name,
+            if_not_exists,
+            // TODO: support create database clauses
+            clauses: _,
+        } => {
+            let node = spec::CommandNode::CreateDatabase {
+                database: from_ast_object_name(name)?,
+                definition: spec::DatabaseDefinition {
+                    if_not_exists: if_not_exists.is_some(),
+                    comment: None,
+                    location: None,
+                    properties: Default::default(),
+                },
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::AlterDatabase { .. } => Err(SqlError::todo("ALTER DATABASE")),
+        Statement::DropDatabase {
+            drop: _,
+            database: _,
+            if_exists,
+            name,
+            specifier,
+        } => {
+            let cascade = match specifier {
+                Some(Either::Left(Restrict { .. })) => {
+                    return Err(SqlError::unsupported("RESTRICT in DROP DATABASE"))
+                }
+                Some(Either::Right(Cascade { .. })) => true,
+                None => false,
+            };
+            let node = spec::CommandNode::DropDatabase {
+                database: from_ast_object_name(name)?,
+                if_exists: if_exists.is_some(),
+                cascade,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ShowDatabases { .. } => Err(SqlError::todo("SHOW DATABASES")),
+        Statement::CreateTable { .. } => Err(SqlError::todo("CREATE TABLE")),
+        Statement::ReplaceTable { .. } => Err(SqlError::todo("REPLACE TABLE")),
+        Statement::AlterTable { .. } => Err(SqlError::todo("ALTER TABLE")),
+        Statement::DropTable {
+            drop: _,
+            table: _,
+            if_exists,
+            name,
+            purge,
+        } => {
+            let node = spec::CommandNode::DropTable {
+                table: from_ast_object_name(name)?,
+                if_exists: if_exists.is_some(),
+                purge: purge.is_some(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::CreateView { .. } => Err(SqlError::todo("CREATE VIEW")),
+        Statement::DropView {
+            drop: _,
+            view: _,
+            if_exists,
+            name,
+        } => {
+            let node = spec::CommandNode::DropView {
+                view: from_ast_object_name(name)?,
+                kind: None,
+                if_exists: if_exists.is_some(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::DropFunction {
+            drop: _,
+            temporary,
+            function: _,
+            if_exists,
+            name,
+        } => {
+            let node = spec::CommandNode::DropFunction {
+                function: from_ast_object_name(name)?,
+                if_exists: if_exists.is_some(),
+                is_temporary: temporary.is_some(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::Explain {
             explain: _,
             format,
@@ -31,17 +140,17 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
         } => {
             let mode = from_ast_explain_format(format)?;
             let query = from_ast_query(query)?;
-            Ok(spec::Plan::Command(spec::CommandPlan::new(
-                spec::CommandNode::Explain {
-                    mode,
-                    input: Box::new(query),
-                },
-            )))
+            let node = spec::CommandNode::Explain {
+                mode,
+                input: Box::new(query),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::CacheTable { .. } => todo!(),
-        Statement::UncacheTable { .. } => todo!(),
-        Statement::ClearCache { .. } => todo!(),
-        Statement::SetTimeZone { .. } => todo!(),
+        Statement::ShowFunctions { .. } => Err(SqlError::todo("SHOW FUNCTIONS")),
+        Statement::CacheTable { .. } => Err(SqlError::todo("CACHE TABLE")),
+        Statement::UncacheTable { .. } => Err(SqlError::todo("UNCACHE TABLE")),
+        Statement::ClearCache { .. } => Err(SqlError::todo("CLEAR CACHE")),
+        Statement::SetTimeZone { .. } => Err(SqlError::todo("SET TIME ZONE")),
     }
 }
 

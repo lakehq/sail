@@ -14,14 +14,14 @@ use lazy_static::lazy_static;
 use sail_common::spec;
 use sail_sql_parser::ast::data_type::{IntervalDayTimeUnit, IntervalYearMonthUnit};
 use sail_sql_parser::ast::expression::{
-    AtomExpr, Expr, IntervalExpr, IntervalQualifier, IntervalUnit, IntervalValueWithUnit,
-    UnaryOperator,
+    AtomExpr, Expr, IntervalExpr, IntervalLiteral, IntervalQualifier, IntervalUnit,
+    IntervalValueWithUnit, UnaryOperator,
 };
 use sail_sql_parser::ast::literal::{NumberLiteral, StringLiteral};
 use {chrono, chrono_tz};
 
 use crate::error::{SqlError, SqlResult};
-use crate::parser::parse_interval_expression;
+use crate::parser::parse_interval_literal;
 
 lazy_static! {
     static ref BINARY_REGEX: regex::Regex =
@@ -238,95 +238,54 @@ impl TryFrom<LiteralValue<Signed<IntervalExpr>>> for spec::Literal {
     fn try_from(literal: LiteralValue<Signed<IntervalExpr>>) -> SqlResult<spec::Literal> {
         let negated = literal.0.is_negative();
         let interval = literal.0.into_inner();
-        let error = || SqlError::invalid(format!("interval: {:?}", interval));
         match interval.clone() {
             IntervalExpr::Standard { value, qualifier } => {
-                let signed = LiteralValue::<Signed<String>>::try_from(*value)?.0;
-                let negated = signed.is_negative() ^ negated;
-                let value = signed.into_inner();
-                match qualifier {
-                    IntervalQualifier::YearMonth(IntervalYearMonthUnit::Year(_), None) => {
-                        parse_interval_year_month_string(&value, negated, &INTERVAL_YEAR_REGEX)
-                    }
-                    IntervalQualifier::YearMonth(
-                        IntervalYearMonthUnit::Year(_),
-                        Some((_, IntervalYearMonthUnit::Month(_))),
-                    ) => parse_interval_year_month_string(
-                        &value,
-                        negated,
-                        &INTERVAL_YEAR_TO_MONTH_REGEX,
-                    ),
-                    IntervalQualifier::YearMonth(IntervalYearMonthUnit::Month(_), None) => {
-                        parse_interval_year_month_string(&value, negated, &INTERVAL_MONTH_REGEX)
-                    }
-                    IntervalQualifier::DayTime(IntervalDayTimeUnit::Day(_), None) => {
-                        parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_REGEX)
-                    }
-                    IntervalQualifier::DayTime(
-                        IntervalDayTimeUnit::Day(_),
-                        Some((_, IntervalDayTimeUnit::Hour(_))),
-                    ) => {
-                        parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_TO_HOUR_REGEX)
-                    }
-                    IntervalQualifier::DayTime(
-                        IntervalDayTimeUnit::Day(_),
-                        Some((_, IntervalDayTimeUnit::Minute(_))),
-                    ) => parse_interval_day_time_string(
-                        &value,
-                        negated,
-                        &INTERVAL_DAY_TO_MINUTE_REGEX,
-                    ),
-                    IntervalQualifier::DayTime(
-                        IntervalDayTimeUnit::Day(_),
-                        Some((_, IntervalDayTimeUnit::Second(_))),
-                    ) => parse_interval_day_time_string(
-                        &value,
-                        negated,
-                        &INTERVAL_DAY_TO_SECOND_REGEX,
-                    ),
-                    IntervalQualifier::DayTime(IntervalDayTimeUnit::Hour(_), None) => {
-                        parse_interval_day_time_string(&value, negated, &INTERVAL_HOUR_REGEX)
-                    }
-                    IntervalQualifier::DayTime(
-                        IntervalDayTimeUnit::Hour(_),
-                        Some((_, IntervalDayTimeUnit::Minute(_))),
-                    ) => parse_interval_day_time_string(
-                        &value,
-                        negated,
-                        &INTERVAL_HOUR_TO_MINUTE_REGEX,
-                    ),
-                    IntervalQualifier::DayTime(
-                        IntervalDayTimeUnit::Hour(_),
-                        Some((_, IntervalDayTimeUnit::Second(_))),
-                    ) => parse_interval_day_time_string(
-                        &value,
-                        negated,
-                        &INTERVAL_HOUR_TO_SECOND_REGEX,
-                    ),
-                    IntervalQualifier::DayTime(IntervalDayTimeUnit::Minute(_), None) => {
-                        parse_interval_day_time_string(&value, negated, &INTERVAL_MINUTE_REGEX)
-                    }
-                    IntervalQualifier::DayTime(
-                        IntervalDayTimeUnit::Minute(_),
-                        Some((_, IntervalDayTimeUnit::Second(_))),
-                    ) => parse_interval_day_time_string(
-                        &value,
-                        negated,
-                        &INTERVAL_MINUTE_TO_SECOND_REGEX,
-                    ),
-                    IntervalQualifier::DayTime(IntervalDayTimeUnit::Second(_), None) => {
-                        parse_interval_day_time_string(&value, negated, &INTERVAL_SECOND_REGEX)
-                    }
-                    _ => Err(error()),
-                }
+                let kind = from_ast_interval_qualifier(qualifier)?;
+                parse_standard_interval(*value, kind, negated)
             }
             IntervalExpr::MultiUnit {
                 head,
                 barrier: _,
                 tail,
             } => {
-                let values = once(*head).chain(tail).collect();
-                parse_multi_unit_interval(values, negated)
+                if tail.is_empty() {
+                    match head.unit {
+                        IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
+                            parse_standard_interval(head.value, StandardIntervalKind::Year, negated)
+                        }
+                        IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
+                            parse_standard_interval(
+                                head.value,
+                                StandardIntervalKind::Month,
+                                negated,
+                            )
+                        }
+                        IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
+                            parse_standard_interval(head.value, StandardIntervalKind::Day, negated)
+                        }
+                        IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
+                            parse_standard_interval(head.value, StandardIntervalKind::Hour, negated)
+                        }
+                        IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
+                            parse_standard_interval(
+                                head.value,
+                                StandardIntervalKind::Minute,
+                                negated,
+                            )
+                        }
+                        IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
+                            parse_standard_interval(
+                                head.value,
+                                StandardIntervalKind::Second,
+                                negated,
+                            )
+                        }
+                        _ => parse_multi_unit_interval(vec![*head], negated),
+                    }
+                } else {
+                    let values = once(*head).chain(tail).collect();
+                    parse_multi_unit_interval(values, negated)
+                }
             }
             IntervalExpr::Literal(value) => {
                 parse_unqualified_interval_string(&value.value, negated)
@@ -813,6 +772,125 @@ fn parse_interval_day_time_string(
     Ok(microseconds_to_interval(n))
 }
 
+enum StandardIntervalKind {
+    Year,
+    YearToMonth,
+    Month,
+    Day,
+    DayToHour,
+    DayToMinute,
+    DayToSecond,
+    Hour,
+    HourToMinute,
+    HourToSecond,
+    Minute,
+    MinuteToSecond,
+    Second,
+}
+
+fn from_ast_interval_qualifier(qualifier: IntervalQualifier) -> SqlResult<StandardIntervalKind> {
+    match qualifier {
+        IntervalQualifier::YearMonth(IntervalYearMonthUnit::Year(_), None) => {
+            Ok(StandardIntervalKind::Year)
+        }
+        IntervalQualifier::YearMonth(
+            IntervalYearMonthUnit::Year(_),
+            Some((_, IntervalYearMonthUnit::Month(_))),
+        ) => Ok(StandardIntervalKind::YearToMonth),
+        IntervalQualifier::YearMonth(IntervalYearMonthUnit::Month(_), None) => {
+            Ok(StandardIntervalKind::Month)
+        }
+        IntervalQualifier::DayTime(IntervalDayTimeUnit::Day(_), None) => {
+            Ok(StandardIntervalKind::Day)
+        }
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Day(_),
+            Some((_, IntervalDayTimeUnit::Hour(_))),
+        ) => Ok(StandardIntervalKind::DayToHour),
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Day(_),
+            Some((_, IntervalDayTimeUnit::Minute(_))),
+        ) => Ok(StandardIntervalKind::DayToMinute),
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Day(_),
+            Some((_, IntervalDayTimeUnit::Second(_))),
+        ) => Ok(StandardIntervalKind::DayToSecond),
+        IntervalQualifier::DayTime(IntervalDayTimeUnit::Hour(_), None) => {
+            Ok(StandardIntervalKind::Hour)
+        }
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Hour(_),
+            Some((_, IntervalDayTimeUnit::Minute(_))),
+        ) => Ok(StandardIntervalKind::HourToMinute),
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Hour(_),
+            Some((_, IntervalDayTimeUnit::Second(_))),
+        ) => Ok(StandardIntervalKind::HourToSecond),
+        IntervalQualifier::DayTime(IntervalDayTimeUnit::Minute(_), None) => {
+            Ok(StandardIntervalKind::Minute)
+        }
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Minute(_),
+            Some((_, IntervalDayTimeUnit::Second(_))),
+        ) => Ok(StandardIntervalKind::MinuteToSecond),
+        IntervalQualifier::DayTime(IntervalDayTimeUnit::Second(_), None) => {
+            Ok(StandardIntervalKind::Second)
+        }
+        _ => Err(SqlError::invalid("interval qualifier")),
+    }
+}
+
+fn parse_standard_interval(
+    value: Expr,
+    kind: StandardIntervalKind,
+    negated: bool,
+) -> SqlResult<spec::Literal> {
+    let signed = LiteralValue::<Signed<String>>::try_from(value)?.0;
+    let negated = signed.is_negative() ^ negated;
+    let value = signed.into_inner();
+    match kind {
+        StandardIntervalKind::Year => {
+            parse_interval_year_month_string(&value, negated, &INTERVAL_YEAR_REGEX)
+        }
+        StandardIntervalKind::YearToMonth => {
+            parse_interval_year_month_string(&value, negated, &INTERVAL_YEAR_TO_MONTH_REGEX)
+        }
+        StandardIntervalKind::Month => {
+            parse_interval_year_month_string(&value, negated, &INTERVAL_MONTH_REGEX)
+        }
+        StandardIntervalKind::Day => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_REGEX)
+        }
+        StandardIntervalKind::DayToHour => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_TO_HOUR_REGEX)
+        }
+        StandardIntervalKind::DayToMinute => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_TO_MINUTE_REGEX)
+        }
+        StandardIntervalKind::DayToSecond => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_TO_SECOND_REGEX)
+        }
+        StandardIntervalKind::Hour => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_HOUR_REGEX)
+        }
+        StandardIntervalKind::HourToMinute => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_HOUR_TO_MINUTE_REGEX)
+        }
+        StandardIntervalKind::HourToSecond => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_HOUR_TO_SECOND_REGEX)
+        }
+        StandardIntervalKind::Minute => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_MINUTE_REGEX)
+        }
+        StandardIntervalKind::MinuteToSecond => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_MINUTE_TO_SECOND_REGEX)
+        }
+        StandardIntervalKind::Second => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_SECOND_REGEX)
+        }
+    }
+}
+
 fn parse_multi_unit_interval(
     values: Vec<IntervalValueWithUnit>,
     negated: bool,
@@ -954,7 +1032,10 @@ pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
 }
 
 fn parse_unqualified_interval_string(s: &str, negated: bool) -> SqlResult<spec::Literal> {
-    let interval = parse_interval_expression(s)?;
+    let IntervalLiteral {
+        interval: _,
+        value: interval,
+    } = parse_interval_literal(s)?;
     let value = if negated {
         Signed::Negative(interval)
     } else {

@@ -3,7 +3,7 @@ use chumsky::prelude::{end, Recursive};
 use chumsky::{IterParser, Parser};
 
 use crate::ast::data_type::DataType;
-use crate::ast::expression::{Expr, IntervalExpr};
+use crate::ast::expression::{Expr, IntervalLiteral};
 use crate::ast::identifier::{ObjectName, QualifiedWildcard};
 use crate::ast::operator::Semicolon;
 use crate::ast::query::{NamedExpr, Query};
@@ -13,9 +13,9 @@ use crate::options::ParserOptions;
 use crate::token::Token;
 use crate::tree::TreeParser;
 
-pub fn create_statement_parser<'a, 'opt, E>(
+fn statement<'a, 'opt, E>(
     options: &'opt ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], Vec<Statement>, E> + Clone
+) -> impl Parser<'a, &'a [Token<'a>], Statement, E> + Clone
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
@@ -45,18 +45,9 @@ where
     data_type.define(DataType::parser(data_type.clone(), options));
 
     statement
-        .padded_by(
-            whitespace()
-                .ignored()
-                .or(Semicolon::parser((), options).ignored())
-                .repeated(),
-        )
-        .repeated()
-        .collect()
-        .then_ignore(end())
 }
 
-pub fn create_data_type_parser<'a, 'opt, E>(
+fn data_type<'a, 'opt, E>(
     options: &'opt ParserOptions,
 ) -> impl Parser<'a, &'a [Token<'a>], DataType, E> + Clone
 where
@@ -65,30 +56,30 @@ where
 {
     let mut data_type = Recursive::declare();
     data_type.define(DataType::parser(data_type.clone(), options));
-    data_type.then_ignore(end())
+    data_type
 }
 
-pub fn create_object_name_parser<'a, 'opt, E>(
+fn object_name<'a, 'opt, E>(
     options: &'opt ParserOptions,
 ) -> impl Parser<'a, &'a [Token<'a>], ObjectName, E> + Clone
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {
-    ObjectName::parser((), options).then_ignore(end())
+    ObjectName::parser((), options)
 }
 
-pub fn create_qualified_wildcard_parser<'a, 'opt, E>(
+fn qualified_wildcard<'a, 'opt, E>(
     options: &'opt ParserOptions,
 ) -> impl Parser<'a, &'a [Token<'a>], QualifiedWildcard, E> + Clone
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {
-    QualifiedWildcard::parser((), options).then_ignore(end())
+    QualifiedWildcard::parser((), options)
 }
 
-pub fn create_expression_parser<'a, 'opt, E>(
+fn expression<'a, 'opt, E>(
     options: &'opt ParserOptions,
 ) -> impl Parser<'a, &'a [Token<'a>], Expr, E> + Clone
 where
@@ -109,30 +100,77 @@ where
     ));
     data_type.define(DataType::parser(data_type.clone(), options));
 
-    expression.then_ignore(end())
+    expression
 }
 
-pub fn create_named_expression_parser<'a, 'opt, E>(
+fn named_expression<'a, 'opt, E>(
     options: &'opt ParserOptions,
 ) -> impl Parser<'a, &'a [Token<'a>], NamedExpr, E> + Clone
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {
-    let expression = create_expression_parser(options);
-    NamedExpr::parser(expression, options).then_ignore(end())
+    NamedExpr::parser(expression(options), options)
 }
 
-pub fn create_interval_expression_parser<'a, 'opt, E>(
+fn interval_literal<'a, 'opt, E>(
     options: &'opt ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], IntervalExpr, E> + Clone
+) -> impl Parser<'a, &'a [Token<'a>], IntervalLiteral, E> + Clone
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
 {
-    let expression = create_expression_parser(options);
-    IntervalExpr::parser(expression, options).then_ignore(end())
+    IntervalLiteral::parser(expression(options), options)
 }
+
+pub fn create_parser<'a, 'opt, E>(
+    options: &'opt ParserOptions,
+) -> impl Parser<'a, &'a [Token<'a>], Vec<Statement>, E> + Clone
+where
+    'opt: 'a,
+    E: ParserExtra<'a, &'a [Token<'a>]>,
+{
+    statement(options)
+        .padded_by(
+            whitespace()
+                .or(Semicolon::parser((), options).ignored())
+                .repeated(),
+        )
+        .repeated()
+        .collect()
+        .then_ignore(end())
+}
+
+macro_rules! define_sub_parser {
+    ($name:ident, $type:ty, $parse:ident $(,)?) => {
+        pub fn $name<'a, 'opt, E>(
+            options: &'opt ParserOptions,
+        ) -> impl Parser<'a, &'a [Token<'a>], $type, E> + Clone
+        where
+            'opt: 'a,
+            E: ParserExtra<'a, &'a [Token<'a>]>,
+        {
+            $parse(options)
+                .padded_by(whitespace().repeated())
+                .then_ignore(end())
+        }
+    };
+}
+
+define_sub_parser!(create_data_type_parser, DataType, data_type);
+define_sub_parser!(create_object_name_parser, ObjectName, object_name);
+define_sub_parser!(
+    create_qualified_wildcard_parser,
+    QualifiedWildcard,
+    qualified_wildcard,
+);
+define_sub_parser!(create_expression_parser, Expr, expression);
+define_sub_parser!(create_named_expression_parser, NamedExpr, named_expression);
+define_sub_parser!(
+    create_interval_literal_parser,
+    IntervalLiteral,
+    interval_literal,
+);
 
 #[cfg(test)]
 mod tests {
@@ -143,7 +181,7 @@ mod tests {
     use crate::ast::statement::Statement;
     use crate::lexer::create_lexer;
     use crate::options::ParserOptions;
-    use crate::parser::create_statement_parser;
+    use crate::parser::create_parser;
 
     type Extra<'a, T> = chumsky::extra::Err<Rich<'a, T>>;
 
@@ -153,7 +191,7 @@ mod tests {
         let options = ParserOptions::default();
         let lexer = create_lexer::<Extra<_>>(&options);
         let tokens = lexer.parse(sql).unwrap();
-        let parser = create_statement_parser::<Extra<_>>(&options);
+        let parser = create_parser::<Extra<_>>(&options);
         let tree = parser.parse(&tokens).unwrap();
         assert!(matches!(
             tree.as_slice(),

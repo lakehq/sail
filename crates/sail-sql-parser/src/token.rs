@@ -400,6 +400,168 @@ impl Keyword {
     pub fn get(value: &str) -> Option<Self> {
         KEYWORD_MAP.get(value.to_uppercase().as_str()).cloned()
     }
+
+    /// Whether the keyword is a reserved keyword in ANSI mode SQL parsing.
+    /// Reserved keywords cannot be used as identifiers unless quoted.
+    ///
+    /// Note that Spark default mode SQL parsing does not have reserved keywords.
+    /// All keywords are either "non-reserved" or "strict-non-reserved".
+    /// All keywords can be used as identifiers without quoting. For example,
+    /// `select from from from values 1 as t(from)` or `select 1 union union select 2`
+    /// are valid SQL statements in Spark. Spark uses ANTLR4 to generate a parser
+    /// that uses Adaptive LL(*) parsing, which can handle these ambiguous cases.
+    /// This is not possible in PEG (parsing expression grammar) parsers supported by `chumsky`.
+    /// `sqlparser-rs` does not support such cases either.
+    ///
+    /// We allow reserved keywords to be used as identifiers when there is no ambiguity,
+    /// to avoid the grammar being too restrictive. For example, we would like to parse
+    /// `select any(c) from values true AS t(c)` even though `any` is a reserved keyword.
+    /// (This query is invalid when `spark.sql.ansi.enabled` and `spark.sql.ansi.enforceReservedKeywords`
+    /// are both set to `true` in Spark.)
+    ///
+    /// However, there are cases when ambiguity does arise (e.g. `select <expr> [[as] <alias>]`).
+    /// In such cases, we must assume that reserved keywords cannot be identifiers when unquoted,
+    /// so that we can make local parsing decisions with limited lookahead.
+    ///
+    /// See also:
+    /// * <https://spark.apache.org/docs/latest/sql-ref-ansi-compliance.html>
+    /// * <https://www.antlr.org/papers/allstar-techreport.pdf>
+    pub fn is_reserved_in_ansi_mode(&self) -> bool {
+        matches!(
+            self,
+            Self::All
+                | Self::And
+                | Self::Any
+                | Self::As
+                | Self::Authorization
+                | Self::Both
+                | Self::Case
+                | Self::Cast
+                | Self::Check
+                | Self::Collate
+                | Self::Column
+                | Self::Constraint
+                | Self::Create
+                | Self::Cross
+                | Self::CurrentDate
+                | Self::CurrentTime
+                | Self::CurrentTimestamp
+                | Self::CurrentUser
+                | Self::Distinct
+                | Self::Else
+                | Self::End
+                | Self::Escape
+                | Self::Except
+                | Self::False
+                | Self::Fetch
+                | Self::Filter
+                | Self::For
+                | Self::Foreign
+                | Self::From
+                | Self::Full
+                | Self::Grant
+                | Self::Group
+                | Self::Having
+                | Self::In
+                | Self::Inner
+                | Self::Intersect
+                | Self::Into
+                | Self::Is
+                | Self::Join
+                | Self::Lateral
+                | Self::Leading
+                | Self::Left
+                | Self::Natural
+                | Self::Not
+                | Self::Null
+                | Self::Offset
+                | Self::On
+                | Self::Only
+                | Self::Or
+                | Self::Order
+                | Self::Outer
+                | Self::Overlaps
+                | Self::PercentileCont
+                | Self::PercentileDisc
+                | Self::Primary
+                | Self::References
+                | Self::Right
+                | Self::Select
+                | Self::SessionUser
+                | Self::Some
+                | Self::Table
+                | Self::Then
+                | Self::Time
+                | Self::To
+                | Self::Trailing
+                | Self::Union
+                | Self::Unique
+                | Self::Unknown
+                | Self::User
+                | Self::Using
+                | Self::When
+                | Self::Where
+                | Self::With
+                | Self::Within
+        )
+    }
+
+    /// Whether the keyword is reserved for use as a column alias.
+    /// These keywords cannot be used as column aliases unless quoted.
+    /// This list is adapted from `sqlparser-rs`.
+    pub fn is_reserved_for_column_alias(&self) -> bool {
+        matches!(
+            self,
+            Self::Analyze
+                | Self::Cluster
+                | Self::Distribute
+                | Self::End
+                | Self::Except
+                | Self::Explain
+                | Self::Fetch
+                | Self::From
+                | Self::Group
+                | Self::Having
+                | Self::Intersect
+                | Self::Into
+                | Self::Lateral
+                | Self::Limit
+                | Self::Offset
+                | Self::Order
+                | Self::Select
+                | Self::Sort
+                | Self::Union
+                | Self::View
+                | Self::Where
+                | Self::With
+        )
+    }
+
+    /// Whether the keyword is reserved for use as a table alias.
+    /// These keywords cannot be used as table aliases unless quoted.
+    /// This is the same list of "strict-non-reserved" keywords in Spark SQL
+    /// default mode.
+    pub fn is_reserved_for_table_alias(&self) -> bool {
+        matches!(
+            self,
+            Self::Anti
+                | Self::Cross
+                | Self::Except
+                | Self::Full
+                | Self::Inner
+                | Self::Intersect
+                | Self::Join
+                | Self::Lateral
+                | Self::Left
+                | Self::Minus
+                | Self::Natural
+                | Self::On
+                | Self::Right
+                | Self::Semi
+                | Self::Union
+                | Self::Using
+        )
+    }
 }
 
 #[cfg(test)]

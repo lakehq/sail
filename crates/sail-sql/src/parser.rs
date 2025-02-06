@@ -1,13 +1,13 @@
 use chumsky::Parser;
 use sail_common::spec;
-use sail_sql_parser::ast::expression::IntervalExpr;
+use sail_sql_parser::ast::expression::IntervalLiteral;
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
 use sail_sql_parser::lexer::create_lexer;
 use sail_sql_parser::options::ParserOptions;
 use sail_sql_parser::parser::{
-    create_data_type_parser, create_expression_parser, create_interval_expression_parser,
-    create_named_expression_parser, create_object_name_parser, create_qualified_wildcard_parser,
-    create_statement_parser,
+    create_data_type_parser, create_expression_parser, create_interval_literal_parser,
+    create_named_expression_parser, create_object_name_parser, create_parser,
+    create_qualified_wildcard_parser,
 };
 
 use crate::data_type::from_ast_data_type;
@@ -40,7 +40,7 @@ pub fn parse_expression(s: &str) -> SqlResult<spec::Expr> {
 }
 
 pub fn parse_statements(s: &str) -> SqlResult<Vec<spec::Plan>> {
-    from_ast_statements(parse!(s, create_statement_parser))
+    from_ast_statements(parse!(s, create_parser))
 }
 
 pub fn parse_one_statement(s: &str) -> SqlResult<spec::Plan> {
@@ -69,6 +69,6 @@ pub fn parse_named_expression(s: &str) -> SqlResult<spec::Expr> {
     from_ast_named_expression(parse!(s, create_named_expression_parser))
 }
 
-pub(crate) fn parse_interval_expression(s: &str) -> SqlResult<IntervalExpr> {
-    Ok(parse!(s, create_interval_expression_parser))
+pub(crate) fn parse_interval_literal(s: &str) -> SqlResult<IntervalLiteral> {
+    Ok(parse!(s, create_interval_literal_parser))
 }
