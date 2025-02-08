@@ -5,7 +5,6 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
 use datafusion_common::{plan_err, ExprSchema, Result};
-use datafusion_expr::type_coercion::binary::get_wider_type;
 use datafusion_expr::{ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions_nested::concat::ArrayConcat;
 
@@ -41,7 +40,7 @@ impl ScalarUDFImpl for SparkConcat {
         &self.signature
     }
 
-    /// [Credit]: <https://github.com/apache/datafusion/blob/7b2284c8a0b49234e9607bfef10d73ef788d9458/datafusion/functions-nested/src/concat.rs#L274-L301>
+    /// [Credit]: <https://github.com/apache/datafusion/blob/7ccc6d7c55ae9dbcb7dee031f394bf11a03000ba/datafusion/functions-nested/src/concat.rs#L276-L310>
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types
             .iter()
@@ -56,7 +55,15 @@ impl ScalarUDFImpl for SparkConcat {
                             let dims = list_ndims(arg_type);
                             expr_type = match max_dims.cmp(&dims) {
                                 Ordering::Greater => expr_type,
-                                Ordering::Equal => get_wider_type(&expr_type, arg_type)?,
+                                Ordering::Equal => {
+                                    if expr_type == DataType::Null {
+                                        arg_type.clone()
+                                    } else if !expr_type.equals_datatype(arg_type) {
+                                        return plan_err!("It is not possible to concatenate arrays of different types. Expected: {expr_type}, got: {arg_type}");
+                                    } else {
+                                        expr_type
+                                    }
+                                }
                                 Ordering::Less => {
                                     max_dims = dims;
                                     arg_type.clone()

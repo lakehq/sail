@@ -6,13 +6,16 @@ use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+#[allow(deprecated)]
 use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
+use datafusion::datasource::physical_plan::{ArrowSource, JsonSource};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
+#[allow(deprecated)]
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
@@ -227,6 +230,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let sort_information =
                     self.try_decode_lex_orderings(&sort_information, registry, &schema)?;
                 Ok(Arc::new(
+                    #[allow(deprecated)]
                     MemoryExec::try_new(&partitions, Arc::new(schema), projection)?
                         .with_show_sizes(show_sizes)
                         .try_with_sort_information(sort_information)?,
@@ -249,9 +253,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &self.try_decode_message(&base_config)?,
                     registry,
                     self,
+                    Arc::new(JsonSource::new()), // TODO: Look into configuring this if needed
                 )?;
                 let file_compression_type: FileCompressionType =
                     self.try_decode_file_compression_type(file_compression_type)?;
+                #[allow(deprecated)]
                 Ok(Arc::new(NdJsonExec::new(
                     base_config,
                     file_compression_type,
@@ -262,7 +268,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &self.try_decode_message(&base_config)?,
                     registry,
                     self,
+                    Arc::new(ArrowSource::default()), // TODO: Look into configuring this if needed
                 )?;
+                #[allow(deprecated)]
                 Ok(Arc::new(ArrowExec::new(base_config)))
             }
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {

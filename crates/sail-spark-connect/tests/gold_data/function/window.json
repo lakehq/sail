@@ -71,7 +71,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The function expected zero argument but received 1 No function matches the given name and argument types 'dense_rank(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdense_rank(NullAry())"
+        "failure": "error in DataFusion: Error during planning: The function 'dense_rank' expected zero argument but received 1 No function matches the given name and argument types 'dense_rank(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdense_rank(NullAry())"
       }
     },
     {
@@ -256,7 +256,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The function expected zero argument but received 1 No function matches the given name and argument types 'percent_rank(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpercent_rank(NullAry())"
+        "failure": "error in DataFusion: Error during planning: The function 'percent_rank' expected zero argument but received 1 No function matches the given name and argument types 'percent_rank(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpercent_rank(NullAry())"
       }
     },
     {
@@ -293,7 +293,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: The function expected zero argument but received 1 No function matches the given name and argument types 'rank(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\trank(NullAry())"
+        "failure": "error in DataFusion: Error during planning: The function 'rank' expected zero argument but received 1 No function matches the given name and argument types 'rank(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\trank(NullAry())"
       }
     },
     {
