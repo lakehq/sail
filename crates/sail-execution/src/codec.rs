@@ -6,16 +6,20 @@ use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+#[allow(deprecated)]
 use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
+use datafusion::datasource::physical_plan::{ArrowSource, JsonSource};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
+#[allow(deprecated)]
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
+#[allow(deprecated)]
 use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
@@ -226,6 +230,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let sort_information =
                     self.try_decode_lex_orderings(&sort_information, registry, &schema)?;
                 Ok(Arc::new(
+                    #[allow(deprecated)]
                     MemoryExec::try_new(&partitions, Arc::new(schema), projection)?
                         .with_show_sizes(show_sizes)
                         .try_with_sort_information(sort_information)?,
@@ -234,6 +239,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
                 let schema = self.try_decode_schema(&schema)?;
                 let data = read_record_batches(&data)?;
+                #[allow(deprecated)]
                 Ok(Arc::new(ValuesExec::try_new_from_batches(
                     Arc::new(schema),
                     data,
@@ -247,9 +253,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &self.try_decode_message(&base_config)?,
                     registry,
                     self,
+                    Arc::new(JsonSource::new()), // TODO: Look into configuring this if needed
                 )?;
                 let file_compression_type: FileCompressionType =
                     self.try_decode_file_compression_type(file_compression_type)?;
+                #[allow(deprecated)]
                 Ok(Arc::new(NdJsonExec::new(
                     base_config,
                     file_compression_type,
@@ -260,7 +268,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &self.try_decode_message(&base_config)?,
                     registry,
                     self,
+                    Arc::new(ArrowSource::default()), // TODO: Look into configuring this if needed
                 )?;
+                #[allow(deprecated)]
                 Ok(Arc::new(ArrowExec::new(base_config)))
             }
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {
@@ -334,7 +344,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             })
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Some(JoinFilter::new(expression, column_indices, schema))
+                    Some(JoinFilter::new(
+                        expression,
+                        column_indices,
+                        Arc::new(schema),
+                    ))
                 } else {
                     None
                 };
@@ -364,6 +378,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
+        #[allow(deprecated)]
         let node_kind = if let Some(range) = node.as_any().downcast_ref::<RangeExec>() {
             let schema = self.try_encode_schema(range.schema().as_ref())?;
             NodeKind::Range(gen::RangeExecNode {

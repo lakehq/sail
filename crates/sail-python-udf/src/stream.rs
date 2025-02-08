@@ -11,7 +11,7 @@ use datafusion_common::{exec_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
-use pyo3::{pyclass, pymethods, IntoPy, PyObject, PyRef, PyRefMut, PyResult, Python};
+use pyo3::{pyclass, pymethods, IntoPyObject, PyObject, PyRef, PyRefMut, PyResult, Python};
 use sail_common::utils::record_batch_with_schema;
 use tokio::runtime::Handle;
 use tokio::select;
@@ -153,9 +153,9 @@ impl PyMapStream {
         // for each record batch, but that does not work if the user wants to maintain state
         // across record batches.
         let input = PyInputStream::new(input, signal, handle);
-        let input = input.into_py(py);
+        let input = input.into_pyobject(py)?;
         let output = function.call1(py, (input,))?.into_bound(py);
-        for batch in output.iter()? {
+        for batch in output.try_iter()? {
             // Ignore empty record batches since the PySpark unit tests expect them to be ignored
             // even if they have incompatible schemas.
             if batch.as_ref().is_ok_and(|x| x.is_empty().unwrap_or(false)) {
