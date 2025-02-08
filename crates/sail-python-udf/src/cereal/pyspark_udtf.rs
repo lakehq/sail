@@ -33,7 +33,7 @@ impl PySparkUdtfPayload {
         tuple
             .get_item(0)?
             .into_pyobject(py)
-            .map_err(|e| PyUdfError::InternalError(e.to_string()))
+            .map_err(|e| PyUdfError::PythonError(e.into()))
     }
 
     pub fn build(
