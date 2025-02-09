@@ -1,11 +1,23 @@
 use either::Either;
 use sail_common::spec;
-use sail_sql_parser::ast::identifier::ObjectName;
-use sail_sql_parser::ast::keywords::{Cascade, Restrict};
-use sail_sql_parser::ast::statement::{ExplainFormat, Statement};
+use sail_sql_parser::ast::expression::{BooleanLiteral, Expr};
+use sail_sql_parser::ast::identifier::{Ident, ObjectName};
+use sail_sql_parser::ast::keywords::{Cascade, Global, Overwrite, Restrict, Temporary};
+use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
+use sail_sql_parser::ast::operator::{Minus, Plus};
+use sail_sql_parser::ast::query::{IdentList, WhereClause};
+use sail_sql_parser::ast::statement::{
+    AsQueryClause, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
+    ColumnTypeDefinition, CreateDatabaseClause, CreateTableClause, CreateViewClause, ExplainFormat,
+    FileFormat, PartitionColumn, PartitionColumnList, PartitionValue, PartitionValueList,
+    PropertyKey, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
+    RowFormatDelimitedClause, SortColumn, SortColumnList, Statement, ViewColumn,
+};
 
+use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
-use crate::expression::from_ast_object_name;
+use crate::expression::{from_ast_expression, from_ast_identifier_list, from_ast_object_name};
+use crate::parser::parse_one_statement;
 use crate::query::from_ast_query;
 
 pub(crate) fn from_ast_statements(statements: Vec<Statement>) -> SqlResult<Vec<spec::Plan>> {
@@ -13,6 +25,8 @@ pub(crate) fn from_ast_statements(statements: Vec<Statement>) -> SqlResult<Vec<s
 }
 
 pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
+    // TODO: avoid using SQL string
+    //   We should define a plan spec instead of constructing `information_schema` queries here.
     match statement {
         Statement::Query(query) => {
             let plan = from_ast_query(query)?;
@@ -51,16 +65,23 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             database: _,
             name,
             if_not_exists,
-            // TODO: support create database clauses
-            clauses: _,
+            clauses,
         } => {
+            let CreateDatabaseClauses {
+                comment,
+                location,
+                properties,
+            } = clauses.try_into()?;
             let node = spec::CommandNode::CreateDatabase {
                 database: from_ast_object_name(name)?,
                 definition: spec::DatabaseDefinition {
                     if_not_exists: if_not_exists.is_some(),
-                    comment: None,
-                    location: None,
-                    properties: Default::default(),
+                    comment: comment.map(|x| x.value),
+                    location: location.map(|x| x.value),
+                    properties: properties
+                        .map(from_ast_property_list)
+                        .transpose()?
+                        .unwrap_or_default(),
                 },
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
@@ -87,10 +108,79 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowDatabases { .. } => Err(SqlError::todo("SHOW DATABASES")),
-        Statement::CreateTable { .. } => Err(SqlError::todo("CREATE TABLE")),
-        Statement::ReplaceTable { .. } => Err(SqlError::todo("REPLACE TABLE")),
-        Statement::AlterTable { .. } => Err(SqlError::todo("ALTER TABLE")),
+        Statement::ShowDatabases { .. } => {
+            parse_one_statement("SELECT * FROM information_schema.schemata;")
+        }
+        Statement::CreateTable {
+            create: _,
+            or_replace,
+            temporary: _, // TODO: handle temporary tables
+            external: _,  // TODO: handle external tables
+            table: _,
+            if_not_exists,
+            name,
+            columns,
+            like,
+            using,
+            clauses,
+            r#as,
+        } => {
+            if like.is_some() {
+                return Err(SqlError::todo("LIKE in CREATE TABLE"));
+            }
+            let definition = TableDefinition {
+                or_replace: or_replace.is_some(),
+                if_not_exists: if_not_exists.is_some(),
+                using: using.map(|(_, x)| x),
+                columns,
+                clauses: clauses.try_into()?,
+                query: r#as,
+            };
+            let node = spec::CommandNode::CreateTable {
+                table: from_ast_object_name(name)?,
+                definition: from_ast_table_definition(definition)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ReplaceTable {
+            replace: _,
+            table: _,
+            name,
+            columns,
+            using,
+            clauses,
+            r#as,
+        } => {
+            if using.is_some() {
+                return Err(SqlError::todo("USING in REPLACE TABLE"));
+            }
+            let definition = TableDefinition {
+                or_replace: true,
+                if_not_exists: false,
+                using: using.map(|(_, x)| x),
+                columns,
+                clauses: clauses.try_into()?,
+                query: r#as,
+            };
+            let node = spec::CommandNode::CreateTable {
+                table: from_ast_object_name(name)?,
+                definition: from_ast_table_definition(definition)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::AlterTable {
+            alter: _,
+            table: _,
+            name,
+            operation: _,
+        } => {
+            let node = spec::CommandNode::AlterTable {
+                table: from_ast_object_name(name)?,
+                if_exists: false,
+                operation: spec::AlterTableOperation::Unknown,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::DropTable {
             drop: _,
             table: _,
@@ -105,7 +195,64 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::CreateView { .. } => Err(SqlError::todo("CREATE VIEW")),
+        Statement::ShowTables { .. } => {
+            parse_one_statement("SELECT * FROM information_schema.tables;")
+        }
+        Statement::ShowCreateTable { .. } => Err(SqlError::todo("SHOW CREATE TABLE")),
+        Statement::ShowColumns { .. } => {
+            parse_one_statement("SELECT * FROM information_schema.columns;")
+        }
+        Statement::CreateView {
+            create: _,
+            or_replace,
+            global_temporary,
+            view: _,
+            if_not_exists,
+            name,
+            columns,
+            clauses,
+            r#as: _,
+            query,
+        } => {
+            if if_not_exists.is_some() {
+                return Err(SqlError::todo("IF NOT EXISTS in CREATE VIEW"));
+            }
+            let columns = if let Some((_, columns, _)) = columns {
+                Some(
+                    columns
+                        .into_items()
+                        .map(|ViewColumn { name, comment: _ }| name.value.into())
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            let query = from_ast_query(query)?;
+            let name = from_ast_object_name(name)?;
+            let kind = match global_temporary {
+                Some((Some(Global { .. }), Temporary { .. })) => spec::ViewKind::GlobalTemporary,
+                Some((None, Temporary { .. })) => spec::ViewKind::Temporary,
+                None => spec::ViewKind::Default,
+            };
+            let CreateViewClauses {
+                comment: _,
+                properties,
+            } = clauses.try_into()?;
+            if properties.is_some() {
+                return Err(SqlError::unsupported("TBLPROPERTIES in CREATE VIEW"));
+            }
+            let node = spec::CommandNode::CreateView {
+                view: name,
+                definition: spec::ViewDefinition {
+                    input: Box::new(query),
+                    columns,
+                    replace: or_replace.is_some(),
+                    kind,
+                    definition: None,
+                },
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::DropView {
             drop: _,
             view: _,
@@ -118,6 +265,9 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
                 if_exists: if_exists.is_some(),
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ShowViews { .. } => {
+            parse_one_statement("SELECT * FROM information_schema.views;")
         }
         Statement::DropFunction {
             drop: _,
@@ -133,6 +283,7 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::ShowFunctions { .. } => Err(SqlError::todo("SHOW FUNCTIONS")),
         Statement::Explain {
             explain: _,
             format,
@@ -146,12 +297,608 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowFunctions { .. } => Err(SqlError::todo("SHOW FUNCTIONS")),
+        Statement::Insert {
+            insert: _,
+            into_or_overwrite,
+            table: _,
+            name,
+            partition,
+            columns,
+            query,
+        } => {
+            let partition_spec = partition
+                .map(|(_, x)| from_ast_partition_value_list(x))
+                .transpose()?
+                .unwrap_or_default();
+            let columns = columns
+                .map(from_ast_identifier_list)
+                .transpose()?
+                .unwrap_or_default();
+            let query = from_ast_query(query)?;
+            let overwrite = matches!(into_or_overwrite, Some(Either::Right(Overwrite { .. })));
+            let node = spec::CommandNode::InsertInto {
+                input: Box::new(query),
+                table: from_ast_object_name(name)?,
+                columns,
+                partition_spec,
+                overwrite,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::Update { .. } => Err(SqlError::unsupported("UPDATE")),
+        Statement::Delete {
+            delete: _,
+            from: _,
+            name,
+            alias,
+            r#where,
+        } => {
+            if alias.is_some() {
+                return Err(SqlError::unsupported("table alias in DELETE"));
+            }
+            let condition = r#where
+                .map(
+                    |WhereClause {
+                         r#where: _,
+                         condition,
+                     }| { from_ast_expression(condition) },
+                )
+                .transpose()?;
+            let node = spec::CommandNode::Delete {
+                table: from_ast_object_name(name)?,
+                condition,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::CacheTable { .. } => Err(SqlError::todo("CACHE TABLE")),
         Statement::UncacheTable { .. } => Err(SqlError::todo("UNCACHE TABLE")),
         Statement::ClearCache { .. } => Err(SqlError::todo("CLEAR CACHE")),
         Statement::SetTimeZone { .. } => Err(SqlError::todo("SET TIME ZONE")),
+        Statement::SetProperty { set: _, property } => {
+            let Some(property) = property else {
+                return Err(SqlError::todo("list all properties"));
+            };
+            let (variable, value) = from_ast_property(property)?;
+            let Some(value) = value else {
+                return Err(SqlError::todo("show property"));
+            };
+            let node = spec::CommandNode::SetVariable { variable, value };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
     }
+}
+
+struct TableDefinition {
+    or_replace: bool,
+    if_not_exists: bool,
+    using: Option<Ident>,
+    columns: Option<ColumnDefinitionList>,
+    clauses: CreateTableClauses,
+    query: Option<AsQueryClause>,
+}
+
+fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::TableDefinition> {
+    let TableDefinition {
+        or_replace,
+        if_not_exists,
+        using,
+        columns,
+        clauses:
+            CreateTableClauses {
+                partition_by,
+                cluster_by,
+                row_format,
+                stored_as,
+                location,
+                comment,
+                options,
+                properties,
+            },
+        query,
+    } = definition;
+    if cluster_by.is_some() {
+        return Err(SqlError::unsupported("CLUSTERED BY in CREATE TABLE"));
+    }
+    let row_format = row_format.map(from_ast_row_format).transpose()?;
+    let file_format = match (using, stored_as) {
+        (Some(using), None) => Some(spec::TableFileFormat::General {
+            format: using.value,
+        }),
+        (None, Some(stored_as)) => Some(from_ast_file_format(stored_as)?),
+        (None, None) => None,
+        (Some(_), Some(_)) => {
+            return Err(SqlError::invalid("conflicting USING and STORED AS clauses"))
+        }
+    };
+    let table_partition_cols = partition_by
+        .into_iter()
+        .flatten()
+        .map(|x| match x {
+            PartitionColumn::Typed(ColumnTypeDefinition { name, .. }) => name.value.into(),
+            PartitionColumn::Name(x) => x.value.into(),
+        })
+        .collect();
+    let options = options.map(from_ast_property_list).transpose()?;
+    let properties = properties.map(from_ast_property_list).transpose()?;
+    let query = query
+        .map(|AsQueryClause { r#as: _, query }| from_ast_query(query).map(Box::new))
+        .transpose()?;
+    let (schema, column_defaults) = from_ast_table_columns(columns)?;
+    Ok(spec::TableDefinition {
+        schema,
+        comment: comment.map(|x| x.value),
+        column_defaults,
+        constraints: vec![],
+        location: location.map(|x| x.value),
+        file_format,
+        row_format,
+        table_partition_cols,
+        file_sort_order: vec![],
+        if_not_exists,
+        or_replace,
+        unbounded: false, // TODO: support unbounded tables
+        options: options
+            .into_iter()
+            .flatten()
+            .chain(properties.into_iter().flatten())
+            .collect(),
+        query,
+        definition: None,
+    })
+}
+
+fn from_ast_table_columns(
+    columns: Option<ColumnDefinitionList>,
+) -> SqlResult<(spec::Schema, Vec<(String, spec::Expr)>)> {
+    let columns = columns.map(
+        |ColumnDefinitionList {
+             left: _,
+             columns,
+             right: _,
+         }| columns,
+    );
+    let mut fields = Vec::with_capacity(
+        columns
+            .as_ref()
+            .map(|x| 1 + x.tail.len())
+            .unwrap_or_default(),
+    );
+    let mut defaults = vec![];
+    for column in columns.map(|x| x.into_items()).into_iter().flatten() {
+        let ColumnDefinition {
+            name,
+            data_type,
+            options,
+        } = column;
+        let ColumnDefinitionOptions {
+            not_null,
+            default,
+            generated_always_as,
+            comment: _,
+        } = options.try_into()?;
+        if generated_always_as.is_some() {
+            return Err(SqlError::unsupported(
+                "GENERATED ALWAYS AS in CREATE TABLE column",
+            ));
+        }
+        if let Some(default) = default {
+            defaults.push((name.value.clone(), from_ast_expression(default)?));
+        }
+        let field = spec::Field {
+            name: name.value,
+            data_type: from_ast_data_type(data_type)?,
+            nullable: !not_null,
+            metadata: vec![],
+        };
+        fields.push(field);
+    }
+    let fields = spec::Fields::from(fields);
+    Ok((spec::Schema { fields }, defaults))
+}
+
+fn from_ast_row_format(format: RowFormat) -> SqlResult<spec::TableRowFormat> {
+    match format {
+        RowFormat::Serde {
+            serde: _,
+            name,
+            properties,
+        } => {
+            let properties = properties
+                .map(|(_, _, x)| from_ast_property_list(x))
+                .transpose()?
+                .unwrap_or_default();
+            Ok(spec::TableRowFormat::Serde {
+                name: name.value,
+                properties,
+            })
+        }
+        RowFormat::Delimited {
+            delimited: _,
+            clauses,
+        } => {
+            let RowFormatDelimitedClauses {
+                fields_terminated_by_escaped_by,
+                collection_items_terminated_by,
+                map_keys_terminated_by,
+                lines_terminated_by,
+                null_defined_as,
+            } = clauses.try_into()?;
+            let (fields_terminated_by, fields_escaped_by) = fields_terminated_by_escaped_by
+                .map(|(t, e)| (Some(t.value), e.map(|x| x.value)))
+                .unwrap_or((None, None));
+            let collection_items_terminated_by = collection_items_terminated_by.map(|x| x.value);
+            let map_keys_terminated_by = map_keys_terminated_by.map(|x| x.value);
+            let lines_terminated_by = lines_terminated_by.map(|x| x.value);
+            let null_defined_as = null_defined_as.map(|x| x.value);
+            Ok(spec::TableRowFormat::Delimited {
+                fields_terminated_by,
+                fields_escaped_by,
+                collection_items_terminated_by,
+                map_keys_terminated_by,
+                lines_terminated_by,
+                null_defined_as,
+            })
+        }
+    }
+}
+
+fn from_ast_file_format(format: FileFormat) -> SqlResult<spec::TableFileFormat> {
+    match format {
+        FileFormat::Table(_, input, _, output) => Ok(spec::TableFileFormat::Table {
+            input_format: input.value,
+            output_format: output.value,
+        }),
+        FileFormat::General(x) => Ok(spec::TableFileFormat::General { format: x.value }),
+    }
+}
+
+#[derive(Default)]
+struct RowFormatDelimitedClauses {
+    fields_terminated_by_escaped_by: Option<(StringLiteral, Option<StringLiteral>)>,
+    collection_items_terminated_by: Option<StringLiteral>,
+    map_keys_terminated_by: Option<StringLiteral>,
+    lines_terminated_by: Option<StringLiteral>,
+    null_defined_as: Option<StringLiteral>,
+}
+
+impl TryFrom<Vec<RowFormatDelimitedClause>> for RowFormatDelimitedClauses {
+    type Error = SqlError;
+
+    fn try_from(value: Vec<RowFormatDelimitedClause>) -> Result<Self, Self::Error> {
+        let mut output = Self::default();
+        for clause in value {
+            match clause {
+                RowFormatDelimitedClause::Fields(_, _, _, terminate, escape) => {
+                    let escape = escape.map(|(_, _, x)| x);
+                    if output
+                        .fields_terminated_by_escaped_by
+                        .replace((terminate, escape))
+                        .is_some()
+                    {
+                        return Err(SqlError::invalid("duplicate FIELDS TERMINATED BY clause"));
+                    }
+                }
+                RowFormatDelimitedClause::CollectionItems(_, _, _, _, x) => {
+                    if output.collection_items_terminated_by.replace(x).is_some() {
+                        return Err(SqlError::invalid(
+                            "duplicate COLLECTION ITEMS TERMINATED BY clause",
+                        ));
+                    }
+                }
+                RowFormatDelimitedClause::MapKeys(_, _, _, _, x) => {
+                    if output.map_keys_terminated_by.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate MAP KEYS TERMINATED BY clause"));
+                    }
+                }
+                RowFormatDelimitedClause::Lines(_, _, _, x) => {
+                    if output.lines_terminated_by.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate LINES TERMINATED BY clause"));
+                    }
+                }
+                RowFormatDelimitedClause::Null(_, _, _, x) => {
+                    if output.null_defined_as.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate NULL DEFINED AS clause"));
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+}
+
+#[derive(Default)]
+struct ColumnDefinitionOptions {
+    not_null: bool,
+    default: Option<Expr>,
+    generated_always_as: Option<Expr>,
+    comment: Option<StringLiteral>,
+}
+
+impl TryFrom<Vec<ColumnDefinitionOption>> for ColumnDefinitionOptions {
+    type Error = SqlError;
+
+    fn try_from(value: Vec<ColumnDefinitionOption>) -> Result<Self, Self::Error> {
+        let mut output = Self::default();
+        for option in value {
+            match option {
+                ColumnDefinitionOption::NotNull(_, _) => {
+                    if output.not_null {
+                        return Err(SqlError::invalid("duplicate NOT NULL clause"));
+                    }
+                    output.not_null = true;
+                }
+                ColumnDefinitionOption::Default(_, x) => {
+                    if output.default.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate DEFAULT clause"));
+                    }
+                }
+                ColumnDefinitionOption::Generated(_, _, _, _, x, _) => {
+                    if output.generated_always_as.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate GENERATED clause"));
+                    }
+                }
+                ColumnDefinitionOption::Comment(_, x) => {
+                    if output.comment.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate COMMENT clause"));
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+}
+
+#[derive(Default)]
+struct CreateDatabaseClauses {
+    comment: Option<StringLiteral>,
+    location: Option<StringLiteral>,
+    properties: Option<PropertyList>,
+}
+
+impl TryFrom<Vec<CreateDatabaseClause>> for CreateDatabaseClauses {
+    type Error = SqlError;
+
+    fn try_from(value: Vec<CreateDatabaseClause>) -> Result<Self, Self::Error> {
+        let mut output = Self::default();
+        for clause in value {
+            match clause {
+                CreateDatabaseClause::Comment(_, x) => {
+                    if output.comment.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate COMMENT clause"));
+                    }
+                }
+                CreateDatabaseClause::Location(_, x) => {
+                    if output.location.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate LOCATION clause"));
+                    }
+                }
+                CreateDatabaseClause::Properties(_, _, properties) => {
+                    if output.properties.replace(properties).is_some() {
+                        return Err(SqlError::invalid(
+                            "duplicate PROPERTIES or DBPROPERTIES clause",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+}
+
+#[allow(unused)]
+struct CreateTableClusterBy {
+    columns: Vec<Ident>,
+    sort_columns: Option<Vec<SortColumn>>,
+    buckets: IntegerLiteral,
+}
+
+#[derive(Default)]
+struct CreateTableClauses {
+    partition_by: Option<Vec<PartitionColumn>>,
+    cluster_by: Option<CreateTableClusterBy>,
+    row_format: Option<RowFormat>,
+    stored_as: Option<FileFormat>,
+    location: Option<StringLiteral>,
+    comment: Option<StringLiteral>,
+    options: Option<PropertyList>,
+    properties: Option<PropertyList>,
+}
+
+impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
+    type Error = SqlError;
+
+    fn try_from(value: Vec<CreateTableClause>) -> Result<Self, Self::Error> {
+        let mut output = Self::default();
+        for clause in value {
+            match clause {
+                CreateTableClause::PartitionedBy(
+                    _,
+                    _,
+                    PartitionColumnList {
+                        left: _,
+                        columns,
+                        right: _,
+                    },
+                ) => {
+                    if output
+                        .partition_by
+                        .replace(columns.into_items().collect())
+                        .is_some()
+                    {
+                        return Err(SqlError::invalid("duplicate PARTITIONED BY clause"));
+                    }
+                }
+                CreateTableClause::ClusteredBy(
+                    _,
+                    _,
+                    IdentList {
+                        left: _,
+                        columns,
+                        right: _,
+                    },
+                    sort,
+                    _,
+                    n,
+                    _,
+                ) => {
+                    let cluster_by = CreateTableClusterBy {
+                        columns: columns.into_items().collect(),
+                        sort_columns: sort.map(
+                            |(
+                                _,
+                                _,
+                                SortColumnList {
+                                    left: _,
+                                    columns,
+                                    right: _,
+                                },
+                            )| columns.into_items().collect(),
+                        ),
+                        buckets: n,
+                    };
+                    if output.cluster_by.replace(cluster_by).is_some() {
+                        return Err(SqlError::invalid("duplicate CLUSTERED BY clause"));
+                    }
+                }
+                CreateTableClause::RowFormat(_, _, x) => {
+                    if output.row_format.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate ROW FORMAT clause"));
+                    }
+                }
+                CreateTableClause::StoredAs(_, _, x) => {
+                    if output.stored_as.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate STORED AS clause"));
+                    }
+                }
+                CreateTableClause::Location(_, x) => {
+                    if output.location.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate LOCATION clause"));
+                    }
+                }
+                CreateTableClause::Comment(_, x) => {
+                    if output.comment.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate COMMENT clause"));
+                    }
+                }
+                CreateTableClause::Options(_, options) => {
+                    if output.options.replace(options).is_some() {
+                        return Err(SqlError::invalid("duplicate OPTIONS clause"));
+                    }
+                }
+                CreateTableClause::Properties(_, properties) => {
+                    if output.properties.replace(properties).is_some() {
+                        return Err(SqlError::invalid("duplicate TBLPROPERTIES clause"));
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+}
+
+#[derive(Default)]
+struct CreateViewClauses {
+    comment: Option<StringLiteral>,
+    properties: Option<PropertyList>,
+}
+
+impl TryFrom<Vec<CreateViewClause>> for CreateViewClauses {
+    type Error = SqlError;
+
+    fn try_from(value: Vec<CreateViewClause>) -> Result<Self, Self::Error> {
+        let mut output = Self::default();
+        for clause in value {
+            match clause {
+                CreateViewClause::Comment(_, x) => {
+                    if output.comment.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate COMMENT clause"));
+                    }
+                }
+                CreateViewClause::Properties(_, properties) => {
+                    if output.properties.replace(properties).is_some() {
+                        return Err(SqlError::invalid("duplicate TBLPROPERTIES clause"));
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+}
+
+fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<String>)> {
+    let PropertyKeyValue { key, value } = property;
+    let key = match key {
+        PropertyKey::Name(ObjectName(parts)) => parts
+            .into_items()
+            .map(|x| x.value)
+            .collect::<Vec<_>>()
+            .join("."),
+        PropertyKey::Literal(x) => x.value,
+    };
+    let value = if let Some((_, value)) = value {
+        let value = match value {
+            PropertyValue::String(x) => x.value,
+            PropertyValue::Number(
+                sign,
+                NumberLiteral {
+                    value,
+                    suffix,
+                    span: _,
+                },
+            ) => {
+                let sign = match sign {
+                    Some(Either::Left(Plus { .. })) => "+",
+                    Some(Either::Right(Minus { .. })) => "-",
+                    None => "",
+                };
+                format!("{sign}{value}{suffix}")
+            }
+            PropertyValue::Boolean(BooleanLiteral::True(_)) => "true".to_string(),
+            PropertyValue::Boolean(BooleanLiteral::False(_)) => "false".to_string(),
+        };
+        Some(value)
+    } else {
+        None
+    };
+    Ok((key, value))
+}
+
+fn from_ast_property_list(properties: PropertyList) -> SqlResult<Vec<(String, String)>> {
+    let PropertyList {
+        left: _,
+        properties,
+        right: _,
+    } = properties;
+    properties
+        .into_items()
+        .map(|x| {
+            let (key, value) = from_ast_property(x)?;
+            let Some(value) = value else {
+                return Err(SqlError::invalid(format!("missing property value: {key}")));
+            };
+            Ok((key, value))
+        })
+        .collect::<SqlResult<Vec<_>>>()
+}
+
+fn from_ast_partition_value_list(
+    values: PartitionValueList,
+) -> SqlResult<Vec<(String, spec::Expr)>> {
+    let PartitionValueList {
+        left: _,
+        values,
+        right: _,
+    } = values;
+    values
+        .into_items()
+        .map(
+            |PartitionValue {
+                 column,
+                 eq: _,
+                 value,
+             }| Ok((column.value, from_ast_expression(value)?)),
+        )
+        .collect::<SqlResult<Vec<_>>>()
 }
 
 fn from_ast_explain_format(format: Option<ExplainFormat>) -> SqlResult<spec::ExplainMode> {
@@ -173,3 +920,8 @@ fn from_ast_explain_format(format: Option<ExplainFormat>) -> SqlResult<spec::Exp
         Some(ExplainFormat::Verbose(_)) => Ok(spec::ExplainMode::Verbose),
     }
 }
+
+// TODO: support table name starting with a number
+// TODO: add the following test cases as gold tests:
+//   `CREATE TABLE foo.1m(a INT)`
+//   `CREATE TABLE foo.1m(a INT) USING parquet`

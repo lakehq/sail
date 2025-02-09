@@ -31,6 +31,7 @@ macro_rules! parse {
             .map_err(SqlError::parser)?
     }};
 }
+
 pub fn parse_data_type(s: &str) -> SqlResult<spec::DataType> {
     from_ast_data_type(parse!(s, create_data_type_parser))
 }

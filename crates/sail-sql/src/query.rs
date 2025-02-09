@@ -14,7 +14,8 @@ use sail_sql_parser::common::Sequence;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{
-    from_ast_expression, from_ast_function_argument, from_ast_object_name, from_ast_order_by,
+    from_ast_expression, from_ast_function_argument, from_ast_identifier_list,
+    from_ast_object_name, from_ast_order_by,
 };
 use crate::literal::LiteralValue;
 
@@ -33,7 +34,7 @@ impl TryFrom<Vec<QueryModifier>> for QueryModifiers {
     type Error = SqlError;
 
     fn try_from(value: Vec<QueryModifier>) -> SqlResult<Self> {
-        let mut output = QueryModifiers::default();
+        let mut output = Self::default();
         for modifier in value {
             match modifier {
                 QueryModifier::Window(x) => output.window.push(x),
@@ -814,16 +815,7 @@ fn query_plan_with_lateral_table_factor(
             columns,
         } = alias;
         let table_alias = Some(spec::ObjectName::new_unqualified(table.value.into()));
-        let column_aliases = if let Some(IdentList {
-            left: _,
-            columns,
-            right: _,
-        }) = columns
-        {
-            Some(columns.into_items().map(|x| x.value.into()).collect())
-        } else {
-            None
-        };
+        let column_aliases = columns.map(from_ast_identifier_list).transpose()?;
         (table_alias, column_aliases)
     } else {
         (None, None)

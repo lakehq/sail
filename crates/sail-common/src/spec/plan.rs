@@ -394,11 +394,11 @@ pub enum CommandNode {
         input: Box<QueryPlan>,
         table: ObjectName,
         columns: Vec<Identifier>,
-        partition_spec: Vec<Expr>,
+        partition_spec: Vec<(String, Expr)>,
         overwrite: bool,
     },
     SetVariable {
-        variable: Identifier,
+        variable: String,
         value: String,
     },
     Update {
@@ -414,7 +414,7 @@ pub enum CommandNode {
     AlterTable {
         table: ObjectName,
         if_exists: bool,
-        actions: Vec<AlterTableAction>,
+        operation: AlterTableOperation,
     },
 }
 
@@ -632,7 +632,6 @@ pub struct TableDefinition {
     pub column_defaults: Vec<(String, Expr)>,
     pub constraints: Vec<TableConstraint>,
     pub location: Option<String>,
-    pub serde_properties: Vec<(String, String)>,
     pub file_format: Option<TableFileFormat>,
     pub row_format: Option<TableRowFormat>,
     pub table_partition_cols: Vec<Identifier>,
@@ -813,23 +812,31 @@ pub enum TableConstraint {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TableFileFormat {
-    pub input_format: String,
-    pub output_format: Option<String>, // if None: INPUTFORMAT AND OUTPUTFORMAT not specified.
+pub enum TableFileFormat {
+    General {
+        format: String,
+    },
+    Table {
+        input_format: String,
+        output_format: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TableRowFormat {
-    Serde(String),
-    Delimited(Vec<TableRowDelimiter>),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TableRowDelimiter {
-    pub delimiter: String,
-    pub char: Identifier,
+    Serde {
+        name: String,
+        properties: Vec<(String, String)>,
+    },
+    Delimited {
+        fields_terminated_by: Option<String>,
+        fields_escaped_by: Option<String>,
+        collection_items_terminated_by: Option<String>,
+        map_keys_terminated_by: Option<String>,
+        lines_terminated_by: Option<String>,
+        null_defined_as: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -847,6 +854,7 @@ pub enum ExplainMode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum AlterTableAction {
-    RenameColumn { from: Identifier, to: Identifier },
+pub enum AlterTableOperation {
+    Unknown,
+    // TODO: add all the alter table operations
 }

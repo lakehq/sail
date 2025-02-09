@@ -8,6 +8,7 @@ use sail_sql_parser::ast::expression::{
     WindowFrame, WindowFrameBound, WindowSpec,
 };
 use sail_sql_parser::ast::identifier::ObjectName;
+use sail_sql_parser::ast::query::IdentList;
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
@@ -26,10 +27,8 @@ fn negated(expr: spec::Expr) -> spec::Expr {
 
 pub(crate) fn from_ast_function_argument(arg: FunctionArgument) -> SqlResult<spec::Expr> {
     match arg {
-        // TODO: Support named argument names.
-        FunctionArgument::Unnamed(arg) | FunctionArgument::Named(_, _, arg) => {
-            from_ast_expression(arg)
-        }
+        FunctionArgument::Unnamed(arg) => from_ast_expression(arg),
+        FunctionArgument::Named(_, _, _) => Err(SqlError::todo("named function arguments")),
     }
 }
 
@@ -675,4 +674,13 @@ pub(crate) fn from_ast_expression_predicate(
             })
         }
     }
+}
+
+pub(crate) fn from_ast_identifier_list(identifiers: IdentList) -> SqlResult<Vec<spec::Identifier>> {
+    let IdentList {
+        left: _,
+        columns,
+        right: _,
+    } = identifiers;
+    Ok(columns.into_items().map(|x| x.value.into()).collect())
 }
