@@ -1,7 +1,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
-use pyo3::{intern, PyObject, Python, ToPyObject};
+use pyo3::{intern, Bound, IntoPyObject, PyAny, Python};
 use sail_common::spec;
 
 use crate::cereal::{check_python_udf_version, should_write_config};
@@ -11,7 +11,7 @@ use crate::error::{PyUdfError, PyUdfResult};
 pub struct PySparkUdfPayload;
 
 impl PySparkUdfPayload {
-    pub fn load(py: Python, data: &[u8]) -> PyUdfResult<PyObject> {
+    pub fn load<'py>(py: Python<'py>, data: &[u8]) -> PyUdfResult<Bound<'py, PyAny>> {
         let (eval_type, v) = data
             .split_at_checked(size_of::<i32>())
             .ok_or_else(|| PyUdfError::invalid("missing eval_type"))?;
@@ -19,16 +19,19 @@ impl PySparkUdfPayload {
             .try_into()
             .map_err(|e| PyValueError::new_err(format!("eval_type bytes: {e}")))?;
         let eval_type = i32::from_be_bytes(eval_type);
-        let infile = PyModule::import_bound(py, intern!(py, "io"))?
+        let infile = PyModule::import(py, intern!(py, "io"))?
             .getattr(intern!(py, "BytesIO"))?
             .call1((v,))?;
-        let serializer = PyModule::import_bound(py, intern!(py, "pyspark.serializers"))?
+        let serializer = PyModule::import(py, intern!(py, "pyspark.serializers"))?
             .getattr(intern!(py, "CPickleSerializer"))?
             .call0()?;
-        let tuple = PyModule::import_bound(py, intern!(py, "pyspark.worker"))?
+        let tuple = PyModule::import(py, intern!(py, "pyspark.worker"))?
             .getattr(intern!(py, "read_udfs"))?
             .call1((serializer, infile, eval_type))?;
-        Ok(tuple.get_item(0)?.to_object(py))
+        tuple
+            .get_item(0)?
+            .into_pyobject(py)
+            .map_err(|e| PyUdfError::PythonError(e.into()))
     }
 
     pub fn build(

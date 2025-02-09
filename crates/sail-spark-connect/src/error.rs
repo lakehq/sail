@@ -283,25 +283,12 @@ impl From<SparkError> for Status {
                 ArrowError::ExternalError(e),
                 _,
             ))
-            | SparkError::DataFusionError(DataFusionError::External(e)) => {
-                if let Some(e) = extract_py_err(e.as_ref()) {
-                    let info = Python::with_gil(|py| -> PyResult<Vec<String>> {
-                        let traceback = PyModule::import_bound(py, intern!(py, "traceback"))?;
-                        let format_exception =
-                            traceback.getattr(intern!(py, "format_exception"))?;
-                        format_exception.call1((e,))?.extract()
-                    });
-                    // The message must end with a newline character
-                    // since the PySpark unit tests expect it.
-                    let message = if let Ok(info) = info {
-                        // Each line string already ends with a newline character.
-                        info.join("")
-                    } else {
-                        format!("{e}\n")
-                    };
-                    SparkThrowable::PythonException(message).into()
+            | SparkError::DataFusionError(DataFusionError::External(e)) => try_py_err(e.as_ref()),
+            SparkError::DataFusionError(DataFusionError::Shared(shared)) => {
+                if let DataFusionError::External(e) = shared.as_ref() {
+                    try_py_err(e.as_ref())
                 } else {
-                    SparkThrowable::SparkRuntimeException(e.to_string()).into()
+                    SparkThrowable::SparkRuntimeException(shared.to_string()).into()
                 }
             }
             SparkError::ArrowError(e)
@@ -355,6 +342,27 @@ impl From<SparkError> for Status {
             e @ SparkError::SendError(_) => Status::cancelled(e.to_string()),
             e @ SparkError::InternalError(_) => Status::internal(e.to_string()),
         }
+    }
+}
+
+fn try_py_err<'a>(e: &'a (dyn std::error::Error + 'static)) -> Status {
+    if let Some(e) = extract_py_err(e) {
+        let info = Python::with_gil(|py| -> PyResult<Vec<String>> {
+            let traceback = PyModule::import(py, intern!(py, "traceback"))?;
+            let format_exception = traceback.getattr(intern!(py, "format_exception"))?;
+            format_exception.call1((e,))?.extract()
+        });
+        // The message must end with a newline character
+        // since the PySpark unit tests expect it.
+        let message = if let Ok(info) = info {
+            // Each line string already ends with a newline character.
+            info.join("")
+        } else {
+            format!("{e}\n")
+        };
+        SparkThrowable::PythonException(message).into()
+    } else {
+        SparkThrowable::SparkRuntimeException(e.to_string()).into()
     }
 }
 

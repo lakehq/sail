@@ -1404,7 +1404,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Internal error: `return_type` should not be called, call `return_type_from_exprs` instead.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
       }
     },
     {

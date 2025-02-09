@@ -3,7 +3,7 @@ use datafusion::arrow::pyarrow::ToPyArrow;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
-use pyo3::{intern, PyObject, PyResult, Python, ToPyObject};
+use pyo3::{intern, Bound, IntoPyObject, PyAny, PyResult, Python};
 use sail_common::spec;
 
 use crate::cereal::{check_python_udf_version, should_write_config};
@@ -13,7 +13,7 @@ use crate::error::{PyUdfError, PyUdfResult};
 pub struct PySparkUdtfPayload;
 
 impl PySparkUdtfPayload {
-    pub fn load(py: Python, v: &[u8]) -> PyUdfResult<PyObject> {
+    pub fn load<'py>(py: Python<'py>, v: &[u8]) -> PyUdfResult<Bound<'py, PyAny>> {
         let (eval_type, v) = v
             .split_at_checked(size_of::<i32>())
             .ok_or_else(|| PyUdfError::invalid("missing eval_type"))?;
@@ -21,16 +21,19 @@ impl PySparkUdtfPayload {
             .try_into()
             .map_err(|e| PyValueError::new_err(format!("eval_type bytes: {e}")))?;
         let eval_type = i32::from_be_bytes(eval_type);
-        let infile = PyModule::import_bound(py, intern!(py, "io"))?
+        let infile = PyModule::import(py, intern!(py, "io"))?
             .getattr(intern!(py, "BytesIO"))?
             .call1((v,))?;
-        let serializer = PyModule::import_bound(py, intern!(py, "pyspark.serializers"))?
+        let serializer = PyModule::import(py, intern!(py, "pyspark.serializers"))?
             .getattr(intern!(py, "CPickleSerializer"))?
             .call0()?;
-        let tuple = PyModule::import_bound(py, intern!(py, "pyspark.worker"))?
+        let tuple = PyModule::import(py, intern!(py, "pyspark.worker"))?
             .getattr(intern!(py, "read_udtf"))?
             .call1((serializer, infile, eval_type))?;
-        Ok(tuple.get_item(0)?.to_object(py))
+        tuple
+            .get_item(0)?
+            .into_pyobject(py)
+            .map_err(|e| PyUdfError::PythonError(e.into()))
     }
 
     pub fn build(
@@ -70,7 +73,7 @@ impl PySparkUdtfPayload {
 
         let type_string = Python::with_gil(|py| -> PyResult<String> {
             let return_type = return_type.to_pyarrow(py)?.clone_ref(py).into_bound(py);
-            PyModule::import_bound(py, intern!(py, "pyspark.sql.pandas.types"))?
+            PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?
                 .getattr(intern!(py, "from_arrow_type"))?
                 .call1((return_type,))?
                 .getattr(intern!(py, "json"))?
