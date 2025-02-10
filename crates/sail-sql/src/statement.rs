@@ -9,8 +9,8 @@ use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
     AsQueryClause, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
     ColumnTypeDefinition, CreateDatabaseClause, CreateTableClause, CreateViewClause, ExplainFormat,
-    FileFormat, PartitionColumn, PartitionColumnList, PartitionValue, PartitionValueList,
-    PropertyKey, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
+    FileFormat, PartitionColumn, PartitionColumnList, PartitionSpec, PartitionValue,
+    PartitionValueList, PropertyKey, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
     RowFormatDelimitedClause, SortColumn, SortColumnList, Statement, ViewColumn,
 };
 
@@ -96,7 +96,7 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
         } => {
             let cascade = match specifier {
                 Some(Either::Left(Restrict { .. })) => {
-                    return Err(SqlError::unsupported("RESTRICT in DROP DATABASE"))
+                    return Err(SqlError::todo("RESTRICT in DROP DATABASE"))
                 }
                 Some(Either::Right(Cascade { .. })) => true,
                 None => false,
@@ -151,9 +151,6 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             clauses,
             r#as,
         } => {
-            if using.is_some() {
-                return Err(SqlError::todo("USING in REPLACE TABLE"));
-            }
             let definition = TableDefinition {
                 or_replace: true,
                 if_not_exists: false,
@@ -239,7 +236,7 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
                 properties,
             } = clauses.try_into()?;
             if properties.is_some() {
-                return Err(SqlError::unsupported("TBLPROPERTIES in CREATE VIEW"));
+                return Err(SqlError::todo("TBLPROPERTIES in CREATE VIEW"));
             }
             let node = spec::CommandNode::CreateView {
                 view: name,
@@ -307,7 +304,12 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             query,
         } => {
             let partition_spec = partition
-                .map(|(_, x)| from_ast_partition_value_list(x))
+                .map(
+                    |PartitionSpec {
+                         partition: _,
+                         values,
+                     }| from_ast_partition_value_list(values),
+                )
                 .transpose()?
                 .unwrap_or_default();
             let columns = columns
@@ -325,7 +327,7 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::Update { .. } => Err(SqlError::unsupported("UPDATE")),
+        Statement::Update { .. } => Err(SqlError::todo("UPDATE")),
         Statement::Delete {
             delete: _,
             from: _,
@@ -334,7 +336,7 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             r#where,
         } => {
             if alias.is_some() {
-                return Err(SqlError::unsupported("table alias in DELETE"));
+                return Err(SqlError::todo("table alias in DELETE"));
             }
             let condition = r#where
                 .map(
@@ -397,7 +399,7 @@ fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::Tab
         query,
     } = definition;
     if cluster_by.is_some() {
-        return Err(SqlError::unsupported("CLUSTERED BY in CREATE TABLE"));
+        return Err(SqlError::todo("CLUSTERED BY in CREATE TABLE"));
     }
     let row_format = row_format.map(from_ast_row_format).transpose()?;
     let file_format = match (using, stored_as) {
@@ -477,9 +479,7 @@ fn from_ast_table_columns(
             comment: _,
         } = options.try_into()?;
         if generated_always_as.is_some() {
-            return Err(SqlError::unsupported(
-                "GENERATED ALWAYS AS in CREATE TABLE column",
-            ));
+            return Err(SqlError::todo("GENERATED ALWAYS AS in CREATE TABLE column"));
         }
         if let Some(default) = default {
             defaults.push((name.value.clone(), from_ast_expression(default)?));

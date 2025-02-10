@@ -1,5 +1,5 @@
 use chumsky::extra::ParserExtra;
-use chumsky::prelude::{any, choice, custom, end, just, none_of, one_of, SimpleSpan};
+use chumsky::prelude::{any, choice, end, just, none_of, one_of, recursive, SimpleSpan};
 use chumsky::{ConfigParser, IterParser, Parser};
 
 use crate::options::{ParserOptions, QuoteEscape};
@@ -83,58 +83,15 @@ fn multi_line_comment<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
 where
     E: ParserExtra<'a, &'a str>,
 {
-    // The delimiter of a multi-line comment can be nested.
-    // We implement a custom parser to handle this.
-    // This avoids the overhead of creating a `recursive` parser in the lexer.
-    custom(|input| {
-        let mut last = None;
-        let mut level = 0;
-        let mut expected = None;
-        let mut found = None;
-        #[allow(unused_assignments)]
-        let mut span = input.span_since(input.offset());
-        loop {
-            let offset = input.offset();
-            let c = input.next();
-            match (last, c) {
-                (None, Some('/')) => {}
-                (None, _) => {
-                    expected = Some('/');
-                    found = c;
-                    span = input.span_since(offset);
-                    break;
-                }
-                (Some('/'), Some('*')) => {
-                    level += 1;
-                }
-                (Some('/'), Some(_)) => {
-                    if level == 0 {
-                        found = c;
-                        span = input.span_since(offset);
-                        break;
-                    }
-                }
-                (Some('*'), Some('/')) => {
-                    level -= 1;
-                    if level == 0 {
-                        return Ok(());
-                    }
-                }
-                (Some(_), Some(_)) => {}
-                (_, None) => {
-                    span = input.span_since(offset);
-                    break;
-                }
-            }
-            last = c;
-        }
-        Err(chumsky::error::Error::expected_found(
-            vec![expected.map(From::from)],
-            found.map(From::from),
-            span,
-        ))
+    recursive(|comment| {
+        any()
+            .and_is(just("/*").or(just("*/")).not())
+            .ignored()
+            .or(comment.ignored())
+            .repeated()
+            .delimited_by(just("/*"), just("*/"))
+            .map_with(|(), e| token!(TokenValue::MultiLineComment { raw: e.slice() }, e))
     })
-    .map_with(|(), e| token!(TokenValue::MultiLineComment { raw: e.slice() }, e))
 }
 
 fn none_quote_escaped_text<'a, E>(delimiter: char) -> impl Parser<'a, &'a str, (), E>
@@ -185,6 +142,7 @@ where
 {
     any()
         .filter(|c: &char| c.is_ascii_alphabetic())
+        .then_ignore(just(' ').or(just('\t')).repeated())
         .or_not()
         .then_ignore(text)
         .map_with(move |prefix, e| {

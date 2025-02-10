@@ -381,19 +381,29 @@ pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> 
             is_distinct: false,
             is_user_defined_function: false,
         }),
-        AtomExpr::CurrentTimestamp(_) => Ok(spec::Expr::UnresolvedFunction {
+        AtomExpr::CurrentUser(_, _) => Ok(spec::Expr::UnresolvedFunction {
+            function_name: "current_user".to_string(),
+            arguments: vec![],
+            is_distinct: false,
+            is_user_defined_function: false,
+        }),
+        AtomExpr::CurrentTimestamp(_, _) => Ok(spec::Expr::UnresolvedFunction {
             function_name: "current_timestamp".to_string(),
             arguments: vec![],
             is_distinct: false,
             is_user_defined_function: false,
         }),
-        AtomExpr::CurrentDate(_) => Ok(spec::Expr::UnresolvedFunction {
+        AtomExpr::CurrentDate(_, _) => Ok(spec::Expr::UnresolvedFunction {
             function_name: "current_date".to_string(),
             arguments: vec![],
             is_distinct: false,
             is_user_defined_function: false,
         }),
-        AtomExpr::Timestamp(_, _, value, _) | AtomExpr::TimestampLiteral(_, value) => {
+        AtomExpr::Timestamp(_, _, value, _)
+        | AtomExpr::TimestampLiteral(_, value)
+        | AtomExpr::TimestampLtzLiteral(_, value)
+        | AtomExpr::TimestampNtzLiteral(_, value) => {
+            // FIXME: timezone information is lost
             Ok(spec::Expr::Literal(parse_timestamp_string(&value.value)?))
         }
         AtomExpr::Date(_, _, value, _) | AtomExpr::DateLiteral(_, value) => {
@@ -427,7 +437,7 @@ pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> 
             if let Some(over_clause) = over_clause {
                 let OverClause { over: _, window } = over_clause;
                 match window {
-                    WindowSpec::Named(_) => Err(SqlError::unsupported("named window function")),
+                    WindowSpec::Named(_) => Err(SqlError::todo("named window function")),
                     WindowSpec::Detailed {
                         left: _,
                         partition_by,
@@ -619,7 +629,7 @@ pub(crate) fn from_ast_expression_predicate(
         }),
         ExprPredicate::Like(not, _, quantifier, pattern, escape) => {
             if quantifier.is_some() {
-                return Err(SqlError::unsupported("LIKE quantifier"));
+                return Err(SqlError::todo("LIKE quantifier"));
             }
             let mut arguments = vec![expr, from_ast_expression(*pattern)?];
             if let Some(PatternEscape { escape: _, value }) = escape {
@@ -639,7 +649,7 @@ pub(crate) fn from_ast_expression_predicate(
         }
         ExprPredicate::ILike(not, _, quantifier, pattern, escape) => {
             if quantifier.is_some() {
-                return Err(SqlError::unsupported("ILIKE quantifier"));
+                return Err(SqlError::todo("ILIKE quantifier"));
             }
             let mut arguments = vec![expr, from_ast_expression(*pattern)?];
             if let Some(PatternEscape { escape: _, value }) = escape {

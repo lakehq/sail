@@ -193,6 +193,7 @@ impl StringStyle {
             Self::SingleQuoted {
                 prefix: Some(prefix),
             } => just::<_, _, chumsky::extra::Default>(prefix)
+                .then(just(' ').or(just('\t')).repeated())
                 .ignore_then(none_of('\'').repeated().to_slice().padded_by(just('\'')))
                 .then_ignore(end())
                 .parse(raw),
@@ -205,6 +206,7 @@ impl StringStyle {
             Self::DoubleQuoted {
                 prefix: Some(prefix),
             } => just::<_, _, chumsky::extra::Default>(prefix)
+                .then(just(' ').or(just('\t')).repeated())
                 .ignore_then(none_of('"').repeated().to_slice().padded_by(just('"')))
                 .then_ignore(end())
                 .parse(raw),
@@ -219,6 +221,7 @@ impl StringStyle {
             Self::TripleSingleQuoted {
                 prefix: Some(prefix),
             } => just::<_, _, chumsky::extra::Default>(prefix)
+                .then(just(' ').or(just('\t')).repeated())
                 .ignore_then(none_of('\'').repeated().to_slice().padded_by(just("'''")))
                 .then_ignore(end())
                 .parse(raw),
@@ -233,6 +236,7 @@ impl StringStyle {
             Self::TripleDoubleQuoted {
                 prefix: Some(prefix),
             } => just::<_, _, chumsky::extra::Default>(prefix)
+                .then(just(' ').or(just('\t')).repeated())
                 .ignore_then(none_of('"').repeated().to_slice().padded_by(just("\"\"\"")))
                 .then_ignore(end())
                 .parse(raw),

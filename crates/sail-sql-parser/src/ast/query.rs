@@ -404,15 +404,19 @@ pub struct TableJoin {
 pub enum JoinOperator {
     Inner(Inner),
     Cross(Cross),
-    LeftOuter(Left, Option<Outer>),
-    RightOuter(Right, Option<Outer>),
-    FullOuter(Option<Full>, Outer),
-    LeftSemi(Left, Semi),
-    RightSemi(Right, Semi),
+    Outer(Outer),
     Semi(Semi),
-    LeftAnti(Left, Anti),
-    RightAnti(Right, Anti),
     Anti(Anti),
+    LeftOuter(Left, Outer),
+    LeftSemi(Left, Semi),
+    LeftAnti(Left, Anti),
+    Left(Left),
+    RightOuter(Right, Outer),
+    RightSemi(Right, Semi),
+    RightAnti(Right, Anti),
+    Right(Right),
+    FullOuter(Full, Outer),
+    Full(Full),
 }
 
 #[derive(Debug, Clone, TreeParser)]

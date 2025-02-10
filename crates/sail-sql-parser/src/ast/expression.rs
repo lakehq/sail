@@ -9,13 +9,13 @@ use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit
 use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
     All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate,
-    CurrentTimestamp, Date, Day, Days, Desc, Distinct, Distribute, Div, Else, End, Escape, Exists,
-    Extract, False, First, Following, For, From, Grouping, Hour, Hours, Ilike, In, Interval, Is,
-    Last, Leading, Like, Microsecond, Microseconds, Millisecond, Milliseconds, Minute, Minutes,
-    Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay, Partition, Placing, Position,
-    Preceding, Range, Rlike, Rollup, Row, Rows, Second, Seconds, Sets, Similar, Sort, Struct,
-    Substr, Substring, Table, Then, Timestamp, To, Trailing, Trim, True, Unbounded, Unknown, Week,
-    Weeks, When, Year, Years,
+    CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Distribute, Div, Else, End,
+    Escape, Exists, Extract, False, First, Following, For, From, Grouping, Hour, Hours, Ilike, In,
+    Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond, Milliseconds,
+    Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay, Partition, Placing,
+    Position, Preceding, Range, Rlike, Rollup, Row, Rows, Second, Seconds, Sets, Similar, Sort,
+    Struct, Substr, Substring, Table, Then, Timestamp, TimestampLtz, TimestampNtz, To, Trailing,
+    Trim, True, Unbounded, Unknown, Week, Weeks, When, Year, Years,
 };
 use crate::ast::literal::{NumberLiteral, StringLiteral};
 use crate::ast::operator;
@@ -158,8 +158,13 @@ pub enum AtomExpr {
         #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
         RightParenthesis,
     ),
-    CurrentTimestamp(CurrentTimestamp),
-    CurrentDate(CurrentDate),
+    CurrentUser(CurrentUser, Option<(LeftParenthesis, RightParenthesis)>),
+    CurrentTimestamp(
+        CurrentTimestamp,
+        Option<(LeftParenthesis, RightParenthesis)>,
+    ),
+    CurrentDate(CurrentDate, Option<(LeftParenthesis, RightParenthesis)>),
+    // TODO: handle `timestamp(value)` and `date(value)` as normal functions in the plan resolver
     Timestamp(Timestamp, LeftParenthesis, StringLiteral, RightParenthesis),
     Date(Date, LeftParenthesis, StringLiteral, RightParenthesis),
     Function(#[parser(function = |(e, _, _), o| compose(e, o))] FunctionExpr),
@@ -168,6 +173,8 @@ pub enum AtomExpr {
     NumberLiteral(NumberLiteral),
     BooleanLiteral(BooleanLiteral),
     TimestampLiteral(Timestamp, StringLiteral),
+    TimestampLtzLiteral(TimestampLtz, StringLiteral),
+    TimestampNtzLiteral(TimestampNtz, StringLiteral),
     DateLiteral(Date, StringLiteral),
     Null(Null),
     Interval(

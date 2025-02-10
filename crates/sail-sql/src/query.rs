@@ -108,11 +108,11 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
     } = modifiers.try_into()?;
 
     if cluster_by.is_some() {
-        return Err(SqlError::unsupported("CLUSTER BY"));
+        return Err(SqlError::todo("CLUSTER BY"));
     }
 
     if distribute_by.is_some() {
-        return Err(SqlError::unsupported("DISTRIBUTE BY"));
+        return Err(SqlError::todo("DISTRIBUTE BY"));
     }
 
     let plan = if let Some(SortByClause { sort_by: _, items }) = sort_by {
@@ -727,7 +727,7 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
         criteria,
     } = join;
     if natural.is_some() {
-        return Err(SqlError::unsupported("NATURAL JOIN"));
+        return Err(SqlError::todo("NATURAL JOIN"));
     }
     if lateral.is_some() {
         if criteria.is_some() {
@@ -735,8 +735,9 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
         }
         let outer = match operator {
             None | Some(JoinOperator::Inner(_)) => false,
-            Some(JoinOperator::LeftOuter(_, _)) => true,
-            Some(JoinOperator::Cross(_)) => true,
+            Some(JoinOperator::LeftOuter(_, _))
+            | Some(JoinOperator::Left(_))
+            | Some(JoinOperator::Cross(_)) => true,
             _ => return Err(SqlError::invalid("LATERAL JOIN operator")),
         };
         return query_plan_with_lateral_table_factor(Some(left), right, outer);
@@ -744,9 +745,15 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
     let right = from_ast_table_factor(right)?;
     let join_type = match operator {
         None | Some(JoinOperator::Inner(_)) => spec::JoinType::Inner,
-        Some(JoinOperator::LeftOuter(_, _)) => spec::JoinType::LeftOuter,
-        Some(JoinOperator::RightOuter(_, _)) => spec::JoinType::RightOuter,
-        Some(JoinOperator::FullOuter(_, _)) => spec::JoinType::FullOuter,
+        Some(JoinOperator::LeftOuter(_, _)) | Some(JoinOperator::Left(_)) => {
+            spec::JoinType::LeftOuter
+        }
+        Some(JoinOperator::RightOuter(_, _)) | Some(JoinOperator::Right(_)) => {
+            spec::JoinType::RightOuter
+        }
+        Some(JoinOperator::FullOuter(_, _))
+        | Some(JoinOperator::Full(_))
+        | Some(JoinOperator::Outer(_)) => spec::JoinType::FullOuter,
         Some(JoinOperator::Cross(_)) => spec::JoinType::Cross,
         Some(JoinOperator::Semi(_)) | Some(JoinOperator::LeftSemi(_, _)) => {
             spec::JoinType::LeftSemi

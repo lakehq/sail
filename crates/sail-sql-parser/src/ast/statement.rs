@@ -6,11 +6,11 @@ use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use crate::ast::identifier::{Ident, ObjectName};
 use crate::ast::keywords::{
-    Add, After, Alter, Always, Analyze, As, Buckets, By, Cache, Cascade, Catalog, Clear, Clustered,
-    Codegen, Collection, Column, Columns, Comment, Cost, Create, Database, Databases, Dbproperties,
-    Default, Defined, Delete, Delimited, Drop, Escaped, Exists, Explain, Extended, External,
-    Fields, Fileformat, First, Format, Formatted, From, Functions, Generated, Global, If, In,
-    Inputformat, Insert, Into, Items, Keys, Lazy, Like, Lines, Local, Location, Map, Not, Null,
+    Add, After, Alter, Always, Analyze, As, Buckets, By, Cache, Cascade, Catalog, Change, Clear,
+    Clustered, Codegen, Collection, Column, Columns, Comment, Cost, Create, Database, Databases,
+    Dbproperties, Default, Defined, Delete, Delimited, Drop, Escaped, Exists, Explain, Extended,
+    External, Fields, Fileformat, First, Format, Formatted, From, Functions, Generated, Global, If,
+    In, Inputformat, Insert, Into, Items, Keys, Lazy, Like, Lines, Local, Location, Map, Not, Null,
     Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge,
     Recover, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
     Sorted, Stored, Table, Tables, Tblproperties, Temporary, Terminated, Time, To, Type, Uncache,
@@ -175,8 +175,8 @@ pub enum Statement {
         into_or_overwrite: Option<Either<Into, Overwrite>>,
         table: Option<Table>,
         name: ObjectName,
-        #[parser(function = |(_, _, e, _), o| unit(o).then(compose(e, o)).or_not())]
-        partition: Option<(Partition, PartitionValueList)>,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        partition: Option<PartitionSpec>,
         columns: Option<IdentList>,
         #[parser(function = |(_, q, _, _), _| q)]
         query: Query,
@@ -488,26 +488,24 @@ pub enum AlterTableOperation {
     DropColumns {
         drop: Drop,
         columns: Either<Column, Columns>,
-        names: IdentList,
+        names: ColumnDropList,
     },
     RenameColumn {
         rename: (Rename, Column),
-        old: Ident,
+        old: ObjectName,
         to: To,
-        new: Ident,
+        new: ObjectName,
     },
     AlterColumn {
-        alter: Alter,
+        alter: Either<Alter, Change>,
         column: Column,
-        name: Ident,
+        name: ObjectName,
         #[parser(function = |(e, t), o| compose((e, t), o))]
         operation: AlterColumnOperation,
     },
     ReplaceColumns {
-        #[parser(function = |(e, _), o| compose(e, o))]
-        partition: Option<PartitionSpec>,
         replace: Replace,
-        columns: Columns,
+        columns: Either<Column, Columns>,
         #[parser(function = |(e, t), o| compose((e, t), o))]
         items: ColumnAlterationList,
     },
@@ -532,6 +530,7 @@ pub enum AlterTableOperation {
     UnsetTableProperties {
         unset: Unset,
         table_properties: Tblproperties,
+        if_exists: Option<(If, Exists)>,
         properties: PropertyKeyList,
     },
     SetFileFormat {
@@ -568,17 +567,23 @@ pub enum AlterColumnOperation {
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Expr, DataType)")]
-pub struct ColumnAlterationList {
-    pub left: LeftParenthesis,
-    #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
-    pub columns: Sequence<ColumnAlteration, Comma>,
-    pub right: RightParenthesis,
+pub enum ColumnAlterationList {
+    Delimited {
+        left: LeftParenthesis,
+        #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
+        columns: Sequence<ColumnAlteration, Comma>,
+        right: RightParenthesis,
+    },
+    NotDelimited {
+        #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
+        columns: Sequence<ColumnAlteration, Comma>,
+    },
 }
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Expr, DataType)")]
 pub struct ColumnAlteration {
-    pub name: Ident,
+    pub name: ObjectName,
     #[parser(function = |(_, t), _| t)]
     pub data_type: DataType,
     #[parser(function = |(e, _), o| compose(e, o))]
@@ -597,7 +602,19 @@ pub enum ColumnAlterationOption {
 #[derive(Debug, Clone, TreeParser)]
 pub enum ColumnPosition {
     First(First),
-    After(After, Ident),
+    After(After, ObjectName),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+pub enum ColumnDropList {
+    Delimited {
+        left: LeftParenthesis,
+        columns: Sequence<ObjectName, Comma>,
+        right: RightParenthesis,
+    },
+    NotDelimited {
+        columns: Sequence<ObjectName, Comma>,
+    },
 }
 
 #[allow(unused)]
@@ -619,11 +636,17 @@ pub struct SetClause {
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
-pub struct AssignmentList {
-    pub left: LeftParenthesis,
-    #[parser(function = |a, o| sequence(compose(a, o), unit(o)))]
-    pub assignments: Sequence<Assignment, Comma>,
-    pub right: RightParenthesis,
+pub enum AssignmentList {
+    Delimited {
+        left: LeftParenthesis,
+        #[parser(function = |a, o| sequence(compose(a, o), unit(o)))]
+        assignments: Sequence<Assignment, Comma>,
+        right: RightParenthesis,
+    },
+    NotDelimited {
+        #[parser(function = |a, o| sequence(compose(a, o), unit(o)))]
+        assignments: Sequence<Assignment, Comma>,
+    },
 }
 
 #[derive(Debug, Clone, TreeParser)]
