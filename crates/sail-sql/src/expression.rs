@@ -4,8 +4,8 @@ use sail_common::spec;
 use sail_sql_parser::ast::expression::{
     AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, ExprList, ExprModifier,
     ExprPredicate, FunctionArgument, FunctionExpr, LambdaFunctionParameters, OrderBy, OrderByExpr,
-    OrderDirection, OrderNulls, OverClause, PartitionBy, PatternEscape, TrimExpr, UnaryOperator,
-    WindowFrame, WindowFrameBound, WindowSpec,
+    OrderDirection, OrderNulls, OverClause, PartitionBy, PatternEscape, TableExpr, TrimExpr,
+    UnaryOperator, WindowFrame, WindowFrameBound, WindowSpec,
 };
 use sail_sql_parser::ast::identifier::ObjectName;
 use sail_sql_parser::ast::query::IdentList;
@@ -175,13 +175,32 @@ pub(crate) fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
 
 pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
     match atom {
-        AtomExpr::SubqueryExpr(_, query, _) => Ok(spec::Expr::ScalarSubquery {
+        AtomExpr::Subquery(_, query, _) => Ok(spec::Expr::ScalarSubquery {
             subquery: Box::new(from_ast_query(query)?),
         }),
-        AtomExpr::ExistsExpr(_, _, query, _) => Ok(spec::Expr::Exists {
+        AtomExpr::Exists(_, _, query, _) => Ok(spec::Expr::Exists {
             subquery: Box::new(from_ast_query(query)?),
             negated: false,
         }),
+        AtomExpr::Table(_, expr) => {
+            let arg = match expr {
+                TableExpr::Name(x) | TableExpr::NestedName(_, x, _) => {
+                    spec::Expr::UnresolvedAttribute {
+                        name: from_ast_object_name(x)?,
+                        plan_id: None,
+                    }
+                }
+                TableExpr::Query(_, query, _) => spec::Expr::ScalarSubquery {
+                    subquery: Box::new(from_ast_query(query)?),
+                },
+            };
+            Ok(spec::Expr::UnresolvedFunction {
+                function_name: "table".to_string(),
+                arguments: vec![arg],
+                is_distinct: false,
+                is_user_defined_function: false,
+            })
+        }
         AtomExpr::LambdaFunction {
             params,
             arrow: _,

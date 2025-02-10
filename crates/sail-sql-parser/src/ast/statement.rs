@@ -6,15 +6,15 @@ use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use crate::ast::identifier::{Ident, ObjectName};
 use crate::ast::keywords::{
-    Add, After, Alter, Always, Analyze, As, Buckets, By, Cache, Cascade, Catalog, Clear, Cluster,
+    Add, After, Alter, Always, Analyze, As, Buckets, By, Cache, Cascade, Catalog, Clear, Clustered,
     Codegen, Collection, Column, Columns, Comment, Cost, Create, Database, Databases, Dbproperties,
     Default, Defined, Delete, Delimited, Drop, Escaped, Exists, Explain, Extended, External,
     Fields, Fileformat, First, Format, Formatted, From, Functions, Generated, Global, If, In,
     Inputformat, Insert, Into, Items, Keys, Lazy, Like, Lines, Local, Location, Map, Not, Null,
-    Options, Or, Outputformat, Overwrite, Partition, Partitions, Properties, Purge, Recover,
-    Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sort,
-    Stored, Table, Tables, Tblproperties, Temporary, Terminated, Time, To, Type, Uncache, Unset,
-    Update, Use, Using, Verbose, View, Views, Where, With, Zone,
+    Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge,
+    Recover, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
+    Sorted, Stored, Table, Tables, Tblproperties, Temporary, Terminated, Time, To, Type, Uncache,
+    Unset, Update, Use, Using, Verbose, View, Views, Where, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{Colon, Comma, Equals, LeftParenthesis, Minus, Plus, RightParenthesis};
@@ -241,14 +241,14 @@ pub enum ExplainFormat {
 pub struct PropertyList {
     pub left: LeftParenthesis,
     pub properties: Sequence<PropertyKeyValue, Comma>,
-    pub right: LeftParenthesis,
+    pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser)]
 pub struct PropertyKeyList {
     pub left: LeftParenthesis,
     pub properties: Sequence<PropertyKey, Comma>,
-    pub right: LeftParenthesis,
+    pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -290,7 +290,7 @@ pub struct ColumnDefinitionList {
     pub left: LeftParenthesis,
     #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
     pub columns: Sequence<ColumnDefinition, Comma>,
-    pub right: LeftParenthesis,
+    pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -343,7 +343,7 @@ pub struct PartitionColumnList {
     pub left: LeftParenthesis,
     #[parser(function = |t, o| sequence(compose(t, o), unit(o)))]
     pub columns: Sequence<PartitionColumn, Comma>,
-    pub right: LeftParenthesis,
+    pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -369,7 +369,7 @@ pub struct PartitionValueList {
     pub left: LeftParenthesis,
     #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
     pub values: Sequence<PartitionValue, Comma>,
-    pub right: LeftParenthesis,
+    pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -383,15 +383,15 @@ pub enum CreateDatabaseClause {
 #[parser(dependency = "DataType")]
 pub enum CreateTableClause {
     PartitionedBy(
-        Partition,
+        Partitioned,
         By,
         #[parser(function = |t, o| compose(t, o))] PartitionColumnList,
     ),
     ClusteredBy(
-        Cluster,
+        Clustered,
         By,
         IdentList,
-        Option<(Sort, By, SortColumnList)>,
+        Option<(Sorted, By, SortColumnList)>,
         Into,
         IntegerLiteral,
         Buckets,
@@ -408,7 +408,7 @@ pub enum CreateTableClause {
 pub struct SortColumnList {
     pub left: LeftParenthesis,
     pub columns: Sequence<SortColumn, Comma>,
-    pub right: LeftParenthesis,
+    pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -572,7 +572,7 @@ pub struct ColumnAlterationList {
     pub left: LeftParenthesis,
     #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
     pub columns: Sequence<ColumnAlteration, Comma>,
-    pub right: LeftParenthesis,
+    pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -623,7 +623,7 @@ pub struct AssignmentList {
     pub left: LeftParenthesis,
     #[parser(function = |a, o| sequence(compose(a, o), unit(o)))]
     pub assignments: Sequence<Assignment, Comma>,
-    pub right: LeftParenthesis,
+    pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser)]

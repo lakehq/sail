@@ -539,11 +539,12 @@ impl Keyword {
 
     /// Whether the keyword is reserved for use as a table alias.
     /// These keywords cannot be used as table aliases unless quoted.
-    /// This is the same list of "strict-non-reserved" keywords in Spark SQL
-    /// default mode.
+    /// This includes the "strict-non-reserved" keywords in Spark SQL
+    /// default mode, as well as additional keywords from `sqlparser-rs`.
     pub fn is_reserved_for_table_alias(&self) -> bool {
         matches!(
             self,
+            // "strict-non-reserved" keywords in Spark SQL default mode
             Self::Anti
                 | Self::Cross
                 | Self::Except
@@ -560,6 +561,42 @@ impl Keyword {
                 | Self::Semi
                 | Self::Union
                 | Self::Using
+                // additional keywords from `sqlparser-rs`
+                | Self::Analyze
+                | Self::Cluster
+                | Self::Connect
+                | Self::Distribute
+                | Self::End
+                | Self::Explain
+                | Self::Fetch
+                | Self::For
+                | Self::Format
+                | Self::From
+                | Self::Global
+                | Self::Group
+                | Self::Having
+                | Self::Limit
+                | Self::MatchRecognize
+                | Self::Offset
+                | Self::Order
+                | Self::Outer
+                | Self::Partition
+                | Self::Pivot
+                | Self::Prewhere
+                | Self::Qualify
+                | Self::Sample
+                | Self::Select
+                | Self::Set
+                | Self::Settings
+                | Self::Sort
+                | Self::Start
+                | Self::Tablesample
+                | Self::Top
+                | Self::Unpivot
+                | Self::View
+                | Self::Where
+                | Self::Window
+                | Self::With
         )
     }
 }

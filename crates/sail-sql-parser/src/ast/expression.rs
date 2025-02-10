@@ -14,8 +14,8 @@ use crate::ast::keywords::{
     Last, Leading, Like, Microsecond, Microseconds, Millisecond, Milliseconds, Minute, Minutes,
     Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay, Partition, Placing, Position,
     Preceding, Range, Rlike, Rollup, Row, Rows, Second, Seconds, Sets, Similar, Sort, Struct,
-    Substr, Substring, Then, Timestamp, To, Trailing, Trim, True, Unbounded, Unknown, Week, Weeks,
-    When, Year, Years,
+    Substr, Substring, Table, Then, Timestamp, To, Trailing, Trim, True, Unbounded, Unknown, Week,
+    Weeks, When, Year, Years,
 };
 use crate::ast::literal::{NumberLiteral, StringLiteral};
 use crate::ast::operator;
@@ -41,16 +41,20 @@ pub enum Expr {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Expr, Query, DataType)")]
 pub enum AtomExpr {
-    SubqueryExpr(
+    Subquery(
         LeftParenthesis,
         #[parser(function = |(_, q, _), _| q)] Query,
         RightParenthesis,
     ),
-    ExistsExpr(
+    Exists(
         Exists,
         LeftParenthesis,
         #[parser(function = |(_, q, _), _| q)] Query,
         RightParenthesis,
+    ),
+    Table(
+        Table,
+        #[parser(function = |(_, q, _), o| compose(q, o))] TableExpr,
     ),
     LambdaFunction {
         params: LambdaFunctionParameters,
@@ -172,6 +176,18 @@ pub enum AtomExpr {
     ),
     Placeholder(Variable),
     Identifier(Ident),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Query")]
+pub enum TableExpr {
+    Name(ObjectName),
+    NestedName(LeftParenthesis, ObjectName, RightParenthesis),
+    Query(
+        LeftParenthesis,
+        #[parser(function = |q, _| q)] Query,
+        RightParenthesis,
+    ),
 }
 
 #[derive(Debug, Clone, TreeParser)]
