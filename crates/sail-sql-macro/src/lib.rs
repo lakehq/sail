@@ -39,6 +39,14 @@ pub(crate) mod utils;
 ///
 ///     By default, the `parser()` method will expect unit argument (`()`).
 ///
+/// * `parser(label = expr)`
+///
+///     This can be specified at the top level for the enum or the struct.
+///     The label is used to represent the class of tokens that the parser is expected to parse.
+///     The label is used to provide better error messages when the parser fails.
+///     When the label is not specified, the error message would show the list of expected tokens
+///     for the invalid input.
+///
 /// * `parser(function = expr)`
 ///
 ///     This can be specified for individual fields (named or unnamed fields in

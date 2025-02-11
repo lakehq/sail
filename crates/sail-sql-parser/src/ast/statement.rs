@@ -21,9 +21,10 @@ use crate::ast::operator::{Colon, Comma, Equals, LeftParenthesis, Minus, Plus, R
 use crate::ast::query::{IdentList, Query, WhereClause};
 use crate::combinator::{compose, sequence, unit};
 use crate::common::Sequence;
+use crate::token::TokenLabel;
 
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Statement, Query, Expr, DataType)")]
+#[parser(dependency = "(Statement, Query, Expr, DataType)", label = TokenLabel::Statement)]
 pub enum Statement {
     Query(#[parser(function = |(_, q, _, _), _| q)] Query),
     SetCatalog {

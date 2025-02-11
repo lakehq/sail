@@ -1,11 +1,12 @@
 use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
+use chumsky::label::LabelError;
 use chumsky::prelude::custom;
 use chumsky::Parser;
 
 use crate::ast::whitespace::whitespace;
 use crate::options::ParserOptions;
-use crate::token::{Punctuation, Token, TokenSpan, TokenValue};
+use crate::token::{Punctuation, Token, TokenLabel, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
 
 fn operator_parser<'a, O, F, E>(
@@ -15,6 +16,7 @@ fn operator_parser<'a, O, F, E>(
 where
     F: Fn(TokenSpan) -> O + Clone + 'static,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     custom(move |input| {
         let mut span = TokenSpan::default();
@@ -29,10 +31,7 @@ where
                 }
                 x => {
                     return Err(Error::expected_found(
-                        vec![Some(
-                            Token::new(TokenValue::Punctuation(*punctuation), TokenSpan::default())
-                                .into(),
-                        )],
+                        vec![],
                         x.map(std::convert::From::from),
                         input.span_since(offset),
                     ))
@@ -43,25 +42,27 @@ where
     })
     .then_ignore(whitespace().repeated())
     .map(builder)
+    .labelled(TokenLabel::Operator(punctuations))
 }
 
 macro_rules! define_operator {
-    ($identifier:ident, [$($punctuation:ident),*]) => {
+    ($name:ident, [$($punctuation:ident),*]) => {
         #[derive(Debug, Clone)]
-        pub struct $identifier {
+        pub struct $name {
             pub span: TokenSpan,
         }
 
-        impl $identifier {
-            pub const fn punctuations() -> &'static [Punctuation] {
+        impl $name {
+            const fn punctuations() -> &'static [Punctuation] {
                 &[$(Punctuation::$punctuation),*]
             }
         }
 
-        impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for $identifier
+        impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for $name
         where
             'opt: 'a,
             E: ParserExtra<'a, &'a [Token<'a>]>,
+            E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
         {
             fn parser(
                 _args: (),

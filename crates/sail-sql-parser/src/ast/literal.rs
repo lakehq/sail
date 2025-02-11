@@ -1,11 +1,12 @@
 use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
+use chumsky::label::LabelError;
 use chumsky::prelude::any;
 use chumsky::Parser;
 
 use crate::ast::whitespace::whitespace;
 use crate::options::ParserOptions;
-use crate::token::{Punctuation, StringStyle, Token, TokenClass, TokenSpan, TokenValue};
+use crate::token::{Punctuation, StringStyle, Token, TokenLabel, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
 
 #[derive(Debug, Clone)]
@@ -19,6 +20,7 @@ impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for NumberLiteral
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     fn parser(
         _args: (),
@@ -34,19 +36,10 @@ where
                     value: value.to_string(),
                     suffix: suffix.to_string(),
                 }),
-                x => Err(Error::expected_found(
-                    vec![Some(
-                        Token::new(
-                            TokenValue::Placeholder(TokenClass::Number),
-                            TokenSpan::default(),
-                        )
-                        .into(),
-                    )],
-                    Some(x.into()),
-                    s,
-                )),
+                x => Err(Error::expected_found(vec![], Some(x.into()), s)),
             })
             .then_ignore(whitespace().repeated())
+            .labelled(TokenLabel::Number)
     }
 }
 
@@ -60,6 +53,7 @@ impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for IntegerLiteral
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     fn parser(
         _args: (),
@@ -88,19 +82,10 @@ where
                         return Ok(IntegerLiteral { span, value });
                     }
                 };
-                Err(Error::expected_found(
-                    vec![Some(
-                        Token::new(
-                            TokenValue::Placeholder(TokenClass::Integer),
-                            TokenSpan::default(),
-                        )
-                        .into(),
-                    )],
-                    Some(From::from(token)),
-                    s,
-                ))
+                Err(Error::expected_found(vec![], Some(From::from(token)), s))
             })
             .then_ignore(whitespace().repeated())
+            .labelled(TokenLabel::Integer)
     }
 }
 
@@ -115,6 +100,7 @@ impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for StringLiteral
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     fn parser(
         _args: (),
@@ -130,18 +116,9 @@ where
                     value: style.parse(raw),
                     style,
                 }),
-                x => Err(Error::expected_found(
-                    vec![Some(
-                        Token::new(
-                            TokenValue::Placeholder(TokenClass::String),
-                            TokenSpan::default(),
-                        )
-                        .into(),
-                    )],
-                    Some(x.into()),
-                    s,
-                )),
+                x => Err(Error::expected_found(vec![], Some(x.into()), s)),
             })
             .then_ignore(whitespace().repeated())
+            .labelled(TokenLabel::String)
     }
 }

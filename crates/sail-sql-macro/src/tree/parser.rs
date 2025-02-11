@@ -17,6 +17,7 @@ struct AttributeArgument;
 
 impl AttributeArgument {
     const DEPENDENCY: &'static str = "dependency";
+    const LABEL: &'static str = "label";
     const FUNCTION: &'static str = "function";
 }
 
@@ -195,12 +196,13 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
         }
     };
 
-    let dependency = {
+    let (dependency, label) = {
         let mut extractor = AttributeExtractor::try_new(ATTRIBUTE, &input.attrs)?;
-        let dep = extractor
+        let dependency = extractor
             .extract_argument_value(AttributeArgument::DEPENDENCY, ParserDependency::extract)?;
+        let label = extractor.extract_argument_value(AttributeArgument::LABEL, Ok)?;
         extractor.expect_empty()?;
-        dep
+        (dependency, label)
     };
     // Use boxed parser to reduce compile times for large parsers.
     // There may be a better heuristic to detect large parsers,
@@ -208,6 +210,10 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
     let parser = match dependency {
         ParserDependency::None => parser,
         _ => quote! { #parser.boxed() },
+    };
+    let parser = match label {
+        Some(label) => quote! { #parser.labelled(#label) },
+        None => parser,
     };
     let (generics, args_type, args_bounds) = match dependency {
         ParserDependency::One(t) => (
@@ -244,6 +250,7 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
         where
             'opt: 'a,
             E: chumsky::extra::ParserExtra<'a, &'a [crate::token::Token<'a>]>,
+            E::Error: chumsky::label::LabelError<'a, &'a [crate::token::Token<'a>], crate::token::TokenLabel>,
             #args_bounds
         {
             fn parser(

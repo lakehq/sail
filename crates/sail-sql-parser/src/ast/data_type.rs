@@ -14,9 +14,10 @@ use crate::ast::operator::{
 };
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
+use crate::token::TokenLabel;
 
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "DataType")]
+#[parser(dependency = "DataType", label = TokenLabel::DataType)]
 pub enum DataType {
     Null(Null),
     Void(Void),

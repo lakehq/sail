@@ -1,6 +1,7 @@
 use std::iter::Iterator;
 
 use chumsky::extra::ParserExtra;
+use chumsky::label::LabelError;
 use chumsky::pratt::{infix, left};
 use chumsky::prelude::choice;
 use chumsky::{IterParser, Parser};
@@ -19,11 +20,11 @@ use crate::ast::operator::{Comma, LeftParenthesis, RightParenthesis};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
 use crate::options::ParserOptions;
-use crate::token::Token;
+use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
 
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Query, Expr, DataType)")]
+#[parser(dependency = "(Query, Expr, DataType)", label = TokenLabel::Query)]
 pub struct Query {
     #[parser(function = |(q, _, _), o| compose(q, o))]
     pub with: Option<WithClause>,
@@ -88,6 +89,7 @@ impl<'a, 'opt, E, P1, P2> TreeParser<'a, 'opt, &'a [Token<'a>], E, (P1, P2)> for
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
     P1: Parser<'a, &'a [Token<'a>], Query, E> + Clone + 'a,
     P2: Parser<'a, &'a [Token<'a>], Expr, E> + Clone + 'a,
 {

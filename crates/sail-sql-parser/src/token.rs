@@ -66,9 +66,6 @@ pub enum TokenValue<'a> {
     MultiLineComment { raw: &'a str },
     /// A punctuation character.
     Punctuation(Punctuation),
-    /// A placeholder used to represent a class of expected token values in errors.
-    /// This token value will not be present in the lexer output.
-    Placeholder(TokenClass),
 }
 
 impl Display for TokenValue<'_> {
@@ -104,16 +101,18 @@ impl Display for TokenValue<'_> {
             TokenValue::Punctuation(p) => {
                 write!(f, "{}", p.to_char())
             }
-            TokenValue::Placeholder(c) => {
-                write!(f, "{c}")
-            }
         }
     }
 }
 
-/// A class of SQL token values.
+/// A SQL token label.
+/// This is useful in error messages to represent an expected class of token values.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TokenClass {
+pub enum TokenLabel {
+    /// A keyword.
+    Keyword(Keyword),
+    /// An operator.
+    Operator(&'static [Punctuation]),
     /// An identifier.
     Identifier,
     /// A variable consisting of `$` followed by an identifier.
@@ -124,16 +123,36 @@ pub enum TokenClass {
     Integer,
     /// A string.
     String,
+    /// A statement.
+    Statement,
+    /// A query.
+    Query,
+    /// An expression.
+    Expression,
+    /// A data type.
+    DataType,
 }
 
-impl Display for TokenClass {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for TokenLabel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Identifier => write!(f, "<identifier>"),
-            Self::Variable => write!(f, "<variable>"),
-            Self::Number => write!(f, "<number>"),
-            Self::Integer => write!(f, "<integer>"),
-            Self::String => write!(f, "<string>"),
+            Self::Keyword(k) => write!(f, "'{}'", k.as_str()),
+            Self::Operator(op) => {
+                write!(f, "'")?;
+                for p in op.iter() {
+                    write!(f, "{}", p.to_char())?;
+                }
+                write!(f, "'")
+            }
+            Self::Identifier => write!(f, "identifier"),
+            Self::Variable => write!(f, "variable"),
+            Self::Number => write!(f, "number"),
+            Self::Integer => write!(f, "integer"),
+            Self::String => write!(f, "string"),
+            Self::Statement => write!(f, "statement"),
+            Self::Query => write!(f, "query"),
+            Self::Expression => write!(f, "expression"),
+            Self::DataType => write!(f, "data type"),
         }
     }
 }

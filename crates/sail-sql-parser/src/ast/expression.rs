@@ -1,4 +1,5 @@
 use chumsky::extra::ParserExtra;
+use chumsky::label::LabelError;
 use chumsky::pratt::{infix, left, postfix, prefix};
 use chumsky::prelude::choice;
 use chumsky::Parser;
@@ -26,7 +27,7 @@ use crate::ast::query::{NamedExpr, Query};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
 use crate::options::ParserOptions;
-use crate::token::Token;
+use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
 
 #[derive(Debug, Clone)]
@@ -602,6 +603,7 @@ impl<'a, 'opt, E, P1, P2, P3> TreeParser<'a, 'opt, &'a [Token<'a>], E, (P1, P2, 
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
     P1: Parser<'a, &'a [Token<'a>], Expr, E> + Clone + 'a,
     P2: Parser<'a, &'a [Token<'a>], Query, E> + Clone + 'a,
     P3: Parser<'a, &'a [Token<'a>], DataType, E> + Clone + 'a,
@@ -713,5 +715,6 @@ where
                 |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
             ),
         ))
+        .labelled(TokenLabel::Expression)
     }
 }

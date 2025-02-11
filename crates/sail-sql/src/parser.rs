@@ -9,6 +9,7 @@ use sail_sql_parser::parser::{
     create_named_expression_parser, create_object_name_parser, create_parser,
     create_qualified_wildcard_parser,
 };
+use sail_sql_parser::token::TokenLabel;
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
@@ -19,12 +20,14 @@ use crate::statement::from_ast_statements;
 macro_rules! parse {
     ($input:ident, $parser:ident $(,)?) => {{
         let options = ParserOptions::default();
-        let lexer = create_lexer::<chumsky::extra::Err<chumsky::error::Rich<_>>>(&options);
+        let lexer =
+            create_lexer::<chumsky::extra::Err<chumsky::error::Rich<_, _, TokenLabel>>>(&options);
         let tokens = lexer
             .parse($input)
             .into_result()
             .map_err(SqlError::parser)?;
-        let parser = $parser::<chumsky::extra::Err<chumsky::error::Rich<_>>>(&options);
+        let parser =
+            $parser::<chumsky::extra::Err<chumsky::error::Rich<_, _, TokenLabel>>>(&options);
         parser
             .parse(&tokens)
             .into_result()

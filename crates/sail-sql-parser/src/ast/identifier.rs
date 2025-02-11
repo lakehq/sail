@@ -1,5 +1,6 @@
 use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
+use chumsky::label::LabelError;
 use chumsky::prelude::any;
 use chumsky::Parser;
 use sail_sql_macro::TreeParser;
@@ -8,13 +9,14 @@ use crate::ast::operator::{Asterisk, Period};
 use crate::ast::whitespace::whitespace;
 use crate::common::Sequence;
 use crate::options::ParserOptions;
-use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenClass, TokenSpan, TokenValue};
+use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
 
 fn identifier_parser<'a, O, F, E>(builder: F) -> impl Parser<'a, &'a [Token<'a>], O, E> + Clone
 where
     F: Fn(String, Option<Keyword>, TokenSpan) -> Option<O> + Clone + 'static,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     any()
         .try_map(move |t: Token<'a>, s| {
@@ -40,19 +42,10 @@ where
                     return Ok(ident);
                 }
             };
-            Err(Error::expected_found(
-                vec![Some(
-                    Token::new(
-                        TokenValue::Placeholder(TokenClass::Identifier),
-                        TokenSpan::default(),
-                    )
-                    .into(),
-                )],
-                Some(t.into()),
-                s,
-            ))
+            Err(Error::expected_found(vec![], Some(t.into()), s))
         })
         .then_ignore(whitespace().repeated())
+        .labelled(TokenLabel::Identifier)
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +58,7 @@ impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for Ident
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     fn parser(
         _args: (),
@@ -93,6 +87,7 @@ impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for ColumnIdent
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     fn parser(
         _args: (),
@@ -129,6 +124,7 @@ impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for TableIdent
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     fn parser(
         _args: (),
@@ -164,6 +160,7 @@ impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for Variable
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     fn parser(
         _args: (),
@@ -183,17 +180,8 @@ where
                         value: raw.to_string(),
                     });
                 };
-                Err(Error::expected_found(
-                    vec![Some(
-                        Token::new(
-                            TokenValue::Placeholder(TokenClass::Variable),
-                            TokenSpan::default(),
-                        )
-                        .into(),
-                    )],
-                    Some(w.into()),
-                    s,
-                ))
+                Err(Error::expected_found(vec![], Some(w.into()), s))
             })
+            .labelled(TokenLabel::Variable)
     }
 }

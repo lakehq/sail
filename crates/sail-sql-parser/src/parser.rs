@@ -1,4 +1,5 @@
 use chumsky::extra::ParserExtra;
+use chumsky::label::LabelError;
 use chumsky::prelude::{end, Recursive};
 use chumsky::{IterParser, Parser};
 
@@ -10,7 +11,7 @@ use crate::ast::query::{NamedExpr, Query};
 use crate::ast::statement::Statement;
 use crate::ast::whitespace::whitespace;
 use crate::options::ParserOptions;
-use crate::token::Token;
+use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
 
 fn statement<'a, 'opt, E>(
@@ -19,6 +20,7 @@ fn statement<'a, 'opt, E>(
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     let mut statement = Recursive::declare();
     let mut query = Recursive::declare();
@@ -53,6 +55,7 @@ fn data_type<'a, 'opt, E>(
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     let mut data_type = Recursive::declare();
     data_type.define(DataType::parser(data_type.clone(), options));
@@ -65,6 +68,7 @@ fn object_name<'a, 'opt, E>(
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     ObjectName::parser((), options)
 }
@@ -75,6 +79,7 @@ fn qualified_wildcard<'a, 'opt, E>(
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     QualifiedWildcard::parser((), options)
 }
@@ -85,6 +90,7 @@ fn expression<'a, 'opt, E>(
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     let mut expression = Recursive::declare();
     let mut query = Recursive::declare();
@@ -109,6 +115,7 @@ fn named_expression<'a, 'opt, E>(
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     NamedExpr::parser(expression(options), options)
 }
@@ -119,6 +126,7 @@ fn interval_literal<'a, 'opt, E>(
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     IntervalLiteral::parser(expression(options), options)
 }
@@ -129,6 +137,7 @@ pub fn create_parser<'a, 'opt, E>(
 where
     'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     statement(options)
         .padded_by(
@@ -149,6 +158,7 @@ macro_rules! define_sub_parser {
         where
             'opt: 'a,
             E: ParserExtra<'a, &'a [Token<'a>]>,
+            E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
         {
             $parse(options)
                 .padded_by(whitespace().repeated())
@@ -182,16 +192,17 @@ mod tests {
     use crate::lexer::create_lexer;
     use crate::options::ParserOptions;
     use crate::parser::create_parser;
+    use crate::token::TokenLabel;
 
-    type Extra<'a, T> = chumsky::extra::Err<Rich<'a, T>>;
+    type Extra<'a, T, S> = chumsky::extra::Err<Rich<'a, T, S, TokenLabel>>;
 
     #[test]
     fn test_parse() {
         let sql = "/* */ ; SELECT 1;;; SELECT 2";
         let options = ParserOptions::default();
-        let lexer = create_lexer::<Extra<_>>(&options);
+        let lexer = create_lexer::<Extra<_, _>>(&options);
         let tokens = lexer.parse(sql).unwrap();
-        let parser = create_parser::<Extra<_>>(&options);
+        let parser = create_parser::<Extra<_, _>>(&options);
         let tree = parser.parse(&tokens).unwrap();
         assert!(matches!(
             tree.as_slice(),
