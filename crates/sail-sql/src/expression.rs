@@ -2,13 +2,13 @@ use std::iter::once;
 
 use sail_common::spec;
 use sail_sql_parser::ast::expression::{
-    AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, ExprList, ExprModifier,
-    ExprPredicate, FunctionArgument, FunctionExpr, LambdaFunctionParameters, OrderBy, OrderByExpr,
-    OrderDirection, OrderNulls, OverClause, PartitionBy, PatternEscape, TableExpr, TrimExpr,
+    AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, ExprList,
+    FunctionArgument, FunctionExpr, LambdaFunctionParameters, OrderBy, OrderByExpr, OrderDirection,
+    OrderNulls, OverClause, PartitionBy, PatternEscape, PatternQuantifier, TableExpr, TrimExpr,
     UnaryOperator, WindowFrame, WindowFrameBound, WindowSpec,
 };
 use sail_sql_parser::ast::identifier::ObjectName;
-use sail_sql_parser::ast::query::IdentList;
+use sail_sql_parser::ast::query::{IdentList, NamedExpr};
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
@@ -153,7 +153,6 @@ fn from_ast_expression_list(expr: ExprList) -> SqlResult<Vec<spec::Expr>> {
 pub(crate) fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
     match expr {
         Expr::Atom(atom) => from_ast_atom_expression(atom),
-        Expr::Modifier(expr, modifier) => from_ast_expression_modifier(*expr, modifier),
         Expr::UnaryOperator(op, expr) => Ok(spec::Expr::UnresolvedFunction {
             function_name: from_ast_unary_operator(op)?,
             arguments: vec![from_ast_expression(*expr)?],
@@ -169,11 +168,193 @@ pub(crate) fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 is_user_defined_function: false,
             })
         }
-        Expr::Predicate(expr, predicate) => from_ast_expression_predicate(*expr, predicate),
+        Expr::Wildcard(expr, _, _) => {
+            let expr = from_ast_expression(*expr)?;
+            match expr {
+                spec::Expr::UnresolvedAttribute {
+                    name,
+                    plan_id: None,
+                } => Ok(spec::Expr::UnresolvedStar {
+                    target: Some(name),
+                    wildcard_options: Default::default(),
+                }),
+                _ => Err(SqlError::invalid("wildcard qualifier")),
+            }
+        }
+        Expr::Field(expr, _, field) => {
+            let expr = from_ast_expression(*expr)?;
+            match expr {
+                spec::Expr::UnresolvedAttribute { name, plan_id } => {
+                    Ok(spec::Expr::UnresolvedAttribute {
+                        name: name.child(field.value.into()),
+                        plan_id,
+                    })
+                }
+                _ => Ok(spec::Expr::UnresolvedExtractValue {
+                    child: Box::new(expr),
+                    extraction: Box::new(spec::Expr::UnresolvedAttribute {
+                        name: spec::ObjectName::new_unqualified(field.value.into()),
+                        plan_id: None,
+                    }),
+                }),
+            }
+        }
+        Expr::Subscript(expr, _, subscript, _) => {
+            let expr = from_ast_expression(*expr)?;
+            Ok(spec::Expr::UnresolvedExtractValue {
+                child: Box::new(expr),
+                extraction: Box::new(from_ast_expression(*subscript)?),
+            })
+        }
+        Expr::Cast(expr, _, data_type) => {
+            let expr = from_ast_expression(*expr)?;
+            Ok(spec::Expr::Cast {
+                expr: Box::new(expr),
+                cast_to_type: from_ast_data_type(data_type)?,
+            })
+        }
+        Expr::IsFalse(expr, _, not, _) => {
+            let expr = from_ast_expression(*expr)?;
+            if not.is_some() {
+                Ok(spec::Expr::IsNotFalse(Box::new(expr)))
+            } else {
+                Ok(spec::Expr::IsFalse(Box::new(expr)))
+            }
+        }
+        Expr::IsTrue(expr, _, not, _) => {
+            let expr = from_ast_expression(*expr)?;
+            if not.is_some() {
+                Ok(spec::Expr::IsNotTrue(Box::new(expr)))
+            } else {
+                Ok(spec::Expr::IsTrue(Box::new(expr)))
+            }
+        }
+        Expr::IsUnknown(expr, _, not, _) => {
+            let expr = from_ast_expression(*expr)?;
+            if not.is_some() {
+                Ok(spec::Expr::IsNotUnknown(Box::new(expr)))
+            } else {
+                Ok(spec::Expr::IsUnknown(Box::new(expr)))
+            }
+        }
+        Expr::IsNull(expr, _, not, _) => {
+            let expr = from_ast_expression(*expr)?;
+            if not.is_some() {
+                Ok(spec::Expr::IsNotNull(Box::new(expr)))
+            } else {
+                Ok(spec::Expr::IsNull(Box::new(expr)))
+            }
+        }
+        Expr::IsDistinctFrom(expr, _, not, _, _, other) => {
+            let expr = from_ast_expression(*expr)?;
+            let other = from_ast_expression(*other)?;
+            if not.is_some() {
+                Ok(spec::Expr::IsNotDistinctFrom {
+                    left: Box::new(expr),
+                    right: Box::new(other),
+                })
+            } else {
+                Ok(spec::Expr::IsDistinctFrom {
+                    left: Box::new(expr),
+                    right: Box::new(other),
+                })
+            }
+        }
+        Expr::InList(expr, not, _, _, list, _) => {
+            let expr = from_ast_expression(*expr)?;
+            Ok(spec::Expr::InList {
+                expr: Box::new(expr),
+                list: list
+                    .into_items()
+                    .map(from_ast_expression)
+                    .collect::<SqlResult<Vec<_>>>()?,
+                negated: not.is_some(),
+            })
+        }
+        Expr::InSubquery(expr, not, _, _, query, _) => {
+            let expr = from_ast_expression(*expr)?;
+            Ok(spec::Expr::InSubquery {
+                expr: Box::new(expr),
+                subquery: Box::new(from_ast_query(query)?),
+                negated: not.is_some(),
+            })
+        }
+        Expr::Between(expr, not, _, low, _, high) => {
+            let expr = from_ast_expression(*expr)?;
+            Ok(spec::Expr::Between {
+                expr: Box::new(expr),
+                negated: not.is_some(),
+                low: Box::new(from_ast_expression(*low)?),
+                high: Box::new(from_ast_expression(*high)?),
+            })
+        }
+        Expr::Like(expr, not, _, quantifier, pattern, escape) => {
+            let expr = from_ast_expression(*expr)?;
+            let pattern = from_ast_quantified_pattern(quantifier, *pattern)?;
+            let mut arguments = vec![expr, pattern];
+            if let Some(escape) = from_ast_pattern_escape_string(escape)? {
+                arguments.push(LiteralValue(escape.to_string()).try_into()?);
+            };
+            let expr = spec::Expr::UnresolvedFunction {
+                function_name: "like".to_string(),
+                arguments,
+                is_distinct: false,
+                is_user_defined_function: false,
+            };
+            if not.is_some() {
+                Ok(negated(expr))
+            } else {
+                Ok(expr)
+            }
+        }
+        Expr::ILike(expr, not, _, quantifier, pattern, escape) => {
+            let expr = from_ast_expression(*expr)?;
+            let pattern = from_ast_quantified_pattern(quantifier, *pattern)?;
+            let mut arguments = vec![expr, pattern];
+            if let Some(escape) = from_ast_pattern_escape_string(escape)? {
+                arguments.push(LiteralValue(escape.to_string()).try_into()?);
+            };
+            let expr = spec::Expr::UnresolvedFunction {
+                function_name: "ilike".to_string(),
+                arguments,
+                is_distinct: false,
+                is_user_defined_function: false,
+            };
+            if not.is_some() {
+                Ok(negated(expr))
+            } else {
+                Ok(expr)
+            }
+        }
+        Expr::RLike(expr, not, _, pattern) => {
+            let expr = from_ast_expression(*expr)?;
+            let expr = spec::Expr::UnresolvedFunction {
+                function_name: "rlike".to_string(),
+                arguments: vec![expr, from_ast_expression(*pattern)?],
+                is_distinct: false,
+                is_user_defined_function: false,
+            };
+            if not.is_some() {
+                Ok(negated(expr))
+            } else {
+                Ok(expr)
+            }
+        }
+        Expr::SimilarTo(expr, not, _, _, pattern, escape) => {
+            let expr = from_ast_expression(*expr)?;
+            let escape_char = from_ast_pattern_escape_string(escape)?;
+            Ok(spec::Expr::SimilarTo {
+                expr: Box::new(expr),
+                pattern: Box::new(from_ast_expression(*pattern)?),
+                negated: not.is_some(),
+                escape_char,
+                case_insensitive: false,
+            })
+        }
     }
 }
 
-pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
+fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
     match atom {
         AtomExpr::Subquery(_, query, _) => Ok(spec::Expr::ScalarSubquery {
             subquery: Box::new(from_ast_query(query)?),
@@ -518,193 +699,6 @@ pub(crate) fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> 
     }
 }
 
-pub(crate) fn from_ast_expression_modifier(
-    expr: Expr,
-    modifier: ExprModifier,
-) -> SqlResult<spec::Expr> {
-    let expr = from_ast_expression(expr)?;
-    match modifier {
-        ExprModifier::Wildcard(_, _) => match expr {
-            spec::Expr::UnresolvedAttribute {
-                name,
-                plan_id: None,
-            } => Ok(spec::Expr::UnresolvedStar {
-                target: Some(name),
-                wildcard_options: Default::default(),
-            }),
-            _ => Err(SqlError::invalid("wildcard qualifier")),
-        },
-        ExprModifier::FieldAccess(_, field) => match expr {
-            spec::Expr::UnresolvedAttribute { name, plan_id } => {
-                Ok(spec::Expr::UnresolvedAttribute {
-                    name: name.child(field.value.into()),
-                    plan_id,
-                })
-            }
-            _ => Ok(spec::Expr::UnresolvedExtractValue {
-                child: Box::new(expr),
-                extraction: Box::new(spec::Expr::UnresolvedAttribute {
-                    name: spec::ObjectName::new_unqualified(field.value.into()),
-                    plan_id: None,
-                }),
-            }),
-        },
-        ExprModifier::SubscriptAccess(_, subscript, _) => Ok(spec::Expr::UnresolvedExtractValue {
-            child: Box::new(expr),
-            extraction: Box::new(from_ast_expression(*subscript)?),
-        }),
-        ExprModifier::Cast(_, data_type) => Ok(spec::Expr::Cast {
-            expr: Box::new(expr),
-            cast_to_type: from_ast_data_type(data_type)?,
-        }),
-    }
-}
-
-pub(crate) fn from_ast_expression_predicate(
-    expr: Expr,
-    predicate: ExprPredicate,
-) -> SqlResult<spec::Expr> {
-    let expr = from_ast_expression(expr)?;
-    match predicate {
-        ExprPredicate::IsFalse(_, not, _) => {
-            if not.is_some() {
-                Ok(spec::Expr::IsNotFalse(Box::new(expr)))
-            } else {
-                Ok(spec::Expr::IsFalse(Box::new(expr)))
-            }
-        }
-        ExprPredicate::IsTrue(_, not, _) => {
-            if not.is_some() {
-                Ok(spec::Expr::IsNotTrue(Box::new(expr)))
-            } else {
-                Ok(spec::Expr::IsTrue(Box::new(expr)))
-            }
-        }
-        ExprPredicate::IsUnknown(_, not, _) => {
-            if not.is_some() {
-                Ok(spec::Expr::IsNotUnknown(Box::new(expr)))
-            } else {
-                Ok(spec::Expr::IsUnknown(Box::new(expr)))
-            }
-        }
-        ExprPredicate::IsNull(_, not, _) => {
-            if not.is_some() {
-                Ok(spec::Expr::IsNotNull(Box::new(expr)))
-            } else {
-                Ok(spec::Expr::IsNull(Box::new(expr)))
-            }
-        }
-        ExprPredicate::IsDistinctFrom(_, not, _, _, other) => {
-            let other = from_ast_expression(*other)?;
-            if not.is_some() {
-                Ok(spec::Expr::IsNotDistinctFrom {
-                    left: Box::new(expr),
-                    right: Box::new(other),
-                })
-            } else {
-                Ok(spec::Expr::IsDistinctFrom {
-                    left: Box::new(expr),
-                    right: Box::new(other),
-                })
-            }
-        }
-        ExprPredicate::InList(not, _, _, list, _) => Ok(spec::Expr::InList {
-            expr: Box::new(expr),
-            list: list
-                .into_items()
-                .map(from_ast_expression)
-                .collect::<SqlResult<Vec<_>>>()?,
-            negated: not.is_some(),
-        }),
-        ExprPredicate::InSubquery(not, _, _, query, _) => Ok(spec::Expr::InSubquery {
-            expr: Box::new(expr),
-            subquery: Box::new(from_ast_query(query)?),
-            negated: not.is_some(),
-        }),
-        ExprPredicate::Between(not, _, low, _, high) => Ok(spec::Expr::Between {
-            expr: Box::new(expr),
-            negated: not.is_some(),
-            low: Box::new(from_ast_expression(*low)?),
-            high: Box::new(from_ast_expression(*high)?),
-        }),
-        ExprPredicate::Like(not, _, quantifier, pattern, escape) => {
-            if quantifier.is_some() {
-                return Err(SqlError::todo("LIKE quantifier"));
-            }
-            let mut arguments = vec![expr, from_ast_expression(*pattern)?];
-            if let Some(PatternEscape { escape: _, value }) = escape {
-                arguments.push(LiteralValue(value.value).try_into()?);
-            };
-            let expr = spec::Expr::UnresolvedFunction {
-                function_name: "like".to_string(),
-                arguments,
-                is_distinct: false,
-                is_user_defined_function: false,
-            };
-            if not.is_some() {
-                Ok(negated(expr))
-            } else {
-                Ok(expr)
-            }
-        }
-        ExprPredicate::ILike(not, _, quantifier, pattern, escape) => {
-            if quantifier.is_some() {
-                return Err(SqlError::todo("ILIKE quantifier"));
-            }
-            let mut arguments = vec![expr, from_ast_expression(*pattern)?];
-            if let Some(PatternEscape { escape: _, value }) = escape {
-                arguments.push(LiteralValue(value.value).try_into()?);
-            };
-            let expr = spec::Expr::UnresolvedFunction {
-                function_name: "ilike".to_string(),
-                arguments,
-                is_distinct: false,
-                is_user_defined_function: false,
-            };
-            if not.is_some() {
-                Ok(negated(expr))
-            } else {
-                Ok(expr)
-            }
-        }
-        ExprPredicate::RLike(not, _, pattern) => {
-            let expr = spec::Expr::UnresolvedFunction {
-                function_name: "rlike".to_string(),
-                arguments: vec![expr, from_ast_expression(*pattern)?],
-                is_distinct: false,
-                is_user_defined_function: false,
-            };
-            if not.is_some() {
-                Ok(negated(expr))
-            } else {
-                Ok(expr)
-            }
-        }
-        ExprPredicate::SimilarTo(not, _, _, pattern, escape) => {
-            let escape_char = if let Some(PatternEscape { escape: _, value }) = escape {
-                let mut chars = value.value.chars();
-                match (chars.next(), chars.next()) {
-                    (Some(x), None) => Some(x),
-                    _ => {
-                        return Err(SqlError::invalid(
-                            "invalid escape character in SIMILAR TO expression",
-                        ))
-                    }
-                }
-            } else {
-                None
-            };
-            Ok(spec::Expr::SimilarTo {
-                expr: Box::new(expr),
-                pattern: Box::new(from_ast_expression(*pattern)?),
-                negated: not.is_some(),
-                escape_char,
-                case_insensitive: false,
-            })
-        }
-    }
-}
-
 pub(crate) fn from_ast_identifier_list(identifiers: IdentList) -> SqlResult<Vec<spec::Identifier>> {
     let IdentList {
         left: _,
@@ -712,4 +706,51 @@ pub(crate) fn from_ast_identifier_list(identifiers: IdentList) -> SqlResult<Vec<
         right: _,
     } = identifiers;
     Ok(columns.into_items().map(|x| x.value.into()).collect())
+}
+
+fn from_ast_quantified_pattern(
+    quantifier: Option<PatternQuantifier>,
+    pattern: Expr,
+) -> SqlResult<spec::Expr> {
+    let Some(quantifier) = quantifier else {
+        return from_ast_expression(pattern);
+    };
+    let quantifier = match quantifier {
+        PatternQuantifier::All(_) => "all",
+        PatternQuantifier::Any(_) => "any",
+        PatternQuantifier::Some(_) => "some",
+    };
+    let Expr::Atom(AtomExpr::Tuple(_, arguments, _)) = pattern else {
+        return Err(SqlError::invalid("quantified pattern expression"));
+    };
+    let arguments = arguments
+        .into_items()
+        .map(|x| {
+            let NamedExpr { expr, alias: None } = x else {
+                return Err(SqlError::invalid("pattern expression with alias"));
+            };
+            from_ast_expression(expr)
+        })
+        .collect::<SqlResult<Vec<_>>>()?;
+    Ok(spec::Expr::UnresolvedFunction {
+        function_name: quantifier.to_string(),
+        arguments,
+        is_distinct: false,
+        is_user_defined_function: false,
+    })
+}
+
+fn from_ast_pattern_escape_string(escape: Option<PatternEscape>) -> SqlResult<Option<char>> {
+    let Some(escape) = escape else {
+        return Ok(None);
+    };
+    let PatternEscape { escape: _, value } = escape;
+    let mut chars = value.value.chars();
+    match (chars.next(), chars.next()) {
+        (Some(x), None) => Ok(Some(x)),
+        _ => Err(SqlError::invalid(format!(
+            "invalid escape character: {}",
+            value.value
+        ))),
+    }
 }
