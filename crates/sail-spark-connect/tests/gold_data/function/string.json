@@ -3605,7 +3605,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_binary"
+        "success": "ok"
       }
     },
     {
@@ -3803,7 +3803,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_binary"
+        "success": "ok"
       }
     },
     {
@@ -3825,7 +3825,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_binary"
+        "success": "ok"
       }
     }
   ]

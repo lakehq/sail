@@ -25,6 +25,7 @@ mod spark_hash_utils;
 pub mod spark_hex_unhex;
 pub mod spark_murmur3_hash;
 pub mod spark_reverse;
+pub mod spark_to_binary;
 pub mod spark_xxhash64;
 pub mod struct_function;
 pub mod table_input;
