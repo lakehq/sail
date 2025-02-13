@@ -64,7 +64,6 @@ impl ScalarUDFImpl for SparkToBinary {
         if args.len() == 1 {
             SparkUnHex::new().invoke_batch(args, number_rows)
         } else {
-            // let (expr, format) = args.two()?;
             match &args[1] {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s)))

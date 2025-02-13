@@ -7,6 +7,7 @@ use crate::error::PlanResult;
 use crate::extension::function::least_greatest;
 use crate::extension::function::randn::Randn;
 use crate::extension::function::random::Random;
+use crate::extension::function::spark_abs::SparkAbs;
 use crate::extension::function::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
@@ -148,7 +149,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("+", F::custom(plus)),
         ("-", F::custom(minus)),
         ("/", F::binary(spark_divide)),
-        ("abs", F::unary(expr_fn::abs)),
+        ("abs", F::udf(SparkAbs::new())),
         ("acos", F::unary(expr_fn::acos)),
         ("acosh", F::unary(expr_fn::acosh)),
         ("asin", F::unary(expr_fn::asin)),

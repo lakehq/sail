@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Function 'abs' expects NativeType::Numeric but received NativeType::Interval(YearMonth) No function matches the given name and argument types 'abs(Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs(Numeric(1))"
+        "success": "ok"
       }
     },
     {
