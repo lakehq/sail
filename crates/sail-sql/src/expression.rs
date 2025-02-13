@@ -412,7 +412,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Expr::UnresolvedFunction {
-                function_name: "named_struct".to_string(),
+                function_name: "struct".to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,

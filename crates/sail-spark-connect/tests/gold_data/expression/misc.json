@@ -69,7 +69,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "named_struct",
+            "functionName": "struct",
             "arguments": [
               {
                 "alias": {
@@ -175,7 +175,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "named_struct",
+            "functionName": "struct",
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -207,7 +207,7 @@
           "inSubquery": {
             "expr": {
               "unresolvedFunction": {
-                "functionName": "named_struct",
+                "functionName": "struct",
                 "arguments": [
                   {
                     "unresolvedAttribute": {
@@ -269,7 +269,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "named_struct",
+            "functionName": "struct",
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -309,7 +309,7 @@
           "inSubquery": {
             "expr": {
               "unresolvedFunction": {
-                "functionName": "named_struct",
+                "functionName": "struct",
                 "arguments": [
                   {
                     "unresolvedAttribute": {
