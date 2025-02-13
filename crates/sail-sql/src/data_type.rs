@@ -7,6 +7,7 @@ use sail_sql_parser::ast::literal::IntegerLiteral;
 use sail_sql_parser::ast::operator::{LeftParenthesis, RightParenthesis};
 
 use crate::error::{SqlError, SqlResult};
+use crate::value::from_ast_string;
 
 pub const SQL_DECIMAL_DEFAULT_PRECISION: u8 = 10;
 pub const SQL_DECIMAL_DEFAULT_SCALE: i8 = 0;
@@ -228,7 +229,7 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                             let data_type = from_ast_data_type(data_type)?;
                             let mut metadata = vec![];
                             if let Some((_, comment)) = comment {
-                                metadata.push(("comment".to_string(), comment.value.clone()));
+                                metadata.push(("comment".to_string(), from_ast_string(comment)?));
                             };
                             Ok(spec::Field {
                                 name,

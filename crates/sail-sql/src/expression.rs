@@ -14,7 +14,9 @@ use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
 use crate::literal::{parse_date_string, parse_timestamp_string, LiteralValue, Signed};
 use crate::query::{from_ast_named_expression, from_ast_query};
-use crate::value::{from_ast_boolean_literal, from_ast_number_literal, from_ast_string_literal};
+use crate::value::{
+    from_ast_boolean_literal, from_ast_number_literal, from_ast_string, from_ast_string_literal,
+};
 
 fn negated(expr: spec::Expr) -> spec::Expr {
     spec::Expr::UnresolvedFunction {
@@ -585,11 +587,13 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         | AtomExpr::TimestampLtzLiteral(_, value)
         | AtomExpr::TimestampNtzLiteral(_, value) => {
             // FIXME: timezone information is lost
-            Ok(spec::Expr::Literal(parse_timestamp_string(&value.value)?))
+            Ok(spec::Expr::Literal(parse_timestamp_string(
+                &from_ast_string(value)?,
+            )?))
         }
-        AtomExpr::Date(_, _, value, _) | AtomExpr::DateLiteral(_, value) => {
-            Ok(spec::Expr::Literal(parse_date_string(&value.value)?))
-        }
+        AtomExpr::Date(_, _, value, _) | AtomExpr::DateLiteral(_, value) => Ok(
+            spec::Expr::Literal(parse_date_string(&from_ast_string(value)?)?),
+        ),
         AtomExpr::Function(function) => {
             let FunctionExpr {
                 name: ObjectName(name),
@@ -689,9 +693,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::Interval(_, value) => Ok(spec::Expr::Literal(spec::Literal::try_from(
             LiteralValue(Signed::Positive(value)),
         )?)),
-        AtomExpr::Placeholder(variable) => {
-            Ok(spec::Expr::Placeholder(format!("${}", variable.value)))
-        }
+        AtomExpr::Placeholder(variable) => Ok(spec::Expr::Placeholder(variable.value)),
         AtomExpr::Identifier(x) => Ok(spec::Expr::UnresolvedAttribute {
             name: spec::ObjectName::new_unqualified(x.value.into()),
             plan_id: None,
@@ -745,12 +747,12 @@ fn from_ast_pattern_escape_string(escape: Option<PatternEscape>) -> SqlResult<Op
         return Ok(None);
     };
     let PatternEscape { escape: _, value } = escape;
-    let mut chars = value.value.chars();
+    let value = from_ast_string(value)?;
+    let mut chars = value.chars();
     match (chars.next(), chars.next()) {
         (Some(x), None) => Ok(Some(x)),
         _ => Err(SqlError::invalid(format!(
-            "invalid escape character: {}",
-            value.value
+            "invalid escape character: {value}"
         ))),
     }
 }

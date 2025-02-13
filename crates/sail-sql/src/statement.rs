@@ -19,6 +19,7 @@ use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_identifier_list, from_ast_object_name};
 use crate::parser::parse_one_statement;
 use crate::query::from_ast_query;
+use crate::value::from_ast_string;
 
 pub(crate) fn from_ast_statements(statements: Vec<Statement>) -> SqlResult<Vec<spec::Plan>> {
     statements.into_iter().map(from_ast_statement).collect()
@@ -39,7 +40,7 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
         } => {
             let name = match name {
                 Either::Left(x) => x.value,
-                Either::Right(x) => x.value,
+                Either::Right(x) => from_ast_string(x)?,
             };
             let node = spec::CommandNode::SetCurrentCatalog {
                 catalog_name: name.into(),
@@ -76,8 +77,8 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
                 database: from_ast_object_name(name)?,
                 definition: spec::DatabaseDefinition {
                     if_not_exists: if_not_exists.is_some(),
-                    comment: comment.map(|x| x.value),
-                    location: location.map(|x| x.value),
+                    comment: comment.map(from_ast_string).transpose()?,
+                    location: location.map(from_ast_string).transpose()?,
                     properties: properties
                         .map(from_ast_property_list)
                         .transpose()?
@@ -428,10 +429,10 @@ fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::Tab
     let (schema, column_defaults) = from_ast_table_columns(columns)?;
     Ok(spec::TableDefinition {
         schema,
-        comment: comment.map(|x| x.value),
+        comment: comment.map(from_ast_string).transpose()?,
         column_defaults,
         constraints: vec![],
-        location: location.map(|x| x.value),
+        location: location.map(from_ast_string).transpose()?,
         file_format,
         row_format,
         table_partition_cols,
@@ -508,7 +509,7 @@ fn from_ast_row_format(format: RowFormat) -> SqlResult<spec::TableRowFormat> {
                 .transpose()?
                 .unwrap_or_default();
             Ok(spec::TableRowFormat::Serde {
-                name: name.value,
+                name: from_ast_string(name)?,
                 properties,
             })
         }
@@ -524,12 +525,20 @@ fn from_ast_row_format(format: RowFormat) -> SqlResult<spec::TableRowFormat> {
                 null_defined_as,
             } = clauses.try_into()?;
             let (fields_terminated_by, fields_escaped_by) = fields_terminated_by_escaped_by
-                .map(|(t, e)| (Some(t.value), e.map(|x| x.value)))
+                .map(|(t, e)| -> SqlResult<_> {
+                    Ok((
+                        Some(from_ast_string(t)?),
+                        e.map(from_ast_string).transpose()?,
+                    ))
+                })
+                .transpose()?
                 .unwrap_or((None, None));
-            let collection_items_terminated_by = collection_items_terminated_by.map(|x| x.value);
-            let map_keys_terminated_by = map_keys_terminated_by.map(|x| x.value);
-            let lines_terminated_by = lines_terminated_by.map(|x| x.value);
-            let null_defined_as = null_defined_as.map(|x| x.value);
+            let collection_items_terminated_by = collection_items_terminated_by
+                .map(from_ast_string)
+                .transpose()?;
+            let map_keys_terminated_by = map_keys_terminated_by.map(from_ast_string).transpose()?;
+            let lines_terminated_by = lines_terminated_by.map(from_ast_string).transpose()?;
+            let null_defined_as = null_defined_as.map(from_ast_string).transpose()?;
             Ok(spec::TableRowFormat::Delimited {
                 fields_terminated_by,
                 fields_escaped_by,
@@ -545,8 +554,8 @@ fn from_ast_row_format(format: RowFormat) -> SqlResult<spec::TableRowFormat> {
 fn from_ast_file_format(format: FileFormat) -> SqlResult<spec::TableFileFormat> {
     match format {
         FileFormat::Table(_, input, _, output) => Ok(spec::TableFileFormat::Table {
-            input_format: input.value,
-            output_format: output.value,
+            input_format: from_ast_string(input)?,
+            output_format: from_ast_string(output)?,
         }),
         FileFormat::General(x) => Ok(spec::TableFileFormat::General { format: x.value }),
     }
@@ -833,11 +842,11 @@ fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<St
             .map(|x| x.value)
             .collect::<Vec<_>>()
             .join("."),
-        PropertyKey::Literal(x) => x.value,
+        PropertyKey::Literal(x) => from_ast_string(x)?,
     };
     let value = if let Some((_, value)) = value {
         let value = match value {
-            PropertyValue::String(x) => x.value,
+            PropertyValue::String(x) => from_ast_string(x)?,
             PropertyValue::Number(
                 sign,
                 NumberLiteral {

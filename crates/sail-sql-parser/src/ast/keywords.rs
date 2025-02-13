@@ -19,6 +19,7 @@ where
     E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
     any()
+        .then_ignore(whitespace().repeated())
         .try_map(move |t: Token<'a>, s| match t {
             Token {
                 value: TokenValue::Word {
@@ -32,7 +33,6 @@ where
                 s,
             )),
         })
-        .then_ignore(whitespace().repeated())
         .labelled(TokenLabel::Keyword(keyword))
 }
 

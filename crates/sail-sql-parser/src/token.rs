@@ -1,9 +1,6 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-use chumsky::prelude::{end, just, none_of};
-use chumsky::Parser;
-
 /// A token in the SQL lexer output.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token<'a> {
@@ -121,7 +118,7 @@ pub enum TokenLabel {
     Number,
     /// A possibly signed integer literal without suffix.
     Integer,
-    /// A string.
+    /// A string literal.
     String,
     /// A statement.
     Statement,
@@ -175,10 +172,14 @@ pub enum StringStyle {
     TripleDoubleQuoted { prefix: Option<char> },
     /// A Unicode string literal surrounded by one single quote on each side.
     /// (e.g., `U&'hello'`).
-    UnicodeSingleQuoted,
+    /// The escape character defaults to `\` but can be specified via `UESCAPE`
+    /// after the string literal.
+    UnicodeSingleQuoted { escape: Option<char> },
     /// A Unicode string literal surrounded by one double quote on each side.
     /// (e.g., `U&"hello"`).
-    UnicodeDoubleQuoted,
+    /// The escape character defaults to `\` but can be specified via `UESCAPE`
+    /// after the string literal.
+    UnicodeDoubleQuoted { escape: Option<char> },
     /// A string literal surrounded by one backtick on each side.
     BacktickQuoted,
     /// A string literal surrounded by the same tag on each side where the tag
@@ -186,107 +187,6 @@ pub enum StringStyle {
     /// with tag `$tag$`). The text of the tag can be an empty string (e.g., `$$hello$$`
     /// with an empty tag `$$`).
     DollarQuoted { tag: String },
-}
-
-impl StringStyle {
-    pub fn prefix(&self) -> Option<char> {
-        match self {
-            Self::SingleQuoted { prefix }
-            | Self::DoubleQuoted { prefix }
-            | Self::TripleSingleQuoted { prefix }
-            | Self::TripleDoubleQuoted { prefix } => *prefix,
-            _ => None,
-        }
-    }
-
-    pub fn parse(&self, raw: &str) -> String {
-        // FIXME: handle escape sequences
-        // FIXME: `none_of` is overly restrictive
-        let output = match self {
-            Self::SingleQuoted { prefix: None } => none_of::<_, _, chumsky::extra::Default>('\'')
-                .repeated()
-                .to_slice()
-                .padded_by(just('\''))
-                .then_ignore(end())
-                .parse(raw),
-            Self::SingleQuoted {
-                prefix: Some(prefix),
-            } => just::<_, _, chumsky::extra::Default>(prefix)
-                .then(just(' ').or(just('\t')).repeated())
-                .ignore_then(none_of('\'').repeated().to_slice().padded_by(just('\'')))
-                .then_ignore(end())
-                .parse(raw),
-            Self::DoubleQuoted { prefix: None } => none_of::<_, _, chumsky::extra::Default>('"')
-                .repeated()
-                .to_slice()
-                .padded_by(just('"'))
-                .then_ignore(end())
-                .parse(raw),
-            Self::DoubleQuoted {
-                prefix: Some(prefix),
-            } => just::<_, _, chumsky::extra::Default>(prefix)
-                .then(just(' ').or(just('\t')).repeated())
-                .ignore_then(none_of('"').repeated().to_slice().padded_by(just('"')))
-                .then_ignore(end())
-                .parse(raw),
-            Self::TripleSingleQuoted { prefix: None } => {
-                none_of::<_, _, chumsky::extra::Default>('\'')
-                    .repeated()
-                    .to_slice()
-                    .padded_by(just("'''"))
-                    .then_ignore(end())
-                    .parse(raw)
-            }
-            Self::TripleSingleQuoted {
-                prefix: Some(prefix),
-            } => just::<_, _, chumsky::extra::Default>(prefix)
-                .then(just(' ').or(just('\t')).repeated())
-                .ignore_then(none_of('\'').repeated().to_slice().padded_by(just("'''")))
-                .then_ignore(end())
-                .parse(raw),
-            Self::TripleDoubleQuoted { prefix: None } => {
-                none_of::<_, _, chumsky::extra::Default>('"')
-                    .repeated()
-                    .to_slice()
-                    .padded_by(just("\"\"\""))
-                    .then_ignore(end())
-                    .parse(raw)
-            }
-            Self::TripleDoubleQuoted {
-                prefix: Some(prefix),
-            } => just::<_, _, chumsky::extra::Default>(prefix)
-                .then(just(' ').or(just('\t')).repeated())
-                .ignore_then(none_of('"').repeated().to_slice().padded_by(just("\"\"\"")))
-                .then_ignore(end())
-                .parse(raw),
-            Self::UnicodeSingleQuoted => none_of::<_, _, chumsky::extra::Default>('\'')
-                .repeated()
-                .to_slice()
-                .delimited_by(just("U&'"), just("'"))
-                .then_ignore(end())
-                .parse(raw),
-            Self::UnicodeDoubleQuoted => none_of::<_, _, chumsky::extra::Default>('"')
-                .repeated()
-                .to_slice()
-                .delimited_by(just("U&\""), just("\""))
-                .then_ignore(end())
-                .parse(raw),
-            Self::BacktickQuoted => none_of::<_, _, chumsky::extra::Default>('`')
-                .repeated()
-                .to_slice()
-                .padded_by(just('`'))
-                .then_ignore(end())
-                .parse(raw),
-            Self::DollarQuoted { tag } => none_of::<_, _, chumsky::extra::Default>('$')
-                .repeated()
-                .to_slice()
-                .padded_by(just(tag.as_str()))
-                .then_ignore(end())
-                .parse(raw),
-        };
-        // TODO: propagate error
-        output.into_output().unwrap_or_default().to_string()
-    }
 }
 
 macro_rules! for_all_punctuations {

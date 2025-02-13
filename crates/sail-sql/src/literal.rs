@@ -17,11 +17,12 @@ use sail_sql_parser::ast::expression::{
     AtomExpr, Expr, IntervalExpr, IntervalLiteral, IntervalQualifier, IntervalUnit,
     IntervalValueWithUnit, UnaryOperator,
 };
-use sail_sql_parser::ast::literal::{NumberLiteral, StringLiteral};
+use sail_sql_parser::ast::literal::NumberLiteral;
 use {chrono, chrono_tz};
 
 use crate::error::{SqlError, SqlResult};
 use crate::parser::parse_interval_literal;
+use crate::value::from_ast_string;
 
 lazy_static! {
     static ref BINARY_REGEX: regex::Regex =
@@ -288,7 +289,7 @@ impl TryFrom<LiteralValue<Signed<IntervalExpr>>> for spec::Literal {
                 }
             }
             IntervalExpr::Literal(value) => {
-                parse_unqualified_interval_string(&value.value, negated)
+                parse_unqualified_interval_string(&from_ast_string(value)?, negated)
             }
         }
     }
@@ -482,8 +483,7 @@ where
     type Error = SqlError;
 
     fn try_from(expr: Expr) -> SqlResult<LiteralValue<T>> {
-        let error = || SqlError::invalid(format!("expression: {:?}", expr));
-        match &expr {
+        match expr {
             Expr::UnaryOperator(UnaryOperator::Minus(_), expr) => {
                 let value = LiteralValue::<T>::try_from(*expr.clone())?;
                 Ok(LiteralValue(-value.0))
@@ -492,20 +492,18 @@ where
                 span: _,
                 value,
                 suffix,
-            })) if suffix.is_empty() => {
-                let value = value.parse::<T>().map_err(|_| error())?;
-                Ok(LiteralValue(value))
+            })) if suffix.is_empty() => match value.parse::<T>() {
+                Ok(x) => Ok(LiteralValue(x)),
+                Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
+            },
+            Expr::Atom(AtomExpr::StringLiteral(value)) => {
+                let value = from_ast_string(value)?;
+                match value.parse::<T>() {
+                    Ok(x) => Ok(LiteralValue(x)),
+                    Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
+                }
             }
-            Expr::Atom(AtomExpr::StringLiteral(StringLiteral {
-                span: _,
-                value,
-                style: _,
-            })) => {
-                // TODO: handle escape strings
-                let value = value.parse::<T>().map_err(|_| error())?;
-                Ok(LiteralValue(value))
-            }
-            _ => Err(error()),
+            _ => Err(SqlError::invalid(format!("literal expression: {:?}", expr))),
         }
     }
 }

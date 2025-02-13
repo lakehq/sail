@@ -9,42 +9,51 @@ use crate::ast::operator::{Asterisk, Period};
 use crate::ast::whitespace::whitespace;
 use crate::common::Sequence;
 use crate::options::ParserOptions;
+use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel, TokenSpan, TokenValue};
 use crate::tree::TreeParser;
 
-fn identifier_parser<'a, O, F, E>(builder: F) -> impl Parser<'a, &'a [Token<'a>], O, E> + Clone
+fn identifier_parser<'a, O, F, E>(
+    builder: F,
+    options: &ParserOptions,
+) -> impl Parser<'a, &'a [Token<'a>], O, E> + Clone
 where
     F: Fn(String, Option<Keyword>, TokenSpan) -> Option<O> + Clone + 'static,
     E: ParserExtra<'a, &'a [Token<'a>]>,
     E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
 {
+    let options = options.clone();
     any()
+        .then_ignore(whitespace().repeated())
         .try_map(move |t: Token<'a>, s| {
-            if let Token {
-                value: TokenValue::Word { keyword, raw },
-                span,
-            } = t.clone()
-            {
-                if let Some(ident) = builder(raw.to_string(), keyword, span) {
-                    return Ok(ident);
+            #[allow(clippy::single_match)]
+            match &t {
+                Token {
+                    value: TokenValue::Word { keyword, raw },
+                    span,
+                } => {
+                    if let Some(ident) = builder(raw.to_string(), *keyword, *span) {
+                        return Ok(ident);
+                    }
                 }
-            };
-            if let Token {
-                value:
-                    TokenValue::String {
-                        raw,
-                        style: style @ StringStyle::BacktickQuoted,
-                    },
-                span,
-            } = t.clone()
-            {
-                if let Some(ident) = builder(style.parse(raw), None, span) {
-                    return Ok(ident);
+                Token {
+                    value: TokenValue::String { raw, style },
+                    span,
+                } if is_identifier_string(style, &options) => {
+                    if let StringValue::Valid {
+                        value,
+                        prefix: None,
+                    } = style.parse(raw, &options)
+                    {
+                        if let Some(ident) = builder(value, None, *span) {
+                            return Ok(ident);
+                        }
+                    }
                 }
-            };
+                _ => {}
+            }
             Err(Error::expected_found(vec![], Some(t.into()), s))
         })
-        .then_ignore(whitespace().repeated())
         .labelled(TokenLabel::Identifier)
 }
 
@@ -62,9 +71,9 @@ where
 {
     fn parser(
         _args: (),
-        _options: &'opt ParserOptions,
+        options: &'opt ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        identifier_parser(|value, _keyword, span| Some(Ident { span, value }))
+        identifier_parser(|value, _keyword, span| Some(Ident { span, value }), options)
     }
 }
 
@@ -91,17 +100,20 @@ where
 {
     fn parser(
         _args: (),
-        _options: &'opt ParserOptions,
+        options: &'opt ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        identifier_parser(|value, keyword, span| {
-            if keyword
-                .is_some_and(|k| k.is_reserved_in_ansi_mode() || k.is_reserved_for_column_alias())
-            {
-                None
-            } else {
-                Some(ColumnIdent { span, value })
-            }
-        })
+        identifier_parser(
+            |value, keyword, span| {
+                if keyword.is_some_and(|k| {
+                    k.is_reserved_in_ansi_mode() || k.is_reserved_for_column_alias()
+                }) {
+                    None
+                } else {
+                    Some(ColumnIdent { span, value })
+                }
+            },
+            options,
+        )
     }
 }
 
@@ -128,17 +140,20 @@ where
 {
     fn parser(
         _args: (),
-        _options: &'opt ParserOptions,
+        options: &'opt ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        identifier_parser(|value, keyword, span| {
-            if keyword
-                .is_some_and(|k| k.is_reserved_in_ansi_mode() || k.is_reserved_for_table_alias())
-            {
-                None
-            } else {
-                Some(TableIdent { span, value })
-            }
-        })
+        identifier_parser(
+            |value, keyword, span| {
+                if keyword.is_some_and(|k| {
+                    k.is_reserved_in_ansi_mode() || k.is_reserved_for_table_alias()
+                }) {
+                    None
+                } else {
+                    Some(TableIdent { span, value })
+                }
+            },
+            options,
+        )
     }
 }
 
@@ -148,11 +163,10 @@ pub struct ObjectName(pub Sequence<Ident, Period>);
 #[derive(Debug, Clone, TreeParser)]
 pub struct QualifiedWildcard(pub Sequence<Ident, Period>, pub Period, pub Asterisk);
 
-/// An identifier with the `$` prefix.
+/// A named variable `$name` or `:name`, or an unnamed variable `?`.
 #[derive(Debug, Clone)]
 pub struct Variable {
     pub span: TokenSpan,
-    /// The variable identifier without the `$` prefix.
     pub value: String,
 }
 
@@ -166,22 +180,54 @@ where
         _args: (),
         _options: &'opt ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        any()
-            .filter(|t: &Token<'a>| matches!(t.value, TokenValue::Punctuation(Punctuation::Dollar)))
-            .then(any())
-            .try_map(|(d, w): (Token<'a>, Token<'a>), s| {
-                if let Token {
-                    value: TokenValue::Word { keyword: _, raw },
-                    span,
-                } = w
-                {
-                    return Ok(Variable {
-                        span: d.span.union(&span),
-                        value: raw.to_string(),
-                    });
-                };
-                Err(Error::expected_found(vec![], Some(w.into()), s))
-            })
-            .labelled(TokenLabel::Variable)
+        let named =
+            any()
+                .then(any())
+                .try_map(|(prefix, word): (Token<'a>, Token<'a>), s| {
+                    #[allow(clippy::single_match)]
+                    match (prefix, &word) {
+                        (
+                            Token {
+                                value:
+                                    TokenValue::Punctuation(
+                                        p @ (Punctuation::Dollar | Punctuation::Colon),
+                                    ),
+                                span: s1,
+                            },
+                            Token {
+                                value: TokenValue::Word { keyword: _, raw },
+                                span: s2,
+                            },
+                        ) => {
+                            return Ok(Variable {
+                                span: s1.union(s2),
+                                value: format!("{}{}", p.to_char(), raw),
+                            });
+                        }
+                        _ => {}
+                    }
+                    Err(Error::expected_found(vec![], Some(word.into()), s))
+                });
+
+        let unnamed = any().try_map(|t: Token<'a>, s| match t.value {
+            TokenValue::Punctuation(p @ Punctuation::QuestionMark) => Ok(Variable {
+                span: t.span,
+                value: format!("{}", p.to_char()),
+            }),
+            _ => Err(Error::expected_found(vec![], Some(t.into()), s)),
+        });
+
+        named.or(unnamed).labelled(TokenLabel::Variable)
+    }
+}
+
+pub(crate) fn is_identifier_string(style: &StringStyle, options: &ParserOptions) -> bool {
+    if options.allow_double_quote_identifier {
+        matches!(
+            style,
+            StringStyle::BacktickQuoted | StringStyle::DoubleQuoted { .. }
+        )
+    } else {
+        matches!(style, StringStyle::BacktickQuoted)
     }
 }
