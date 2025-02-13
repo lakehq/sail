@@ -11,6 +11,15 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
+      - name: Adjust Swap Space
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          sudo swapon --show
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -26,8 +35,6 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run Cargo Test
-        env:
-          CARGO_BUILD_JOBS: 1
         run: cargo test
 
       - name: Build Python Package
