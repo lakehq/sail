@@ -1,4 +1,4 @@
-name: Gold data script validation
+name: Gold Data Script Validation
 
 on:
   push:
@@ -32,11 +32,11 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
 
-      - name: Bootstrap gold data
+      - name: Bootstrap Gold Data
         run: |
           scripts/spark-gold-data/bootstrap.sh
 
-      - name: Update gold data
+      - name: Update Gold Data
         run: |
           env SAIL_UPDATE_GOLD_DATA=1 cargo test
 

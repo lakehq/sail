@@ -25,14 +25,13 @@ pbjson-types = "0.7.0"
 pbjson-build = "0.7.0"
 tower = { version = "0.5", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["full"] }
-uuid = { version = "1.10.0", features = ["v4"] }
-async-trait = "0.1.84"
+uuid = { version = "1.12.1", features = ["v4"] }
+async-trait = "0.1.86"
 async-recursion = "1.1.0"
 async-stream = "0.3"
 lazy_static = "1.5.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_bytes = "0.11"
 monostate = "0.1"
 regex = "1.10"
 glob = "0.3"
@@ -41,7 +40,7 @@ chrono-tz = "0.10.0"
 futures = "0.3"
 comfy-table = "7.1"
 html-escape = "0.2"
-syn = "2.0.95"
+syn = "2.0.98"
 quote = "1.0.37"
 paste = "1.0.15"
 proc-macro2 = "1.0.92"
@@ -51,28 +50,28 @@ ryu = "1.0.18"
 either = "1.12.0"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
-serde_arrow = { version = "0.12.3", features = ["arrow-53"] }
+serde_arrow = { version = "0.12.3", features = ["arrow-54"] }
 mimalloc = { version = "0.1.43", default-features = false }
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 rand_distr = "0.4.3"
 url = "2.5.4"
 lexical-core = { version = "1.0.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-aws-config = "1.5.13"
+aws-config = "1.5.15"
 aws-credential-types = "1.2.1"
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.27", features = ["derive"] }
 num_enum = "0.7.3"
 log = "0.4.22"
 env_logger = "0.11.6"
-fastrace = { version = "0.7.5", features = ["enable"] }
+fastrace = { version = "0.7.6", features = ["enable"] }
 fastrace-opentelemetry = "0.7.4"
 opentelemetry = "0.26.0"
 opentelemetry_sdk = "0.26.0"
 opentelemetry-otlp = { version = "0.26.0", features = ["tls", "tls-roots"] }
 hdfs-native-object-store = "0.12.1"
 figment = { version = "0.10.19", features = ["toml", "env"] }
-kube = "0.96.0"
-k8s-openapi = { version = "0.23.0", features = ["latest"] }
+kube = "0.98.0"
+k8s-openapi = { version = "0.24.0", features = ["latest"] }
 twox-hash = "2.1.0"
 aes = "0.8.4"
 aes-gcm = "0.10.3"
@@ -81,22 +80,22 @@ base64 = "0.22.1"
 md-5 = "0.10.6"
 half = { version = "2.4.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.61"
-chumsky = { version = "1.0.0-alpha.7", default-features = false, features = ["pratt", "label"] }
+chumsky = { version = "=1.0.0-alpha.7", default-features = false, features = ["pratt", "label"] }
 
 ######
 # The versions of the following dependencies are managed manually.
 ######
 
-datafusion = { version = "44.0.0", features = ["serde", "pyarrow", "avro"] }
-datafusion-common = { version = "44.0.0", features = ["object_store", "pyarrow", "avro"] }
-datafusion-expr = { version = "44.0.0" }
-datafusion-expr-common = { version = "44.0.0" }
-datafusion-proto = { version = "44.0.0" }
-datafusion-functions-nested = { version = "44.0.0" }
-datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "7bcca26" }
+datafusion = { version = "45.0.0", features = ["serde", "pyarrow", "avro"] }
+datafusion-common = { version = "45.0.0", features = ["object_store", "pyarrow", "avro"] }
+datafusion-expr = { version = "45.0.0" }
+datafusion-expr-common = { version = "45.0.0" }
+datafusion-proto = { version = "45.0.0" }
+datafusion-functions-nested = { version = "45.0.0" }
+datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "453183d" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
-pyo3 = { version = "0.22.0", features = ["auto-initialize", "serde"] }
-arrow-flight = { version = "53.3.0" }
+pyo3 = { version = "0.23.4", features = ["auto-initialize", "serde"] }
+arrow-flight = { version = "54.1.0" }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
 # We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
@@ -110,6 +109,31 @@ sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "9ade53d
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-catalog = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-common-runtime = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-doc = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+#datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-functions-aggregate-common = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-functions-table = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-functions-window = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-functions-window-common = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-macros = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-physical-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-physical-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-proto-common = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
+datafusion-sql = { git = "https://github.com/apache/datafusion.git", rev = "a9fb58c" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release

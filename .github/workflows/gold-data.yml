@@ -1,4 +1,4 @@
-name: Gold data
+name: Gold Data
 
 on:
   push:
@@ -23,7 +23,7 @@ jobs:
           path: tmp/baseline
           ref: ${{ steps.baseline.outputs.sha }}
 
-      - name: Generate gold data report
+      - name: Generate Gold Data Report
         env:
           REPORT_GIT_REF_BEFORE: ${{ steps.baseline.outputs.ref }}
           REPORT_GIT_REF_AFTER: ${{ github.ref }}
@@ -32,14 +32,14 @@ jobs:
           scripts/common-gold-data/report.sh . tmp/baseline > tmp/report/report.md
           cat tmp/report/report.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Save pull request number
+      - name: Save Pull Request Number
         if: github.event_name == 'pull_request'
         env:
           NUMBER: ${{ github.event.number }}
         run: |
           echo "$NUMBER" > tmp/report/pull-request.txt
 
-      - name: Upload report
+      - name: Upload Report
         uses: actions/upload-artifact@v4
         with:
           name: gold-data-report

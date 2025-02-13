@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported data type Interval(YearMonth) for function abs"
+        "failure": "error in DataFusion: Error during planning: Function 'abs' expects NativeType::Numeric but received NativeType::Interval(YearMonth) No function matches the given name and argument types 'abs(Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tabs(Numeric(1))"
       }
     },
     {
@@ -1867,7 +1867,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to signum function: coercion from [Interval(YearMonth)] to the signature Uniform(1, [Float64, Float32]) failed. No function matches the given name and argument types 'signum(Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsignum(Float64/Float32)"
+        "failure": "error in DataFusion: Error during planning: Failed to coerce arguments to satisfy a call to 'signum' function: coercion from [Interval(YearMonth)] to the signature Uniform(1, [Float64, Float32]) failed No function matches the given name and argument types 'signum(Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsignum(Float64/Float32)"
       }
     },
     {
@@ -1911,7 +1911,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Error during planning: Failed to coerce arguments to satisfy a call to signum function: coercion from [Interval(YearMonth)] to the signature Uniform(1, [Float64, Float32]) failed. No function matches the given name and argument types 'signum(Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsignum(Float64/Float32)"
+        "failure": "error in DataFusion: Error during planning: Failed to coerce arguments to satisfy a call to 'signum' function: coercion from [Interval(YearMonth)] to the signature Uniform(1, [Float64, Float32]) failed No function matches the given name and argument types 'signum(Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsignum(Float64/Float32)"
       }
     },
     {
