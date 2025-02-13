@@ -13,6 +13,7 @@ jobs:
     steps:
       - name: Adjust Swap Space
         run: |
+          sudo df -h
           sudo swapon --show
           sudo swapoff -a
           sudo fallocate -l 2G /swapfile
