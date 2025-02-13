@@ -3,49 +3,49 @@
     {
       "input": "COMMENT ON DATABASE a.b.c IS 'NULL'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: COMMENT at Line: 1, Column: 1"
+        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
       }
     },
     {
       "input": "COMMENT ON DATABASE a.b.c IS NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: COMMENT at Line: 1, Column: 1"
+        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
       }
     },
     {
       "input": "COMMENT ON NAMESPACE a.b.c IS ''",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: COMMENT at Line: 1, Column: 1"
+        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
       }
     },
     {
       "input": "COMMENT ON TABLE a.b.c IS 'xYz'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: COMMENT at Line: 1, Column: 1"
+        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
       }
     },
     {
       "input": "REFRESH FUNCTION a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: REFRESH at Line: 1, Column: 1"
+        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
       }
     },
     {
       "input": "REFRESH FUNCTION b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: REFRESH at Line: 1, Column: 1"
+        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
       }
     },
     {
       "input": "REFRESH FUNCTION c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: REFRESH at Line: 1, Column: 1"
+        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
       }
     },
     {
       "input": "REFRESH TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: REFRESH at Line: 1, Column: 1"
+        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
       }
     },
     {
@@ -215,7 +215,46 @@
     {
       "input": "VALUES (1, 2, DEFAULT) AS val",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "success": {
+          "query": {
+            "tableAlias": {
+              "input": {
+                "values": [
+                  [
+                    {
+                      "literal": {
+                        "int32": {
+                          "value": 1
+                        }
+                      }
+                    },
+                    {
+                      "literal": {
+                        "int32": {
+                          "value": 2
+                        }
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "DEFAULT"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ]
+                ],
+                "planId": null,
+                "sourceInfo": null
+              },
+              "name": "val",
+              "columns": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]

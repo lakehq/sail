@@ -43,32 +43,32 @@
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\n  ROW FORMAT DELIMITED\n  FIELDS TERMINATED BY '\\t'\n  COLLECTION ITEMS TERMINATED BY '\u0002'\n  MAP KEYS TERMINATED BY '\u0003'\n  LINES TERMINATED BY '\\n'\n  NULL DEFINED AS 'null'\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT DELIMITED\n  FIELDS TERMINATED BY '\\t'\n  COLLECTION ITEMS TERMINATED BY '\u0004'\n  MAP KEYS TERMINATED BY '\u0005'\n  LINES TERMINATED BY '\\n'\n  NULL DEFINED AS 'NULL'\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: FIELDS"
+        "failure": "invalid argument: found FORMAT at 33:39 expected statement, or end of input"
       }
     },
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat'\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: 'cat'"
+        "failure": "invalid argument: found USING at 27:32 expected statement, or end of input"
       }
     },
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat' AS (a int, b string, c long)\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: 'cat'"
+        "failure": "invalid argument: found USING at 27:32 expected statement, or end of input"
       }
     },
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat' AS (a, b, c)\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: 'cat'"
+        "failure": "invalid argument: found USING at 27:32 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM (INSERT INTO BAR VALUES (2))",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BAR': missing ')'.(line 1, pos 27)\n\n== SQL ==\nSELECT * FROM (INSERT INTO BAR VALUES (2))\n---------------------------^^^\n",
       "output": {
-        "failure": "not supported: INSERT statement in set expression"
+        "failure": "invalid argument: found FROM at 9:13 expected statement, or end of input"
       }
     },
     {
@@ -166,7 +166,7 @@
       "input": "SELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'IN'.(line 1, pos 25)\n\n== SQL ==\nSELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))\n-------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: INTO at Line: 1, Column: 37"
+        "failure": "invalid argument: found IN at 25:27 expected statement, or end of input"
       }
     },
     {
@@ -212,154 +212,154 @@
     {
       "input": "SELECT * FROM a LIMIT :limitA",
       "output": {
-        "failure": "invalid argument: expression: Value(Placeholder(\":limitA\"))"
+        "failure": "invalid argument: literal expression: Atom(Placeholder(Variable { span: TokenSpan { start: 22, end: 29 }, value: \":limitA\" }))"
       }
     },
     {
       "input": "SELECT * FROM a LIMIT ?",
       "output": {
-        "failure": "invalid argument: expression: Value(Placeholder(\"?\"))"
+        "failure": "invalid argument: literal expression: Atom(Placeholder(Variable { span: TokenSpan { start: 22, end: 23 }, value: \"?\" }))"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column: 25"
+        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column: 25"
+        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF current_date()",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_TIME at Line: 1, Column: 25"
+        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_VERSION at Line: 1, Column: 25"
+        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: SYSTEM_VERSION at Line: 1, Column: 25"
+        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column: 25"
+        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column: 25"
+        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF current_date()",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: TIMESTAMP at Line: 1, Column: 25"
+        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: VERSION at Line: 1, Column: 25"
+        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: one of UPDATE or SHARE, found: VERSION at Line: 1, Column: 25"
+        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 32:34 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 32:34 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF current_date()",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 32:34 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 35:37 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 35:37 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 30:32 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 30:32 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF col",
       "exception": "\nInvalid time travel spec: timestamp expression cannot refer to any columns.(line 1, pos 36)\n\n== SQL ==\nSELECT * FROM a.b.c TIMESTAMP AS OF col\n------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 30:32 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF current_date()",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 30:32 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 28:30 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: AS"
+        "failure": "invalid argument: found AS at 28:30 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(300M) s",
       "exception": "\nTABLESAMPLE(byteLengthLiteral) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(300M) s\n-------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: s"
+        "failure": "invalid argument: found TABLESAMPLE at 25:36 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s",
       "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON function) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s\n-------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: s"
+        "failure": "invalid argument: found TABLESAMPLE at 25:36 expected statement, or end of input"
       }
     },
     {
@@ -575,14 +575,14 @@
       "input": "SELECT :",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 8)\n\n== SQL ==\nSELECT :\n--------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: placeholder, found: EOF"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "SELECT :-",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'.(line 1, pos 8)\n\n== SQL ==\nSELECT :-\n--------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: placeholder, found: - at Line: 1, Column: 9"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -861,7 +861,7 @@
       "input": "SELECT TRANSFORM(a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData",
       "exception": "\n[UNSUPPORTED_FEATURE.TRANSFORM_NON_HIVE] The feature is not supported: TRANSFORM with SERDE is only supported in hive mode.(line 1, pos 0)\n\n== SQL ==\nSELECT TRANSFORM(a, b, c)\n^^^\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: 'org.apache.hadoop.hive.serde2.OpenCSVSerde'"
+        "failure": "invalid argument: found FORMAT at 32:38 expected statement, or end of input"
       }
     },
     {
@@ -957,7 +957,39 @@
     {
       "input": "SELECT TRIM(BOTH FROM '  bunch o blanks  ')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: '  bunch o blanks  ' at Line: 1, Column: 23"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "trim",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "utf8": {
+                            "value": "  bunch o blanks  "
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1008,7 +1040,39 @@
     {
       "input": "SELECT TRIM(LEADING FROM '  bunch o blanks  ')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: '  bunch o blanks  ' at Line: 1, Column: 26"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "ltrim",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "utf8": {
+                            "value": "  bunch o blanks  "
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1059,13 +1123,45 @@
     {
       "input": "SELECT TRIM(TRAILING FROM '  bunch o blanks  ')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: '  bunch o blanks  ' at Line: 1, Column: 27"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "rtrim",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "utf8": {
+                            "value": "  bunch o blanks  "
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT abs(:1Abc)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: placeholder, found: 1Abc at Line: 1, Column: 13"
+        "failure": "invalid argument: found : at 11:12 expected query"
       }
     },
     {
@@ -1105,7 +1201,49 @@
     {
       "input": "SELECT interval FROM VALUES ('abc') AS tbl(interval);",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ("
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "values": [
+                      [
+                        {
+                          "literal": {
+                            "utf8": {
+                              "value": "abc"
+                            }
+                          }
+                        }
+                      ]
+                    ],
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "tbl",
+                  "columns": [
+                    "interval"
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "interval"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1326,129 +1464,28 @@
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\nlateral view outer json_tuple(x, y) jtup q, z",
       "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "lateralView": {
-                  "input": {
-                    "lateralView": {
-                      "input": {
-                        "read": {
-                          "namedTable": {
-                            "name": [
-                              "t"
-                            ],
-                            "options": []
-                          },
-                          "isStreaming": false
-                        },
-                        "planId": null,
-                        "sourceInfo": null
-                      },
-                      "expression": {
-                        "unresolvedFunction": {
-                          "functionName": "explode",
-                          "arguments": [
-                            {
-                              "unresolvedAttribute": {
-                                "name": [
-                                  "x"
-                                ],
-                                "planId": null
-                              }
-                            }
-                          ],
-                          "isDistinct": false,
-                          "isUserDefinedFunction": false
-                        }
-                      },
-                      "tableAlias": [
-                        "expl"
-                      ],
-                      "columnAliases": null,
-                      "outer": false
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "expression": {
-                    "unresolvedFunction": {
-                      "functionName": "json_tuple",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "x"
-                            ],
-                            "planId": null
-                          }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "y"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
-                    }
-                  },
-                  "tableAlias": [
-                    "jtup"
-                  ],
-                  "columnAliases": [
-                    "q",
-                    "z"
-                  ],
-                  "outer": true
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: found q at 86:87 expected statement, or end of input"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)",
       "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_PIVOT] Not allowed in the FROM clause: LATERAL together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ("
+        "failure": "invalid argument: found pivot at 45:50 expected statement, or end of input"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)",
       "exception": "\n[NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ("
+        "failure": "invalid argument: found pivot at 45:50 expected statement, or end of input"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)",
       "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_UNPIVOT] Not allowed in the FROM clause: LATERAL together with UNPIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ("
+        "failure": "invalid argument: found unpivot at 45:52 expected statement, or end of input"
       }
     },
     {
@@ -1494,13 +1531,13 @@
     {
       "input": "select * from (from a select * select *)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: select at Line: 1, Column: 23"
+        "failure": "invalid argument: found from at 9:13 expected statement, or end of input"
       }
     },
     {
       "input": "select * from a, lateral (select * from b) bb, lateral (select * from c) cc",
       "output": {
-        "failure": "not supported: LATERAL in derived table factor"
+        "failure": "invalid argument: expected function for lateral table factor"
       }
     },
     {
@@ -1557,50 +1594,50 @@
     {
       "input": "select * from my_tvf(2, arg1 => 'value1', arg2 => true)",
       "output": {
-        "failure": "invalid argument: unsupported function argument type"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "select * from my_tvf(2, table (v1), arg1 => table (select 1))",
       "output": {
-        "failure": "invalid argument: unsupported function argument type"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => 'value1', 2, arg2 => true)",
       "output": {
-        "failure": "invalid argument: unsupported function argument type"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => 'value1', arg2 => true)",
       "output": {
-        "failure": "invalid argument: unsupported function argument type"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table (v1), 2, arg2 => true)",
       "output": {
-        "failure": "invalid argument: unsupported function argument type"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table (v1), arg2 => table (select 1))",
       "output": {
-        "failure": "invalid argument: unsupported function argument type"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table v1)",
       "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_FUNCTION_IDENTIFIER_ARGUMENT_MISSING_PARENTHESES] Invalid SQL syntax: Syntax error: call to table-valued function is invalid because parentheses are missing around the provided TABLE argument `v1`; please surround this with parentheses and try again.(line 1, pos 29)\n\n== SQL ==\nselect * from my_tvf(arg1 => table v1)\n-----------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: => at Line: 1, Column: 27"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "select * from my_tvf(group => 'abc')",
       "output": {
-        "failure": "invalid argument: unsupported function argument type"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
@@ -1841,7 +1878,7 @@
     {
       "input": "select * from t , lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: LATERAL in derived table factor"
+        "failure": "invalid argument: expected function for lateral table factor"
       }
     },
     {
@@ -1919,148 +1956,19 @@
       "input": "select * from t cluster by a distribute by a",
       "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t cluster by a distribute by a\n----------------^^^\n",
       "output": {
-        "failure": "not supported: CLUSTER BY clause in SELECT"
+        "failure": "invalid argument: found distribute at 29:39 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t lateral view explode(x) expl as x",
       "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "lateralView": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "t"
-                        ],
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "expression": {
-                    "unresolvedFunction": {
-                      "functionName": "explode",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "x"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
-                    }
-                  },
-                  "tableAlias": [
-                    "expl"
-                  ],
-                  "columnAliases": [
-                    "x"
-                  ],
-                  "outer": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: found as at 45:47 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t lateral view posexplode(x) posexpl as x, y",
       "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "lateralView": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "t"
-                        ],
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "expression": {
-                    "unresolvedFunction": {
-                      "functionName": "posexplode",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "x"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
-                    }
-                  },
-                  "tableAlias": [
-                    "posexpl"
-                  ],
-                  "columnAliases": [
-                    "x",
-                    "y"
-                  ],
-                  "outer": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: found as at 51:53 expected statement, or end of input"
       }
     },
     {
@@ -2114,39 +2022,39 @@
     {
       "input": "select * from t limit cast(9 / 4 as int)",
       "output": {
-        "failure": "invalid argument: expression: Cast { kind: Cast, expr: BinaryOp { left: Value(Number(\"9\", None)), op: Divide, right: Value(Number(\"4\", None)) }, data_type: Int(None), format: None }"
+        "failure": "invalid argument: literal expression: Atom(Cast(Cast { span: TokenSpan { start: 22, end: 26 } }, LeftParenthesis { span: TokenSpan { start: 26, end: 27 } }, BinaryOperator(Atom(NumberLiteral(NumberLiteral { span: TokenSpan { start: 27, end: 28 }, value: \"9\", suffix: \"\" })), Divide(Slash { span: TokenSpan { start: 29, end: 30 } }), Atom(NumberLiteral(NumberLiteral { span: TokenSpan { start: 31, end: 32 }, value: \"4\", suffix: \"\" }))), As { span: TokenSpan { start: 33, end: 35 } }, Int(None, Int { span: TokenSpan { start: 36, end: 39 } }), RightParenthesis { span: TokenSpan { start: 39, end: 40 } }))"
       }
     },
     {
       "input": "select * from t tablesample(100 rows)",
       "output": {
-        "failure": "not supported: table sample"
+        "failure": "invalid argument: found tablesample at 16:27 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t tablesample(43 percent) as x",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: as"
+        "failure": "invalid argument: found tablesample at 16:27 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t tablesample(bucket 11 out of 10) as x",
       "exception": "\nSampling fraction (1.1) must be on interval [0, 1].(line 1, pos 16)\n\n== SQL ==\nselect * from t tablesample(bucket 11 out of 10) as x\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: as"
+        "failure": "invalid argument: found tablesample at 16:27 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10 on x) as x",
       "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON colname) is not supported.(line 1, pos 28)\n\n== SQL ==\nselect * from t tablesample(bucket 4 out of 10 on x) as x\n----------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: as"
+        "failure": "invalid argument: found tablesample at 16:27 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10) as x",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: as"
+        "failure": "invalid argument: found tablesample at 16:27 expected statement, or end of input"
       }
     },
     {
@@ -2248,13 +2156,89 @@
     {
       "input": "select * from t window w1 as ()",
       "output": {
-        "failure": "not implemented: named window in SELECT"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t window w1 as () limit 10",
       "output": {
-        "failure": "not implemented: named window in SELECT"
+        "success": {
+          "query": {
+            "limit": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "skip": 0,
+              "limit": 10
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -2318,7 +2302,7 @@
     {
       "input": "select a from 1k.2m",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: 1k at Line: 1, Column: 15"
+        "failure": "invalid argument: found from at 9:13 expected statement, or end of input"
       }
     },
     {
@@ -2478,13 +2462,13 @@
     {
       "input": "select a, b from db.c where x !< 1",
       "output": {
-        "failure": "invalid argument: sql parser error: No infix parser for token ExclamationMark at Line: 1, Column: 31"
+        "failure": "invalid argument: found ! at 30:31 expected statement, or end of input"
       }
     },
     {
       "input": "select a, b from db.c where x !> 1",
       "output": {
-        "failure": "invalid argument: sql parser error: No infix parser for token ExclamationMark at Line: 1, Column: 31"
+        "failure": "invalid argument: found ! at 30:31 expected statement, or end of input"
       }
     },
     {
@@ -2792,93 +2776,65 @@
     {
       "input": "select from tbl",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected an expression, found: from at Line: 1, Column: 13"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "from"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    "name": [
+                      "tbl"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select id from ((((((t0))))))",
       "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "t0"
-                    ],
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "id"
-                    ],
-                    "planId": null
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: found from at 10:14 expected statement, or end of input"
       }
     },
     {
       "input": "select id from (t0)",
       "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "t0"
-                    ],
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "expressions": [
-                {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "id"
-                    ],
-                    "planId": null
-                  }
-                }
-              ]
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: found from at 10:14 expected statement, or end of input"
       }
     },
     {
       "input": "select ltrim(both 'S' from 'SS abc S'",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 22)\n\n== SQL ==\nselect ltrim(both 'S' from 'SS abc S'\n----------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: 'S' at Line: 1, Column: 19"
+        "failure": "invalid argument: found both at 13:17 expected query"
       }
     },
     {
       "input": "select rtrim(trailing 'S' from 'SS abc S'",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 26)\n\n== SQL ==\nselect rtrim(trailing 'S' from 'SS abc S'\n--------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: 'S' at Line: 1, Column: 23"
+        "failure": "invalid argument: found trailing at 13:21 expected query"
       }
     }
   ]

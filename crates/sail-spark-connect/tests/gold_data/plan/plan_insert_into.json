@@ -148,54 +148,26 @@
               ],
               "columns": [],
               "partitionSpec": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "name": [
-                            "c"
-                          ],
-                          "planId": null
-                        }
-                      },
-                      {
-                        "literal": {
-                          "utf8": {
-                            "value": "d"
-                          }
-                        }
+                [
+                  "c",
+                  {
+                    "literal": {
+                      "utf8": {
+                        "value": "d"
                       }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    }
                   }
-                },
-                {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "name": [
-                            "e"
-                          ],
-                          "planId": null
-                        }
-                      },
-                      {
-                        "literal": {
-                          "int32": {
-                            "value": 1
-                          }
-                        }
+                ],
+                [
+                  "e",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 1
                       }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    }
                   }
-                }
+                ]
               ],
               "overwrite": false
             },

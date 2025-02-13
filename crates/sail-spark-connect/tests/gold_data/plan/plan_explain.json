@@ -41,7 +41,7 @@
       "input": "EXPLAIN logical SELECT 1",
       "exception": "\nUnsupported SQL statement\n== SQL ==\nEXPLAIN logical SELECT 1",
       "output": {
-        "failure": "invalid argument: token after EXPLAIN: logical"
+        "failure": "invalid argument: found logical at 8:15 expected 'EXTENDED', 'CODEGEN', 'COST', 'FORMATTED', 'ANALYZE', 'VERBOSE', or query"
       }
     }
   ]

@@ -3,13 +3,13 @@
     {
       "input": "DROP index IF EXISTS i1 ON a.b.c",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ON"
+        "failure": "invalid argument: found index at 5:10 expected 'DATABASE', 'SCHEMA', 'TABLE', 'VIEW', 'TEMPORARY', or 'FUNCTIONS'"
       }
     },
     {
       "input": "DROP index i1 ON a.b.c",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ON"
+        "failure": "invalid argument: found index at 5:10 expected 'DATABASE', 'SCHEMA', 'TABLE', 'VIEW', 'TEMPORARY', or 'FUNCTIONS'"
       }
     }
   ]

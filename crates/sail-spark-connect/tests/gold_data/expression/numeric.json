@@ -115,7 +115,7 @@
       "input": ".e3",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'.(line 1, pos 0)\n\n== SQL ==\n.e3\n^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an expression, found: . at Line: 1, Column: 1"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -327,13 +327,13 @@
     {
       "input": "1SL",
       "output": {
-        "failure": "invalid argument: number postfix: \"1\"Some(\"SL\")"
+        "failure": "invalid argument: number postfix: 1SL"
       }
     },
     {
       "input": "1a",
       "output": {
-        "failure": "invalid argument: number postfix: \"1\"Some(\"a\")"
+        "failure": "invalid argument: number postfix: 1a"
       }
     },
     {

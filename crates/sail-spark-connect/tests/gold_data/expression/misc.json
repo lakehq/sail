@@ -5,7 +5,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": "!",
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -67,7 +67,47 @@
     {
       "input": "(a as b, b as c)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: as at Line: 1, Column: 4"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "named_struct",
+            "arguments": [
+              {
+                "alias": {
+                  "expr": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  "name": [
+                    "b"
+                  ],
+                  "metadata": null
+                }
+              },
+              {
+                "alias": {
+                  "expr": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  "name": [
+                    "c"
+                  ],
+                  "metadata": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -135,7 +175,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "struct",
+            "functionName": "named_struct",
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -167,7 +207,7 @@
           "inSubquery": {
             "expr": {
               "unresolvedFunction": {
-                "functionName": "struct",
+                "functionName": "named_struct",
                 "arguments": [
                   {
                     "unresolvedAttribute": {
@@ -229,7 +269,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "struct",
+            "functionName": "named_struct",
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -269,7 +309,7 @@
           "inSubquery": {
             "expr": {
               "unresolvedFunction": {
-                "functionName": "struct",
+                "functionName": "named_struct",
                 "arguments": [
                   {
                     "unresolvedAttribute": {
@@ -463,7 +503,50 @@
     {
       "input": "-+~~a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an expression, found: ~~ at Line: 1, Column: 3"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "-",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "+",
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "~",
+                        "arguments": [
+                          {
+                            "unresolvedFunction": {
+                              "functionName": "~",
+                              "arguments": [
+                                {
+                                  "unresolvedAttribute": {
+                                    "name": [
+                                      "a"
+                                    ],
+                                    "planId": null
+                                  }
+                                }
+                              ],
+                              "isDistinct": false,
+                              "isUserDefinedFunction": false
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -562,7 +645,7 @@
       "input": "1 - f('o', o(bar)) hello * world",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '*'.(line 1, pos 25)\n\n== SQL ==\n1 - f('o', o(bar)) hello * world\n-------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: *"
+        "failure": "invalid argument: found * at 25:26 expected end of input"
       }
     },
     {
@@ -588,7 +671,7 @@
     {
       "input": "1a.123_",
       "output": {
-        "failure": "invalid argument: number postfix: \"1\"Some(\"a\")"
+        "failure": "invalid argument: found .123 at 2:6 expected end of input"
       }
     },
     {
@@ -607,22 +690,7 @@
       "input": "GEO '(10,-6)'",
       "exception": "\n[UNSUPPORTED_TYPED_LITERAL] Literals of the type \"GEO\" are not supported. Supported types are \"DATE\", \"TIMESTAMP_NTZ\", \"TIMESTAMP_LTZ\", \"TIMESTAMP\", \"INTERVAL\", \"X\".(line 1, pos 0)\n\n== SQL ==\nGEO '(10,-6)'\n^^^\n",
       "output": {
-        "success": {
-          "alias": {
-            "expr": {
-              "unresolvedAttribute": {
-                "name": [
-                  "GEO"
-                ],
-                "planId": null
-              }
-            },
-            "name": [
-              "(10,-6)"
-            ],
-            "metadata": null
-          }
-        }
+        "failure": "invalid argument: found '(10,-6)' at 4:13 expected end of input"
       }
     },
     {
@@ -697,7 +765,7 @@
       "input": "`fo`o.`ba`r",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'.(line 1, pos 5)\n\n== SQL ==\n`fo`o.`ba`r\n-----^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: ."
+        "failure": "invalid argument: found . at 5:6 expected end of input"
       }
     },
     {
@@ -718,7 +786,7 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "`select`",
+            "functionName": "select",
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -773,7 +841,7 @@
     {
       "input": "a !< b",
       "output": {
-        "failure": "invalid argument: sql parser error: No infix parser for token ExclamationMark at Line: 1, Column: 3"
+        "failure": "invalid argument: found ! at 2:3 expected end of input"
       }
     },
     {
@@ -809,7 +877,7 @@
     {
       "input": "a !> b",
       "output": {
-        "failure": "invalid argument: sql parser error: No infix parser for token ExclamationMark at Line: 1, Column: 3"
+        "failure": "invalid argument: found ! at 2:3 expected end of input"
       }
     },
     {
@@ -989,53 +1057,45 @@
                                 },
                                 {
                                   "unresolvedFunction": {
-                                    "functionName": "div",
+                                    "functionName": "*",
                                     "arguments": [
                                       {
                                         "unresolvedFunction": {
-                                          "functionName": "%",
-                                          "arguments": [
-                                            {
-                                              "unresolvedAttribute": {
-                                                "name": [
-                                                  "f"
-                                                ],
-                                                "planId": null
-                                              }
-                                            },
-                                            {
-                                              "unresolvedAttribute": {
-                                                "name": [
-                                                  "g"
-                                                ],
-                                                "planId": null
-                                              }
-                                            }
-                                          ],
-                                          "isDistinct": false,
-                                          "isUserDefinedFunction": false
-                                        }
-                                      },
-                                      {
-                                        "unresolvedFunction": {
-                                          "functionName": "*",
+                                          "functionName": "/",
                                           "arguments": [
                                             {
                                               "unresolvedFunction": {
-                                                "functionName": "/",
+                                                "functionName": "div",
                                                 "arguments": [
                                                   {
-                                                    "unresolvedAttribute": {
-                                                      "name": [
-                                                        "h"
+                                                    "unresolvedFunction": {
+                                                      "functionName": "%",
+                                                      "arguments": [
+                                                        {
+                                                          "unresolvedAttribute": {
+                                                            "name": [
+                                                              "f"
+                                                            ],
+                                                            "planId": null
+                                                          }
+                                                        },
+                                                        {
+                                                          "unresolvedAttribute": {
+                                                            "name": [
+                                                              "g"
+                                                            ],
+                                                            "planId": null
+                                                          }
+                                                        }
                                                       ],
-                                                      "planId": null
+                                                      "isDistinct": false,
+                                                      "isUserDefinedFunction": false
                                                     }
                                                   },
                                                   {
                                                     "unresolvedAttribute": {
                                                       "name": [
-                                                        "i"
+                                                        "h"
                                                       ],
                                                       "planId": null
                                                     }
@@ -1048,7 +1108,7 @@
                                             {
                                               "unresolvedAttribute": {
                                                 "name": [
-                                                  "k"
+                                                  "i"
                                                 ],
                                                 "planId": null
                                               }
@@ -1056,6 +1116,14 @@
                                           ],
                                           "isDistinct": false,
                                           "isUserDefinedFunction": false
+                                        }
+                                      },
+                                      {
+                                        "unresolvedAttribute": {
+                                          "name": [
+                                            "k"
+                                          ],
+                                          "planId": null
                                         }
                                       }
                                     ],
@@ -1789,7 +1857,7 @@
     {
       "input": "a as (b, c)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an identifier after AS, found: ( at Line: 1, Column: 6"
+        "failure": "invalid argument: found as at 2:4 expected end of input"
       }
     },
     {
@@ -2120,39 +2188,7 @@
     {
       "input": "a not regexp 'pattern%'",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "not",
-            "arguments": [
-              {
-                "unresolvedFunction": {
-                  "functionName": "rlike",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "literal": {
-                        "utf8": {
-                          "value": "pattern%"
-                        }
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "invalid argument: found regexp at 6:12 expected end of input"
       }
     },
     {
@@ -2350,30 +2386,7 @@
     {
       "input": "a regexp 'pattern%'",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "rlike",
-            "arguments": [
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null
-                }
-              },
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "pattern%"
-                  }
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "invalid argument: found 'pattern%' at 9:19 expected end of input"
       }
     },
     {
@@ -2409,37 +2422,58 @@
     {
       "input": "a() (b, c)",
       "output": {
-        "failure": "not supported: function parameters"
+        "failure": "invalid argument: found ( at 4:5 expected end of input"
       }
     },
     {
       "input": "a.* b",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: b"
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedStar": {
+                "target": [
+                  "a"
+                ],
+                "wildcardOptions": {
+                  "ilikePattern": null,
+                  "excludeColumns": null,
+                  "exceptColumns": null,
+                  "replaceColumns": null,
+                  "renameColumns": null
+                }
+              }
+            },
+            "name": [
+              "b"
+            ],
+            "metadata": null
+          }
+        }
       }
     },
     {
       "input": "a.123A",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: .123A"
+        "failure": "invalid argument: found .123A at 1:6 expected end of input"
       }
     },
     {
       "input": "a.123BD_column",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: .123BD"
+        "failure": "invalid argument: found .123BD at 1:7 expected end of input"
       }
     },
     {
       "input": "a.123D_column",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: .123D"
+        "failure": "invalid argument: found .123D at 1:6 expected end of input"
       }
     },
     {
       "input": "a.123E3_column",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: .123E3"
+        "failure": "invalid argument: found .123E3 at 1:7 expected end of input"
       }
     },
     {
@@ -2583,176 +2617,31 @@
     {
       "input": "encode('abc', charset => 'utf' || '-8')",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "encode",
-            "arguments": [
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "abc"
-                  }
-                }
-              },
-              {
-                "unresolvedFunction": {
-                  "functionName": "concat",
-                  "arguments": [
-                    {
-                      "literal": {
-                        "utf8": {
-                          "value": "utf"
-                        }
-                      }
-                    },
-                    {
-                      "literal": {
-                        "utf8": {
-                          "value": "-8"
-                        }
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "encode('abc', charset => 'utf-8')",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "encode",
-            "arguments": [
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "abc"
-                  }
-                }
-              },
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "utf-8"
-                  }
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "encode(charset => 'utf-8', 'abc')",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "encode",
-            "arguments": [
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "utf-8"
-                  }
-                }
-              },
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "abc"
-                  }
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "encode(value => 'abc', charset => 'utf-8')",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "encode",
-            "arguments": [
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "abc"
-                  }
-                }
-              },
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "utf-8"
-                  }
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "not implemented: named function arguments"
       }
     },
     {
       "input": "encode(value => ((select '1')), charset => 'utf-8')",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "encode",
-            "arguments": [
-              {
-                "scalarSubquery": {
-                  "subquery": {
-                    "project": {
-                      "input": {
-                        "empty": {
-                          "produceOneRow": true
-                        },
-                        "planId": null,
-                        "sourceInfo": null
-                      },
-                      "expressions": [
-                        {
-                          "literal": {
-                            "utf8": {
-                              "value": "1"
-                            }
-                          }
-                        }
-                      ]
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  }
-                }
-              },
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "utf-8"
-                  }
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "not implemented: named function arguments"
       }
     },
     {
@@ -2829,7 +2718,7 @@
     {
       "input": "first(a ignore nulls)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: ignore at Line: 1, Column: 9"
+        "failure": "invalid argument: found ( at 5:6 expected end of input"
       }
     },
     {
@@ -2897,7 +2786,7 @@
       "input": "foo(a x)",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'x': extra input 'x'.(line 1, pos 6)\n\n== SQL ==\nfoo(a x)\n------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: x at Line: 1, Column: 7"
+        "failure": "invalid argument: found ( at 3:4 expected end of input"
       }
     },
     {
@@ -2993,14 +2882,7 @@
     {
       "input": "foo.bar()",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "foo.bar",
-            "arguments": [],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "not supported: qualified function name"
       }
     },
     {
@@ -3036,7 +2918,7 @@
     {
       "input": "last(a ignore nulls)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: ignore at Line: 1, Column: 8"
+        "failure": "invalid argument: found ( at 4:5 expected end of input"
       }
     },
     {
@@ -3178,7 +3060,43 @@
     {
       "input": "struct(a, b).b",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: ."
+        "success": {
+          "unresolvedExtractValue": {
+            "child": {
+              "unresolvedFunction": {
+                "functionName": "struct",
+                "arguments": [
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  }
+                ],
+                "isDistinct": false,
+                "isUserDefinedFunction": false
+              }
+            },
+            "extraction": {
+              "unresolvedAttribute": {
+                "name": [
+                  "b"
+                ],
+                "planId": null
+              }
+            }
+          }
+        }
       }
     },
     {
@@ -3258,7 +3176,23 @@
     {
       "input": "~a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an expression, found: ~ at Line: 1, Column: 1"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "~",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     }
   ]
