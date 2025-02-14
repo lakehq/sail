@@ -11,17 +11,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - name: Adjust Swap Space
-        run: |
-          sudo df -h
-          sudo swapon --show
-          sudo swapoff -a
-          sudo rm -f /mnt/swapfile
-          sudo fallocate -l 8G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          sudo swapon --show
+      - uses: ./.github/actions/adjust-swap-space
 
       - uses: actions/checkout@v4
 

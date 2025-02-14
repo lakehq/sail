@@ -44,6 +44,8 @@ jobs:
     needs:
       - setup
     steps:
+      - uses: ./.github/actions/adjust-swap-space
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
