@@ -15,9 +15,9 @@ jobs:
     name: Validate
     runs-on: ubuntu-latest
     steps:
-      - uses: ./.github/actions/adjust-swap-space
-
       - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/adjust-swap-space
 
       - uses: actions/checkout@v4
         name: Checkout Spark
