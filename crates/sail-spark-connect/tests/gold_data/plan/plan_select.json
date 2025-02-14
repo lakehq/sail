@@ -1161,7 +1161,35 @@
     {
       "input": "SELECT abs(:1Abc)",
       "output": {
-        "failure": "invalid argument: found : at 11:12 expected query"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "abs",
+                    "arguments": [
+                      {
+                        "placeholder": ":1Abc"
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -1464,28 +1492,28 @@
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\nlateral view outer json_tuple(x, y) jtup q, z",
       "output": {
-        "failure": "invalid argument: found q at 86:87 expected statement, or end of input"
+        "failure": "invalid argument: found view at 53:57 expected statement, or end of input"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)",
       "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_PIVOT] Not allowed in the FROM clause: LATERAL together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\n",
       "output": {
-        "failure": "invalid argument: found pivot at 45:50 expected statement, or end of input"
+        "failure": "invalid argument: found sum at 55:58 expected query"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)",
       "exception": "\n[NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)\n",
       "output": {
-        "failure": "invalid argument: found pivot at 45:50 expected statement, or end of input"
+        "failure": "invalid argument: found sum at 55:58 expected query"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)",
       "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_UNPIVOT] Not allowed in the FROM clause: LATERAL together with UNPIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)\n",
       "output": {
-        "failure": "invalid argument: found unpivot at 45:52 expected statement, or end of input"
+        "failure": "invalid argument: found val at 57:60 expected query"
       }
     },
     {
@@ -1962,13 +1990,134 @@
     {
       "input": "select * from t lateral view explode(x) expl as x",
       "output": {
-        "failure": "invalid argument: found as at 45:47 expected statement, or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralView": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "function": [
+                    "explode"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "x"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "tableAlias": [
+                    "expl"
+                  ],
+                  "columnAliases": [
+                    "x"
+                  ],
+                  "outer": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t lateral view posexplode(x) posexpl as x, y",
       "output": {
-        "failure": "invalid argument: found as at 51:53 expected statement, or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralView": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "function": [
+                    "posexplode"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "x"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "tableAlias": [
+                    "posexpl"
+                  ],
+                  "columnAliases": [
+                    "x",
+                    "y"
+                  ],
+                  "outer": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

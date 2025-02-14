@@ -477,7 +477,107 @@
     {
       "input": "select a, b, sum(c) as c from d group by grouping sets((a, b), (a), ())",
       "output": {
-        "failure": "invalid argument: found sets at 50:54 expected statement, or end of input"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "d"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "grouping": [
+                {
+                  "groupingSets": [
+                    [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "b"
+                          ],
+                          "planId": null
+                        }
+                      }
+                    ],
+                    [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null
+                        }
+                      }
+                    ],
+                    []
+                  ]
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": "sum",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ],
+              "having": null,
+              "withGroupingExpressions": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

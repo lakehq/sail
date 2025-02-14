@@ -25,7 +25,7 @@
       "input": "CREATE FUNCTION test-func as org.test.func",
       "exception": "\n[INVALID_IDENTIFIER] The identifier test-func is invalid. Please, consider quoting it with back-quotes as `test-func`.(line 1, pos 20)\n\n== SQL ==\nCREATE FUNCTION test-func as org.test.func\n--------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found FUNCTION at 7:15 expected 'DATABASE', 'SCHEMA', 'OR', 'TEMPORARY', 'EXTERNAL', 'TABLE', 'GLOBAL', or 'VIEW'"
+        "failure": "invalid argument: found FUNCTION at 7:15 expected 'DATABASE', 'SCHEMA', 'OR', 'TEMP', 'TEMPORARY', 'EXTERNAL', 'TABLE', 'GLOBAL', or 'VIEW'"
       }
     },
     {
@@ -39,7 +39,7 @@
       "input": "DROP FUNCTION test-func as org.test.func",
       "exception": "\n[INVALID_IDENTIFIER] The identifier test-func is invalid. Please, consider quoting it with back-quotes as `test-func`.(line 1, pos 18)\n\n== SQL ==\nDROP FUNCTION test-func as org.test.func\n------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found FUNCTION at 5:13 expected 'DATABASE', 'SCHEMA', 'TABLE', 'VIEW', 'TEMPORARY', or 'FUNCTIONS'"
+        "failure": "invalid argument: found FUNCTION at 5:13 expected 'DATABASE', 'SCHEMA', 'TABLE', 'VIEW', 'TEMP', 'TEMPORARY', or 'FUNCTIONS'"
       }
     },
     {

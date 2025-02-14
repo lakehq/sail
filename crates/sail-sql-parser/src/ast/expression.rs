@@ -142,22 +142,6 @@ pub enum AtomExpr {
         r#else: Option<CaseElse>,
         end: End,
     },
-    GroupingSets(
-        Grouping,
-        Sets,
-        LeftParenthesis,
-        #[parser(function = |(e, _, _), o| sequence(compose(e, o), unit(o)))]
-        Sequence<ExprList, Comma>,
-        RightParenthesis,
-    ),
-    Cube(
-        Cube,
-        #[parser(function = |(e, _, _), o| compose(e, o))] ExprList,
-    ),
-    Rollup(
-        Rollup,
-        #[parser(function = |(e, _, _), o| compose(e, o))] ExprList,
-    ),
     Cast(
         Cast,
         LeftParenthesis,
@@ -324,15 +308,6 @@ pub enum IntervalUnit {
 pub enum IntervalQualifier {
     YearMonth(IntervalYearMonthUnit, Option<(To, IntervalYearMonthUnit)>),
     DayTime(IntervalDayTimeUnit, Option<(To, IntervalDayTimeUnit)>),
-}
-
-#[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "Expr")]
-pub struct ExprList {
-    pub left: LeftParenthesis,
-    #[parser(function = |e, o| sequence(e, unit(o)))]
-    pub expressions: Sequence<Expr, Comma>,
-    pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -572,6 +547,34 @@ pub enum PatternQuantifier {
 pub struct PatternEscape {
     pub escape: Escape,
     pub value: StringLiteral,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum GroupingExpr {
+    GroupingSets(
+        Grouping,
+        Sets,
+        LeftParenthesis,
+        #[parser(function = |e, o| sequence(compose(e, o), unit(o)))] Sequence<GroupingSet, Comma>,
+        RightParenthesis,
+    ),
+    Cube(Cube, #[parser(function = |e, o| compose(e, o))] GroupingSet),
+    Rollup(
+        Rollup,
+        #[parser(function = |e, o| compose(e, o))] GroupingSet,
+    ),
+    Default(#[parser(function = |e, _| e)] Expr),
+}
+
+// TODO: support nested grouping sets
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct GroupingSet {
+    pub left: LeftParenthesis,
+    #[parser(function = |e, o| sequence(e, unit(o)).or_not())]
+    pub expressions: Option<Sequence<Expr, Comma>>,
+    pub right: RightParenthesis,
 }
 
 // All private `struct`s or `enum`s are "internal" AST nodes used to parse expressions.

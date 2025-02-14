@@ -2,10 +2,10 @@ use std::iter::once;
 
 use sail_common::spec;
 use sail_sql_parser::ast::expression::{
-    AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, ExprList,
-    FunctionArgument, FunctionExpr, LambdaFunctionParameters, OrderBy, OrderByExpr, OrderDirection,
-    OrderNulls, OverClause, PartitionBy, PatternEscape, PatternQuantifier, TableExpr, TrimExpr,
-    UnaryOperator, WindowFrame, WindowFrameBound, WindowSpec,
+    AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, FunctionArgument,
+    FunctionExpr, GroupingExpr, GroupingSet, LambdaFunctionParameters, OrderBy, OrderByExpr,
+    OrderDirection, OrderNulls, OverClause, PartitionBy, PatternEscape, PatternQuantifier,
+    TableExpr, TrimExpr, UnaryOperator, WindowFrame, WindowFrameBound, WindowSpec,
 };
 use sail_sql_parser::ast::identifier::ObjectName;
 use sail_sql_parser::ast::query::{IdentList, NamedExpr};
@@ -138,18 +138,6 @@ fn from_ast_window_frame_bound(bound: WindowFrameBound) -> SqlResult<spec::Windo
             spec::WindowFrameBoundary::Value(Box::new(from_ast_expression(*e)?)),
         ),
     }
-}
-
-fn from_ast_expression_list(expr: ExprList) -> SqlResult<Vec<spec::Expr>> {
-    let ExprList {
-        left: _,
-        expressions,
-        right: _,
-    } = expr;
-    expressions
-        .into_items()
-        .map(from_ast_expression)
-        .collect::<SqlResult<Vec<_>>>()
 }
 
 pub(crate) fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
@@ -474,21 +462,6 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 is_user_defined_function: false,
             })
         }
-        AtomExpr::GroupingSets(_, _, _, expr, _) => {
-            let expr = expr
-                .into_items()
-                .map(from_ast_expression_list)
-                .collect::<SqlResult<Vec<_>>>()?;
-            Ok(spec::Expr::GroupingSets(expr))
-        }
-        AtomExpr::Cube(_, expr) => {
-            let expr = from_ast_expression_list(expr)?;
-            Ok(spec::Expr::Cube(expr))
-        }
-        AtomExpr::Rollup(_, expr) => {
-            let expr = from_ast_expression_list(expr)?;
-            Ok(spec::Expr::Rollup(expr))
-        }
         AtomExpr::Cast(_, _, expr, _, data_type, _) => Ok(spec::Expr::Cast {
             expr: Box::new(from_ast_expression(*expr)?),
             cast_to_type: from_ast_data_type(data_type)?,
@@ -699,6 +672,43 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             plan_id: None,
         }),
     }
+}
+
+pub(crate) fn from_ast_grouping_expression(expr: GroupingExpr) -> SqlResult<spec::Expr> {
+    match expr {
+        GroupingExpr::GroupingSets(_, _, _, grouping, _) => {
+            let expr = grouping
+                .into_items()
+                .map(from_ast_grouping_set)
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::Expr::GroupingSets(expr))
+        }
+        GroupingExpr::Cube(_, grouping) => {
+            let expr = from_ast_grouping_set(grouping)?;
+            Ok(spec::Expr::Cube(expr))
+        }
+        GroupingExpr::Rollup(_, grouping) => {
+            let expr = from_ast_grouping_set(grouping)?;
+            Ok(spec::Expr::Rollup(expr))
+        }
+        GroupingExpr::Default(expr) => from_ast_expression(expr),
+    }
+}
+
+fn from_ast_grouping_set(grouping: GroupingSet) -> SqlResult<Vec<spec::Expr>> {
+    let GroupingSet {
+        left: _,
+        expressions,
+        right: _,
+    } = grouping;
+    Ok(expressions
+        .map(|x| {
+            x.into_items()
+                .map(from_ast_expression)
+                .collect::<SqlResult<Vec<_>>>()
+        })
+        .transpose()?
+        .unwrap_or_default())
 }
 
 pub(crate) fn from_ast_identifier_list(identifiers: IdentList) -> SqlResult<Vec<spec::Identifier>> {

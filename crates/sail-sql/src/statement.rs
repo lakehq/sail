@@ -2,7 +2,7 @@ use either::Either;
 use sail_common::spec;
 use sail_sql_parser::ast::expression::{BooleanLiteral, Expr};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
-use sail_sql_parser::ast::keywords::{Cascade, Global, Overwrite, Restrict, Temporary};
+use sail_sql_parser::ast::keywords::{Cascade, Global, Overwrite, Restrict, Temp, Temporary};
 use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use sail_sql_parser::ast::operator::{Minus, Plus};
 use sail_sql_parser::ast::query::{IdentList, WhereClause};
@@ -228,8 +228,13 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             let query = from_ast_query(query)?;
             let name = from_ast_object_name(name)?;
             let kind = match global_temporary {
-                Some((Some(Global { .. }), Temporary { .. })) => spec::ViewKind::GlobalTemporary,
-                Some((None, Temporary { .. })) => spec::ViewKind::Temporary,
+                Some((
+                    Some(Global { .. }),
+                    Either::Left(Temp { .. }) | Either::Right(Temporary { .. }),
+                )) => spec::ViewKind::GlobalTemporary,
+                Some((None, Either::Left(Temp { .. }) | Either::Right(Temporary { .. }))) => {
+                    spec::ViewKind::Temporary
+                }
                 None => spec::ViewKind::Default,
             };
             let CreateViewClauses {

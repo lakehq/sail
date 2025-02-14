@@ -13,8 +13,8 @@ use crate::ast::keywords::{
     In, Inputformat, Insert, Into, Items, Keys, Lazy, Like, Lines, Local, Location, Map, Not, Null,
     Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge,
     Recover, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
-    Sorted, Stored, Table, Tables, Tblproperties, Temporary, Terminated, Time, To, Type, Uncache,
-    Unset, Update, Use, Using, Verbose, View, Views, Where, With, Zone,
+    Sorted, Stored, Table, Tables, Tblproperties, Temp, Temporary, Terminated, Time, To, Type,
+    Uncache, Unset, Update, Use, Using, Verbose, View, Views, Where, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{Colon, Comma, Equals, LeftParenthesis, Minus, Plus, RightParenthesis};
@@ -66,7 +66,7 @@ pub enum Statement {
     CreateTable {
         create: Create,
         or_replace: Option<(Or, Replace)>,
-        temporary: Option<Temporary>,
+        temporary: Option<Either<Temp, Temporary>>,
         external: Option<External>,
         table: Table,
         if_not_exists: Option<(If, Not, Exists)>,
@@ -128,7 +128,7 @@ pub enum Statement {
     CreateView {
         create: Create,
         or_replace: Option<(Or, Replace)>,
-        global_temporary: Option<(Option<Global>, Temporary)>,
+        global_temporary: Option<(Option<Global>, Either<Temp, Temporary>)>,
         view: View,
         if_not_exists: Option<(If, Not, Exists)>,
         name: ObjectName,
@@ -156,7 +156,7 @@ pub enum Statement {
     },
     DropFunction {
         drop: Drop,
-        temporary: Option<Temporary>,
+        temporary: Option<Either<Temp, Temporary>>,
         function: Functions,
         if_exists: Option<(If, Exists)>,
         name: ObjectName,

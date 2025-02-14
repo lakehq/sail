@@ -183,8 +183,8 @@ where
         let named =
             any()
                 .then(any())
+                .then_ignore(whitespace().repeated())
                 .try_map(|(prefix, word): (Token<'a>, Token<'a>), s| {
-                    #[allow(clippy::single_match)]
                     match (prefix, &word) {
                         (
                             Token {
@@ -204,18 +204,38 @@ where
                                 value: format!("{}{}", p.to_char(), raw),
                             });
                         }
+                        (
+                            Token {
+                                value:
+                                    TokenValue::Punctuation(
+                                        p @ (Punctuation::Dollar | Punctuation::Colon),
+                                    ),
+                                span: s1,
+                            },
+                            Token {
+                                value: TokenValue::Number { value, suffix },
+                                span: s2,
+                            },
+                        ) => {
+                            return Ok(Variable {
+                                span: s1.union(s2),
+                                value: format!("{}{}{}", p.to_char(), value, suffix),
+                            });
+                        }
                         _ => {}
                     }
                     Err(Error::expected_found(vec![], Some(word.into()), s))
                 });
 
-        let unnamed = any().try_map(|t: Token<'a>, s| match t.value {
-            TokenValue::Punctuation(p @ Punctuation::QuestionMark) => Ok(Variable {
-                span: t.span,
-                value: format!("{}", p.to_char()),
-            }),
-            _ => Err(Error::expected_found(vec![], Some(t.into()), s)),
-        });
+        let unnamed = any()
+            .then_ignore(whitespace().repeated())
+            .try_map(|t: Token<'a>, s| match t.value {
+                TokenValue::Punctuation(p @ Punctuation::QuestionMark) => Ok(Variable {
+                    span: t.span,
+                    value: format!("{}", p.to_char()),
+                }),
+                _ => Err(Error::expected_found(vec![], Some(t.into()), s)),
+            });
 
         named.or(unnamed).labelled(TokenLabel::Variable)
     }

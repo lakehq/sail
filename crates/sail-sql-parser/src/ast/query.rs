@@ -8,7 +8,9 @@ use chumsky::{IterParser, Parser};
 use sail_sql_macro::TreeParser;
 
 use crate::ast::data_type::DataType;
-use crate::ast::expression::{DuplicateTreatment, Expr, FunctionArgument, OrderByExpr, WindowSpec};
+use crate::ast::expression::{
+    DuplicateTreatment, Expr, FunctionArgument, GroupingExpr, OrderByExpr, WindowSpec,
+};
 use crate::ast::identifier::{ColumnIdent, Ident, ObjectName, TableIdent};
 use crate::ast::keywords::{
     All, Anti, As, By, Cluster, Cross, Cube, Distinct, Except, Exclude, For, From, Full, Group,
@@ -438,8 +440,9 @@ pub struct LateralViewClause {
     #[parser(function = |e, o| sequence(e, unit(o)))]
     pub arguments: Sequence<Expr, Comma>,
     pub right: RightParenthesis,
-    pub table: ObjectName,
-    pub columns: Option<(Option<As>, IdentList)>,
+    #[parser(function = |_, o| unit(o).and_is(As::parser((), o).not()).or_not())]
+    pub table: Option<ObjectName>,
+    pub columns: Option<(Option<As>, Sequence<Ident, Comma>)>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -454,8 +457,8 @@ pub struct WhereClause {
 #[parser(dependency = "Expr")]
 pub struct GroupByClause {
     pub group_by: (Group, By),
-    #[parser(function = |e, o| sequence(e, unit(o)))]
-    pub expressions: Sequence<Expr, Comma>,
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    pub expressions: Sequence<GroupingExpr, Comma>,
     pub modifier: Option<GroupByModifier>,
 }
 

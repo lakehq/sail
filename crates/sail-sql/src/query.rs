@@ -14,8 +14,8 @@ use sail_sql_parser::common::Sequence;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{
-    from_ast_expression, from_ast_function_argument, from_ast_identifier_list,
-    from_ast_object_name, from_ast_order_by,
+    from_ast_expression, from_ast_function_argument, from_ast_grouping_expression,
+    from_ast_identifier_list, from_ast_object_name, from_ast_order_by,
 };
 use crate::literal::LiteralValue;
 
@@ -249,7 +249,7 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
             } = x;
             let expr = expressions
                 .into_items()
-                .map(from_ast_expression)
+                .map(from_ast_grouping_expression)
                 .collect::<SqlResult<Vec<spec::Expr>>>()?;
             let expr = match modifier {
                 None => expr,
@@ -859,16 +859,8 @@ fn query_plan_with_lateral_views(
                 .into_items()
                 .map(from_ast_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
-            let table_alias = Some(from_ast_object_name(table)?);
-            let column_aliases = if let Some((
-                _,
-                IdentList {
-                    left: _,
-                    columns,
-                    right: _,
-                },
-            )) = columns
-            {
+            let table_alias = table.map(from_ast_object_name).transpose()?;
+            let column_aliases = if let Some((_, columns)) = columns {
                 Some(columns.into_items().map(|x| x.value.into()).collect())
             } else {
                 None
