@@ -1,0 +1,19 @@
+name: Adjust swap space
+description: Increase the size of the swap space on the runner
+# References:
+#   * https://github.com/actions/runner-images/issues/6680#issuecomment-2640923706
+#   * https://github.com/actions/runner-images/discussions/7188#discussioncomment-6750749
+runs:
+  using: composite
+  steps:
+    - run: |
+        sudo df -h
+        sudo swapon --show
+        sudo swapoff -a
+        sudo rm -f /mnt/swapfile
+        sudo fallocate -l 8G /mnt/swapfile
+        sudo chmod 600 /mnt/swapfile
+        sudo mkswap /mnt/swapfile
+        sudo swapon /mnt/swapfile
+        sudo swapon --show
+      shell: bash
