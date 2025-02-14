@@ -19,6 +19,12 @@ pub struct SparkAbs {
     signature: Signature,
 }
 
+impl Default for SparkAbs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SparkAbs {
     pub fn new() -> Self {
         Self {
