@@ -638,88 +638,61 @@ type TokenInputSlice<'a> = <&'a [Token<'a>] as SliceInput<'a>>::Slice;
 /// The fragments are then built into an [`Expr`] at the end of parsing.
 /// Any unmatched fragments of ternary predicates will result in a parser error.
 #[derive(Debug, Clone)]
-enum ExprFragment<'a, E> {
-    Atom {
-        atom: AtomExpr,
-        phantom: std::marker::PhantomData<E>,
-    },
+enum ExprFragment<'a> {
+    Singleton(Expr),
     UnaryOperator {
         op: UnaryOperator,
-        expr: Box<ExprFragment<'a, E>>,
+        expr: Box<ExprFragment<'a>>,
     },
     BinaryOperator {
-        left: Box<ExprFragment<'a, E>>,
+        left: Box<ExprFragment<'a>>,
         op: BinaryOperator,
-        right: Box<ExprFragment<'a, E>>,
+        right: Box<ExprFragment<'a>>,
     },
     Modifier {
-        expr: Box<ExprFragment<'a, E>>,
+        expr: Box<ExprFragment<'a>>,
         modifier: ExprModifier,
     },
     PostfixPredicate {
-        expr: Box<ExprFragment<'a, E>>,
+        expr: Box<ExprFragment<'a>>,
         predicate: ExprPostfixPredicate,
     },
     InfixPredicate {
         span: TokenInputSpan<'a>,
         slice: TokenInputSlice<'a>,
-        left: Box<ExprFragment<'a, E>>,
+        left: Box<ExprFragment<'a>>,
         predicate: ExprInfixPredicate,
-        right: Box<ExprFragment<'a, E>>,
+        right: Box<ExprFragment<'a>>,
     },
     Escape {
         span: TokenInputSpan<'a>,
         slice: TokenInputSlice<'a>,
-        expr: Box<ExprFragment<'a, E>>,
+        expr: Box<ExprFragment<'a>>,
         escape: PatternEscape,
     },
 }
 
-impl<'a, E> ExprFragment<'a, E>
-where
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
-{
-    fn atom(atom: AtomExpr) -> Self {
-        Self::Atom {
-            atom,
-            phantom: std::marker::PhantomData,
-        }
-    }
-
-    fn build(self) -> Result<Expr, E::Error> {
+impl<'a> ExprFragment<'a> {
+    fn build<E>(self) -> Result<Expr, E::Error>
+    where
+        E: ParserExtra<'a, &'a [Token<'a>]>,
+        E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    {
         match self {
-            ExprFragment::Atom { atom, phantom: _ } => Ok(Expr::Atom(atom)),
+            ExprFragment::Singleton(expr) => Ok(expr),
             ExprFragment::UnaryOperator { op, expr } => {
-                Ok(Expr::UnaryOperator(op, Box::new(expr.build()?)))
+                Ok(Expr::UnaryOperator(op, Box::new(expr.build::<E>()?)))
             }
-            ExprFragment::BinaryOperator { left, op, right } => match (*left, op, *right) {
-                (
-                    ExprFragment::InfixPredicate {
-                        span: _,
-                        slice: _,
-                        left: expr,
-                        predicate: ExprInfixPredicate::Between(not, between),
-                        right: low,
-                    },
-                    BinaryOperator::And(and),
-                    high,
-                ) => Ok(Expr::Between(
-                    Box::new(expr.build()?),
-                    not,
-                    between,
-                    Box::new(low.build()?),
-                    and,
-                    Box::new(high.build()?),
-                )),
-                (left, op, right) => Ok(Expr::BinaryOperator(
-                    Box::new(left.build()?),
+            ExprFragment::BinaryOperator { left, op, right } => match op {
+                BinaryOperator::And(and) => left.build_logical_and::<E>(and, *right),
+                _ => Ok(Expr::BinaryOperator(
+                    Box::new(left.build::<E>()?),
                     op,
-                    Box::new(right.build()?),
+                    Box::new(right.build::<E>()?),
                 )),
             },
             ExprFragment::Modifier { expr, modifier } => {
-                let expr = expr.build()?;
+                let expr = expr.build::<E>()?;
                 match modifier {
                     ExprModifier::Wildcard(x1, x2) => Ok(Expr::Wildcard(Box::new(expr), x1, x2)),
                     ExprModifier::Field(x1, x2) => Ok(Expr::Field(Box::new(expr), x1, x2)),
@@ -730,7 +703,7 @@ where
                 }
             }
             ExprFragment::PostfixPredicate { expr, predicate } => {
-                let expr = expr.build()?;
+                let expr = expr.build::<E>()?;
                 match predicate {
                     ExprPostfixPredicate::IsFalse(x1, x2, x3) => {
                         Ok(Expr::IsFalse(Box::new(expr), x1, x2, x3))
@@ -761,12 +734,12 @@ where
             } => match (*left, predicate, *right) {
                 (left, ExprInfixPredicate::IsDistinctFrom(x1, x2, x3, x4), right) => {
                     Ok(Expr::IsDistinctFrom(
-                        Box::new(left.build()?),
+                        Box::new(left.build::<E>()?),
                         x1,
                         x2,
                         x3,
                         x4,
-                        Box::new(right.build()?),
+                        Box::new(right.build::<E>()?),
                     ))
                 }
                 (_, ExprInfixPredicate::Between(_, _), _) => Err(E::Error::expected_found(
@@ -775,9 +748,9 @@ where
                     span,
                 )),
                 (left, ExprInfixPredicate::Like(x3, x4, x5), right) => {
-                    let (pattern, escape) = right.build_pattern_and_escape()?;
+                    let (pattern, escape) = right.build_pattern_and_escape::<E>()?;
                     Ok(Expr::Like(
-                        Box::new(left.build()?),
+                        Box::new(left.build::<E>()?),
                         x3,
                         x4,
                         x5,
@@ -786,9 +759,9 @@ where
                     ))
                 }
                 (left, ExprInfixPredicate::ILike(x1, x2, x3), right) => {
-                    let (pattern, escape) = right.build_pattern_and_escape()?;
+                    let (pattern, escape) = right.build_pattern_and_escape::<E>()?;
                     Ok(Expr::ILike(
-                        Box::new(left.build()?),
+                        Box::new(left.build::<E>()?),
                         x1,
                         x2,
                         x3,
@@ -797,15 +770,15 @@ where
                     ))
                 }
                 (left, ExprInfixPredicate::RLike(x1, x2), right) => Ok(Expr::RLike(
-                    Box::new(left.build()?),
+                    Box::new(left.build::<E>()?),
                     x1,
                     x2,
-                    Box::new(right.build()?),
+                    Box::new(right.build::<E>()?),
                 )),
                 (left, ExprInfixPredicate::SimilarTo(x1, x2, x3), right) => {
-                    let (pattern, escape) = right.build_pattern_and_escape()?;
+                    let (pattern, escape) = right.build_pattern_and_escape::<E>()?;
                     Ok(Expr::SimilarTo(
-                        Box::new(left.build()?),
+                        Box::new(left.build::<E>()?),
                         x1,
                         x2,
                         x3,
@@ -827,16 +800,67 @@ where
         }
     }
 
-    fn build_pattern_and_escape(self) -> Result<(Expr, Option<PatternEscape>), E::Error> {
+    fn build_pattern_and_escape<E>(self) -> Result<(Expr, Option<PatternEscape>), E::Error>
+    where
+        E: ParserExtra<'a, &'a [Token<'a>]>,
+        E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    {
         match self {
             ExprFragment::Escape {
                 span: _,
                 slice: _,
                 expr,
                 escape,
-            } => Ok((expr.build()?, Some(escape))),
-            _ => Ok((self.build()?, None)),
+            } => Ok((expr.build::<E>()?, Some(escape))),
+            _ => Ok((self.build::<E>()?, None)),
         }
+    }
+
+    fn build_logical_and<E>(mut self, and: And, other: Self) -> Result<Expr, E::Error>
+    where
+        E: ParserExtra<'a, &'a [Token<'a>]>,
+        E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    {
+        // Find the right-most leaf in the left expression tree,
+        // and rewrite the expression if the leaf is the `BETWEEN` operator.
+        // This would allow expressions such as `a AND b BETWEEN c AND d` to be parsed correctly.
+        // The Pratt parser returns `((a AND (b BETWEEN c)) AND d)` for such a case,
+        // which needs to be rewritten as `(a AND (b BETWEEN c AND d))`.
+        let mut current = &mut self;
+        loop {
+            match current {
+                ExprFragment::InfixPredicate {
+                    left: expr,
+                    predicate: ExprInfixPredicate::Between(not, between),
+                    right: low,
+                    ..
+                } => {
+                    *current = ExprFragment::Singleton(Expr::Between(
+                        Box::new(expr.clone().build::<E>()?),
+                        not.clone(),
+                        between.clone(),
+                        Box::new(low.clone().build::<E>()?),
+                        and,
+                        Box::new(other.build::<E>()?),
+                    ));
+                    return self.build::<E>();
+                }
+                ExprFragment::UnaryOperator { expr: next, .. }
+                | ExprFragment::BinaryOperator { right: next, .. }
+                | ExprFragment::InfixPredicate { right: next, .. } => {
+                    current = next;
+                }
+                ExprFragment::Singleton(_)
+                | ExprFragment::Modifier { .. }
+                | ExprFragment::PostfixPredicate { .. }
+                | ExprFragment::Escape { .. } => break,
+            }
+        }
+        Ok(Expr::BinaryOperator(
+            Box::new(self.build::<E>()?),
+            BinaryOperator::And(and),
+            Box::new(other.build::<E>()?),
+        ))
     }
 }
 
@@ -854,7 +878,7 @@ where
         options: &'opt ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
         let atom = AtomExpr::parser((expr.clone(), query.clone(), data_type.clone()), options)
-            .map(|atom| <ExprFragment<E>>::atom(atom));
+            .map(|atom| <ExprFragment>::Singleton(Expr::Atom(atom)));
         atom.pratt((
             postfix(
                 26,
@@ -1026,7 +1050,7 @@ where
                 },
             ),
         ))
-        .try_map(|e, _| e.build())
+        .try_map(|e, _| e.build::<E>())
         .labelled(TokenLabel::Expression)
     }
 }
