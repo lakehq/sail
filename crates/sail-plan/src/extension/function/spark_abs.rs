@@ -84,22 +84,22 @@ impl ScalarUDFImpl for SparkAbs {
             ColumnarValue::Array(array) => {
                 let result = match array.data_type() {
                     DataType::Interval(IntervalUnit::YearMonth) => {
-                        let interval_array = array.as_primitive::<IntervalYearMonthType>();
-                        let result: IntervalYearMonthArray = interval_array
+                        let result: IntervalYearMonthArray = array
+                            .as_primitive::<IntervalYearMonthType>()
                             .unary(|x| x.wrapping_abs())
                             .with_data_type(DataType::Interval(IntervalUnit::YearMonth));
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Interval(IntervalUnit::DayTime) => {
-                        let interval_array = array.as_primitive::<IntervalDayTimeType>();
-                        let result: IntervalDayTimeArray = interval_array
+                        let result: IntervalDayTimeArray = array
+                            .as_primitive::<IntervalDayTimeType>()
                             .unary(|x| x.wrapping_abs())
                             .with_data_type(DataType::Interval(IntervalUnit::DayTime));
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Interval(IntervalUnit::MonthDayNano) => {
-                        let interval_array = array.as_primitive::<IntervalMonthDayNanoType>();
-                        let result: IntervalMonthDayNanoArray = interval_array
+                        let result: IntervalMonthDayNanoArray = array
+                            .as_primitive::<IntervalMonthDayNanoType>()
                             .unary(|x| x.wrapping_abs())
                             .with_data_type(DataType::Interval(IntervalUnit::MonthDayNano));
                         Ok(Arc::new(result) as ArrayRef)
