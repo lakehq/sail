@@ -1404,7 +1404,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_utc_timestamp"
+        "success": "ok"
       }
     },
     {

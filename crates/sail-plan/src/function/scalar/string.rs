@@ -10,7 +10,7 @@ use datafusion_expr::{expr, lit, ScalarUDF};
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::levenshtein::Levenshtein;
 use crate::extension::function::spark_base64::{SparkBase64, SparkUnbase64};
-use crate::extension::function::spark_hex_unhex::SparkUnHex;
+use crate::extension::function::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 
@@ -51,53 +51,6 @@ fn concat_ws(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> Plan
         return Ok(expr::Expr::Literal(ScalarValue::Utf8(Some("".to_string()))));
     }
     Ok(expr_fn::concat_ws(delimiter, args))
-}
-
-fn to_binary(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
-    if args.len() == 1 {
-        let expr = args.one()?;
-        return Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkUnHex::new())),
-            args: vec![expr],
-        }));
-    }
-    if args.len() == 2 {
-        let (expr, format) = args.two()?;
-        return match format {
-            expr::Expr::Literal(ScalarValue::Utf8(Some(ref s)))
-            | expr::Expr::Literal(ScalarValue::Utf8View(Some(ref s)))
-            | expr::Expr::Literal(ScalarValue::LargeUtf8(Some(ref s)))
-                if s.trim().to_lowercase() == "utf-8" || s.trim().to_lowercase() == "utf8" =>
-            {
-                Ok(expr::Expr::Cast(expr::Cast {
-                    expr: Box::new(expr),
-                    data_type: DataType::Binary,
-                }))
-            }
-            expr::Expr::Literal(ScalarValue::Utf8(Some(ref s)))
-            | expr::Expr::Literal(ScalarValue::Utf8View(Some(ref s)))
-            | expr::Expr::Literal(ScalarValue::LargeUtf8(Some(ref s)))
-                if s.trim().to_lowercase() == "hex" =>
-            {
-                Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                    func: Arc::new(ScalarUDF::from(SparkUnHex::new())),
-                    args: vec![expr],
-                }))
-            }
-            expr::Expr::Literal(ScalarValue::Utf8(Some(ref s)))
-            | expr::Expr::Literal(ScalarValue::Utf8View(Some(ref s)))
-            | expr::Expr::Literal(ScalarValue::LargeUtf8(Some(ref s)))
-                if s.trim().to_lowercase() == "base64" =>
-            {
-                Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                    func: Arc::new(ScalarUDF::from(SparkUnbase64::new())),
-                    args: vec![expr],
-                }))
-            }
-            _ => Ok(expr_fn::decode(expr, format)),
-        };
-    }
-    Err(PlanError::invalid("to_binary requires 1 or 2 arguments"))
 }
 
 fn overlay(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
@@ -339,13 +292,13 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("substr", F::custom(substr)),
         ("substring", F::custom(substr)),
         ("substring_index", F::ternary(expr_fn::substr_index)),
-        ("to_binary", F::custom(to_binary)),
+        ("to_binary", F::udf(SparkToBinary::new())),
         ("to_char", F::unknown("to_char")),
         ("to_number", F::unknown("to_number")),
         ("to_varchar", F::unknown("to_varchar")),
         ("translate", F::ternary(expr_fn::translate)),
         ("trim", F::var_arg(expr_fn::trim)),
-        ("try_to_binary", F::unknown("try_to_binary")),
+        ("try_to_binary", F::udf(SparkTryToBinary::new())),
         ("try_to_number", F::unknown("try_to_number")),
         ("ucase", F::unary(upper)),
         ("unbase64", F::udf(SparkUnbase64::new())),

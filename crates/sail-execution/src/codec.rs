@@ -43,12 +43,19 @@ use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
 use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
 use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
+use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
+use sail_plan::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_plan::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
+use sail_plan::extension::function::datetime::timestamp_now::TimestampNow;
 use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::least_greatest::{Greatest, Least};
 use sail_plan::extension::function::levenshtein::Levenshtein;
 use sail_plan::extension::function::map_function::MapFunction;
+use sail_plan::extension::function::math::spark_abs::SparkAbs;
+use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
+use sail_plan::extension::function::math::spark_signum::SparkSignum;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
@@ -63,14 +70,12 @@ use sail_plan::extension::function::spark_aes::{
 use sail_plan::extension::function::spark_array::SparkArray;
 use sail_plan::extension::function::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_plan::extension::function::spark_concat::SparkConcat;
-use sail_plan::extension::function::spark_hex_unhex::{SparkHex, SparkUnHex};
+use sail_plan::extension::function::spark_element_at::{SparkElementAt, SparkTryElementAt};
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_plan::extension::function::spark_reverse::SparkReverse;
-use sail_plan::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
-use sail_plan::extension::function::spark_weekofyear::SparkWeekOfYear;
+use sail_plan::extension::function::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::struct_function::StructFunction;
-use sail_plan::extension::function::timestamp_now::TimestampNow;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{
@@ -694,6 +699,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = TimestampNow::new(Arc::from(timezone), time_unit);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkFromUtcTimestamp(gen::SparkFromUtcTimestampUdf { time_unit }) => {
+                let time_unit = gen_datafusion_common::TimeUnit::from_str_name(time_unit.as_str())
+                    .ok_or_else(|| plan_datafusion_err!("invalid time unit: {time_unit}"))?;
+                let udf = SparkFromUtcTimestamp::new(time_unit.into());
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -737,6 +748,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_aes_decrypt" | "try_aes_decrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryAESDecrypt::new())))
             }
+            "spark_to_binary" | "to_binary" => Ok(Arc::new(ScalarUDF::from(SparkToBinary::new()))),
+            "spark_try_to_binary" | "try_to_binary" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
+            }
+            "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
+            "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
+            "spark_element_at" | "element_at" => {
+                Ok(Arc::new(ScalarUDF::from(SparkElementAt::new())))
+            }
+            "spark_try_element_at" | "try_element_at" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryElementAt::new())))
+            }
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -770,6 +793,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryAESEncrypt>()
             || node.inner().as_any().is::<SparkAESDecrypt>()
             || node.inner().as_any().is::<SparkTryAESDecrypt>()
+            || node.inner().as_any().is::<SparkAbs>()
+            || node.inner().as_any().is::<SparkSignum>()
+            || node.inner().as_any().is::<SparkToBinary>()
+            || node.inner().as_any().is::<SparkTryToBinary>()
+            || node.inner().as_any().is::<SparkElementAt>()
+            || node.inner().as_any().is::<SparkTryElementAt>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"
@@ -846,6 +875,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 timezone,
                 time_unit,
             })
+        } else if let Some(func) = node
+            .inner()
+            .as_any()
+            .downcast_ref::<SparkFromUtcTimestamp>()
+        {
+            let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
+            let time_unit = time_unit.as_str_name().to_string();
+            UdfKind::SparkFromUtcTimestamp(gen::SparkFromUtcTimestampUdf { time_unit })
         } else {
             return Ok(());
         };
