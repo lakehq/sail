@@ -9,8 +9,8 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use sail_common::display::{ArrayFormatter, FormatOptions};
-use sail_common::schema::escape_meta_characters;
+use sail_common::string::escape_meta_characters;
+use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 
 use crate::utils::ItemTaker;
 

@@ -1,12 +1,9 @@
-use datafusion::common::DataFusionError;
 use thiserror::Error;
 
 pub type CommonResult<T> = Result<T, CommonError>;
 
 #[derive(Debug, Error)]
 pub enum CommonError {
-    #[error("error in DataFusion: {0}")]
-    DataFusionError(#[from] DataFusionError),
     #[error("missing argument: {0}")]
     MissingArgument(String),
     #[error("invalid argument: {0}")]

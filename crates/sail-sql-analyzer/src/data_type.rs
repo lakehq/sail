@@ -1,5 +1,5 @@
-use datafusion::arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
+use sail_common::spec::ARROW_DECIMAL128_MAX_PRECISION;
 use sail_sql_parser::ast::data_type::{
     DataType, IntervalDayTimeUnit, IntervalType, IntervalYearMonthUnit, StructField, TimezoneType,
 };
@@ -11,10 +11,6 @@ use crate::value::from_ast_string;
 
 pub const SQL_DECIMAL_DEFAULT_PRECISION: u8 = 10;
 pub const SQL_DECIMAL_DEFAULT_SCALE: i8 = 0;
-#[allow(unused)]
-pub const SQL_DECIMAL_MAX_PRECISION: u8 = 38;
-#[allow(unused)]
-pub const SQL_DECIMAL_MAX_SCALE: i8 = 38;
 
 fn from_ast_char_length(length: Option<&IntegerLiteral>) -> SqlResult<u32> {
     let Some(length) = length else {

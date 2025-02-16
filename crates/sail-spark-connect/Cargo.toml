@@ -5,6 +5,7 @@ edition = { workspace = true }
 
 [dependencies]
 sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-server = { path = "../sail-server" }
 sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
@@ -16,28 +17,18 @@ tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-types = { workspace = true }
 prost = { workspace = true }
-prost-types = { workspace = true }
 pbjson = { workspace = true }
 pbjson-types = { workspace = true }
 uuid = { workspace = true }
 datafusion = { workspace = true }
-datafusion-common = { workspace = true }
-datafusion-expr = { workspace = true }
-datafusion-functions-nested = { workspace = true }
-async-recursion = { workspace = true }
 async-stream = { workspace = true }
 lazy_static = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 monostate = { workspace = true }
 regex = { workspace = true }
-glob = { workspace = true }
-chrono = { workspace = true }
-chrono-tz = { workspace = true }
 pyo3 = { workspace = true }
-serde_arrow = { workspace = true }
 phf = { workspace = true }
-clap = { workspace = true }
 log = { workspace = true }
 
 [build-dependencies]

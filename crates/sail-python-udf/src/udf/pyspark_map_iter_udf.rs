@@ -5,8 +5,8 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::Result;
 use pyo3::Python;
-use sail_common::udf::StreamUDF;
-use sail_common::utils::rename_record_batch_stream;
+use sail_common_datafusion::udf::StreamUDF;
+use sail_common_datafusion::utils::rename_record_batch_stream;
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;

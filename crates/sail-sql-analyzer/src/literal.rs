@@ -5,13 +5,12 @@ use std::str::FromStr;
 
 use chrono::{TimeDelta, Utc};
 use chrono_tz::Tz;
-use datafusion::arrow::datatypes::{
-    i256, DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION,
-    DECIMAL256_MAX_PRECISION as ARROW_DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE as ARROW_DECIMAL256_MAX_SCALE,
-};
 use lazy_static::lazy_static;
 use sail_common::spec;
+use sail_common::spec::{
+    i256, ARROW_DECIMAL128_MAX_PRECISION, ARROW_DECIMAL256_MAX_PRECISION,
+    ARROW_DECIMAL256_MAX_SCALE,
+};
 use sail_sql_parser::ast::data_type::{IntervalDayTimeUnit, IntervalYearMonthUnit};
 use sail_sql_parser::ast::expression::{
     AtomExpr, Expr, IntervalExpr, IntervalLiteral, IntervalQualifier, IntervalUnit,
@@ -1068,7 +1067,7 @@ mod tests {
             Literal::Decimal128 {
                 precision: 5,
                 scale: 2,
-                value: Some(12345)
+                value: Some(12345),
             }
         );
         assert_eq!(
@@ -1197,7 +1196,7 @@ mod tests {
             Literal::Decimal256 {
                 precision: 42,
                 scale: 4,
-                value: i256::from_string("120000000000000000000000000000000000000000")
+                value: i256::from_string("120000000000000000000000000000000000000000"),
             }
         );
         assert_eq!(
@@ -1205,7 +1204,7 @@ mod tests {
             Literal::Decimal256 {
                 precision: 42,
                 scale: 5,
-                value: i256::from_string("120000000000000000000000000000000000000000")
+                value: i256::from_string("120000000000000000000000000000000000000000"),
             }
         );
         assert!(parse("123456789012345678901234567890123456789").is_ok());

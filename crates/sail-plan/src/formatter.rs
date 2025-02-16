@@ -955,7 +955,7 @@ mod tests {
             to_string(Literal::Decimal128 {
                 precision: 3,
                 scale: 0,
-                value: Some(123)
+                value: Some(123),
             })?,
             "123",
         );
@@ -963,7 +963,7 @@ mod tests {
             to_string(Literal::Decimal128 {
                 precision: 3,
                 scale: 0,
-                value: Some(-123)
+                value: Some(-123),
             })?,
             "-123",
         );
@@ -971,7 +971,7 @@ mod tests {
             to_string(Literal::Decimal128 {
                 precision: 3,
                 scale: 2,
-                value: Some(123)
+                value: Some(123),
             })?,
             "1.23",
         );
@@ -979,7 +979,7 @@ mod tests {
             to_string(Literal::Decimal128 {
                 precision: 3,
                 scale: 5,
-                value: Some(123)
+                value: Some(123),
             })?,
             "0.00123",
         );
@@ -987,7 +987,7 @@ mod tests {
             to_string(Literal::Decimal128 {
                 precision: 3,
                 scale: -2,
-                value: Some(12300)
+                value: Some(12300),
             })?,
             "12300",
         );
@@ -995,7 +995,7 @@ mod tests {
             to_string(Literal::Decimal256 {
                 precision: 3,
                 scale: 0,
-                value: Some(i256::from(123))
+                value: Some(i256::from(123)),
             })?,
             "123",
         );
@@ -1003,7 +1003,7 @@ mod tests {
             to_string(Literal::Decimal256 {
                 precision: 3,
                 scale: 0,
-                value: Some(i256::from(-123))
+                value: Some(i256::from(-123)),
             })?,
             "-123",
         );
@@ -1011,7 +1011,7 @@ mod tests {
             to_string(Literal::Decimal256 {
                 precision: 3,
                 scale: 2,
-                value: Some(i256::from(123))
+                value: Some(i256::from(123)),
             })?,
             "1.23",
         );
@@ -1019,7 +1019,7 @@ mod tests {
             to_string(Literal::Decimal256 {
                 precision: 3,
                 scale: 5,
-                value: Some(i256::from(123))
+                value: Some(i256::from(123)),
             })?,
             "0.00123",
         );
@@ -1027,7 +1027,7 @@ mod tests {
             to_string(Literal::Decimal256 {
                 precision: 3,
                 scale: -2,
-                value: Some(i256::from(12300))
+                value: Some(i256::from(12300)),
             })?,
             "12300",
         );
@@ -1043,39 +1043,39 @@ mod tests {
             to_string(Literal::Utf8 {
                 value: Some("abc".to_string())
             })?,
-            "abc"
+            "abc",
         );
         assert_eq!(
             to_string(Literal::LargeUtf8 {
                 value: Some("abc".to_string())
             })?,
-            "abc"
+            "abc",
         );
         assert_eq!(
             to_string(Literal::Utf8View {
                 value: Some("abc".to_string())
             })?,
-            "abc"
+            "abc",
         );
         assert_eq!(
             to_string(Literal::Date32 { days: Some(10) })?,
-            "DATE '1970-01-11'"
+            "DATE '1970-01-11'",
         );
         assert_eq!(
             to_string(Literal::Date32 { days: Some(-5) })?,
-            "DATE '1969-12-27'"
+            "DATE '1969-12-27'",
         );
         assert_eq!(
             to_string(Literal::TimestampMicrosecond {
                 microseconds: Some(123_000_000),
-                timezone_info: spec::TimeZoneInfo::TimeZone { timezone: None }
+                timezone_info: spec::TimeZoneInfo::TimeZone { timezone: None },
             })?,
             "TIMESTAMP '1970-01-01 00:02:03'",
         );
         assert_eq!(
             to_string(Literal::TimestampMicrosecond {
                 microseconds: Some(-1),
-                timezone_info: spec::TimeZoneInfo::NoTimeZone
+                timezone_info: spec::TimeZoneInfo::NoTimeZone,
             })?,
             "TIMESTAMP_NTZ '1969-12-31 23:59:59'",
         );
@@ -1142,7 +1142,7 @@ mod tests {
                 data_type: spec::DataType::Int32,
                 values: Some(vec![
                     Literal::Int32 { value: Some(1) },
-                    Literal::Int32 { value: Some(-2) }
+                    Literal::Int32 { value: Some(-2) },
                 ]),
             })?,
             "array(1, -2)",
@@ -1152,7 +1152,7 @@ mod tests {
                 data_type: spec::DataType::Int32,
                 values: Some(vec![
                     Literal::Int32 { value: Some(1) },
-                    Literal::Int32 { value: Some(-2) }
+                    Literal::Int32 { value: Some(-2) },
                 ]),
             })?,
             "array(1, -2)",
@@ -1163,7 +1163,7 @@ mod tests {
                 data_type: spec::DataType::Int32,
                 values: Some(vec![
                     Literal::Int32 { value: Some(1) },
-                    Literal::Int32 { value: Some(-2) }
+                    Literal::Int32 { value: Some(-2) },
                 ]),
             })?,
             "array(1, -2)",
@@ -1182,7 +1182,7 @@ mod tests {
                 ]),
                 values: Some(vec![
                     Literal::Float64 { value: Some(1.0) },
-                    Literal::Float64 { value: Some(2.0) }
+                    Literal::Float64 { value: Some(2.0) },
                 ]),
             })?,
             "map(array(a, b), array(1.0, 2.0))",

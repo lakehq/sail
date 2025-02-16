@@ -51,7 +51,6 @@ impl PlanError {
 impl From<CommonError> for PlanError {
     fn from(error: CommonError) -> Self {
         match error {
-            CommonError::DataFusionError(e) => PlanError::DataFusionError(e),
             CommonError::MissingArgument(message) => PlanError::MissingArgument(message),
             CommonError::InvalidArgument(message) => PlanError::InvalidArgument(message),
             CommonError::NotSupported(message) => PlanError::NotSupported(message),

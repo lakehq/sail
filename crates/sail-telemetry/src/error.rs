@@ -1,6 +1,5 @@
 use std::env;
 
-use datafusion::common::DataFusionError;
 use opentelemetry::trace::TraceError;
 use sail_common::error::CommonError;
 use thiserror::Error;
@@ -13,8 +12,6 @@ pub type TelemetryResult<T> = Result<T, TelemetryError>;
 
 #[derive(Debug, Error)]
 pub enum TelemetryError {
-    #[error("error in DataFusion: {0}")]
-    DataFusionError(#[from] DataFusionError),
     #[error("missing argument: {0}")]
     MissingArgument(String),
     #[error("invalid argument: {0}")]
@@ -62,7 +59,6 @@ impl TelemetryError {
 impl From<CommonError> for TelemetryError {
     fn from(error: CommonError) -> Self {
         match error {
-            CommonError::DataFusionError(e) => TelemetryError::DataFusionError(e),
             CommonError::MissingArgument(message) => TelemetryError::MissingArgument(message),
             CommonError::InvalidArgument(message) => TelemetryError::InvalidArgument(message),
             CommonError::NotSupported(message) => TelemetryError::NotSupported(message),

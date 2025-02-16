@@ -1,4 +1,4 @@
-use datafusion::arrow::datatypes::i256;
+pub use arrow_buffer::i256;
 use half::f16;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

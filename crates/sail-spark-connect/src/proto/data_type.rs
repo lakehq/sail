@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DECIMAL128_MAX_PRECISION as ARROW_DECIMAL128_MAX_PRECISION;
 use sail_common::spec;
+use sail_common::spec::ARROW_DECIMAL128_MAX_PRECISION;
 use sail_sql_analyzer::parser::parse_data_type;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};

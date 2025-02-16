@@ -37,7 +37,7 @@ use datafusion_expr::{
 };
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
-use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
+use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;

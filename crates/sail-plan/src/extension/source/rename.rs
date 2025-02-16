@@ -13,7 +13,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Column, Constraints, Result, Statistics};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
-use sail_common::utils::{rename_physical_plan, rename_schema};
+use sail_common_datafusion::utils::{rename_physical_plan, rename_schema};
 
 #[derive(Clone)]
 pub(crate) struct RenameTableProvider {

@@ -7,7 +7,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_common::spec;
-use sail_common::utils::rename_physical_plan;
+use sail_common_datafusion::utils::rename_physical_plan;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
