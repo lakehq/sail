@@ -1,5 +1,5 @@
 use sail_common::spec;
-use sail_sql::parser::{parse_expression, parse_object_name, parse_one_statement};
+use sail_sql_analyzer::parser::{parse_expression, parse_object_name, parse_one_statement};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
@@ -1526,7 +1526,7 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
 #[cfg(test)]
 mod tests {
     use sail_common::tests::test_gold_set;
-    use sail_sql::parser::parse_one_statement;
+    use sail_sql_analyzer::parser::parse_one_statement;
 
     use crate::error::{SparkError, SparkResult};
 
