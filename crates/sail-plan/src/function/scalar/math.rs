@@ -5,11 +5,11 @@ use datafusion_expr::{expr, BinaryExpr, Operator};
 
 use crate::error::PlanResult;
 use crate::extension::function::least_greatest;
+use crate::extension::function::math::spark_abs::SparkAbs;
+use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
+use crate::extension::function::math::spark_signum::SparkSignum;
 use crate::extension::function::randn::Randn;
 use crate::extension::function::random::Random;
-use crate::extension::function::spark_abs::SparkAbs;
-use crate::extension::function::spark_hex_unhex::{SparkHex, SparkUnHex};
-use crate::extension::function::spark_signum::SparkSignum;
 use crate::function::common::{Function, FunctionContext};
 use crate::utils::ItemTaker;
 

@@ -10,8 +10,8 @@ use datafusion_expr::{expr, Expr, ScalarUDF, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
 
+use crate::extension::function::math::spark_hex_unhex::SparkUnHex;
 use crate::extension::function::spark_base64::SparkUnbase64;
-use crate::extension::function::spark_hex_unhex::SparkUnHex;
 use crate::utils::ItemTaker;
 
 #[derive(Debug)]

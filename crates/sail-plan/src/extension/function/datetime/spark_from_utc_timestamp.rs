@@ -2,9 +2,11 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::{exec_err, internal_err, ExprSchema, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Expr, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Volatility,
+};
 use datafusion_expr_common::signature::{Signature, TypeSignature, TIMEZONE_WILDCARD};
 
 use crate::utils::ItemTaker;
@@ -142,37 +144,33 @@ impl ScalarUDFImpl for SparkFromUtcTimestamp {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("`return_type` should not be called, call `return_type_from_exprs` instead")
+        internal_err!("`return_type` should not be called, call `return_type_from_args` instead")
     }
 
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        _schema: &dyn ExprSchema,
-        arg_types: &[DataType],
-    ) -> Result<DataType> {
-        if args.len() != 2 {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        if args.arg_types.len() != 2 {
             return exec_err!(
                 "Spark `from_utc_timestamp` function requires 2 arguments, got {}",
-                args.len()
+                args.arg_types.len()
             );
         }
-        match &args[1] {
-            Expr::Literal(ScalarValue::Utf8(tz))
-            | Expr::Literal(ScalarValue::Utf8View(tz))
-            | Expr::Literal(ScalarValue::LargeUtf8(tz)) => Ok(DataType::Timestamp(
-                *self.time_unit(),
-                tz.as_ref().map(|tz| Arc::from(tz.to_string())),
-            )),
-            _ => exec_err!(
-                "Second argument for `from_utc_timestamp` must be string, received {:?}",
-                arg_types[1]
+        // FIXME: Second arg can be ColumnarValue::Array, but DataFusion doesn't support that.
+        match &args.scalar_arguments[1] {
+            Some(ScalarValue::Utf8(tz))
+            | Some(ScalarValue::Utf8View(tz))
+            | Some(ScalarValue::LargeUtf8(tz)) => {
+                Ok(ReturnInfo::new_nullable(DataType::Timestamp(
+                    *self.time_unit(),
+                    tz.as_ref().map(|tz| Arc::from(tz.to_string())),
+                )))
+            }
+            other => exec_err!(
+                "Second argument for `from_utc_timestamp` must be string, received {other:?}"
             ),
         }
     }
 
-    // TODO: When DataFusion 45 is released, implement this method so we can accept array input.
-    //  DataFusion 45 introduces `return_type_from_args` which is required for array input.
+    // TODO: Implement this method after the FIXME above is fixed so we can accept array input.
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("`invoke` should not be called on a simplified `from_utc_timestamp` function")
     }
