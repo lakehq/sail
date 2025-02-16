@@ -70,6 +70,7 @@ use sail_plan::extension::function::spark_aes::{
 use sail_plan::extension::function::spark_array::SparkArray;
 use sail_plan::extension::function::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_plan::extension::function::spark_concat::SparkConcat;
+use sail_plan::extension::function::spark_element_at::{SparkElementAt, SparkTryElementAt};
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_plan::extension::function::spark_reverse::SparkReverse;
 use sail_plan::extension::function::spark_to_binary::{SparkToBinary, SparkTryToBinary};
@@ -753,6 +754,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
+            "spark_element_at" | "element_at" => {
+                Ok(Arc::new(ScalarUDF::from(SparkElementAt::new())))
+            }
+            "spark_try_element_at" | "try_element_at" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryElementAt::new())))
+            }
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -790,6 +797,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkSignum>()
             || node.inner().as_any().is::<SparkToBinary>()
             || node.inner().as_any().is::<SparkTryToBinary>()
+            || node.inner().as_any().is::<SparkElementAt>()
+            || node.inner().as_any().is::<SparkTryElementAt>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"

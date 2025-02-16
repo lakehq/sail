@@ -28,7 +28,7 @@ impl Default for SparkAbs {
 impl SparkAbs {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Stable),
+            signature: Signature::any(1, Volatility::Immutable),
         }
     }
 }

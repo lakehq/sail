@@ -22,6 +22,7 @@ pub mod spark_aes;
 pub mod spark_array;
 pub mod spark_base64;
 pub mod spark_concat;
+pub mod spark_element_at;
 mod spark_hash_utils;
 pub mod spark_murmur3_hash;
 pub mod spark_reverse;
