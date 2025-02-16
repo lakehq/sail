@@ -36,51 +36,7 @@
     {
       "input": "foo(*) over (cluster by a, b)",
       "output": {
-        "success": {
-          "window": {
-            "windowFunction": {
-              "unresolvedFunction": {
-                "functionName": "foo",
-                "arguments": [
-                  {
-                    "unresolvedStar": {
-                      "target": null,
-                      "wildcardOptions": {
-                        "ilikePattern": null,
-                        "excludeColumns": null,
-                        "exceptColumns": null,
-                        "replaceColumns": null,
-                        "renameColumns": null
-                      }
-                    }
-                  }
-                ],
-                "isDistinct": false,
-                "isUserDefinedFunction": false
-              }
-            },
-            "partitionSpec": [
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null
-                }
-              },
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "b"
-                  ],
-                  "planId": null
-                }
-              }
-            ],
-            "orderSpec": [],
-            "frameSpec": null
-          }
-        }
+        "failure": "invalid argument: found ( at 12:13 expected end of input"
       }
     },
     {
@@ -4756,7 +4712,7 @@
     {
       "input": "foo(*) over w1",
       "output": {
-        "failure": "not supported: named window function"
+        "failure": "not implemented: named window function"
       }
     },
     {

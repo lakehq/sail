@@ -3,109 +3,27 @@
     {
       "input": "\nINSERT INTO testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2)\nSELECT * FROM source\n      ",
       "output": {
-        "success": {
-          "command": {
-            "insertInto": {
-              "input": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "source"
-                        ],
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null,
-                    "sourceInfo": null
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {
-                        "target": null,
-                        "wildcardOptions": {
-                          "ilikePattern": null,
-                          "excludeColumns": null,
-                          "exceptColumns": null,
-                          "replaceColumns": null,
-                          "renameColumns": null
-                        }
-                      }
-                    }
-                  ]
-                },
-                "planId": null,
-                "sourceInfo": null
-              },
-              "table": [
-                "testcat",
-                "ns1",
-                "ns2",
-                "tbl"
-              ],
-              "columns": [],
-              "partitionSpec": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "name": [
-                            "p1"
-                          ],
-                          "planId": null
-                        }
-                      },
-                      {
-                        "literal": {
-                          "int32": {
-                            "value": 3
-                          }
-                        }
-                      }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
-                  }
-                },
-                {
-                  "unresolvedAttribute": {
-                    "name": [
-                      "p2"
-                    ],
-                    "planId": null
-                  }
-                }
-              ],
-              "overwrite": false
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: found ) at 54:55 expected '='"
       }
     },
     {
       "input": "\nINSERT INTO testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) (a, b)\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: a at Line: 3, Column: 25"
+        "failure": "invalid argument: found ) at 54:55 expected '='"
       }
     },
     {
       "input": "INSERT INTO TABLE t1 BY NAME (c1,c2) SELECT * FROM tmp_view",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'c1'.(line 1, pos 30)\n\n== SQL ==\nINSERT INTO TABLE t1 BY NAME (c1,c2) SELECT * FROM tmp_view\n------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: BY at Line: 1, Column: 22"
+        "failure": "invalid argument: found BY at 21:23 expected '.', 'PARTITION', '(', or query"
       }
     },
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3) IF NOT EXISTS\nSELECT * FROM source",
       "exception": "\nOperation not allowed: INSERT INTO ... IF NOT EXISTS.(line 1, pos 0)\n\n== SQL ==\nINSERT INTO TABLE testcat.ns1.ns2.tbl\n^^^\nPARTITION (p1 = 3) IF NOT EXISTS\nSELECT * FROM source\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: IF at Line: 2, Column: 20"
+        "failure": "invalid argument: found IF at 57:59 expected '(', or query"
       }
     },
     {
@@ -169,7 +87,7 @@
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: BY at Line: 1, Column: 39"
+        "failure": "invalid argument: found BY at 38:40 expected '.', 'PARTITION', '(', or query"
       }
     },
     {
@@ -310,40 +228,26 @@
               ],
               "columns": [],
               "partitionSpec": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "name": [
-                            "part"
-                          ],
-                          "planId": null
-                        }
-                      },
-                      {
-                        "literal": {
-                          "binary": {
-                            "value": [
-                              83,
-                              112,
-                              97,
-                              114,
-                              107,
-                              32,
-                              83,
-                              81,
-                              76
-                            ]
-                          }
-                        }
+                [
+                  "part",
+                  {
+                    "literal": {
+                      "binary": {
+                        "value": [
+                          83,
+                          112,
+                          97,
+                          114,
+                          107,
+                          32,
+                          83,
+                          81,
+                          76
+                        ]
                       }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    }
                   }
-                }
+                ]
               ],
               "overwrite": false
             },
@@ -387,30 +291,16 @@
               ],
               "columns": [],
               "partitionSpec": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "name": [
-                            "part"
-                          ],
-                          "planId": null
-                        }
-                      },
-                      {
-                        "literal": {
-                          "date32": {
-                            "days": 17898
-                          }
-                        }
+                [
+                  "part",
+                  {
+                    "literal": {
+                      "date32": {
+                        "days": 17898
                       }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    }
                   }
-                }
+                ]
               ],
               "overwrite": false
             },
@@ -446,30 +336,16 @@
               ],
               "columns": [],
               "partitionSpec": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "name": [
-                            "part"
-                          ],
-                          "planId": null
-                        }
-                      },
-                      {
-                        "literal": {
-                          "date32": {
-                            "days": 17898
-                          }
-                        }
+                [
+                  "part",
+                  {
+                    "literal": {
+                      "date32": {
+                        "days": 17898
                       }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    }
                   }
-                }
+                ]
               ],
               "overwrite": false
             },
@@ -505,34 +381,20 @@
               ],
               "columns": [],
               "partitionSpec": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "name": [
-                            "part"
-                          ],
-                          "planId": null
-                        }
-                      },
-                      {
-                        "literal": {
-                          "intervalMonthDayNano": {
-                            "value": {
-                              "months": 0,
-                              "days": 1,
-                              "nanoseconds": 7384128462000
-                            }
-                          }
+                [
+                  "part",
+                  {
+                    "literal": {
+                      "intervalMonthDayNano": {
+                        "value": {
+                          "months": 0,
+                          "days": 1,
+                          "nanoseconds": 7384128462000
                         }
                       }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    }
                   }
-                }
+                ]
               ],
               "overwrite": false
             },
@@ -568,30 +430,16 @@
               ],
               "columns": [],
               "partitionSpec": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "name": [
-                            "part"
-                          ],
-                          "planId": null
-                        }
-                      },
-                      {
-                        "literal": {
-                          "intervalYearMonth": {
-                            "months": 14
-                          }
-                        }
+                [
+                  "part",
+                  {
+                    "literal": {
+                      "intervalYearMonth": {
+                        "months": 14
                       }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    }
                   }
-                }
+                ]
               ],
               "overwrite": false
             },
@@ -627,34 +475,20 @@
               ],
               "columns": [],
               "partitionSpec": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "name": [
-                            "part"
-                          ],
-                          "planId": null
-                        }
-                      },
-                      {
-                        "literal": {
-                          "intervalMonthDayNano": {
-                            "value": {
-                              "months": 7,
-                              "days": 1,
-                              "nanoseconds": 1000000
-                            }
-                          }
+                [
+                  "part",
+                  {
+                    "literal": {
+                      "intervalMonthDayNano": {
+                        "value": {
+                          "months": 7,
+                          "days": 1,
+                          "nanoseconds": 1000000
                         }
                       }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    }
                   }
-                }
+                ]
               ],
               "overwrite": false
             },
@@ -690,31 +524,17 @@
               ],
               "columns": [],
               "partitionSpec": [
-                {
-                  "unresolvedFunction": {
-                    "functionName": "==",
-                    "arguments": [
-                      {
-                        "unresolvedAttribute": {
-                          "name": [
-                            "part"
-                          ],
-                          "planId": null
-                        }
-                      },
-                      {
-                        "literal": {
-                          "timestampMicrosecond": {
-                            "microseconds": 1546427471000000,
-                            "timezoneInfo": "sQLConfigured"
-                          }
-                        }
+                [
+                  "part",
+                  {
+                    "literal": {
+                      "timestampMicrosecond": {
+                        "microseconds": 1546427471000000,
+                        "timezoneInfo": "sQLConfigured"
                       }
-                    ],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    }
                   }
-                }
+                ]
               ],
               "overwrite": false
             },
@@ -785,7 +605,7 @@
     {
       "input": "INSERT INTO testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SELECT, VALUES, or a subquery in the query body, found: BY at Line: 1, Column: 33"
+        "failure": "invalid argument: found BY at 32:34 expected '.', 'PARTITION', '(', or query"
       }
     },
     {

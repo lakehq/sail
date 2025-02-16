@@ -36,6 +36,7 @@ use datafusion_expr::{
     WriteOp,
 };
 use sail_common::spec;
+use sail_common::spec::TableFileFormat;
 use sail_common::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
@@ -364,14 +365,16 @@ impl PlanResolver<'_> {
             }
             QueryNode::LateralView {
                 input,
-                expression,
+                function,
+                arguments,
                 table_alias,
                 column_aliases,
                 outer,
             } => {
                 self.resolve_query_lateral_view(
                     input.map(|x| *x),
-                    expression,
+                    function,
+                    arguments,
                     table_alias,
                     column_aliases,
                     outer,
@@ -2217,21 +2220,16 @@ impl PlanResolver<'_> {
     async fn resolve_query_lateral_view(
         &self,
         input: Option<spec::QueryPlan>,
-        expression: spec::Expr,
+        function: spec::ObjectName,
+        arguments: Vec<spec::Expr>,
         table_alias: Option<spec::ObjectName>,
         column_aliases: Option<Vec<spec::Identifier>>,
         outer: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let spec::Expr::UnresolvedFunction {
-            function_name,
-            arguments,
-            is_distinct,
-            is_user_defined_function,
-        } = expression
-        else {
-            return Err(PlanError::invalid(
-                "a generator function is expected for lateral view",
+        let Ok(function_name) = <Vec<String>>::from(function).one() else {
+            return Err(PlanError::unsupported(
+                "qualified lateral view function name",
             ));
         };
         let canonical_function_name = function_name.to_ascii_lowercase();
@@ -2290,8 +2288,8 @@ impl PlanResolver<'_> {
         let expression = spec::Expr::UnresolvedFunction {
             function_name,
             arguments,
-            is_distinct,
-            is_user_defined_function,
+            is_distinct: false,
+            is_user_defined_function: false,
         };
         let expression = if let Some(aliases) = column_aliases {
             spec::Expr::Alias {
@@ -2588,7 +2586,6 @@ impl PlanResolver<'_> {
             column_defaults,
             constraints,
             location,
-            serde_properties,
             file_format,
             row_format,
             table_partition_cols,
@@ -2603,11 +2600,6 @@ impl PlanResolver<'_> {
 
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
-        }
-        if !serde_properties.is_empty() {
-            return Err(PlanError::todo(
-                "SERDE PROPERTIES in CREATE TABLE statement",
-            ));
         }
 
         let (schema, query_logical_plan) = if let Some(query) = query {
@@ -2651,12 +2643,14 @@ impl PlanResolver<'_> {
             )
         };
         let file_format = if let Some(file_format) = file_format {
-            let input_format = file_format.input_format;
-            let output_format = file_format.output_format;
-            if let Some(output_format) = output_format {
-                return Err(PlanError::todo(format!("STORED AS INPUTFORMAT: {input_format} OUTPUTFORMAT: {output_format} in CREATE TABLE statement")));
+            match file_format {
+                TableFileFormat::General { format } => format,
+                TableFileFormat::Table { .. } => {
+                    return Err(PlanError::todo(
+                        "STORED AS INPUTFORMAT ... OUTPUTFORMAT ... in CREATE TABLE statement",
+                    ));
+                }
             }
-            input_format
         } else if unbounded {
             self.config.default_unbounded_table_file_format.clone()
         } else {
@@ -2947,7 +2941,7 @@ impl PlanResolver<'_> {
         input: spec::QueryPlan,
         table: spec::ObjectName,
         columns: Vec<spec::Identifier>,
-        partition_spec: Vec<spec::Expr>,
+        partition_spec: Vec<(String, spec::Expr)>,
         overwrite: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
@@ -3313,13 +3307,17 @@ impl PlanResolver<'_> {
 
     async fn resolve_command_set_variable(
         &self,
-        variable: spec::Identifier,
+        variable: String,
         value: String,
     ) -> PlanResult<LogicalPlan> {
-        let statement = plan::Statement::SetVariable(plan::SetVariable {
-            variable: variable.into(),
-            value,
-        });
+        let variable = if variable.eq_ignore_ascii_case("timezone")
+            || variable.eq_ignore_ascii_case("time.zone")
+        {
+            "datafusion.execution.time_zone".to_string()
+        } else {
+            variable
+        };
+        let statement = plan::Statement::SetVariable(plan::SetVariable { variable, value });
 
         Ok(LogicalPlan::Statement(statement))
     }

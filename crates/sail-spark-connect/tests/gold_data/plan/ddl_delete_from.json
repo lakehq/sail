@@ -23,52 +23,14 @@
     {
       "input": "DELETE FROM testcat.ns1.ns2.tbl AS t WHERE t.a = 2",
       "output": {
-        "success": {
-          "command": {
-            "delete": {
-              "table": [
-                "testcat",
-                "ns1",
-                "ns2",
-                "tbl"
-              ],
-              "condition": {
-                "unresolvedFunction": {
-                  "functionName": "==",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "t",
-                          "a"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "literal": {
-                        "int32": {
-                          "value": 2
-                        }
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
-              }
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "not implemented: table alias in DELETE"
       }
     },
     {
       "input": "DELETE FROM testcat.ns1.ns2.tbl AS t(a,b,c,d) WHERE d = 2",
       "exception": "\n[COLUMN_ALIASES_IS_NOT_ALLOWED] Columns aliases are not allowed in DELETE.(line 1, pos 36)\n\n== SQL ==\nDELETE FROM testcat.ns1.ns2.tbl AS t(a,b,c,d) WHERE d = 2\n------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: Columns aliases are not allowed in DELETE"
+        "failure": "not implemented: table alias in DELETE"
       }
     }
   ]

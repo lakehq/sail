@@ -4,14 +4,14 @@
       "input": "\nSELECT a, b\nFROM t1 JOIN t2\nUSING (a, b, at-tr)\n        ",
       "exception": "\n[INVALID_IDENTIFIER] The identifier at-tr is invalid. Please, consider quoting it with back-quotes as `at-tr`.(line 4, pos 15)\n\n== SQL ==\n\nSELECT a, b\nFROM t1 JOIN t2\nUSING (a, b, at-tr)\n---------------^^^\n        \n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: - at Line: 4, Column: 16"
+        "failure": "invalid argument: found USING at 29:34 expected statement, or end of input"
       }
     },
     {
       "input": "\nSELECT tb.*\nFROM t-a INNER JOIN tb\nON ta.a = tb.a AND ta.tag = tb.tag\n        ",
       "exception": "\n[INVALID_IDENTIFIER] The identifier t-a is invalid. Please, consider quoting it with back-quotes as `t-a`.(line 3, pos 6)\n\n== SQL ==\n\nSELECT tb.*\nFROM t-a INNER JOIN tb\n------^^^\nON ta.a = tb.a AND ta.tag = tb.tag\n        \n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: -"
+        "failure": "invalid argument: found - at 19:20 expected statement, or end of input"
       }
     }
   ]

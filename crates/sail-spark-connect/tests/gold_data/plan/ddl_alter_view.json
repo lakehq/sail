@@ -4,37 +4,37 @@
       "input": "ALTER VIEW a.b.c ADD IF NOT EXISTS PARTITION\n(dt='2008-08-08', country='us') PARTITION\n(dt='2009-09-09', country='uk')",
       "exception": "\nOperation not allowed: ALTER VIEW ... ADD PARTITION.(line 1, pos 0)\n\n== SQL ==\nALTER VIEW a.b.c ADD IF NOT EXISTS PARTITION\n^^^\n(dt='2008-08-08', country='us') PARTITION\n(dt='2009-09-09', country='uk')\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: AS, found: ADD at Line: 1, Column: 18"
+        "failure": "invalid argument: found VIEW at 6:10 expected 'DATABASE', 'SCHEMA', or 'TABLE'"
       }
     },
     {
       "input": "ALTER VIEW a.b.c AS SELECT 1",
       "output": {
-        "failure": "not implemented: SQL alter view"
+        "failure": "invalid argument: found VIEW at 6:10 expected 'DATABASE', 'SCHEMA', or 'TABLE'"
       }
     },
     {
       "input": "ALTER VIEW a.b.c RENAME TO x.y.z",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: AS, found: RENAME at Line: 1, Column: 18"
+        "failure": "invalid argument: found VIEW at 6:10 expected 'DATABASE', 'SCHEMA', or 'TABLE'"
       }
     },
     {
       "input": "ALTER VIEW table_name SET TBLPROPERTIES ('test' = 'test', 'comment' = 'new_comment')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: AS, found: SET at Line: 1, Column: 23"
+        "failure": "invalid argument: found VIEW at 6:10 expected 'DATABASE', 'SCHEMA', or 'TABLE'"
       }
     },
     {
       "input": "ALTER VIEW table_name UNSET TBLPROPERTIES ('comment', 'test')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: AS, found: UNSET at Line: 1, Column: 23"
+        "failure": "invalid argument: found VIEW at 6:10 expected 'DATABASE', 'SCHEMA', or 'TABLE'"
       }
     },
     {
       "input": "ALTER VIEW table_name UNSET TBLPROPERTIES IF EXISTS ('comment', 'test')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: AS, found: UNSET at Line: 1, Column: 23"
+        "failure": "invalid argument: found VIEW at 6:10 expected 'DATABASE', 'SCHEMA', or 'TABLE'"
       }
     }
   ]

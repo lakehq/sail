@@ -3,7 +3,7 @@
     {
       "input": "SELECT * FROM (src1 s1 INNER JOIN src2 s2 ON s1.id = s2.id) dst(a, b, c, d)",
       "output": {
-        "failure": "not implemented: nested join"
+        "failure": "invalid argument: found FROM at 9:13 expected statement, or end of input"
       }
     },
     {
@@ -119,14 +119,14 @@
       "input": "select * from a natural cross join b",
       "exception": "\n[INCOMPATIBLE_JOIN_TYPES] The join types NATURAL and CROSS are incompatible.(line 1, pos 16)\n\n== SQL ==\nselect * from a natural cross join b\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a join type after NATURAL, found: cross at Line: 1, Column: 25"
+        "failure": "not implemented: NATURAL JOIN"
       }
     },
     {
       "input": "select * from a natural join b on a.id = b.id",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'.(line 1, pos 31)\n\n== SQL ==\nselect * from a natural join b on a.id = b.id\n-------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: on"
+        "failure": "not implemented: NATURAL JOIN"
       }
     },
     {
@@ -1216,7 +1216,7 @@
     {
       "input": "select * from t cross join lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: LATERAL in derived table factor"
+        "failure": "invalid argument: expected function for lateral table factor"
       }
     },
     {
@@ -1544,7 +1544,7 @@
     {
       "input": "select * from t inner join lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: LATERAL in derived table factor"
+        "failure": "invalid argument: expected function for lateral table factor"
       }
     },
     {
@@ -1711,13 +1711,13 @@
     {
       "input": "select * from t join lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: LATERAL in derived table factor"
+        "failure": "invalid argument: expected function for lateral table factor"
       }
     },
     {
       "input": "select * from t join lateral (select * from u) uu on true",
       "output": {
-        "failure": "not supported: LATERAL in derived table factor"
+        "failure": "not supported: LATERAL JOIN with criteria"
       }
     },
     {
@@ -2045,7 +2045,7 @@
     {
       "input": "select * from t left join lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: LATERAL in derived table factor"
+        "failure": "invalid argument: expected function for lateral table factor"
       }
     },
     {
@@ -2212,7 +2212,7 @@
     {
       "input": "select * from t left outer join lateral (select * from u) uu",
       "output": {
-        "failure": "not supported: LATERAL in derived table factor"
+        "failure": "invalid argument: expected function for lateral table factor"
       }
     },
     {
@@ -3023,49 +3023,49 @@
     {
       "input": "select * from t tt natural full join u as uu",
       "output": {
-        "failure": "not supported: natural join"
+        "failure": "not implemented: NATURAL JOIN"
       }
     },
     {
       "input": "select * from t tt natural full outer join u as uu",
       "output": {
-        "failure": "not supported: natural join"
+        "failure": "not implemented: NATURAL JOIN"
       }
     },
     {
       "input": "select * from t tt natural inner join u as uu",
       "output": {
-        "failure": "not supported: natural join"
+        "failure": "not implemented: NATURAL JOIN"
       }
     },
     {
       "input": "select * from t tt natural join u as uu",
       "output": {
-        "failure": "not supported: natural join"
+        "failure": "not implemented: NATURAL JOIN"
       }
     },
     {
       "input": "select * from t tt natural left join u as uu",
       "output": {
-        "failure": "not supported: natural join"
+        "failure": "not implemented: NATURAL JOIN"
       }
     },
     {
       "input": "select * from t tt natural left outer join u as uu",
       "output": {
-        "failure": "not supported: natural join"
+        "failure": "not implemented: NATURAL JOIN"
       }
     },
     {
       "input": "select * from t tt natural right join u as uu",
       "output": {
-        "failure": "not supported: natural join"
+        "failure": "not implemented: NATURAL JOIN"
       }
     },
     {
       "input": "select * from t tt natural right outer join u as uu",
       "output": {
-        "failure": "not supported: natural join"
+        "failure": "not implemented: NATURAL JOIN"
       }
     },
     {
@@ -3367,26 +3367,26 @@
     {
       "input": "select * from t1 inner join (t2 inner join t3 on col3 = col2)",
       "output": {
-        "failure": "not implemented: nested join"
+        "failure": "invalid argument: found inner at 17:22 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t1 inner join (t2 inner join t3 on col3 = col2) on col3 = col1",
       "output": {
-        "failure": "not implemented: nested join"
+        "failure": "invalid argument: found inner at 17:22 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t1 inner join (t2 inner join t3) on col3 = col2",
       "output": {
-        "failure": "not implemented: nested join"
+        "failure": "invalid argument: found inner at 17:22 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'.(line 1, pos 60)\n\n== SQL ==\nselect * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1\n------------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: on"
+        "failure": "invalid argument: found on at 60:62 expected statement, or end of input"
       }
     },
     {

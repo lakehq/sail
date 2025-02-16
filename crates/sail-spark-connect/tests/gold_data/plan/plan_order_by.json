@@ -3,64 +3,174 @@
     {
       "input": "SELECT PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY col DESC)",
       "output": {
-        "failure": "not supported: function within group"
+        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY col)",
       "output": {
-        "failure": "not supported: function within group"
+        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY col) FILTER (WHERE id > 10)",
       "output": {
-        "failure": "not supported: function filter"
+        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT PERCENTILE_DISC(0.1) WITHIN GROUP (ORDER BY col DESC)",
       "output": {
-        "failure": "not supported: function within group"
+        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT PERCENTILE_DISC(0.1) WITHIN GROUP (ORDER BY col)",
       "output": {
-        "failure": "not supported: function within group"
+        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
       }
     },
     {
       "input": "SELECT PERCENTILE_DISC(0.1) WITHIN GROUP (ORDER BY col) FILTER (WHERE id > 10)",
       "output": {
-        "failure": "not supported: function filter"
+        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t\nwindow w1 as (partition by a, b order by c rows between 1 preceding and 1 following),\n       w2 as w1,\n       w3 as w1",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: (, found: w1 at Line: 3, Column: 14"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t order by a cluster by a",
       "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t order by a cluster by a\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: cluster"
+        "failure": "not implemented: CLUSTER BY"
       }
     },
     {
       "input": "select * from t order by a distribute by a",
       "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t order by a distribute by a\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: distribute"
+        "failure": "invalid argument: found distribute at 27:37 expected statement, or end of input"
       }
     },
     {
       "input": "select * from t order by a sort by a",
       "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t order by a sort by a\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: sort"
+        "success": {
+          "query": {
+            "sort": {
+              "input": {
+                "sort": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {
+                            "target": null,
+                            "wildcardOptions": {
+                              "ilikePattern": null,
+                              "excludeColumns": null,
+                              "exceptColumns": null,
+                              "replaceColumns": null,
+                              "renameColumns": null
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "order": [
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      "direction": "unspecified",
+                      "nullOrdering": "unspecified"
+                    }
+                  ],
+                  "isGlobal": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
+                }
+              ],
+              "isGlobal": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -220,37 +330,463 @@
     {
       "input": "select * from t order by a, b desc window w1 as ()",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: window"
+        "success": {
+          "query": {
+            "sort": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
+                },
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  "direction": "descending",
+                  "nullOrdering": "unspecified"
+                }
+              ],
+              "isGlobal": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t order by a, b desc window w1 as () limit 10",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: window"
+        "success": {
+          "query": {
+            "limit": {
+              "input": {
+                "sort": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {
+                            "target": null,
+                            "wildcardOptions": {
+                              "ilikePattern": null,
+                              "excludeColumns": null,
+                              "exceptColumns": null,
+                              "replaceColumns": null,
+                              "renameColumns": null
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "order": [
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      "direction": "unspecified",
+                      "nullOrdering": "unspecified"
+                    },
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "b"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      "direction": "descending",
+                      "nullOrdering": "unspecified"
+                    }
+                  ],
+                  "isGlobal": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "skip": 0,
+              "limit": 10
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t sort by a, b desc",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: desc"
+        "success": {
+          "query": {
+            "sort": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
+                },
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  "direction": "descending",
+                  "nullOrdering": "unspecified"
+                }
+              ],
+              "isGlobal": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t sort by a, b desc limit 10",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: desc"
+        "success": {
+          "query": {
+            "limit": {
+              "input": {
+                "sort": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {
+                            "target": null,
+                            "wildcardOptions": {
+                              "ilikePattern": null,
+                              "excludeColumns": null,
+                              "exceptColumns": null,
+                              "replaceColumns": null,
+                              "renameColumns": null
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "order": [
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      "direction": "unspecified",
+                      "nullOrdering": "unspecified"
+                    },
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "b"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      "direction": "descending",
+                      "nullOrdering": "unspecified"
+                    }
+                  ],
+                  "isGlobal": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "skip": 0,
+              "limit": 10
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t sort by a, b desc window w1 as ()",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: desc"
+        "success": {
+          "query": {
+            "sort": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "a"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
+                },
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null
+                    }
+                  },
+                  "direction": "descending",
+                  "nullOrdering": "unspecified"
+                }
+              ],
+              "isGlobal": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t sort by a, b desc window w1 as () limit 10",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: desc"
+        "success": {
+          "query": {
+            "limit": {
+              "input": {
+                "sort": {
+                  "input": {
+                    "project": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "expressions": [
+                        {
+                          "unresolvedStar": {
+                            "target": null,
+                            "wildcardOptions": {
+                              "ilikePattern": null,
+                              "excludeColumns": null,
+                              "exceptColumns": null,
+                              "replaceColumns": null,
+                              "renameColumns": null
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "order": [
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      "direction": "unspecified",
+                      "nullOrdering": "unspecified"
+                    },
+                    {
+                      "child": {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "b"
+                          ],
+                          "planId": null
+                        }
+                      },
+                      "direction": "descending",
+                      "nullOrdering": "unspecified"
+                    }
+                  ],
+                  "isGlobal": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "skip": 0,
+              "limit": 10
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]

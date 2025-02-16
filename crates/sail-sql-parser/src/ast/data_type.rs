@@ -3,19 +3,21 @@ use sail_sql_macro::TreeParser;
 use crate::ast::identifier::Ident;
 use crate::ast::keywords::{
     Array, Bigint, Binary, Bool, Boolean, Byte, Bytea, Char, Character, Comment, Date, Date32,
-    Date64, Decimal, Double, Float, Float32, Float64, Hour, Int, Int16, Int32, Int64, Int8,
-    Integer, Interval, Local, Long, Map, Minute, Month, Not, Null, Second, Short, Smallint, Struct,
-    Time, Timestamp, Tinyint, To, Unsigned, Varchar, Void, With, Without, Year, Zone,
+    Date64, Day, Dec, Decimal, Double, Float, Float32, Float64, Hour, Int, Int16, Int32, Int64,
+    Int8, Integer, Interval, Local, Long, Map, Minute, Month, Not, Null, Numeric, Second, Short,
+    Smallint, Struct, Text, Time, Timestamp, TimestampLtz, TimestampNtz, Tinyint, To, Uint16,
+    Uint32, Uint64, Uint8, Unsigned, Varchar, Void, With, Without, Year, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, StringLiteral};
 use crate::ast::operator::{
     Colon, Comma, GreaterThan, LeftParenthesis, LessThan, RightParenthesis,
 };
-use crate::combinator::{boxed, compose, sequence, unit, Sequence};
+use crate::combinator::{boxed, compose, sequence, unit};
+use crate::common::Sequence;
+use crate::token::TokenLabel;
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "DataType")]
+#[parser(dependency = "DataType", label = TokenLabel::DataType)]
 pub enum DataType {
     Null(Null),
     Void(Void),
@@ -29,10 +31,14 @@ pub enum DataType {
     Short(Option<Unsigned>, Short),
     Integer(Option<Unsigned>, Integer),
     Long(Option<Unsigned>, Long),
-    Int8(Option<Unsigned>, Int8),
-    Int16(Option<Unsigned>, Int16),
-    Int32(Option<Unsigned>, Int32),
-    Int64(Option<Unsigned>, Int64),
+    Int8(Int8),
+    Int16(Int16),
+    Int32(Int32),
+    Int64(Int64),
+    UInt8(Uint8),
+    UInt16(Uint16),
+    UInt32(Uint32),
+    UInt64(Uint64),
     Binary(Binary),
     Bytea(Bytea),
     Float(Float),
@@ -41,7 +47,7 @@ pub enum DataType {
     Float64(Float64),
     #[allow(clippy::type_complexity)]
     Decimal(
-        Decimal,
+        DecimalType,
         Option<(
             LeftParenthesis,
             IntegerLiteral,
@@ -59,10 +65,19 @@ pub enum DataType {
     ),
     Varchar(Varchar, LeftParenthesis, IntegerLiteral, RightParenthesis),
     String(crate::ast::keywords::String),
+    Text(Text),
     Timestamp(
         Timestamp,
         Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
         Option<TimezoneType>,
+    ),
+    TimestampNtz(
+        TimestampNtz,
+        Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
+    ),
+    TimestampLtz(
+        TimestampLtz,
+        Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
     ),
     Date(Date),
     Date32(Date32),
@@ -77,7 +92,8 @@ pub enum DataType {
     Struct(
         Struct,
         LessThan,
-        #[parser(function = |x, o| sequence(compose(x, o), unit(o)))] Sequence<StructField, Comma>,
+        #[parser(function = |x, o| sequence(compose(x, o), unit(o)).or_not())]
+        Option<Sequence<StructField, Comma>>,
         GreaterThan,
     ),
     Map(
@@ -90,7 +106,13 @@ pub enum DataType {
     ),
 }
 
-#[allow(unused)]
+#[derive(Debug, Clone, TreeParser)]
+pub enum DecimalType {
+    Decimal(Decimal),
+    Dec(Dec),
+    Numeric(Numeric),
+}
+
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalType {
     YearMonth(
@@ -103,25 +125,23 @@ pub enum IntervalType {
         IntervalDayTimeUnit,
         Option<(To, IntervalDayTimeUnit)>,
     ),
+    Default(Interval),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalYearMonthUnit {
     Year(Year),
     Month(Month),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum IntervalDayTimeUnit {
-    Day(Year),
+    Day(Day),
     Hour(Hour),
     Minute(Minute),
     Second(Second),
 }
 
-#[allow(unused)]
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser)]
 pub enum TimezoneType {
@@ -130,7 +150,6 @@ pub enum TimezoneType {
     WithLocalTimeZone(With, Local, Time, Zone),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "DataType")]
 pub struct StructField {

@@ -1,111 +1,360 @@
+use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
+use chumsky::input::{Input, MapExtra, SliceInput};
+use chumsky::label::LabelError;
 use chumsky::pratt::{infix, left, postfix, prefix};
 use chumsky::prelude::choice;
 use chumsky::Parser;
 use either::Either;
 use sail_sql_macro::TreeParser;
 
-use crate::ast::data_type::DataType;
-use crate::ast::identifier::{Ident, ObjectName};
+use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit};
+use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
-    All, And, Asc, Between, By, Case, Cube, Current, Desc, Distinct, Distribute, Div, Else, End,
-    Exists, False, First, Following, From, Grouping, Ilike, In, Is, Last, Like, Not, Null, Nulls,
-    Or, Order, Over, Partition, Preceding, Range, Rlike, Rollup, Row, Rows, Sets, Sort, Then, True,
-    Unbounded, Unknown, When,
+    All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate,
+    CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Distribute, Div, Else, End,
+    Escape, Exists, Extract, False, First, Following, For, From, Grouping, Hour, Hours, Ilike, In,
+    Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond, Milliseconds,
+    Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay, Partition, Placing,
+    Position, Preceding, Range, Rlike, Rollup, Row, Rows, Second, Seconds, Sets, Similar, Sort,
+    Struct, Substr, Substring, Table, Then, Timestamp, TimestampLtz, TimestampNtz, To, Trailing,
+    Trim, True, Unbounded, Unknown, Week, Weeks, When, Year, Years,
 };
 use crate::ast::literal::{NumberLiteral, StringLiteral};
 use crate::ast::operator;
 use crate::ast::operator::{
     Comma, DoubleColon, LeftBracket, LeftParenthesis, Period, RightBracket, RightParenthesis,
 };
-use crate::ast::query::Query;
+use crate::ast::query::{NamedExpr, Query};
 use crate::combinator::{boxed, compose, sequence, unit};
-use crate::token::Token;
+use crate::common::Sequence;
+use crate::options::ParserOptions;
+use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
-use crate::{ParserOptions, Sequence};
 
 #[derive(Debug, Clone)]
 pub enum Expr {
     Atom(AtomExpr),
-    Modifier(Box<Expr>, ExprModifier),
     UnaryOperator(UnaryOperator, Box<Expr>),
     BinaryOperator(Box<Expr>, BinaryOperator, Box<Expr>),
-    Predicate(Box<Expr>, ExprPredicate),
+    Wildcard(Box<Expr>, Period, operator::Asterisk),
+    Field(Box<Expr>, Period, Ident),
+    Subscript(Box<Expr>, LeftBracket, Box<Expr>, RightBracket),
+    Cast(Box<Expr>, DoubleColon, DataType),
+    IsFalse(Box<Expr>, Is, Option<Not>, False),
+    IsTrue(Box<Expr>, Is, Option<Not>, True),
+    IsUnknown(Box<Expr>, Is, Option<Not>, Unknown),
+    IsNull(Box<Expr>, Is, Option<Not>, Null),
+    IsDistinctFrom(Box<Expr>, Is, Option<Not>, Distinct, From, Box<Expr>),
+    InList(
+        Box<Expr>,
+        Option<Not>,
+        In,
+        LeftParenthesis,
+        Sequence<Expr, Comma>,
+        RightParenthesis,
+    ),
+    InSubquery(
+        Box<Expr>,
+        Option<Not>,
+        In,
+        LeftParenthesis,
+        Query,
+        RightParenthesis,
+    ),
+    Between(Box<Expr>, Option<Not>, Between, Box<Expr>, And, Box<Expr>),
+    Like(
+        Box<Expr>,
+        Option<Not>,
+        Like,
+        Option<PatternQuantifier>,
+        Box<Expr>,
+        Option<PatternEscape>,
+    ),
+    ILike(
+        Box<Expr>,
+        Option<Not>,
+        Ilike,
+        Option<PatternQuantifier>,
+        Box<Expr>,
+        Option<PatternEscape>,
+    ),
+    RLike(Box<Expr>, Option<Not>, Rlike, Box<Expr>),
+    SimilarTo(
+        Box<Expr>,
+        Option<Not>,
+        Similar,
+        To,
+        Box<Expr>,
+        Option<PatternEscape>,
+    ),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Expr, Query)")]
+#[parser(dependency = "(Expr, Query, DataType)")]
 pub enum AtomExpr {
-    SubqueryExpr(
+    Subquery(
         LeftParenthesis,
-        #[parser(function = |(_, q), _| q)] Query,
+        #[parser(function = |(_, q, _), _| q)] Query,
         RightParenthesis,
     ),
-    ExistsExpr(
+    Exists(
         Exists,
         LeftParenthesis,
-        #[parser(function = |(_, q), _| q)] Query,
+        #[parser(function = |(_, q, _), _| q)] Query,
         RightParenthesis,
     ),
-    Nested(#[parser(function = |(e, _), o| compose(e, o))] NestedExpr),
-    Case {
-        case: Case,
-        #[parser(function = |(e, _), _| boxed(e).or_not())]
-        operand: Option<Box<Expr>>,
-        #[parser(function = |(e, _), o| compose(e, o))]
-        conditions: Vec<CaseWhen>,
-        #[parser(function = |(e, _), o| compose(e, o))]
-        r#else: Option<CaseElse>,
-        end: End,
-    },
-    GroupingSets(
-        Grouping,
-        Sets,
-        #[parser(function = |(e, _), o| compose(e, o))] NestedExpr,
+    Table(
+        Table,
+        #[parser(function = |(_, q, _), o| compose(q, o))] TableExpr,
     ),
-    Cube(
-        Cube,
-        #[parser(function = |(e, _), o| compose(e, o))] NestedExpr,
-    ),
-    Rollup(
-        Rollup,
-        #[parser(function = |(e, _), o| compose(e, o))] NestedExpr,
-    ),
-    Function(#[parser(function = |(e, _), o| compose(e, o))] FunctionExpr),
     LambdaFunction {
         params: LambdaFunctionParameters,
         arrow: operator::Arrow,
-        #[parser(function = |(e, _), _| boxed(e))]
+        #[parser(function = |(e, _, _), _| boxed(e))]
         body: Box<Expr>,
     },
+    Nested(
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        RightParenthesis,
+    ),
+    Tuple(
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), o| sequence(compose(e, o), unit(o)))]
+        Sequence<NamedExpr, Comma>,
+        RightParenthesis,
+    ),
+    Struct(
+        Struct,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), o| sequence(compose(e, o), unit(o)))]
+        Sequence<NamedExpr, Comma>,
+        RightParenthesis,
+    ),
+    Case {
+        case: Case,
+        #[parser(function = |(e, _, _), o| When::parser((), o).not().rewind().ignore_then(boxed(e)).or_not())]
+        operand: Option<Box<Expr>>,
+        #[parser(function = |(e, _, _), o| compose(e, o))]
+        conditions: (CaseWhen, Vec<CaseWhen>),
+        #[parser(function = |(e, _, _), o| compose(e, o))]
+        r#else: Option<CaseElse>,
+        end: End,
+    },
+    Cast(
+        Cast,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        As,
+        #[parser(function = |(_, _, t), _| t)] DataType,
+        RightParenthesis,
+    ),
+    Extract(
+        Extract,
+        LeftParenthesis,
+        Ident,
+        From,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        RightParenthesis,
+    ),
+    Substring(
+        Either<Substring, Substr>,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        #[parser(function = |(e, _, _), o| unit(o).then(boxed(e)).or_not())]
+        Option<(From, Box<Expr>)>,
+        #[parser(function = |(e, _, _), o| unit(o).then(boxed(e)).or_not())]
+        Option<(For, Box<Expr>)>,
+        RightParenthesis,
+    ),
+    Trim(
+        Trim,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), o| compose(e, o))] TrimExpr,
+        RightParenthesis,
+    ),
+    Overlay(
+        Overlay,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        Placing,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        From,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        #[parser(function = |(e, _, _), o| unit(o).then(boxed(e)).or_not())]
+        Option<(For, Box<Expr>)>,
+        RightParenthesis,
+    ),
+    Position(
+        Position,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        In,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        RightParenthesis,
+    ),
+    CurrentUser(CurrentUser, Option<(LeftParenthesis, RightParenthesis)>),
+    CurrentTimestamp(
+        CurrentTimestamp,
+        Option<(LeftParenthesis, RightParenthesis)>,
+    ),
+    CurrentDate(CurrentDate, Option<(LeftParenthesis, RightParenthesis)>),
+    // TODO: handle `timestamp(value)` and `date(value)` as normal functions in the plan resolver
+    Timestamp(Timestamp, LeftParenthesis, StringLiteral, RightParenthesis),
+    Date(Date, LeftParenthesis, StringLiteral, RightParenthesis),
+    Function(#[parser(function = |(e, _, _), o| compose(e, o))] FunctionExpr),
     Wildcard(operator::Asterisk),
     StringLiteral(StringLiteral),
     NumberLiteral(NumberLiteral),
+    BooleanLiteral(BooleanLiteral),
+    TimestampLiteral(Timestamp, StringLiteral),
+    TimestampLtzLiteral(TimestampLtz, StringLiteral),
+    TimestampNtzLiteral(TimestampNtz, StringLiteral),
+    DateLiteral(Date, StringLiteral),
+    Null(Null),
+    Interval(
+        Interval,
+        #[parser(function = |(e, _, _), o| compose(e, o))] IntervalExpr,
+    ),
+    Placeholder(Variable),
     Identifier(Ident),
 }
 
-#[allow(unused)]
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Query")]
+pub enum TableExpr {
+    Name(ObjectName),
+    NestedName(LeftParenthesis, ObjectName, RightParenthesis),
+    Query(
+        LeftParenthesis,
+        #[parser(function = |q, _| q)] Query,
+        RightParenthesis,
+    ),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+pub enum BooleanLiteral {
+    True(True),
+    False(False),
+}
+
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
-pub struct NestedExpr(
-    LeftParenthesis,
-    #[parser(function = |e, o| sequence(e, unit(o)))] Sequence<Expr, Comma>,
-    RightParenthesis,
-);
+pub struct IntervalLiteral {
+    pub interval: Option<Interval>,
+    #[parser(function = |e, o| compose(e, o))]
+    pub value: IntervalExpr,
+}
 
-#[allow(unused)]
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum IntervalExpr {
+    // The multi-unit pattern must be defined before the standard pattern,
+    // since the multi-unit pattern can match longer inputs.
+    // Some interval expressions such as `1 day` match both multi-unit and standard
+    // patterns. They are parsed as multi-unit intervals.
+    // Note that interval expressions such as `1 millisecond` can only be parsed as
+    // multi-unit intervals since the unit is not recognized in the standard pattern.
+    MultiUnit {
+        #[parser(function = |e, o| boxed(compose(e, o)))]
+        head: Box<IntervalValueWithUnit>,
+        // If the unit is followed by `TO` (e.g. `'1 1' DAY TO HOUR`), it must be parsed
+        // as a standard interval,
+        #[parser(function = |_, o| To::parser((), o).not().rewind())]
+        barrier: (),
+        #[parser(function = |e, o| compose(e, o))]
+        tail: Vec<IntervalValueWithUnit>,
+    },
+    Standard {
+        #[parser(function = |e, _| boxed(e))]
+        value: Box<Expr>,
+        qualifier: IntervalQualifier,
+    },
+    Literal(StringLiteral),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct IntervalValueWithUnit {
+    #[parser(function = |e, _| e)]
+    pub value: Expr,
+    pub unit: IntervalUnit,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+pub enum IntervalUnit {
+    Year(Year),
+    Years(Years),
+    Month(Month),
+    Months(Months),
+    Week(Week),
+    Weeks(Weeks),
+    Day(Day),
+    Days(Days),
+    Hour(Hour),
+    Hours(Hours),
+    Minute(Minute),
+    Minutes(Minutes),
+    Second(Second),
+    Seconds(Seconds),
+    Millisecond(Millisecond),
+    Milliseconds(Milliseconds),
+    Microsecond(Microsecond),
+    Microseconds(Microseconds),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+pub enum IntervalQualifier {
+    YearMonth(IntervalYearMonthUnit, Option<(To, IntervalYearMonthUnit)>),
+    DayTime(IntervalDayTimeUnit, Option<(To, IntervalDayTimeUnit)>),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum TrimExpr {
+    LeadingSpace(
+        Leading,
+        From,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+    ),
+    Leading(
+        Leading,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        From,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+    ),
+    TrailingSpace(
+        Trailing,
+        From,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+    ),
+    Trailing(
+        Trailing,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        From,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+    ),
+    BothSpace(Both, From, #[parser(function = |e, _| boxed(e))] Box<Expr>),
+    Both(
+        Option<Both>,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        From,
+        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+    ),
+}
+
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct FunctionExpr {
-    name: ObjectName,
-    left: LeftParenthesis,
-    duplicate_treatment: Option<DuplicateTreatment>,
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
-    arguments: Sequence<FunctionArgument, Comma>,
-    right: RightParenthesis,
+    pub name: ObjectName,
+    pub left: LeftParenthesis,
+    pub duplicate_treatment: Option<DuplicateTreatment>,
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o)).or_not())]
+    pub arguments: Option<Sequence<FunctionArgument, Comma>>,
+    pub right: RightParenthesis,
     #[parser(function = |e, o| compose(e, o))]
-    over_clause: Option<OverClause>,
+    pub over_clause: Option<OverClause>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -125,13 +374,12 @@ pub enum DuplicateTreatment {
     Distinct(Distinct),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct OverClause {
-    over: Over,
+    pub over: Over,
     #[parser(function = |e, o| compose(e, o))]
-    window: WindowSpec,
+    pub window: WindowSpec,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -140,41 +388,53 @@ pub enum WindowSpec {
     Named(Ident),
     Detailed {
         left: LeftParenthesis,
+        #[parser(function = |e, o| compose(e, o))]
         partition_by: Option<PartitionBy>,
         #[parser(function = |e, o| compose(e, o))]
         order_by: Option<OrderBy>,
         #[parser(function = |e, o| compose(e, o))]
-        window_frame: WindowFrame,
+        window_frame: Option<WindowFrame>,
         right: RightParenthesis,
     },
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
 pub struct PartitionBy {
-    partition: Either<Partition, Distribute>,
-    by: By,
-    columns: Sequence<Ident, Comma>,
+    pub partition: Either<Partition, Distribute>,
+    pub by: By,
+    #[parser(function = |e, o| sequence(e, unit(o)))]
+    pub columns: Sequence<Expr, Comma>,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct OrderBy {
-    order: Either<Order, Sort>,
-    by: By,
+    pub order: Either<Order, Sort>,
+    pub by: By,
     #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
-    expressions: Sequence<OrderByExpr, Comma>,
+    pub expressions: Sequence<OrderByExpr, Comma>,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct OrderByExpr {
     #[parser(function = |e, _| e)]
-    expression: Expr,
-    asc: Option<Either<Asc, Desc>>,
-    nulls: Option<(Nulls, Either<First, Last>)>,
+    pub expr: Expr,
+    pub direction: Option<OrderDirection>,
+    pub nulls: Option<OrderNulls>,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+pub enum OrderDirection {
+    Asc(Asc),
+    Desc(Desc),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+pub enum OrderNulls {
+    First(Nulls, First),
+    Last(Nulls, Last),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -210,8 +470,8 @@ pub enum WindowFrameBound {
     UnboundedPreceding(Unbounded, Preceding),
     Preceding(#[parser(function = |e, _| boxed(e))] Box<Expr>, Preceding),
     CurrentRow(Current, Row),
-    Following(#[parser(function = |e, _| boxed(e))] Box<Expr>, Following),
     UnboundedFollowing(Unbounded, Following),
+    Following(#[parser(function = |e, _| boxed(e))] Box<Expr>, Following),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -242,6 +502,7 @@ pub enum BinaryOperator {
     LtEq(operator::LessThanEquals),
     Gt(operator::GreaterThan),
     GtEq(operator::GreaterThanEquals),
+    Spaceship(operator::Spaceship),
     BitwiseShiftLeft(operator::DoubleLessThan),
     BitwiseShiftRight(operator::DoubleGreaterThan),
     BitwiseShiftRightUnsigned(operator::TripleGreaterThan),
@@ -250,25 +511,23 @@ pub enum BinaryOperator {
     BitwiseOr(operator::VerticalBar),
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct CaseWhen {
-    when: When,
+    pub when: When,
     #[parser(function = |e, _| boxed(e))]
-    condition: Box<Expr>,
-    then: Then,
+    pub condition: Box<Expr>,
+    pub then: Then,
     #[parser(function = |e, _| boxed(e))]
-    result: Box<Expr>,
+    pub result: Box<Expr>,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct CaseElse {
-    r#else: Else,
+    pub r#else: Else,
     #[parser(function = |e, _| boxed(e))]
-    result: Box<Expr>,
+    pub result: Box<Expr>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -278,12 +537,57 @@ pub enum LambdaFunctionParameters {
 }
 
 #[derive(Debug, Clone, TreeParser)]
+pub enum PatternQuantifier {
+    All(All),
+    Any(Any),
+    Some(crate::ast::keywords::Some),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+pub struct PatternEscape {
+    pub escape: Escape,
+    pub value: StringLiteral,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum GroupingExpr {
+    GroupingSets(
+        Grouping,
+        Sets,
+        LeftParenthesis,
+        #[parser(function = |e, o| sequence(compose(e, o), unit(o)))] Sequence<GroupingSet, Comma>,
+        RightParenthesis,
+    ),
+    Cube(Cube, #[parser(function = |e, o| compose(e, o))] GroupingSet),
+    Rollup(
+        Rollup,
+        #[parser(function = |e, o| compose(e, o))] GroupingSet,
+    ),
+    Default(#[parser(function = |e, _| e)] Expr),
+}
+
+// TODO: support nested grouping sets
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct GroupingSet {
+    pub left: LeftParenthesis,
+    #[parser(function = |e, o| sequence(e, unit(o)).or_not())]
+    pub expressions: Option<Sequence<Expr, Comma>>,
+    pub right: RightParenthesis,
+}
+
+// All private `struct`s or `enum`s are "internal" AST nodes used to parse expressions.
+// They are not part of the final AST.
+
+#[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Expr, DataType)")]
-pub enum ExprModifier {
-    FieldAccess(Period, Ident),
-    SubscriptAccess(
+enum ExprModifier {
+    Wildcard(Period, operator::Asterisk),
+    Field(Period, Ident),
+    Subscript(
         LeftBracket,
-        #[parser(function = |(e, _), _| boxed(e))] Box<Expr>,
+        #[parser(function = |(e, _), _| e)] Expr,
         RightBracket,
     ),
     Cast(DoubleColon, #[parser(function = |(_, t), _| t)] DataType),
@@ -291,18 +595,11 @@ pub enum ExprModifier {
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Expr, Query)")]
-pub enum ExprPredicate {
+enum ExprPostfixPredicate {
     IsFalse(Is, Option<Not>, False),
     IsTrue(Is, Option<Not>, True),
     IsUnknown(Is, Option<Not>, Unknown),
     IsNull(Is, Option<Not>, Null),
-    IsDistinctFrom(
-        Is,
-        Option<Not>,
-        Distinct,
-        From,
-        #[parser(function = |(e, _), _| boxed(e))] Box<Expr>,
-    ),
     InList(
         Option<Not>,
         In,
@@ -317,47 +614,282 @@ pub enum ExprPredicate {
         #[parser(function = |(_, q), _| q)] Query,
         RightParenthesis,
     ),
-    Between(
-        Option<Not>,
-        Between,
-        #[parser(function = |(e, _), _| boxed(e))] Box<Expr>,
-        And,
-        #[parser(function = |(e, _), _| boxed(e))] Box<Expr>,
-    ),
-    Like(
-        Option<Not>,
-        Like,
-        #[parser(function = |(e, _), _| boxed(e))] Box<Expr>,
-    ),
-    ILike(
-        Option<Not>,
-        Ilike,
-        #[parser(function = |(e, _), _| boxed(e))] Box<Expr>,
-    ),
-    RLike(
-        Option<Not>,
-        Rlike,
-        #[parser(function = |(e, _), _| boxed(e))] Box<Expr>,
-    ),
 }
 
-impl<'a, E, P1, P2, P3> TreeParser<'a, &'a [Token<'a>], E, (P1, P2, P3)> for Expr
+#[derive(Debug, Clone, TreeParser)]
+enum ExprInfixPredicate {
+    IsDistinctFrom(Is, Option<Not>, Distinct, From),
+    Between(Option<Not>, Between),
+    Like(Option<Not>, Like, Option<PatternQuantifier>),
+    ILike(Option<Not>, Ilike, Option<PatternQuantifier>),
+    RLike(Option<Not>, Rlike),
+    SimilarTo(Option<Not>, Similar, To),
+}
+
+type TokenInputSpan<'a> = <&'a [Token<'a>] as Input<'a>>::Span;
+type TokenInputSlice<'a> = <&'a [Token<'a>] as SliceInput<'a>>::Slice;
+
+/// An expression fragment that can be parsed by a Pratt parser.
+///
+/// This is helpful for parsing certain ternary predicates:
+///   * `a BETWEEN b AND c` is parsed as `((a BETWEEN b) AND c)`
+///     since the `BETWEEN` operator has a higher binding power than `AND`.
+///   * `a LIKE b ESCAPE c` is parsed as `(a LIKE (b ESCAPE c))`
+///     since the `ESCAPE` postfix has a higher binding power than `LIKE`.
+///     The same applies to `ILIKE` and `SIMILAR TO`.
+///
+/// The fragments are then built into an [`Expr`] at the end of parsing.
+/// Any unmatched fragments of ternary predicates will result in a parser error.
+#[derive(Debug, Clone)]
+enum ExprFragment<'a> {
+    Singleton(Expr),
+    UnaryOperator {
+        op: UnaryOperator,
+        expr: Box<ExprFragment<'a>>,
+    },
+    BinaryOperator {
+        left: Box<ExprFragment<'a>>,
+        op: BinaryOperator,
+        right: Box<ExprFragment<'a>>,
+    },
+    Modifier {
+        expr: Box<ExprFragment<'a>>,
+        modifier: ExprModifier,
+    },
+    PostfixPredicate {
+        expr: Box<ExprFragment<'a>>,
+        predicate: ExprPostfixPredicate,
+    },
+    InfixPredicate {
+        span: TokenInputSpan<'a>,
+        slice: TokenInputSlice<'a>,
+        left: Box<ExprFragment<'a>>,
+        predicate: ExprInfixPredicate,
+        right: Box<ExprFragment<'a>>,
+    },
+    Escape {
+        span: TokenInputSpan<'a>,
+        slice: TokenInputSlice<'a>,
+        expr: Box<ExprFragment<'a>>,
+        escape: PatternEscape,
+    },
+}
+
+impl<'a> ExprFragment<'a> {
+    fn build<E>(self) -> Result<Expr, E::Error>
+    where
+        E: ParserExtra<'a, &'a [Token<'a>]>,
+        E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    {
+        match self {
+            ExprFragment::Singleton(expr) => Ok(expr),
+            ExprFragment::UnaryOperator { op, expr } => {
+                Ok(Expr::UnaryOperator(op, Box::new(expr.build::<E>()?)))
+            }
+            ExprFragment::BinaryOperator { left, op, right } => match op {
+                BinaryOperator::And(and) => left.build_logical_and::<E>(and, *right),
+                _ => Ok(Expr::BinaryOperator(
+                    Box::new(left.build::<E>()?),
+                    op,
+                    Box::new(right.build::<E>()?),
+                )),
+            },
+            ExprFragment::Modifier { expr, modifier } => {
+                let expr = expr.build::<E>()?;
+                match modifier {
+                    ExprModifier::Wildcard(x1, x2) => Ok(Expr::Wildcard(Box::new(expr), x1, x2)),
+                    ExprModifier::Field(x1, x2) => Ok(Expr::Field(Box::new(expr), x1, x2)),
+                    ExprModifier::Subscript(x1, x2, x3) => {
+                        Ok(Expr::Subscript(Box::new(expr), x1, Box::new(x2), x3))
+                    }
+                    ExprModifier::Cast(x1, x2) => Ok(Expr::Cast(Box::new(expr), x1, x2)),
+                }
+            }
+            ExprFragment::PostfixPredicate { expr, predicate } => {
+                let expr = expr.build::<E>()?;
+                match predicate {
+                    ExprPostfixPredicate::IsFalse(x1, x2, x3) => {
+                        Ok(Expr::IsFalse(Box::new(expr), x1, x2, x3))
+                    }
+                    ExprPostfixPredicate::IsTrue(x1, x2, x3) => {
+                        Ok(Expr::IsTrue(Box::new(expr), x1, x2, x3))
+                    }
+                    ExprPostfixPredicate::IsUnknown(x1, x2, x3) => {
+                        Ok(Expr::IsUnknown(Box::new(expr), x1, x2, x3))
+                    }
+                    ExprPostfixPredicate::IsNull(x1, x2, x3) => {
+                        Ok(Expr::IsNull(Box::new(expr), x1, x2, x3))
+                    }
+                    ExprPostfixPredicate::InList(x1, x2, x3, x4, x5) => {
+                        Ok(Expr::InList(Box::new(expr), x1, x2, x3, x4, x5))
+                    }
+                    ExprPostfixPredicate::InSubquery(x1, x2, x3, x4, x5) => {
+                        Ok(Expr::InSubquery(Box::new(expr), x1, x2, x3, x4, x5))
+                    }
+                }
+            }
+            ExprFragment::InfixPredicate {
+                span,
+                slice,
+                left,
+                predicate,
+                right,
+            } => match (*left, predicate, *right) {
+                (left, ExprInfixPredicate::IsDistinctFrom(x1, x2, x3, x4), right) => {
+                    Ok(Expr::IsDistinctFrom(
+                        Box::new(left.build::<E>()?),
+                        x1,
+                        x2,
+                        x3,
+                        x4,
+                        Box::new(right.build::<E>()?),
+                    ))
+                }
+                (_, ExprInfixPredicate::Between(_, _), _) => Err(E::Error::expected_found(
+                    vec![],
+                    slice.first().map(|x| x.into()),
+                    span,
+                )),
+                (left, ExprInfixPredicate::Like(x3, x4, x5), right) => {
+                    let (pattern, escape) = right.build_pattern_and_escape::<E>()?;
+                    Ok(Expr::Like(
+                        Box::new(left.build::<E>()?),
+                        x3,
+                        x4,
+                        x5,
+                        Box::new(pattern),
+                        escape,
+                    ))
+                }
+                (left, ExprInfixPredicate::ILike(x1, x2, x3), right) => {
+                    let (pattern, escape) = right.build_pattern_and_escape::<E>()?;
+                    Ok(Expr::ILike(
+                        Box::new(left.build::<E>()?),
+                        x1,
+                        x2,
+                        x3,
+                        Box::new(pattern),
+                        escape,
+                    ))
+                }
+                (left, ExprInfixPredicate::RLike(x1, x2), right) => Ok(Expr::RLike(
+                    Box::new(left.build::<E>()?),
+                    x1,
+                    x2,
+                    Box::new(right.build::<E>()?),
+                )),
+                (left, ExprInfixPredicate::SimilarTo(x1, x2, x3), right) => {
+                    let (pattern, escape) = right.build_pattern_and_escape::<E>()?;
+                    Ok(Expr::SimilarTo(
+                        Box::new(left.build::<E>()?),
+                        x1,
+                        x2,
+                        x3,
+                        Box::new(pattern),
+                        escape,
+                    ))
+                }
+            },
+            ExprFragment::Escape {
+                span,
+                slice,
+                expr: _,
+                escape: _,
+            } => Err(E::Error::expected_found(
+                vec![],
+                slice.first().map(|x| x.into()),
+                span,
+            )),
+        }
+    }
+
+    fn build_pattern_and_escape<E>(self) -> Result<(Expr, Option<PatternEscape>), E::Error>
+    where
+        E: ParserExtra<'a, &'a [Token<'a>]>,
+        E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    {
+        match self {
+            ExprFragment::Escape {
+                span: _,
+                slice: _,
+                expr,
+                escape,
+            } => Ok((expr.build::<E>()?, Some(escape))),
+            _ => Ok((self.build::<E>()?, None)),
+        }
+    }
+
+    fn build_logical_and<E>(mut self, and: And, other: Self) -> Result<Expr, E::Error>
+    where
+        E: ParserExtra<'a, &'a [Token<'a>]>,
+        E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    {
+        // Find the right-most leaf in the left expression tree,
+        // and rewrite the expression if the leaf is the `BETWEEN` operator.
+        // This would allow expressions such as `a AND b BETWEEN c AND d` to be parsed correctly.
+        // The Pratt parser returns `((a AND (b BETWEEN c)) AND d)` for such a case,
+        // which needs to be rewritten as `(a AND (b BETWEEN c AND d))`.
+        let mut current = &mut self;
+        loop {
+            match current {
+                ExprFragment::InfixPredicate {
+                    left: expr,
+                    predicate: ExprInfixPredicate::Between(not, between),
+                    right: low,
+                    ..
+                } => {
+                    *current = ExprFragment::Singleton(Expr::Between(
+                        Box::new(expr.clone().build::<E>()?),
+                        not.clone(),
+                        between.clone(),
+                        Box::new(low.clone().build::<E>()?),
+                        and,
+                        Box::new(other.build::<E>()?),
+                    ));
+                    return self.build::<E>();
+                }
+                ExprFragment::UnaryOperator { expr: next, .. }
+                | ExprFragment::BinaryOperator { right: next, .. }
+                | ExprFragment::InfixPredicate { right: next, .. } => {
+                    current = next;
+                }
+                ExprFragment::Singleton(_)
+                | ExprFragment::Modifier { .. }
+                | ExprFragment::PostfixPredicate { .. }
+                | ExprFragment::Escape { .. } => break,
+            }
+        }
+        Ok(Expr::BinaryOperator(
+            Box::new(self.build::<E>()?),
+            BinaryOperator::And(and),
+            Box::new(other.build::<E>()?),
+        ))
+    }
+}
+
+impl<'a, 'opt, E, P1, P2, P3> TreeParser<'a, 'opt, &'a [Token<'a>], E, (P1, P2, P3)> for Expr
 where
+    'opt: 'a,
     E: ParserExtra<'a, &'a [Token<'a>]>,
-    P1: Parser<'a, &'a [Token<'a>], Expr, E> + Clone,
-    P2: Parser<'a, &'a [Token<'a>], Query, E> + Clone,
-    P3: Parser<'a, &'a [Token<'a>], DataType, E> + Clone,
+    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    P1: Parser<'a, &'a [Token<'a>], Expr, E> + Clone + 'a,
+    P2: Parser<'a, &'a [Token<'a>], Query, E> + Clone + 'a,
+    P3: Parser<'a, &'a [Token<'a>], DataType, E> + Clone + 'a,
 {
     fn parser(
         (expr, query, data_type): (P1, P2, P3),
-        options: &ParserOptions,
+        options: &'opt ParserOptions,
     ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        let atom = AtomExpr::parser((expr.clone(), query.clone()), options).map(Expr::Atom);
+        let atom = AtomExpr::parser((expr.clone(), query.clone(), data_type.clone()), options)
+            .map(|atom| <ExprFragment>::Singleton(Expr::Atom(atom)));
         atom.pratt((
             postfix(
                 26,
                 ExprModifier::parser((expr.clone(), data_type.clone()), options),
-                |e, op| Expr::Modifier(Box::new(e), op),
+                |e, op| ExprFragment::Modifier {
+                    expr: Box::new(e),
+                    modifier: op,
+                },
             ),
             prefix(
                 25,
@@ -366,7 +898,10 @@ where
                     operator::Minus::parser((), options).map(UnaryOperator::Minus),
                     operator::Tilde::parser((), options).map(UnaryOperator::BitwiseNot),
                 )),
-                |op, e| Expr::UnaryOperator(op, Box::new(e)),
+                |op, e| ExprFragment::UnaryOperator {
+                    op,
+                    expr: Box::new(e),
+                },
             ),
             infix(
                 left(24),
@@ -376,7 +911,11 @@ where
                     operator::Percent::parser((), options).map(BinaryOperator::Modulo),
                     Div::parser((), options).map(BinaryOperator::IntegerDivide),
                 )),
-                |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
+                |l, op, r| ExprFragment::BinaryOperator {
+                    left: Box::new(l),
+                    op,
+                    right: Box::new(r),
+                },
             ),
             infix(
                 left(23),
@@ -386,48 +925,73 @@ where
                     operator::DoubleVerticalBar::parser((), options)
                         .map(BinaryOperator::StringConcat),
                 )),
-                |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
+                |l, op, r| ExprFragment::BinaryOperator {
+                    left: Box::new(l),
+                    op,
+                    right: Box::new(r),
+                },
             ),
             infix(
                 left(22),
                 choice((
-                    operator::DoubleLessThan::parser((), options)
-                        .map(BinaryOperator::BitwiseShiftLeft),
-                    operator::DoubleGreaterThan::parser((), options)
-                        .map(BinaryOperator::BitwiseShiftRight),
                     operator::TripleGreaterThan::parser((), options)
                         .map(BinaryOperator::BitwiseShiftRightUnsigned),
+                    operator::DoubleGreaterThan::parser((), options)
+                        .map(BinaryOperator::BitwiseShiftRight),
+                    operator::DoubleLessThan::parser((), options)
+                        .map(BinaryOperator::BitwiseShiftLeft),
                 )),
-                |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
+                |l, op, r| ExprFragment::BinaryOperator {
+                    left: Box::new(l),
+                    op,
+                    right: Box::new(r),
+                },
             ),
             infix(
                 left(21),
                 operator::Ampersand::parser((), options).map(BinaryOperator::BitwiseAnd),
-                |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
+                |l, op, r| ExprFragment::BinaryOperator {
+                    left: Box::new(l),
+                    op,
+                    right: Box::new(r),
+                },
             ),
             infix(
                 left(20),
                 operator::Caret::parser((), options).map(BinaryOperator::BitwiseXor),
-                |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
+                |l, op, r| ExprFragment::BinaryOperator {
+                    left: Box::new(l),
+                    op,
+                    right: Box::new(r),
+                },
             ),
             infix(
                 left(19),
                 operator::VerticalBar::parser((), options).map(BinaryOperator::BitwiseOr),
-                |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
+                |l, op, r| ExprFragment::BinaryOperator {
+                    left: Box::new(l),
+                    op,
+                    right: Box::new(r),
+                },
             ),
             infix(
                 left(18),
                 choice((
-                    operator::Equals::parser((), options).map(BinaryOperator::Eq),
-                    operator::DoubleEquals::parser((), options).map(BinaryOperator::EqEq),
                     operator::NotEquals::parser((), options).map(BinaryOperator::NotEq),
+                    operator::DoubleEquals::parser((), options).map(BinaryOperator::EqEq),
+                    operator::Equals::parser((), options).map(BinaryOperator::Eq),
+                    operator::GreaterThanEquals::parser((), options).map(BinaryOperator::GtEq),
+                    operator::GreaterThan::parser((), options).map(BinaryOperator::Gt),
+                    operator::Spaceship::parser((), options).map(BinaryOperator::Spaceship),
+                    operator::LessThanEquals::parser((), options).map(BinaryOperator::LtEq),
                     operator::LessThanGreaterThan::parser((), options).map(BinaryOperator::LtGt),
                     operator::LessThan::parser((), options).map(BinaryOperator::Lt),
-                    operator::LessThanEquals::parser((), options).map(BinaryOperator::LtEq),
-                    operator::GreaterThan::parser((), options).map(BinaryOperator::Gt),
-                    operator::GreaterThanEquals::parser((), options).map(BinaryOperator::GtEq),
                 )),
-                |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
+                |l, op, r| ExprFragment::BinaryOperator {
+                    left: Box::new(l),
+                    op,
+                    right: Box::new(r),
+                },
             ),
             prefix(
                 17,
@@ -435,23 +999,61 @@ where
                     Not::parser((), options).map(UnaryOperator::Not),
                     operator::ExclamationMark::parser((), options).map(UnaryOperator::LogicalNot),
                 )),
-                |op, e| Expr::UnaryOperator(op, Box::new(e)),
+                |op, e| ExprFragment::UnaryOperator {
+                    op,
+                    expr: Box::new(e),
+                },
             ),
             postfix(
                 16,
-                ExprPredicate::parser((expr.clone(), query.clone()), options),
-                |e, op| Expr::Predicate(Box::new(e), op),
+                PatternEscape::parser((), options),
+                |e, op, extra: &mut MapExtra<'a, '_, _, _>| ExprFragment::Escape {
+                    span: extra.span(),
+                    slice: extra.slice(),
+                    expr: Box::new(e),
+                    escape: op,
+                },
+            ),
+            // The "postfix" predicates and "infix" predicates are allowed to have the same binding power.
+            postfix(
+                15,
+                ExprPostfixPredicate::parser((expr.clone(), query.clone()), options),
+                |e, op| ExprFragment::PostfixPredicate {
+                    expr: Box::new(e),
+                    predicate: op,
+                },
             ),
             infix(
-                left(2),
+                left(15),
+                ExprInfixPredicate::parser((), options),
+                |l, op, r, extra: &mut MapExtra<'a, '_, _, _>| ExprFragment::InfixPredicate {
+                    span: extra.span(),
+                    slice: extra.slice(),
+                    left: Box::new(l),
+                    predicate: op,
+                    right: Box::new(r),
+                },
+            ),
+            infix(
+                left(14),
                 And::parser((), options).map(BinaryOperator::And),
-                |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
+                |l, op, r| ExprFragment::BinaryOperator {
+                    left: Box::new(l),
+                    op,
+                    right: Box::new(r),
+                },
             ),
             infix(
-                left(1),
+                left(13),
                 Or::parser((), options).map(BinaryOperator::Or),
-                |l, op, r| Expr::BinaryOperator(Box::new(l), op, Box::new(r)),
+                |l, op, r| ExprFragment::BinaryOperator {
+                    left: Box::new(l),
+                    op,
+                    right: Box::new(r),
+                },
             ),
         ))
+        .try_map(|e, _| e.build::<E>())
+        .labelled(TokenLabel::Expression)
     }
 }

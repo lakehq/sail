@@ -1,6 +1,5 @@
 use sail_common::spec;
-use sail_sql::expression::common::{parse_expression, parse_object_name};
-use sail_sql::statement::common::parse_sql_statement;
+use sail_sql::parser::{parse_expression, parse_object_name, parse_one_statement};
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
@@ -396,7 +395,7 @@ impl TryFrom<RelType> for RelationNode {
                     args,
                     pos_args,
                 } = sql;
-                match parse_sql_statement(query.as_str())? {
+                match parse_one_statement(query.as_str())? {
                     spec::Plan::Query(input) => {
                         let positional_arguments = pos_args
                             .into_iter()
@@ -1225,11 +1224,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         column_defaults: Default::default(),
                         constraints: vec![],
                         location: path,
-                        serde_properties: vec![],
-                        file_format: source.map(|x| spec::TableFileFormat {
-                            input_format: x,
-                            output_format: None,
-                        }),
+                        file_format: source.map(|x| spec::TableFileFormat::General { format: x }),
                         row_format: None,
                         table_partition_cols: vec![],
                         file_sort_order: vec![],
@@ -1262,11 +1257,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         column_defaults: Default::default(),
                         constraints: vec![],
                         location: path,
-                        serde_properties: vec![],
-                        file_format: source.map(|x| spec::TableFileFormat {
-                            input_format: x,
-                            output_format: None,
-                        }),
+                        file_format: source.map(|x| spec::TableFileFormat::General { format: x }),
                         row_format: None,
                         table_partition_cols: vec![],
                         file_sort_order: vec![],
@@ -1535,7 +1526,7 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
 #[cfg(test)]
 mod tests {
     use sail_common::tests::test_gold_set;
-    use sail_sql::statement::common::parse_sql_statement;
+    use sail_sql::parser::parse_one_statement;
 
     use crate::error::{SparkError, SparkResult};
 
@@ -1543,7 +1534,7 @@ mod tests {
     fn test_sql_to_plan() -> SparkResult<()> {
         test_gold_set(
             "tests/gold_data/plan/*.json",
-            |sql: String| Ok(parse_sql_statement(&sql)?),
+            |sql: String| Ok(parse_one_statement(&sql)?),
             SparkError::internal,
         )
     }

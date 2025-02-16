@@ -415,7 +415,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ("
+        "success": "ok"
       }
     },
     {
@@ -1008,7 +1008,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ("
+        "failure": "not implemented: function: user"
       }
     },
     {

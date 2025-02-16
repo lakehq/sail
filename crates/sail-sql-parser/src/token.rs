@@ -1,3 +1,6 @@
+use std::fmt;
+use std::fmt::{Display, Formatter};
+
 /// A token in the SQL lexer output.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token<'a> {
@@ -11,6 +14,17 @@ impl<'a> Token<'a> {
             value,
             span: span.into(),
         }
+    }
+}
+
+impl Display for Token<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)?;
+        if !self.span.is_empty() {
+            // TODO: show token span as location
+            write!(f, " at {}:{}", self.span.start, self.span.end)?
+        }
+        Ok(())
     }
 }
 
@@ -49,22 +63,95 @@ pub enum TokenValue<'a> {
     MultiLineComment { raw: &'a str },
     /// A punctuation character.
     Punctuation(Punctuation),
-    /// A placeholder used to represent a class of expected token values in errors.
-    /// This token value will not be present in the lexer output.
-    Placeholder(TokenClass),
 }
 
-/// A class of SQL token values.
+impl Display for TokenValue<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenValue::Word { raw, .. } => {
+                write!(f, "{raw}")
+            }
+            TokenValue::Number { value, suffix } => {
+                write!(f, "{value}{suffix}")
+            }
+            TokenValue::String { raw, .. } => {
+                write!(f, "{raw}")
+            }
+            TokenValue::Tab { count } => {
+                write!(f, "{}", "<tab>".repeat(*count))
+            }
+            TokenValue::LineFeed { count } => {
+                write!(f, "{}", "<lf>".repeat(*count))
+            }
+            TokenValue::CarriageReturn { count } => {
+                write!(f, "{}", "<cr>".repeat(*count))
+            }
+            TokenValue::Space { count } => {
+                write!(f, "{}", "<space>".repeat(*count))
+            }
+            TokenValue::SingleLineComment { raw, .. } => {
+                write!(f, "{raw}")
+            }
+            TokenValue::MultiLineComment { raw, .. } => {
+                write!(f, "{raw}")
+            }
+            TokenValue::Punctuation(p) => {
+                write!(f, "{}", p.to_char())
+            }
+        }
+    }
+}
+
+/// A SQL token label.
+/// This is useful in error messages to represent an expected class of token values.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TokenClass {
+pub enum TokenLabel {
+    /// A keyword.
+    Keyword(Keyword),
+    /// An operator.
+    Operator(&'static [Punctuation]),
     /// An identifier.
     Identifier,
+    /// A variable consisting of `$` followed by an identifier.
+    Variable,
     /// A numeric literal.
     Number,
-    /// An integer literal without sign or suffix.
+    /// A possibly signed integer literal without suffix.
     Integer,
-    /// A string.
+    /// A string literal.
     String,
+    /// A statement.
+    Statement,
+    /// A query.
+    Query,
+    /// An expression.
+    Expression,
+    /// A data type.
+    DataType,
+}
+
+impl Display for TokenLabel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Keyword(k) => write!(f, "'{}'", k.as_str()),
+            Self::Operator(op) => {
+                write!(f, "'")?;
+                for p in op.iter() {
+                    write!(f, "{}", p.to_char())?;
+                }
+                write!(f, "'")
+            }
+            Self::Identifier => write!(f, "identifier"),
+            Self::Variable => write!(f, "variable"),
+            Self::Number => write!(f, "number"),
+            Self::Integer => write!(f, "integer"),
+            Self::String => write!(f, "string"),
+            Self::Statement => write!(f, "statement"),
+            Self::Query => write!(f, "query"),
+            Self::Expression => write!(f, "expression"),
+            Self::DataType => write!(f, "data type"),
+        }
+    }
 }
 
 /// A style of SQL string literal.
@@ -85,10 +172,14 @@ pub enum StringStyle {
     TripleDoubleQuoted { prefix: Option<char> },
     /// A Unicode string literal surrounded by one single quote on each side.
     /// (e.g., `U&'hello'`).
-    UnicodeSingleQuoted,
+    /// The escape character defaults to `\` but can be specified via `UESCAPE`
+    /// after the string literal.
+    UnicodeSingleQuoted { escape: Option<char> },
     /// A Unicode string literal surrounded by one double quote on each side.
     /// (e.g., `U&"hello"`).
-    UnicodeDoubleQuoted,
+    /// The escape character defaults to `\` but can be specified via `UESCAPE`
+    /// after the string literal.
+    UnicodeDoubleQuoted { escape: Option<char> },
     /// A string literal surrounded by one backtick on each side.
     BacktickQuoted,
     /// A string literal surrounded by the same tag on each side where the tag
@@ -151,7 +242,6 @@ macro_rules! punctuation_enum {
                 }
             }
 
-            #[allow(unused)]
             pub fn to_char(self) -> char {
                 match self {
                     $(Self::$p => $ch,)*
@@ -174,7 +264,6 @@ pub struct TokenSpan {
     pub end: usize,
 }
 
-#[allow(unused)]
 impl TokenSpan {
     pub fn is_empty(&self) -> bool {
         self.start >= self.end
@@ -203,12 +292,19 @@ impl TokenSpan {
 }
 
 macro_rules! keyword_enum {
-    ([$(($_:expr, $identifier:ident),)* $(,)?]) => {
+    ([$(($string:expr, $identifier:ident),)* $(,)?]) => {
         /// A SQL keyword.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        #[allow(unused)]
         pub enum Keyword {
             $($identifier,)*
+        }
+
+        impl Keyword {
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $(Self::$identifier => $string,)*
+                }
+            }
         }
     };
 }
@@ -226,6 +322,205 @@ static KEYWORD_MAP: phf::Map<&'static str, Keyword> = keyword_map!(keyword_map_v
 impl Keyword {
     pub fn get(value: &str) -> Option<Self> {
         KEYWORD_MAP.get(value.to_uppercase().as_str()).cloned()
+    }
+
+    /// Whether the keyword is a reserved keyword in ANSI mode SQL parsing.
+    /// Reserved keywords cannot be used as identifiers unless quoted.
+    ///
+    /// Note that Spark default mode SQL parsing does not have reserved keywords.
+    /// All keywords are either "non-reserved" or "strict-non-reserved".
+    /// All keywords can be used as identifiers without quoting. For example,
+    /// `select from from from values 1 as t(from)` or `select 1 union union select 2`
+    /// are valid SQL statements in Spark. Spark uses ANTLR4 to generate a parser
+    /// that uses Adaptive LL(*) parsing, which can handle these ambiguous cases.
+    /// This is not possible in PEG (parsing expression grammar) parsers supported by `chumsky`.
+    /// `sqlparser-rs` does not support such cases either.
+    ///
+    /// We allow reserved keywords to be used as identifiers when there is no ambiguity,
+    /// to avoid the grammar being too restrictive. For example, we would like to parse
+    /// `select any(c) from values true AS t(c)` even though `any` is a reserved keyword.
+    /// (This query is invalid when `spark.sql.ansi.enabled` and `spark.sql.ansi.enforceReservedKeywords`
+    /// are both set to `true` in Spark.)
+    ///
+    /// However, there are cases when ambiguity does arise (e.g. `select <expr> [[as] <alias>]`).
+    /// In such cases, we must assume that reserved keywords cannot be identifiers when unquoted,
+    /// so that we can make local parsing decisions with limited lookahead.
+    ///
+    /// See also:
+    /// * <https://spark.apache.org/docs/latest/sql-ref-ansi-compliance.html>
+    /// * <https://www.antlr.org/papers/allstar-techreport.pdf>
+    pub fn is_reserved_in_ansi_mode(&self) -> bool {
+        matches!(
+            self,
+            Self::All
+                | Self::And
+                | Self::Any
+                | Self::As
+                | Self::Authorization
+                | Self::Both
+                | Self::Case
+                | Self::Cast
+                | Self::Check
+                | Self::Collate
+                | Self::Column
+                | Self::Constraint
+                | Self::Create
+                | Self::Cross
+                | Self::CurrentDate
+                | Self::CurrentTime
+                | Self::CurrentTimestamp
+                | Self::CurrentUser
+                | Self::Distinct
+                | Self::Else
+                | Self::End
+                | Self::Escape
+                | Self::Except
+                | Self::False
+                | Self::Fetch
+                | Self::Filter
+                | Self::For
+                | Self::Foreign
+                | Self::From
+                | Self::Full
+                | Self::Grant
+                | Self::Group
+                | Self::Having
+                | Self::In
+                | Self::Inner
+                | Self::Intersect
+                | Self::Into
+                | Self::Is
+                | Self::Join
+                | Self::Lateral
+                | Self::Leading
+                | Self::Left
+                | Self::Natural
+                | Self::Not
+                | Self::Null
+                | Self::Offset
+                | Self::On
+                | Self::Only
+                | Self::Or
+                | Self::Order
+                | Self::Outer
+                | Self::Overlaps
+                | Self::PercentileCont
+                | Self::PercentileDisc
+                | Self::Primary
+                | Self::References
+                | Self::Right
+                | Self::Select
+                | Self::SessionUser
+                | Self::Some
+                | Self::Table
+                | Self::Then
+                | Self::Time
+                | Self::To
+                | Self::Trailing
+                | Self::Union
+                | Self::Unique
+                | Self::Unknown
+                | Self::User
+                | Self::Using
+                | Self::When
+                | Self::Where
+                | Self::With
+                | Self::Within
+        )
+    }
+
+    /// Whether the keyword is reserved for use as a column alias.
+    /// These keywords cannot be used as column aliases unless quoted.
+    /// This list is adapted from `sqlparser-rs`.
+    pub fn is_reserved_for_column_alias(&self) -> bool {
+        matches!(
+            self,
+            Self::Analyze
+                | Self::Cluster
+                | Self::Distribute
+                | Self::End
+                | Self::Except
+                | Self::Explain
+                | Self::Fetch
+                | Self::From
+                | Self::Group
+                | Self::Having
+                | Self::Intersect
+                | Self::Into
+                | Self::Lateral
+                | Self::Limit
+                | Self::Offset
+                | Self::Order
+                | Self::Select
+                | Self::Sort
+                | Self::Union
+                | Self::View
+                | Self::Where
+                | Self::With
+        )
+    }
+
+    /// Whether the keyword is reserved for use as a table alias.
+    /// These keywords cannot be used as table aliases unless quoted.
+    /// This includes the "strict-non-reserved" keywords in Spark SQL
+    /// default mode, as well as additional keywords from `sqlparser-rs`.
+    pub fn is_reserved_for_table_alias(&self) -> bool {
+        matches!(
+            self,
+            // "strict-non-reserved" keywords in Spark SQL default mode
+            Self::Anti
+                | Self::Cross
+                | Self::Except
+                | Self::Full
+                | Self::Inner
+                | Self::Intersect
+                | Self::Join
+                | Self::Lateral
+                | Self::Left
+                | Self::Minus
+                | Self::Natural
+                | Self::On
+                | Self::Right
+                | Self::Semi
+                | Self::Union
+                | Self::Using
+                // additional keywords from `sqlparser-rs`
+                | Self::Analyze
+                | Self::Cluster
+                | Self::Connect
+                | Self::Distribute
+                | Self::End
+                | Self::Explain
+                | Self::Fetch
+                | Self::For
+                | Self::Format
+                | Self::From
+                | Self::Global
+                | Self::Group
+                | Self::Having
+                | Self::Limit
+                | Self::MatchRecognize
+                | Self::Offset
+                | Self::Order
+                | Self::Outer
+                | Self::Partition
+                | Self::Pivot
+                | Self::Prewhere
+                | Self::Qualify
+                | Self::Sample
+                | Self::Select
+                | Self::Set
+                | Self::Settings
+                | Self::Sort
+                | Self::Start
+                | Self::Tablesample
+                | Self::Top
+                | Self::Unpivot
+                | Self::View
+                | Self::Where
+                | Self::Window
+                | Self::With
+        )
     }
 }
 

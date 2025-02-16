@@ -3,25 +3,25 @@
     {
       "input": "DESC FUNCTION a",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: a"
+        "failure": "invalid argument: found DESC at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "DESCRIBE FUNCTION EXTENDED a.b.c",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: EXTENDED"
+        "failure": "invalid argument: found DESCRIBE at 0:8 expected statement, or end of input"
       }
     },
     {
       "input": "DESCRIBE FUNCTION a",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: a"
+        "failure": "invalid argument: found DESCRIBE at 0:8 expected statement, or end of input"
       }
     },
     {
       "input": "DESCRIBE FUNCTION a.b.c",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: a"
+        "failure": "invalid argument: found DESCRIBE at 0:8 expected statement, or end of input"
       }
     }
   ]

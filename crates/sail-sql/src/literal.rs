@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::iter::once;
 use std::ops::{Add, Neg};
 use std::str::FromStr;
 
@@ -11,13 +12,17 @@ use datafusion::arrow::datatypes::{
 };
 use lazy_static::lazy_static;
 use sail_common::spec;
-use sqlparser::ast;
-use sqlparser::keywords::Keyword;
-use sqlparser::parser::Parser;
+use sail_sql_parser::ast::data_type::{IntervalDayTimeUnit, IntervalYearMonthUnit};
+use sail_sql_parser::ast::expression::{
+    AtomExpr, Expr, IntervalExpr, IntervalLiteral, IntervalQualifier, IntervalUnit,
+    IntervalValueWithUnit, UnaryOperator,
+};
+use sail_sql_parser::ast::literal::NumberLiteral;
 use {chrono, chrono_tz};
 
 use crate::error::{SqlError, SqlResult};
-use crate::parser::{fail_on_extra_token, SparkDialect};
+use crate::parser::parse_interval_literal;
+use crate::value::from_ast_string;
 
 lazy_static! {
     static ref BINARY_REGEX: regex::Regex =
@@ -226,134 +231,65 @@ impl TryFrom<LiteralValue<(chrono::DateTime<Utc>, TimeZoneVariant)>> for spec::L
     }
 }
 
-impl TryFrom<LiteralValue<Signed<ast::Interval>>> for spec::Literal {
+impl TryFrom<LiteralValue<Signed<IntervalExpr>>> for spec::Literal {
     type Error = SqlError;
 
     // TODO: support the legacy calendar interval when `spark.sql.legacy.interval.enabled` is `true`
 
-    fn try_from(literal: LiteralValue<Signed<ast::Interval>>) -> SqlResult<spec::Literal> {
-        use ast::{DateTimeField, Interval, IntervalUnit, IntervalValueWithUnit};
-
-        let Signed(interval, negated) = literal.0;
-        let error = || SqlError::invalid(format!("interval: {:?}", interval));
+    fn try_from(literal: LiteralValue<Signed<IntervalExpr>>) -> SqlResult<spec::Literal> {
+        let negated = literal.0.is_negative();
+        let interval = literal.0.into_inner();
         match interval.clone() {
-            Interval::Standard { value, unit } => {
-                if unit.leading_precision.is_some() || unit.fractional_seconds_precision.is_some() {
-                    return Err(error());
-                }
-                let signed = LiteralValue::<Signed<String>>::try_from(*value)?.0;
-                let value = signed.0;
-                let negated = signed.1 ^ negated;
-                match (unit.leading_field, unit.last_field) {
-                    (Some(DateTimeField::Year | DateTimeField::Years), None) => {
-                        parse_interval_year_month_string(&value, negated, &INTERVAL_YEAR_REGEX)
+            IntervalExpr::Standard { value, qualifier } => {
+                let kind = from_ast_interval_qualifier(qualifier)?;
+                parse_standard_interval(*value, kind, negated)
+            }
+            IntervalExpr::MultiUnit {
+                head,
+                barrier: _,
+                tail,
+            } => {
+                if tail.is_empty() {
+                    match head.unit {
+                        IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
+                            parse_standard_interval(head.value, StandardIntervalKind::Year, negated)
+                        }
+                        IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
+                            parse_standard_interval(
+                                head.value,
+                                StandardIntervalKind::Month,
+                                negated,
+                            )
+                        }
+                        IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
+                            parse_standard_interval(head.value, StandardIntervalKind::Day, negated)
+                        }
+                        IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
+                            parse_standard_interval(head.value, StandardIntervalKind::Hour, negated)
+                        }
+                        IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
+                            parse_standard_interval(
+                                head.value,
+                                StandardIntervalKind::Minute,
+                                negated,
+                            )
+                        }
+                        IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
+                            parse_standard_interval(
+                                head.value,
+                                StandardIntervalKind::Second,
+                                negated,
+                            )
+                        }
+                        _ => parse_multi_unit_interval(vec![*head], negated),
                     }
-                    (
-                        Some(DateTimeField::Year | DateTimeField::Years),
-                        Some(DateTimeField::Month | DateTimeField::Months),
-                    ) => parse_interval_year_month_string(
-                        &value,
-                        negated,
-                        &INTERVAL_YEAR_TO_MONTH_REGEX,
-                    ),
-                    (Some(DateTimeField::Month | DateTimeField::Months), None) => {
-                        parse_interval_year_month_string(&value, negated, &INTERVAL_MONTH_REGEX)
-                    }
-                    (Some(DateTimeField::Day | DateTimeField::Days), None) => {
-                        parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_REGEX)
-                    }
-                    (
-                        Some(DateTimeField::Day | DateTimeField::Days),
-                        Some(DateTimeField::Hour | DateTimeField::Hours),
-                    ) => {
-                        parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_TO_HOUR_REGEX)
-                    }
-                    (
-                        Some(DateTimeField::Day | DateTimeField::Days),
-                        Some(DateTimeField::Minute | DateTimeField::Minutes),
-                    ) => parse_interval_day_time_string(
-                        &value,
-                        negated,
-                        &INTERVAL_DAY_TO_MINUTE_REGEX,
-                    ),
-                    (
-                        Some(DateTimeField::Day | DateTimeField::Days),
-                        Some(DateTimeField::Second | DateTimeField::Seconds),
-                    ) => parse_interval_day_time_string(
-                        &value,
-                        negated,
-                        &INTERVAL_DAY_TO_SECOND_REGEX,
-                    ),
-                    (Some(DateTimeField::Hour | DateTimeField::Hours), None) => {
-                        parse_interval_day_time_string(&value, negated, &INTERVAL_HOUR_REGEX)
-                    }
-                    (
-                        Some(DateTimeField::Hour | DateTimeField::Hours),
-                        Some(DateTimeField::Minute | DateTimeField::Minutes),
-                    ) => parse_interval_day_time_string(
-                        &value,
-                        negated,
-                        &INTERVAL_HOUR_TO_MINUTE_REGEX,
-                    ),
-                    (
-                        Some(DateTimeField::Hour | DateTimeField::Hours),
-                        Some(DateTimeField::Second | DateTimeField::Seconds),
-                    ) => parse_interval_day_time_string(
-                        &value,
-                        negated,
-                        &INTERVAL_HOUR_TO_SECOND_REGEX,
-                    ),
-                    (Some(DateTimeField::Minute | DateTimeField::Minutes), None) => {
-                        parse_interval_day_time_string(&value, negated, &INTERVAL_MINUTE_REGEX)
-                    }
-                    (
-                        Some(DateTimeField::Minute | DateTimeField::Minutes),
-                        Some(DateTimeField::Second | DateTimeField::Seconds),
-                    ) => parse_interval_day_time_string(
-                        &value,
-                        negated,
-                        &INTERVAL_MINUTE_TO_SECOND_REGEX,
-                    ),
-                    (Some(DateTimeField::Second | DateTimeField::Seconds), None) => {
-                        parse_interval_day_time_string(&value, negated, &INTERVAL_SECOND_REGEX)
-                    }
-                    (Some(x), None) => {
-                        let value = ast::Expr::Value(ast::Value::SingleQuotedString(value));
-                        let values = vec![(value.clone(), x.clone())];
-                        parse_multi_unit_interval(values, negated)
-                    }
-                    (None, None) => {
-                        // The interval qualifier is not specified, so the interval string itself
-                        // is assumed to follow interval syntax. Therefore, we invoke the SQL parser
-                        // to parse the content.
-                        let value = ast::Expr::Value(ast::Value::SingleQuotedString(value));
-                        let v = LiteralValue::<Signed<String>>::try_from(value)?.0;
-                        let s = v.0.as_str();
-                        let negated = v.1 ^ negated;
-                        parse_unqualified_interval_string(s, negated)
-                    }
-                    _ => Err(error()),
+                } else {
+                    let values = once(*head).chain(tail).collect();
+                    parse_multi_unit_interval(values, negated)
                 }
             }
-            Interval::MultiUnit { values } => {
-                let values = values
-                    .into_iter()
-                    .map(|x| {
-                        let IntervalValueWithUnit { value, unit } = x;
-                        if let IntervalUnit {
-                            leading_field: Some(f),
-                            leading_precision: None,
-                            last_field: None,
-                            fractional_seconds_precision: None,
-                        } = unit
-                        {
-                            Ok((value, f))
-                        } else {
-                            Err(error())
-                        }
-                    })
-                    .collect::<SqlResult<_>>()?;
-                parse_multi_unit_interval(values, negated)
+            IntervalExpr::Literal(value) => {
+                parse_unqualified_interval_string(&from_ast_string(value)?, negated)
             }
         }
     }
@@ -487,24 +423,47 @@ impl FromStr for Signed<DecimalSecond> {
         let seconds: u32 = extract_match(&captures, "second", error)?.unwrap_or(0);
         let microseconds: u32 =
             extract_second_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
-        Ok(Signed(
-            DecimalSecond {
-                seconds,
-                microseconds,
-            },
-            negated,
-        ))
+        let value = DecimalSecond {
+            seconds,
+            microseconds,
+        };
+        if negated {
+            Ok(Signed::Negative(value))
+        } else {
+            Ok(Signed::Positive(value))
+        }
     }
 }
 
-pub(crate) type Negated = bool;
-pub(crate) struct Signed<T>(pub T, pub Negated);
+pub(crate) enum Signed<T> {
+    Positive(T),
+    Negative(T),
+}
+
+impl<T> Signed<T> {
+    pub fn into_inner(self) -> T {
+        match self {
+            Signed::Positive(x) => x,
+            Signed::Negative(x) => x,
+        }
+    }
+
+    pub fn is_negative(&self) -> bool {
+        match self {
+            Signed::Positive(_) => false,
+            Signed::Negative(_) => true,
+        }
+    }
+}
 
 impl<T> Neg for Signed<T> {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
-        Self(self.0, !self.1)
+        match self {
+            Signed::Positive(x) => Signed::Negative(x),
+            Signed::Negative(x) => Signed::Positive(x),
+        }
     }
 }
 
@@ -513,40 +472,38 @@ impl<T: FromStr> FromStr for Signed<T> {
 
     fn from_str(s: &str) -> SqlResult<Self> {
         let v = s.parse::<T>().map_err(|_| SqlError::invalid(s))?;
-        Ok(Signed(v, false))
+        Ok(Signed::Positive(v))
     }
 }
 
-impl<T> TryFrom<ast::Expr> for LiteralValue<T>
+impl<T> TryFrom<Expr> for LiteralValue<T>
 where
     T: Neg<Output = T> + FromStr,
 {
     type Error = SqlError;
 
-    fn try_from(expr: ast::Expr) -> SqlResult<LiteralValue<T>> {
-        use ast::Value;
-
-        let error = || SqlError::invalid(format!("expression: {:?}", expr));
-        match &expr {
-            ast::Expr::UnaryOp {
-                op: ast::UnaryOperator::Minus,
-                expr,
-            } => {
+    fn try_from(expr: Expr) -> SqlResult<LiteralValue<T>> {
+        match expr {
+            Expr::UnaryOperator(UnaryOperator::Minus(_), expr) => {
                 let value = LiteralValue::<T>::try_from(*expr.clone())?;
                 Ok(LiteralValue(-value.0))
             }
-            ast::Expr::Value(Value::Number(value, None))
-            | ast::Expr::Value(Value::SingleQuotedString(value))
-            | ast::Expr::Value(Value::DoubleQuotedString(value))
-            | ast::Expr::Value(Value::DollarQuotedString(ast::DollarQuotedString {
-                value, ..
-            }))
-            | ast::Expr::Value(Value::TripleSingleQuotedString(value))
-            | ast::Expr::Value(Value::TripleDoubleQuotedString(value)) => {
-                let value = value.parse::<T>().map_err(|_| error())?;
-                Ok(LiteralValue(value))
+            Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral {
+                span: _,
+                value,
+                suffix,
+            })) if suffix.is_empty() => match value.parse::<T>() {
+                Ok(x) => Ok(LiteralValue(x)),
+                Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
+            },
+            Expr::Atom(AtomExpr::StringLiteral(value)) => {
+                let value = from_ast_string(value)?;
+                match value.parse::<T>() {
+                    Ok(x) => Ok(LiteralValue(x)),
+                    Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
+                }
             }
-            _ => Err(error()),
+            _ => Err(SqlError::invalid(format!("literal expression: {:?}", expr))),
         }
     }
 }
@@ -759,7 +716,7 @@ fn parse_timezone_string(tz: Option<&str>) -> SqlResult<TimeZoneVariant> {
 
 fn parse_interval_year_month_string(
     s: &str,
-    negated: Negated,
+    negated: bool,
     interval_regex: &regex::Regex,
 ) -> SqlResult<spec::Literal> {
     let error = || SqlError::invalid(format!("interval: {s}"));
@@ -782,7 +739,7 @@ fn parse_interval_year_month_string(
 
 fn parse_interval_day_time_string(
     s: &str,
-    negated: Negated,
+    negated: bool,
     interval_regex: &regex::Regex,
 ) -> SqlResult<spec::Literal> {
     let error = || SqlError::invalid(format!("interval: {s}"));
@@ -813,49 +770,168 @@ fn parse_interval_day_time_string(
     Ok(microseconds_to_interval(n))
 }
 
-fn parse_multi_unit_interval(
-    values: Vec<(ast::Expr, ast::DateTimeField)>,
-    negated: Negated,
-) -> SqlResult<spec::Literal> {
-    use ast::DateTimeField;
+enum StandardIntervalKind {
+    Year,
+    YearToMonth,
+    Month,
+    Day,
+    DayToHour,
+    DayToMinute,
+    DayToSecond,
+    Hour,
+    HourToMinute,
+    HourToSecond,
+    Minute,
+    MinuteToSecond,
+    Second,
+}
 
+fn from_ast_interval_qualifier(qualifier: IntervalQualifier) -> SqlResult<StandardIntervalKind> {
+    match qualifier {
+        IntervalQualifier::YearMonth(IntervalYearMonthUnit::Year(_), None) => {
+            Ok(StandardIntervalKind::Year)
+        }
+        IntervalQualifier::YearMonth(
+            IntervalYearMonthUnit::Year(_),
+            Some((_, IntervalYearMonthUnit::Month(_))),
+        ) => Ok(StandardIntervalKind::YearToMonth),
+        IntervalQualifier::YearMonth(IntervalYearMonthUnit::Month(_), None) => {
+            Ok(StandardIntervalKind::Month)
+        }
+        IntervalQualifier::DayTime(IntervalDayTimeUnit::Day(_), None) => {
+            Ok(StandardIntervalKind::Day)
+        }
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Day(_),
+            Some((_, IntervalDayTimeUnit::Hour(_))),
+        ) => Ok(StandardIntervalKind::DayToHour),
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Day(_),
+            Some((_, IntervalDayTimeUnit::Minute(_))),
+        ) => Ok(StandardIntervalKind::DayToMinute),
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Day(_),
+            Some((_, IntervalDayTimeUnit::Second(_))),
+        ) => Ok(StandardIntervalKind::DayToSecond),
+        IntervalQualifier::DayTime(IntervalDayTimeUnit::Hour(_), None) => {
+            Ok(StandardIntervalKind::Hour)
+        }
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Hour(_),
+            Some((_, IntervalDayTimeUnit::Minute(_))),
+        ) => Ok(StandardIntervalKind::HourToMinute),
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Hour(_),
+            Some((_, IntervalDayTimeUnit::Second(_))),
+        ) => Ok(StandardIntervalKind::HourToSecond),
+        IntervalQualifier::DayTime(IntervalDayTimeUnit::Minute(_), None) => {
+            Ok(StandardIntervalKind::Minute)
+        }
+        IntervalQualifier::DayTime(
+            IntervalDayTimeUnit::Minute(_),
+            Some((_, IntervalDayTimeUnit::Second(_))),
+        ) => Ok(StandardIntervalKind::MinuteToSecond),
+        IntervalQualifier::DayTime(IntervalDayTimeUnit::Second(_), None) => {
+            Ok(StandardIntervalKind::Second)
+        }
+        _ => Err(SqlError::invalid("interval qualifier")),
+    }
+}
+
+fn parse_standard_interval(
+    value: Expr,
+    kind: StandardIntervalKind,
+    negated: bool,
+) -> SqlResult<spec::Literal> {
+    let signed = LiteralValue::<Signed<String>>::try_from(value)?.0;
+    let negated = signed.is_negative() ^ negated;
+    let value = signed.into_inner();
+    match kind {
+        StandardIntervalKind::Year => {
+            parse_interval_year_month_string(&value, negated, &INTERVAL_YEAR_REGEX)
+        }
+        StandardIntervalKind::YearToMonth => {
+            parse_interval_year_month_string(&value, negated, &INTERVAL_YEAR_TO_MONTH_REGEX)
+        }
+        StandardIntervalKind::Month => {
+            parse_interval_year_month_string(&value, negated, &INTERVAL_MONTH_REGEX)
+        }
+        StandardIntervalKind::Day => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_REGEX)
+        }
+        StandardIntervalKind::DayToHour => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_TO_HOUR_REGEX)
+        }
+        StandardIntervalKind::DayToMinute => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_TO_MINUTE_REGEX)
+        }
+        StandardIntervalKind::DayToSecond => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_DAY_TO_SECOND_REGEX)
+        }
+        StandardIntervalKind::Hour => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_HOUR_REGEX)
+        }
+        StandardIntervalKind::HourToMinute => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_HOUR_TO_MINUTE_REGEX)
+        }
+        StandardIntervalKind::HourToSecond => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_HOUR_TO_SECOND_REGEX)
+        }
+        StandardIntervalKind::Minute => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_MINUTE_REGEX)
+        }
+        StandardIntervalKind::MinuteToSecond => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_MINUTE_TO_SECOND_REGEX)
+        }
+        StandardIntervalKind::Second => {
+            parse_interval_day_time_string(&value, negated, &INTERVAL_SECOND_REGEX)
+        }
+    }
+}
+
+fn parse_multi_unit_interval(
+    values: Vec<IntervalValueWithUnit>,
+    negated: bool,
+) -> SqlResult<spec::Literal> {
     let error = || SqlError::invalid("multi-unit interval");
     let mut months = 0i32;
     let mut delta = TimeDelta::zero();
-    for (expr, field) in values {
-        match field {
-            DateTimeField::Year | DateTimeField::Years => {
-                let value = LiteralValue::<i32>::try_from(expr)?.0;
+    for value in values {
+        let IntervalValueWithUnit { value, unit } = value;
+        match unit {
+            IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
+                let value = LiteralValue::<i32>::try_from(value)?.0;
                 let m = value.checked_mul(12).ok_or_else(error)?;
                 months = months.checked_add(m).ok_or_else(error)?;
             }
-            DateTimeField::Month | DateTimeField::Months => {
-                let value = LiteralValue::<i32>::try_from(expr)?.0;
+            IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
+                let value = LiteralValue::<i32>::try_from(value)?.0;
                 months = months.checked_add(value).ok_or_else(error)?;
             }
-            DateTimeField::Week(None) | DateTimeField::Weeks => {
-                let value = LiteralValue::<i64>::try_from(expr)?.0;
+            IntervalUnit::Week(_) | IntervalUnit::Weeks(_) => {
+                let value = LiteralValue::<i64>::try_from(value)?.0;
                 let weeks = TimeDelta::try_weeks(value).ok_or_else(error)?;
                 delta = delta.checked_add(&weeks).ok_or_else(error)?;
             }
-            DateTimeField::Day | DateTimeField::Days => {
-                let value = LiteralValue::<i64>::try_from(expr)?.0;
+            IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
+                let value = LiteralValue::<i64>::try_from(value)?.0;
                 let days = TimeDelta::try_days(value).ok_or_else(error)?;
                 delta = delta.checked_add(&days).ok_or_else(error)?;
             }
-            DateTimeField::Hour | DateTimeField::Hours => {
-                let value = LiteralValue::<i64>::try_from(expr)?.0;
+            IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
+                let value = LiteralValue::<i64>::try_from(value)?.0;
                 let hours = TimeDelta::try_hours(value).ok_or_else(error)?;
                 delta = delta.checked_add(&hours).ok_or_else(error)?;
             }
-            DateTimeField::Minute | DateTimeField::Minutes => {
-                let value = LiteralValue::<i64>::try_from(expr)?.0;
+            IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
+                let value = LiteralValue::<i64>::try_from(value)?.0;
                 let minutes = TimeDelta::try_minutes(value).ok_or_else(error)?;
                 delta = delta.checked_add(&minutes).ok_or_else(error)?;
             }
-            DateTimeField::Second | DateTimeField::Seconds => {
-                let Signed(value, negated) =
-                    LiteralValue::<Signed<DecimalSecond>>::try_from(expr)?.0;
+            IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
+                let value = LiteralValue::<Signed<DecimalSecond>>::try_from(value)?.0;
+                let negated = value.is_negative();
+                let value = value.into_inner();
                 let seconds = TimeDelta::seconds(value.seconds as i64);
                 let microseconds = TimeDelta::microseconds(value.microseconds as i64);
                 if negated {
@@ -866,17 +942,16 @@ fn parse_multi_unit_interval(
                     delta = delta.checked_add(&microseconds).ok_or_else(error)?;
                 }
             }
-            DateTimeField::Millisecond | DateTimeField::Milliseconds => {
-                let value = LiteralValue::<i64>::try_from(expr)?.0;
+            IntervalUnit::Millisecond(_) | IntervalUnit::Milliseconds(_) => {
+                let value = LiteralValue::<i64>::try_from(value)?.0;
                 let milliseconds = TimeDelta::try_milliseconds(value).ok_or_else(error)?;
                 delta = delta.checked_add(&milliseconds).ok_or_else(error)?;
             }
-            DateTimeField::Microsecond | DateTimeField::Microseconds => {
-                let value = LiteralValue::<i64>::try_from(expr)?.0;
+            IntervalUnit::Microsecond(_) | IntervalUnit::Microseconds(_) => {
+                let value = LiteralValue::<i64>::try_from(value)?.0;
                 let microseconds = TimeDelta::microseconds(value);
                 delta = delta.checked_add(&microseconds).ok_or_else(error)?;
             }
-            _ => return Err(error()),
         }
     }
     match (months != 0, delta != TimeDelta::zero()) {
@@ -954,32 +1029,17 @@ pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
     }
 }
 
-fn parse_unqualified_interval_string(s: &str, negated: Negated) -> SqlResult<spec::Literal> {
-    let mut parser = Parser::new(&SparkDialect {}).try_with_sql(s)?;
-    // consume the `INTERVAL` keyword if any
-    let _ = parser.parse_keyword(Keyword::INTERVAL);
-    let expr = parser.parse_interval()?;
-    fail_on_extra_token(&mut parser, "interval")?;
-    let interval = match expr {
-        ast::Expr::Interval(interval) => interval,
-        _ => return Err(SqlError::invalid(format!("interval: {s}"))),
+fn parse_unqualified_interval_string(s: &str, negated: bool) -> SqlResult<spec::Literal> {
+    let IntervalLiteral {
+        interval: _,
+        value: interval,
+    } = parse_interval_literal(s)?;
+    let value = if negated {
+        Signed::Negative(interval)
+    } else {
+        Signed::Positive(interval)
     };
-    if matches!(
-        interval,
-        ast::Interval::Standard {
-            unit: ast::IntervalUnit {
-                leading_field: None,
-                last_field: None,
-                ..
-            },
-            ..
-        }
-    ) {
-        // The parsed unqualified interval string cannot itself be unqualified,
-        // otherwise it could cause infinite recursion when creating the literal.
-        return Err(SqlError::invalid(format!("interval: {s}")));
-    }
-    spec::Literal::try_from(LiteralValue(Signed(interval, negated)))
+    spec::Literal::try_from(LiteralValue(value))
 }
 
 /// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L308-L318>

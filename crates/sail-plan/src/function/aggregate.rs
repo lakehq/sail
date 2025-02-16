@@ -9,7 +9,6 @@ use datafusion::functions_aggregate::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::AggregateFunction;
-use datafusion_expr::sqlparser::ast::NullTreatment;
 use datafusion_expr::{expr, AggregateUDF};
 use lazy_static::lazy_static;
 
@@ -31,6 +30,8 @@ fn first_last_value(
     agg_function_context: AggFunctionContext,
     first_value: bool,
 ) -> PlanResult<expr::Expr> {
+    use datafusion_expr::sqlparser::ast::NullTreatment;
+
     let (args, ignore_nulls) = if args.len() == 1 {
         let expr = args.one()?;
         (vec![expr], NullTreatment::RespectNulls)
