@@ -8,7 +8,6 @@ sail-common = { path = "../sail-common" }
 sail-sql-parser = { path = "../sail-sql-parser" }
 
 thiserror = { workspace = true }
-datafusion = { workspace = true }
 regex = { workspace = true }
 lazy_static = { workspace = true }
 chrono = { workspace = true }

@@ -4,13 +4,11 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-sail-common = { path = "../sail-common" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 sail-cli = { path = "../sail-cli" }
 
 pyo3 = { workspace = true }
-futures = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
 fastrace = { workspace = true }

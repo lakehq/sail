@@ -1,7 +1,7 @@
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::prelude::SessionContext;
 use sail_common::spec;
-use sail_common::utils::rename_schema;
+use sail_common_datafusion::utils::rename_schema;
 use sail_plan::resolve_and_execute_plan;
 use sail_plan::resolver::plan::NamedPlan;
 use sail_plan::resolver::PlanResolver;

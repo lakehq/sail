@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-use sail_common::udf::StreamUDF;
-use sail_common::utils::rename_schema;
+use sail_common_datafusion::udf::StreamUDF;
+use sail_common_datafusion::utils::rename_schema;
 
 use crate::utils::ItemTaker;
 

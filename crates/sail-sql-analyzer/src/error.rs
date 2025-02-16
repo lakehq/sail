@@ -1,6 +1,5 @@
 use std::fmt;
 
-use datafusion::common::DataFusionError;
 use sail_common::error::CommonError;
 use thiserror::Error;
 
@@ -8,8 +7,6 @@ pub type SqlResult<T> = Result<T, SqlError>;
 
 #[derive(Debug, Error)]
 pub enum SqlError {
-    #[error("error in DataFusion: {0}")]
-    DataFusionError(#[from] DataFusionError),
     #[error("error in SQL parser: {0}")]
     SqlParserError(String),
     #[error("missing argument: {0}")]
@@ -58,7 +55,6 @@ impl SqlError {
 impl From<CommonError> for SqlError {
     fn from(error: CommonError) -> Self {
         match error {
-            CommonError::DataFusionError(e) => SqlError::DataFusionError(e),
             CommonError::MissingArgument(message) => SqlError::MissingArgument(message),
             CommonError::InvalidArgument(message) => SqlError::InvalidArgument(message),
             CommonError::NotSupported(message) => SqlError::NotSupported(message),

@@ -14,7 +14,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
-use sail_common::utils::rename_physical_plan;
+use sail_common_datafusion::utils::rename_physical_plan;
 
 use crate::extension::logical::ShowStringFormat;
 use crate::utils::ItemTaker;

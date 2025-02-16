@@ -6,7 +6,7 @@ use datafusion_expr::{
     expr, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, Projection, ScalarUDF,
 };
 use sail_common::spec;
-use sail_common::udf::StreamUDF;
+use sail_common_datafusion::udf::StreamUDF;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::cereal::pyspark_udtf::PySparkUdtfPayload;
 use sail_python_udf::get_udf_name;

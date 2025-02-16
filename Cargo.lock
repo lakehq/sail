@@ -453,7 +453,6 @@ version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df895a515f70646414f4b45c0b79082783b80552b373a68283012928df56f522"
 dependencies = [
- "brotli",
  "bzip2 0.4.4",
  "flate2",
  "futures-core",
@@ -2558,12 +2557,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-range-header"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
-
-[[package]]
 name = "httparse"
 version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2928,16 +2921,6 @@ name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
-
-[[package]]
-name = "iri-string"
-version = "0.7.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc0f0a572e8ffe56e2ff4f769f32ffe919282c3916799f8b68688b6030063bea"
-dependencies = [
- "memchr",
- "serde",
-]
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -3352,16 +3335,6 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
-
-[[package]]
-name = "mime_guess"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
-dependencies = [
- "mime",
- "unicase",
-]
 
 [[package]]
 name = "miniz_oxide"
@@ -4677,23 +4650,33 @@ dependencies = [
 name = "sail-common"
 version = "0.2.1"
 dependencies = [
+ "arrow-buffer",
+ "arrow-schema",
  "chrono",
  "chrono-tz",
- "datafusion",
- "datafusion-common",
- "datafusion-expr",
  "figment",
- "futures",
  "glob",
  "half",
  "iana-time-zone",
- "lexical-core",
  "log",
  "num_enum",
- "ryu",
  "serde",
  "serde_json",
  "thiserror 2.0.11",
+]
+
+[[package]]
+name = "sail-common-datafusion"
+version = "0.2.1"
+dependencies = [
+ "chrono",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "futures",
+ "lexical-core",
+ "ryu",
+ "sail-common",
 ]
 
 [[package]]
@@ -4710,9 +4693,9 @@ dependencies = [
  "log",
  "prost 0.13.5",
  "prost-build",
- "prost-types 0.13.5",
  "rand 0.8.5",
  "sail-common",
+ "sail-common-datafusion",
  "sail-plan",
  "sail-python-udf",
  "sail-server",
@@ -4720,7 +4703,6 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
- "tonic-types",
 ]
 
 [[package]]
@@ -4736,7 +4718,6 @@ dependencies = [
  "base64 0.22.1",
  "cbc",
  "chrono",
- "chrono-tz",
  "comfy-table",
  "datafusion",
  "datafusion-common",
@@ -4750,20 +4731,18 @@ dependencies = [
  "hdfs-native-object-store",
  "html-escape",
  "lazy_static",
- "log",
  "num-traits",
  "object_store",
- "pyo3",
  "rand 0.8.5",
  "rand_chacha 0.3.1",
  "rand_distr",
  "regex",
  "ryu",
  "sail-common",
+ "sail-common-datafusion",
  "sail-python-udf",
  "serde",
  "serde_arrow",
- "serde_json",
  "thiserror 2.0.11",
  "tokio",
  "tokio-stream",
@@ -4777,11 +4756,9 @@ name = "sail-python"
 version = "0.2.1"
 dependencies = [
  "fastrace",
- "futures",
  "log",
  "pyo3",
  "sail-cli",
- "sail-common",
  "sail-spark-connect",
  "sail-telemetry",
  "tokio",
@@ -4791,7 +4768,6 @@ dependencies = [
 name = "sail-python-udf"
 version = "0.2.1"
 dependencies = [
- "async-trait",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -4800,6 +4776,7 @@ dependencies = [
  "num-bigint",
  "pyo3",
  "sail-common",
+ "sail-common-datafusion",
  "thiserror 2.0.11",
  "tokio",
  "tokio-stream",
@@ -4816,25 +4793,15 @@ dependencies = [
  "tonic",
  "tonic-health",
  "tonic-reflection",
- "tonic-types",
  "tower 0.5.2",
- "tower-http",
 ]
 
 [[package]]
 name = "sail-spark-connect"
 version = "0.2.1"
 dependencies = [
- "async-recursion",
  "async-stream",
- "chrono",
- "chrono-tz",
- "clap",
  "datafusion",
- "datafusion-common",
- "datafusion-expr",
- "datafusion-functions-nested",
- "glob",
  "lazy_static",
  "log",
  "monostate",
@@ -4845,18 +4812,17 @@ dependencies = [
  "prettyplease",
  "prost 0.13.5",
  "prost-build",
- "prost-types 0.13.5",
  "pyo3",
  "quote",
  "regex",
  "sail-common",
+ "sail-common-datafusion",
  "sail-execution",
  "sail-plan",
  "sail-python-udf",
  "sail-server",
  "sail-sql-analyzer",
  "serde",
- "serde_arrow",
  "serde_json",
  "syn",
  "thiserror 2.0.11",
@@ -4874,7 +4840,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "chumsky",
- "datafusion",
  "either",
  "lazy_static",
  "regex",
@@ -4910,7 +4875,6 @@ dependencies = [
 name = "sail-telemetry"
 version = "0.2.1"
 dependencies = [
- "datafusion",
  "env_logger",
  "fastrace",
  "fastrace-opentelemetry",
@@ -5717,29 +5681,16 @@ version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "403fa3b783d4b626a8ad51d766ab03cb6d2dbfc46b1c5d4448395e6628dc9697"
 dependencies = [
- "async-compression",
  "base64 0.22.1",
  "bitflags 2.8.0",
  "bytes",
- "futures-core",
- "futures-util",
  "http 1.2.0",
  "http-body 1.0.1",
- "http-body-util",
- "http-range-header",
- "httpdate",
- "iri-string",
  "mime",
- "mime_guess",
- "percent-encoding",
  "pin-project-lite",
- "tokio",
- "tokio-util",
- "tower 0.5.2",
  "tower-layer",
  "tower-service",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -5851,12 +5802,6 @@ checksum = "e1b88fcfe09e89d3866a5c11019378088af2d24c3fbd4f0543f96b479ec90697"
 dependencies = [
  "version_check",
 ]
-
-[[package]]
-name = "unicase"
-version = "2.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75b844d17643ee918803943289730bec8aac480150456169e647ed0b576ba539"
 
 [[package]]
 name = "unicode-ident"
