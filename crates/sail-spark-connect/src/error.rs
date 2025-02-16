@@ -13,7 +13,7 @@ use pyo3::{intern, PyErr, PyResult, Python};
 use sail_common::error::CommonError;
 use sail_execution::error::ExecutionError;
 use sail_plan::error::PlanError;
-use sail_sql::error::SqlError;
+use sail_sql_analyzer::error::SqlError;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinError;

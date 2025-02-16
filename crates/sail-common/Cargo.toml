@@ -14,10 +14,8 @@ datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 glob = { workspace = true }
-pyo3 = { workspace = true }
 lexical-core = { workspace = true }
 num_enum = { workspace = true }
-sqlparser = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
 half = { workspace = true }

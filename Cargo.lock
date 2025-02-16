@@ -1474,7 +1474,7 @@ dependencies = [
  "parquet",
  "rand 0.8.5",
  "regex",
- "sqlparser 0.54.0",
+ "sqlparser",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -1501,7 +1501,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "parking_lot",
- "sqlparser 0.54.0",
+ "sqlparser",
 ]
 
 [[package]]
@@ -1549,7 +1549,7 @@ dependencies = [
  "paste",
  "pyo3",
  "recursive",
- "sqlparser 0.54.0",
+ "sqlparser",
  "tokio",
  "web-time",
 ]
@@ -1603,7 +1603,7 @@ dependencies = [
  "paste",
  "recursive",
  "serde_json",
- "sqlparser 0.54.0",
+ "sqlparser",
 ]
 
 [[package]]
@@ -1907,7 +1907,7 @@ dependencies = [
  "log",
  "recursive",
  "regex",
- "sqlparser 0.54.0",
+ "sqlparser",
 ]
 
 [[package]]
@@ -4690,11 +4690,9 @@ dependencies = [
  "lexical-core",
  "log",
  "num_enum",
- "pyo3",
  "ryu",
  "serde",
  "serde_json",
- "sqlparser 0.53.0",
  "thiserror 2.0.11",
 ]
 
@@ -4856,11 +4854,10 @@ dependencies = [
  "sail-plan",
  "sail-python-udf",
  "sail-server",
- "sail-sql",
+ "sail-sql-analyzer",
  "serde",
  "serde_arrow",
  "serde_json",
- "sqlparser 0.53.0",
  "syn",
  "thiserror 2.0.11",
  "tokio",
@@ -4871,7 +4868,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sail-sql"
+name = "sail-sql-analyzer"
 version = "0.2.1"
 dependencies = [
  "chrono",
@@ -5233,24 +5230,13 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 
 [[package]]
 name = "sqlparser"
-version = "0.53.0"
-source = "git+https://github.com/lakehq/sqlparser-rs.git?rev=9ade53d#9ade53d1bdf2fd56f3c5f93ba35db65cd3b1f709"
-dependencies = [
- "log",
- "recursive",
- "serde",
- "sqlparser_derive 0.3.0 (git+https://github.com/lakehq/sqlparser-rs.git?rev=9ade53d)",
-]
-
-[[package]]
-name = "sqlparser"
 version = "0.54.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c66e3b7374ad4a6af849b08b3e7a6eda0edbd82f0fd59b57e22671bf16979899"
 dependencies = [
  "log",
  "recursive",
- "sqlparser_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sqlparser_derive",
 ]
 
 [[package]]
@@ -5258,16 +5244,6 @@ name = "sqlparser_derive"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da5fc6819faabb412da764b99d3b713bb55083c11e7e0c00144d386cd6a1939c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "sqlparser_derive"
-version = "0.3.0"
-source = "git+https://github.com/lakehq/sqlparser-rs.git?rev=9ade53d#9ade53d1bdf2fd56f3c5f93ba35db65cd3b1f709"
 dependencies = [
  "proc-macro2",
  "quote",

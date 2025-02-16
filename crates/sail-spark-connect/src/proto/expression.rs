@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use sail_common::spec;
-use sail_sql::parser::{
+use sail_sql_analyzer::parser::{
     parse_data_type, parse_expression, parse_named_expression, parse_object_name,
     parse_qualified_wildcard,
 };
@@ -443,7 +443,7 @@ mod tests {
 
     use sail_common::spec;
     use sail_common::tests::test_gold_set;
-    use sail_sql::parser::parse_named_expression;
+    use sail_sql_analyzer::parser::parse_named_expression;
 
     use crate::error::SparkError;
 
