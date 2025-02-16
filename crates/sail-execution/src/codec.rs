@@ -39,8 +39,8 @@ use datafusion_proto::protobuf::{
 };
 use prost::bytes::BytesMut;
 use prost::Message;
-use sail_common::udf::StreamUDF;
-use sail_common::utils::{read_record_batches, write_record_batches};
+use sail_common_datafusion::udf::StreamUDF;
+use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
 use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
 use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
 use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;

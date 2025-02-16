@@ -1,8 +1,9 @@
-use chumsky::error::EmptyErr;
-use chumsky::prelude::{any, choice, custom, end, just, none_of, one_of, SimpleSpan};
+use chumsky::container::OrderedSeq;
+use chumsky::extra::ParserExtra;
+use chumsky::prelude::{any, choice, end, just, none_of, one_of, recursive, SimpleSpan};
 use chumsky::{ConfigParser, IterParser, Parser};
 
-use crate::options::{ParserOptions, QuoteEscape};
+use crate::options::ParserOptions;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenSpan, TokenValue};
 
 macro_rules! token {
@@ -20,7 +21,10 @@ impl From<SimpleSpan> for TokenSpan {
     }
 }
 
-fn word<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn word<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     any()
         .filter(|c: &char| c.is_ascii_alphabetic() || *c == '_')
         .ignore_then(
@@ -40,7 +44,10 @@ fn word<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
         })
 }
 
-fn number<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn number<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     let digit = any().filter(|c: &char| c.is_ascii_digit());
     let suffix = any().filter(|c: &char| c.is_ascii_alphabetic()).repeated();
 
@@ -64,83 +71,106 @@ fn number<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
         .map_with(|(value, suffix), e| token!(TokenValue::Number { value, suffix }, e))
 }
 
-fn single_line_comment<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn single_line_comment<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     just("--")
         .ignore_then(none_of("\n\r").repeated())
         .map_with(|(), e| token!(TokenValue::SingleLineComment { raw: e.slice() }, e))
 }
 
-fn multi_line_comment<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
-    // The delimiter of a multi-line comment can be nested.
-    // We implement a custom parser to handle this.
-    // This avoids the overhead of creating a `recursive` parser in the lexer.
-    custom(|input| {
-        let mut last = None;
-        let mut level = 0;
-        loop {
-            let c = input.next();
-            match (last, c) {
-                (None, Some('/')) => {}
-                (None, _) => break,
-                (Some('/'), Some('*')) => {
-                    level += 1;
-                }
-                (Some('/'), Some(_)) => {
-                    if level == 0 {
-                        break;
-                    }
-                }
-                (Some('*'), Some('/')) => {
-                    level -= 1;
-                    if level == 0 {
-                        return Ok(());
-                    }
-                }
-                (Some(_), Some(_)) => {}
-                (_, None) => break,
-            }
-            last = c;
-        }
-        Err(EmptyErr::default())
+fn multi_line_comment<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
+    recursive(|comment| {
+        any()
+            .and_is(just("/*").or(just("*/")).not())
+            .ignored()
+            .or(comment.ignored())
+            .repeated()
+            .delimited_by(just("/*"), just("*/"))
+            .map_with(|(), e| token!(TokenValue::MultiLineComment { raw: e.slice() }, e))
     })
-    .map_with(|(), e| token!(TokenValue::MultiLineComment { raw: e.slice() }, e))
 }
 
-fn none_quote_escaped_text<'a>(delimiter: char) -> impl Parser<'a, &'a str, ()> {
-    none_of(delimiter).repeated().padded_by(just(delimiter))
-}
-
-fn dual_quote_escaped_text<'a>(delimiter: char) -> impl Parser<'a, &'a str, ()> {
-    none_of(delimiter)
-        .ignored()
-        .or(just(delimiter).repeated().exactly(2))
+fn none_escape_text<'a, E, D>(delimiter: D) -> impl Parser<'a, &'a str, (), E>
+where
+    E: ParserExtra<'a, &'a str>,
+    D: OrderedSeq<'a, char> + Clone,
+{
+    any()
+        .and_is(just(delimiter.clone()).not())
         .repeated()
         .padded_by(just(delimiter))
 }
 
-fn backslash_quote_escaped_text<'a>(delimiter: char) -> impl Parser<'a, &'a str, ()> {
+fn dual_quote_escape_text<'a, E, D>(delimiter: D) -> impl Parser<'a, &'a str, (), E>
+where
+    E: ParserExtra<'a, &'a str>,
+    D: OrderedSeq<'a, char> + Clone,
+{
     any()
-        .filter(move |c: &char| *c != '\\' && *c != delimiter)
+        .and_is(just('\\').not())
+        .and_is(just(delimiter.clone()).not())
+        .ignored()
+        .or(just('\\').then(any()).ignored())
+        .or(just(delimiter.clone()).repeated().exactly(2))
+        .repeated()
+        .padded_by(just(delimiter))
+}
+
+fn backslash_escape_text<'a, E, D>(delimiter: D) -> impl Parser<'a, &'a str, (), E>
+where
+    E: ParserExtra<'a, &'a str>,
+    D: OrderedSeq<'a, char> + Clone,
+{
+    any()
+        .and_is(just('\\').not())
+        .and_is(just(delimiter.clone()).not())
         .ignored()
         .or(just('\\').then(any()).ignored())
         .repeated()
         .padded_by(just(delimiter))
 }
 
-fn multi_quoted_text<'a>(delimiter: &'static str) -> impl Parser<'a, &'a str, ()> {
-    any()
-        .and_is(just(delimiter).not())
-        .repeated()
-        .padded_by(just(delimiter))
-}
-
-fn quoted_string<'a, P, S>(text: P, style: S) -> impl Parser<'a, &'a str, Token<'a>>
+fn string_prefix<'a, E, F>(predicate: F) -> impl Parser<'a, &'a str, char, E>
 where
-    P: Parser<'a, &'a str, ()>,
-    S: Fn(Option<char>) -> StringStyle + 'static,
+    E: ParserExtra<'a, &'a str>,
+    F: Fn(char) -> bool + 'static,
 {
     any()
-        .filter(|c: &char| c.is_ascii_alphabetic())
+        .filter(move |c: &char| predicate(*c))
+        .then_ignore(just(' ').or(just('\t')).repeated())
+}
+
+fn raw_string<'a, E, D, S>(delimiter: D, style: S) -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+    D: OrderedSeq<'a, char> + Clone,
+    S: Fn(Option<char>) -> StringStyle + 'static,
+{
+    string_prefix(|c| c == 'r' || c == 'R')
+        .then_ignore(none_escape_text(delimiter))
+        .map_with(move |prefix, e| {
+            token!(
+                TokenValue::String {
+                    raw: e.slice(),
+                    style: style(Some(prefix)),
+                },
+                e
+            )
+        })
+}
+
+fn escape_string<'a, E, P, S>(text: P, style: S) -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+    P: Parser<'a, &'a str, (), E>,
+    S: Fn(Option<char>) -> StringStyle + 'static,
+{
+    string_prefix(|c| c.is_ascii_alphabetic())
         .or_not()
         .then_ignore(text)
         .map_with(move |prefix, e| {
@@ -154,9 +184,15 @@ where
         })
 }
 
-fn backtick_quoted_string<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
-    // TODO: Should we support escaping backticks?
+fn backtick_quoted_string<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
+    // The backtick character can be escaped by repeating it twice,
+    // regardless of the parser options.
     none_of('`')
+        .ignored()
+        .or(just('`').repeated().exactly(2))
         .repeated()
         .padded_by(just('`'))
         .map_with(|(), e| {
@@ -170,22 +206,31 @@ fn backtick_quoted_string<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
         })
 }
 
-fn unicode_escape_string<'a, P>(text: P, style: StringStyle) -> impl Parser<'a, &'a str, Token<'a>>
+fn unicode_escape_string<'a, E, D>(
+    delimiter: D,
+    style: StringStyle,
+) -> impl Parser<'a, &'a str, Token<'a>, E>
 where
-    P: Parser<'a, &'a str, ()>,
+    E: ParserExtra<'a, &'a str>,
+    D: OrderedSeq<'a, char> + Clone,
 {
-    just("U&").ignore_then(text).map_with(move |(), e| {
-        token!(
-            TokenValue::String {
-                raw: e.slice(),
-                style: style.clone()
-            },
-            e
-        )
-    })
+    just("U&")
+        .ignore_then(none_escape_text(delimiter))
+        .map_with(move |(), e| {
+            token!(
+                TokenValue::String {
+                    raw: e.slice(),
+                    style: style.clone()
+                },
+                e
+            )
+        })
 }
 
-fn dollar_quoted_string<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn dollar_quoted_string<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     // TODO: Should we restrict the characters allowed in the tag?
     let start = none_of('$').repeated().padded_by(just('$')).to_slice();
     let tag = just("").configure(|cfg, ctx| cfg.seq(*ctx));
@@ -205,8 +250,9 @@ fn dollar_quoted_string<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
         })
 }
 
-fn whitespace<'a, T>(c: char, token: T) -> impl Parser<'a, &'a str, Token<'a>>
+fn whitespace<'a, E, T>(c: char, token: T) -> impl Parser<'a, &'a str, Token<'a>, E>
 where
+    E: ParserExtra<'a, &'a str>,
     T: Fn(usize) -> TokenValue<'a> + 'static,
 {
     just(c)
@@ -216,25 +262,37 @@ where
         .map_with(move |count, e| token!(token(count), e))
 }
 
-fn punctuation<'a>() -> impl Parser<'a, &'a str, Token<'a>> {
+fn punctuation<'a, E>() -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     any().try_map_with(|c: char, e| match Punctuation::from_char(c) {
         Some(p) => Ok(token!(TokenValue::Punctuation(p), e)),
-        None => Err(EmptyErr::default()),
+        None => Err(chumsky::error::Error::expected_found(
+            vec![],
+            Some(c.into()),
+            e.span(),
+        )),
     })
 }
 
-fn string<'a>(options: &ParserOptions) -> impl Parser<'a, &'a str, Token<'a>> {
-    let text = match options.quote_escape {
-        QuoteEscape::None => |d| none_quote_escaped_text(d).boxed(),
-        QuoteEscape::Dual => |d| dual_quote_escaped_text(d).boxed(),
-        QuoteEscape::Backslash => |d| backslash_quote_escaped_text(d).boxed(),
+fn string<'a, E>(options: &ParserOptions) -> impl Parser<'a, &'a str, Token<'a>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
+    let text = if options.allow_dual_quote_escape {
+        |d: char| dual_quote_escape_text(d).boxed()
+    } else {
+        |d: char| backslash_escape_text(d).boxed()
     };
 
     let string = choice((
-        quoted_string(text('\''), |prefix| StringStyle::SingleQuoted { prefix }),
-        quoted_string(text('"'), |prefix| StringStyle::DoubleQuoted { prefix }),
-        unicode_escape_string(text('\''), StringStyle::UnicodeSingleQuoted),
-        unicode_escape_string(text('"'), StringStyle::UnicodeDoubleQuoted),
+        raw_string('\'', |prefix| StringStyle::SingleQuoted { prefix }),
+        raw_string('"', |prefix| StringStyle::DoubleQuoted { prefix }),
+        escape_string(text('\''), |prefix| StringStyle::SingleQuoted { prefix }),
+        escape_string(text('"'), |prefix| StringStyle::DoubleQuoted { prefix }),
+        unicode_escape_string('\'', StringStyle::UnicodeSingleQuoted { escape: None }),
+        unicode_escape_string('"', StringStyle::UnicodeDoubleQuoted { escape: None }),
         backtick_quoted_string(),
         dollar_quoted_string(),
     ));
@@ -242,10 +300,14 @@ fn string<'a>(options: &ParserOptions) -> impl Parser<'a, &'a str, Token<'a>> {
     let string = if options.allow_triple_quote_string {
         choice((
             // Multi-quote delimiter must come before one-quote delimiter.
-            quoted_string(multi_quoted_text("'''"), |prefix| {
+            raw_string("'''", |prefix| StringStyle::TripleSingleQuoted { prefix }),
+            raw_string("\"\"\"", |prefix| StringStyle::TripleDoubleQuoted {
+                prefix,
+            }),
+            escape_string(backslash_escape_text("'''"), |prefix| {
                 StringStyle::TripleSingleQuoted { prefix }
             }),
-            quoted_string(multi_quoted_text("\"\"\""), |prefix| {
+            escape_string(backslash_escape_text("\"\"\""), |prefix| {
                 StringStyle::TripleDoubleQuoted { prefix }
             }),
             string,
@@ -258,8 +320,10 @@ fn string<'a>(options: &ParserOptions) -> impl Parser<'a, &'a str, Token<'a>> {
     string
 }
 
-#[allow(unused)]
-pub fn lexer<'a>(options: &ParserOptions) -> impl Parser<'a, &'a str, Vec<Token<'a>>> {
+pub fn create_lexer<'a, E>(options: &ParserOptions) -> impl Parser<'a, &'a str, Vec<Token<'a>>, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
     choice((
         // When the parsers can parse the same prefix, more specific parsers must come before
         // more general parsers to avoid ambiguity.

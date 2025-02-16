@@ -13,7 +13,7 @@ use pyo3::{intern, PyErr, PyResult, Python};
 use sail_common::error::CommonError;
 use sail_execution::error::ExecutionError;
 use sail_plan::error::PlanError;
-use sail_sql::error::SqlError;
+use sail_sql_analyzer::error::SqlError;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinError;
@@ -73,7 +73,6 @@ impl SparkError {
 impl From<CommonError> for SparkError {
     fn from(error: CommonError) -> Self {
         match error {
-            CommonError::DataFusionError(e) => SparkError::DataFusionError(e),
             CommonError::MissingArgument(message) => SparkError::MissingArgument(message),
             CommonError::InvalidArgument(message) => SparkError::InvalidArgument(message),
             CommonError::NotSupported(message) => SparkError::NotSupported(message),
@@ -85,7 +84,6 @@ impl From<CommonError> for SparkError {
 impl From<SqlError> for SparkError {
     fn from(error: SqlError) -> Self {
         match error {
-            SqlError::DataFusionError(e) => SparkError::DataFusionError(e),
             SqlError::MissingArgument(message) => SparkError::MissingArgument(message),
             SqlError::InvalidArgument(message) => SparkError::InvalidArgument(message),
             SqlError::NotSupported(message) => SparkError::NotSupported(message),

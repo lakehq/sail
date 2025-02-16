@@ -4,7 +4,19 @@
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"COMMENT\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"\n--------------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"abc\" at Line: 1, Column: 48"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -18,62 +30,7 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operations": [
-                {
-                  "AddColumn": {
-                    "column_keyword": true,
-                    "if_not_exists": false,
-                    "column_def": {
-                      "name": {
-                        "value": "b",
-                        "quote_style": null,
-                        "span": {
-                          "start": {
-                            "line": 1,
-                            "column": 31
-                          },
-                          "end": {
-                            "line": 1,
-                            "column": 32
-                          }
-                        }
-                      },
-                      "data_type": {
-                        "String": null
-                      },
-                      "collation": null,
-                      "options": [
-                        {
-                          "name": null,
-                          "option": {
-                            "Default": {
-                              "Value": {
-                                "DoubleQuotedString": "123"
-                              }
-                            }
-                          }
-                        },
-                        {
-                          "name": null,
-                          "option": "NotNull"
-                        },
-                        {
-                          "name": null,
-                          "option": {
-                            "Default": {
-                              "Value": {
-                                "DoubleQuotedString": "abc"
-                              }
-                            }
-                          }
-                        }
-                      ]
-                    },
-                    "column_position": null
-                  }
-                }
-              ],
-              "location": null
+              "operation": "unknown"
             },
             "planId": null,
             "sourceInfo": null
@@ -85,7 +42,19 @@
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"FIRST|AFTER\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y\n-----------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: COMMENT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -99,56 +68,7 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operations": [
-                {
-                  "AddColumn": {
-                    "column_keyword": true,
-                    "if_not_exists": false,
-                    "column_def": {
-                      "name": {
-                        "value": "b",
-                        "quote_style": null,
-                        "span": {
-                          "start": {
-                            "line": 1,
-                            "column": 31
-                          },
-                          "end": {
-                            "line": 1,
-                            "column": 32
-                          }
-                        }
-                      },
-                      "data_type": {
-                        "String": null
-                      },
-                      "collation": null,
-                      "options": [
-                        {
-                          "name": null,
-                          "option": "NotNull"
-                        },
-                        {
-                          "name": null,
-                          "option": {
-                            "Default": {
-                              "Value": {
-                                "DoubleQuotedString": "abc"
-                              }
-                            }
-                          }
-                        },
-                        {
-                          "name": null,
-                          "option": "NotNull"
-                        }
-                      ]
-                    },
-                    "column_position": null
-                  }
-                }
-              ],
-              "location": null
+              "operation": "unknown"
             },
             "planId": null,
             "sourceInfo": null
@@ -159,145 +79,433 @@
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" DEFAULT 'abc' FIRST NOT NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" DEFAULT 'abc' NOT NULL FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" FIRST DEFAULT 'abc' NOT NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" FIRST NOT NULL DEFAULT 'abc'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" NOT NULL DEFAULT 'abc' FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING COMMENT \"a\" NOT NULL FIRST DEFAULT 'abc'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 48"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' COMMENT \"a\" FIRST NOT NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 62"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' COMMENT \"a\" NOT NULL FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 62"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' FIRST COMMENT \"a\" NOT NULL",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: COMMENT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' FIRST NOT NULL COMMENT \"a\"",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: NOT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' NOT NULL COMMENT \"a\" FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 71"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING DEFAULT 'abc' NOT NULL FIRST COMMENT \"a\"",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: COMMENT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST COMMENT \"a\" DEFAULT 'abc' NOT NULL",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: COMMENT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST COMMENT \"a\" NOT NULL DEFAULT 'abc'",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: COMMENT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST DEFAULT 'abc' COMMENT \"a\" NOT NULL",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: DEFAULT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST DEFAULT 'abc' NOT NULL COMMENT \"a\"",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: DEFAULT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST NOT NULL COMMENT \"a\" DEFAULT 'abc'",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: NOT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING FIRST NOT NULL DEFAULT 'abc' COMMENT \"a\"",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: NOT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL COMMENT \"a\" DEFAULT 'abc' FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 57"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL COMMENT \"a\" FIRST DEFAULT 'abc'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 57"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL DEFAULT 'abc' COMMENT \"a\" FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: string, found: \"a\" at Line: 1, Column: 71"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL DEFAULT 'abc' FIRST COMMENT \"a\"",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: COMMENT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL FIRST COMMENT \"a\" DEFAULT 'abc'",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: COMMENT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN x STRING NOT NULL FIRST DEFAULT 'abc' COMMENT \"a\"",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: DEFAULT"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "my_tab"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -310,55 +518,7 @@
                 "t1"
               ],
               "ifExists": false,
-              "operations": [
-                {
-                  "AddColumn": {
-                    "column_keyword": true,
-                    "if_not_exists": false,
-                    "column_def": {
-                      "name": {
-                        "value": "x",
-                        "quote_style": null,
-                        "span": {
-                          "start": {
-                            "line": 1,
-                            "column": 27
-                          },
-                          "end": {
-                            "line": 1,
-                            "column": 28
-                          }
-                        }
-                      },
-                      "data_type": {
-                        "Int": null
-                      },
-                      "collation": null,
-                      "options": [
-                        {
-                          "name": null,
-                          "option": "NotNull"
-                        },
-                        {
-                          "name": null,
-                          "option": {
-                            "Default": {
-                              "Value": {
-                                "Number": [
-                                  "42",
-                                  null
-                                ]
-                              }
-                            }
-                          }
-                        }
-                      ]
-                    },
-                    "column_position": null
-                  }
-                }
-              ],
-              "location": null
+              "operation": "unknown"
             },
             "planId": null,
             "sourceInfo": null
@@ -369,33 +529,69 @@
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t1"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'SET'.(line 1, pos 47)\n\n== SQL ==\nALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42\n-----------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
+        "failure": "invalid argument: expected one statement"
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT ",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 46)\n\n== SQL ==\nALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT \n----------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
+        "failure": "invalid argument: found end of input expected expression"
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT ''",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t1"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT 42",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 30"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "t1"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -408,37 +604,7 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operations": [
-                {
-                  "AddColumn": {
-                    "column_keyword": true,
-                    "if_not_exists": false,
-                    "column_def": {
-                      "name": {
-                        "value": "x",
-                        "quote_style": null,
-                        "span": {
-                          "start": {
-                            "line": 1,
-                            "column": 35
-                          },
-                          "end": {
-                            "line": 1,
-                            "column": 36
-                          }
-                        }
-                      },
-                      "data_type": {
-                        "Int": null
-                      },
-                      "collation": null,
-                      "options": []
-                    },
-                    "column_position": null
-                  }
-                }
-              ],
-              "location": null
+              "operation": "unknown"
             },
             "planId": null,
             "sourceInfo": null
@@ -456,52 +622,7 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operations": [
-                {
-                  "AddColumn": {
-                    "column_keyword": true,
-                    "if_not_exists": false,
-                    "column_def": {
-                      "name": {
-                        "value": "x",
-                        "quote_style": null,
-                        "span": {
-                          "start": {
-                            "line": 1,
-                            "column": 35
-                          },
-                          "end": {
-                            "line": 1,
-                            "column": 36
-                          }
-                        }
-                      },
-                      "data_type": {
-                        "Int": null
-                      },
-                      "collation": null,
-                      "options": []
-                    },
-                    "column_position": {
-                      "After": {
-                        "value": "y",
-                        "quote_style": null,
-                        "span": {
-                          "start": {
-                            "line": 1,
-                            "column": 47
-                          },
-                          "end": {
-                            "line": 1,
-                            "column": 48
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              ],
-              "location": null
+              "operation": "unknown"
             },
             "planId": null,
             "sourceInfo": null
@@ -519,44 +640,7 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operations": [
-                {
-                  "AddColumn": {
-                    "column_keyword": true,
-                    "if_not_exists": false,
-                    "column_def": {
-                      "name": {
-                        "value": "x",
-                        "quote_style": null,
-                        "span": {
-                          "start": {
-                            "line": 1,
-                            "column": 35
-                          },
-                          "end": {
-                            "line": 1,
-                            "column": 36
-                          }
-                        }
-                      },
-                      "data_type": {
-                        "Int": null
-                      },
-                      "collation": null,
-                      "options": [
-                        {
-                          "name": null,
-                          "option": {
-                            "Comment": "doc"
-                          }
-                        }
-                      ]
-                    },
-                    "column_position": null
-                  }
-                }
-              ],
-              "location": null
+              "operation": "unknown"
             },
             "planId": null,
             "sourceInfo": null
@@ -574,37 +658,7 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operations": [
-                {
-                  "AddColumn": {
-                    "column_keyword": true,
-                    "if_not_exists": false,
-                    "column_def": {
-                      "name": {
-                        "value": "x",
-                        "quote_style": null,
-                        "span": {
-                          "start": {
-                            "line": 1,
-                            "column": 35
-                          },
-                          "end": {
-                            "line": 1,
-                            "column": 36
-                          }
-                        }
-                      },
-                      "data_type": {
-                        "Int": null
-                      },
-                      "collation": null,
-                      "options": []
-                    },
-                    "column_position": "First"
-                  }
-                }
-              ],
-              "location": null
+              "operation": "unknown"
             },
             "planId": null,
             "sourceInfo": null
@@ -622,42 +676,7 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operations": [
-                {
-                  "AddColumn": {
-                    "column_keyword": true,
-                    "if_not_exists": false,
-                    "column_def": {
-                      "name": {
-                        "value": "x",
-                        "quote_style": null,
-                        "span": {
-                          "start": {
-                            "line": 1,
-                            "column": 35
-                          },
-                          "end": {
-                            "line": 1,
-                            "column": 36
-                          }
-                        }
-                      },
-                      "data_type": {
-                        "Int": null
-                      },
-                      "collation": null,
-                      "options": [
-                        {
-                          "name": null,
-                          "option": "NotNull"
-                        }
-                      ]
-                    },
-                    "column_position": null
-                  }
-                }
-              ],
-              "location": null
+              "operation": "unknown"
             },
             "planId": null,
             "sourceInfo": null
@@ -668,234 +687,522 @@
     {
       "input": "ALTER TABLE table_name ADD COLUMN x.y.z int COMMENT 'doc'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a data type name, found: . at Line: 1, Column: 36"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMN x.y.z int COMMENT 'doc', a.b string FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a data type name, found: . at Line: 1, Column: 36"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMNS (x int COMMENT 'doc')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ( at Line: 1, Column: 36"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMNS (x int)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: a data type name, found: ( at Line: 1, Column: 36"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMNS x int",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: int"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ADD COLUMNS x int, y string",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: int"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c DROP NOT NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c SET NOT NULL",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bad_type",
       "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"BAD_TYPE\".(line 1, pos 47)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bad_type\n-----------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
+        "failure": "invalid argument: found bad_type at 47:55 expected data type"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
+        "failure": "invalid argument: found COMMENT at 54:61 expected statement, or end of input"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
+        "failure": "invalid argument: found COMMENT at 54:61 expected statement, or end of input"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: SET/DROP NOT NULL, SET DEFAULT, or SET DATA TYPE after ALTER COLUMN, found: . at Line: 1, Column: 38"
+        "failure": "invalid argument: found COMMENT at 54:61 expected statement, or end of input"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c COMMENT 'new comment'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c FIRST",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c TYPE bigint",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
+        "failure": "invalid argument: found c at 43:44 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT AFTER other_col",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
+        "failure": "invalid argument: found c at 43:44 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c c INT COMMENT 'new_comment'",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
+        "failure": "invalid argument: found c at 43:44 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
       }
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT",
       "exception": "\nRenaming column is not supported in Hive-style ALTER COLUMN, please run RENAME COLUMN instead.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT\n^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: identifier, found: . at Line: 1, Column: 39"
+        "failure": "invalid argument: found new_name at 43:51 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
       }
     },
     {
       "input": "ALTER TABLE table_name DROP COLUMN IF EXISTS a.b.c",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ."
+        "failure": "invalid argument: found EXISTS at 38:44 expected statement, or end of input"
       }
     },
     {
       "input": "ALTER TABLE table_name DROP COLUMN IF EXISTS x, y, a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: y at Line: 1, Column: 49"
+        "failure": "invalid argument: found EXISTS at 38:44 expected statement, or end of input"
       }
     },
     {
       "input": "ALTER TABLE table_name DROP COLUMN a.b.c",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: ."
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name DROP COLUMN x, y, a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: y at Line: 1, Column: 39"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name DROP COLUMNS IF EXISTS x, y, a.b.c",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: IF"
+        "failure": "invalid argument: found EXISTS at 39:45 expected statement, or end of input"
       }
     },
     {
       "input": "ALTER TABLE table_name DROP COLUMNS x, y, a.b.c",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: x"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT",
       "exception": "\nOperation not allowed: ALTER TABLE table PARTITION partition_spec CHANGE COLUMN.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT\n^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: RENAME, found: CHANGE at Line: 1, Column: 42"
+        "failure": "invalid argument: found CHANGE at 41:47 expected 'RENAME', or 'SET'"
       }
     },
     {
       "input": "ALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)",
       "exception": "\nOperation not allowed: ALTER TABLE table PARTITION partition_spec REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)\n^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: RENAME, found: REPLACE at Line: 1, Column: 42"
+        "failure": "invalid argument: found REPLACE at 41:48 expected 'RENAME', or 'SET'"
       }
     },
     {
       "input": "ALTER TABLE table_name RENAME COLUMN a.b.c TO d",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: TO, found: . at Line: 1, Column: 39"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE REPLACE column a specifies descriptor \"COMMENT\" more than once, which is invalid.(line 1, pos 61)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')\n-------------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (a.b.c string)",
       "exception": "\nReplacing with a nested column is not supported in Hive-style REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (a.b.c string)\n^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string COMMENT 'x1')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string COMMENT 'x1', y int COMMENT 'y1')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string COMMENT 'x1', y int)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string FIRST)",
       "exception": "\nColumn position is not supported in Hive-style REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (x string FIRST)\n^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string NOT NULL)",
       "exception": "\nNOT NULL is not supported in Hive-style REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (x string NOT NULL)\n^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string)",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: REPLACE at Line: 1, Column: 24"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -908,61 +1215,7 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operations": [
-                {
-                  "SetTblProperties": {
-                    "table_properties": [
-                      {
-                        "KeyValue": {
-                          "key": {
-                            "value": "test",
-                            "quote_style": "'",
-                            "span": {
-                              "start": {
-                                "line": 0,
-                                "column": 0
-                              },
-                              "end": {
-                                "line": 0,
-                                "column": 0
-                              }
-                            }
-                          },
-                          "value": {
-                            "Value": {
-                              "SingleQuotedString": "test"
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "KeyValue": {
-                          "key": {
-                            "value": "comment",
-                            "quote_style": "'",
-                            "span": {
-                              "start": {
-                                "line": 0,
-                                "column": 0
-                              },
-                              "end": {
-                                "line": 0,
-                                "column": 0
-                              }
-                            }
-                          },
-                          "value": {
-                            "Value": {
-                              "SingleQuotedString": "new_comment"
-                            }
-                          }
-                        }
-                      }
-                    ]
-                  }
-                }
-              ],
-              "location": null
+              "operation": "unknown"
             },
             "planId": null,
             "sourceInfo": null
@@ -973,13 +1226,37 @@
     {
       "input": "ALTER TABLE table_name UNSET TBLPROPERTIES ('comment', 'test')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: UNSET at Line: 1, Column: 24"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "ALTER TABLE table_name UNSET TBLPROPERTIES IF EXISTS ('comment', 'test')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ADD, RENAME, PARTITION, SWAP, DROP, or SET TBLPROPERTIES after ALTER TABLE, found: UNSET at Line: 1, Column: 24"
+        "success": {
+          "command": {
+            "alterTable": {
+              "table": [
+                "table_name"
+              ],
+              "ifExists": false,
+              "operation": "unknown"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]

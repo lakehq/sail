@@ -49,6 +49,12 @@
       "input": "a ilike all()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike all()\n--^^^\n",
       "output": {
+        "failure": "invalid argument: found all at 8:11 expected end of input"
+      }
+    },
+    {
+      "input": "a ilike any ('FOO%', 'b%')",
+      "output": {
         "success": {
           "unresolvedFunction": {
             "functionName": "ilike",
@@ -63,8 +69,23 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "all",
-                  "arguments": [],
+                  "functionName": "any",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "utf8": {
+                          "value": "FOO%"
+                        }
+                      }
+                    },
+                    {
+                      "literal": {
+                        "utf8": {
+                          "value": "b%"
+                        }
+                      }
+                    }
+                  ],
                   "isDistinct": false,
                   "isUserDefinedFunction": false
                 }
@@ -77,16 +98,10 @@
       }
     },
     {
-      "input": "a ilike any ('FOO%', 'b%')",
-      "output": {
-        "failure": "not supported: ILIKE ANY expression"
-      }
-    },
-    {
       "input": "a ilike any()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike any()\n--^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an expression, found: ) at Line: 1, Column: 13"
+        "failure": "invalid argument: found any at 8:11 expected end of input"
       }
     },
     {
@@ -138,31 +153,7 @@
       "input": "a ilike some()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike some()\n--^^^\n",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "ilike",
-            "arguments": [
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null
-                }
-              },
-              {
-                "unresolvedFunction": {
-                  "functionName": "some",
-                  "arguments": [],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "invalid argument: found some at 8:12 expected end of input"
       }
     },
     {
@@ -234,37 +225,7 @@
       "input": "a like 'pattern%' escape '##'",
       "exception": "\n[INVALID_ESC] Found an invalid escape string: '##'. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na like 'pattern%' escape '##'\n--^^^\n",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "like",
-            "arguments": [
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null
-                }
-              },
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "pattern%"
-                  }
-                }
-              },
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "##"
-                  }
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "invalid argument: invalid escape character: ##"
       }
     },
     {
@@ -307,37 +268,7 @@
       "input": "a like 'pattern%' escape ''",
       "exception": "\n[INVALID_ESC] Found an invalid escape string: ''. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na like 'pattern%' escape ''\n--^^^\n",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "like",
-            "arguments": [
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null
-                }
-              },
-              {
-                "literal": {
-                  "utf8": {
-                    "value": "pattern%"
-                  }
-                }
-              },
-              {
-                "literal": {
-                  "utf8": {
-                    "value": ""
-                  }
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "invalid argument: invalid escape character: "
       }
     },
     {
@@ -389,6 +320,12 @@
       "input": "a like all()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like all()\n--^^^\n",
       "output": {
+        "failure": "invalid argument: found all at 7:10 expected end of input"
+      }
+    },
+    {
+      "input": "a like any ('foo%', 'b%')",
+      "output": {
         "success": {
           "unresolvedFunction": {
             "functionName": "like",
@@ -403,8 +340,23 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "all",
-                  "arguments": [],
+                  "functionName": "any",
+                  "arguments": [
+                    {
+                      "literal": {
+                        "utf8": {
+                          "value": "foo%"
+                        }
+                      }
+                    },
+                    {
+                      "literal": {
+                        "utf8": {
+                          "value": "b%"
+                        }
+                      }
+                    }
+                  ],
                   "isDistinct": false,
                   "isUserDefinedFunction": false
                 }
@@ -417,16 +369,10 @@
       }
     },
     {
-      "input": "a like any ('foo%', 'b%')",
-      "output": {
-        "failure": "not supported: LIKE ANY expression"
-      }
-    },
-    {
       "input": "a like any()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like any()\n--^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an expression, found: ) at Line: 1, Column: 12"
+        "failure": "invalid argument: found any at 7:10 expected end of input"
       }
     },
     {
@@ -478,31 +424,7 @@
       "input": "a like some()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like some()\n--^^^\n",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "like",
-            "arguments": [
-              {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null
-                }
-              },
-              {
-                "unresolvedFunction": {
-                  "functionName": "some",
-                  "arguments": [],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "invalid argument: found some at 7:11 expected end of input"
       }
     },
     {
@@ -562,7 +484,55 @@
     {
       "input": "a not ilike any ('foo%', 'B%')",
       "output": {
-        "failure": "not supported: ILIKE ANY expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "ilike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "any",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "foo%"
+                              }
+                            }
+                          },
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "B%"
+                              }
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -706,46 +676,7 @@
       "input": "a not like 'pattern%' escape '\"/'",
       "exception": "\n[INVALID_ESC] Found an invalid escape string: '\"/'. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na not like 'pattern%' escape '\"/'\n--^^^\n",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "not",
-            "arguments": [
-              {
-                "unresolvedFunction": {
-                  "functionName": "like",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "literal": {
-                        "utf8": {
-                          "value": "pattern%"
-                        }
-                      }
-                    },
-                    {
-                      "literal": {
-                        "utf8": {
-                          "value": "\"/"
-                        }
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "invalid argument: invalid escape character: \"/"
       }
     },
     {
@@ -797,46 +728,7 @@
       "input": "a not like 'pattern%' escape ''",
       "exception": "\n[INVALID_ESC] Found an invalid escape string: ''. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na not like 'pattern%' escape ''\n--^^^\n",
       "output": {
-        "success": {
-          "unresolvedFunction": {
-            "functionName": "not",
-            "arguments": [
-              {
-                "unresolvedFunction": {
-                  "functionName": "like",
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null
-                      }
-                    },
-                    {
-                      "literal": {
-                        "utf8": {
-                          "value": "pattern%"
-                        }
-                      }
-                    },
-                    {
-                      "literal": {
-                        "utf8": {
-                          "value": ""
-                        }
-                      }
-                    }
-                  ],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false
-                }
-              }
-            ],
-            "isDistinct": false,
-            "isUserDefinedFunction": false
-          }
-        }
+        "failure": "invalid argument: invalid escape character: "
       }
     },
     {
@@ -896,7 +788,55 @@
     {
       "input": "a not like any ('foo%', 'b%')",
       "output": {
-        "failure": "not supported: LIKE ANY expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "any",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "foo%"
+                              }
+                            }
+                          },
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "b%"
+                              }
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -1009,7 +949,7 @@
               {
                 "literal": {
                   "utf8": {
-                    "value": "^\\x20[\\x20-\\x23]+$"
+                    "value": "^ [ -#]+$"
                   }
                 }
               }
@@ -1067,7 +1007,7 @@
               {
                 "literal": {
                   "utf8": {
-                    "value": "pattern\\\\"
+                    "value": "pattern\\"
                   }
                 }
               }
@@ -1096,7 +1036,7 @@
               {
                 "literal": {
                   "utf8": {
-                    "value": "pattern\\t\\n"
+                    "value": "pattern\t\n"
                   }
                 }
               }
@@ -1164,7 +1104,55 @@
     {
       "input": "not (a ilike any ('FOO%', 'B%'))",
       "output": {
-        "failure": "not supported: ILIKE ANY expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "ilike",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "any",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "FOO%"
+                              }
+                            }
+                          },
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "B%"
+                              }
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -1278,7 +1266,55 @@
     {
       "input": "not (a like any ('foo%', 'b%'))",
       "output": {
-        "failure": "not supported: LIKE ANY expression"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "like",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": "any",
+                        "arguments": [
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "foo%"
+                              }
+                            }
+                          },
+                          {
+                            "literal": {
+                              "utf8": {
+                                "value": "b%"
+                              }
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {

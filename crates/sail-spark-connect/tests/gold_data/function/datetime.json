@@ -130,7 +130,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"window\")])"
+        "failure": "invalid argument: found as at 44:46 expected statement, or end of input"
       }
     },
     {

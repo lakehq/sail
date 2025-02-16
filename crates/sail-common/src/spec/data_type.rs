@@ -7,89 +7,96 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CommonError, CommonResult};
 
+pub const ARROW_DECIMAL128_MAX_PRECISION: u8 = arrow_schema::DECIMAL128_MAX_PRECISION;
+pub const ARROW_DECIMAL128_MAX_SCALE: i8 = arrow_schema::DECIMAL128_MAX_SCALE;
+pub const ARROW_DECIMAL256_MAX_PRECISION: u8 = arrow_schema::DECIMAL256_MAX_PRECISION;
+pub const ARROW_DECIMAL256_MAX_SCALE: i8 = arrow_schema::DECIMAL256_MAX_SCALE;
+
 /// Native Sail data types that convert to Arrow types.
-/// Types directly match to [`datafusion::arrow::datatypes::DataType`] variants when there is a corresponding type.
+/// Types directly match to [`arrow_schema::DataType`] variants when there is a corresponding type.
 /// Additionally, custom data types are supported for cases not covered by Arrow.
+///
 /// The style of expressing the type may not always be exactly the same as Arrow's.
 /// The spec is designed to have an easy-to-read JSON representation,
 /// making language interoperability easier in the future.
 /// This is achieved by eliminating the use of tuple structs and using named fields instead.
-/// [Credit]: Comments within the enum are copied from [`datafusion::arrow::datatypes::DataType`].
+///
+/// Some comments for the enum variants are copied from [`arrow_schema::DataType`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DataType {
     /// Null type.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Null`].
+    /// Corresponds to [`arrow_schema::DataType::Null`].
     Null,
     /// A boolean datatype representing the values `true` and `false`.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Boolean`].
+    /// Corresponds to [`arrow_schema::DataType::Boolean`].
     Boolean,
     /// A signed 8-bit integer.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Int8`].
+    /// Corresponds to [`arrow_schema::DataType::Int8`].
     Int8,
     /// A signed 16-bit integer.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Int16`].
+    /// Corresponds to [`arrow_schema::DataType::Int16`].
     Int16,
     /// A signed 32-bit integer.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Int32`].
+    /// Corresponds to [`arrow_schema::DataType::Int32`].
     Int32,
     /// A signed 64-bit integer.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Int64`].
+    /// Corresponds to [`arrow_schema::DataType::Int64`].
     Int64,
     /// An unsigned 8-bit integer.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::UInt8`].
+    /// Corresponds to [`arrow_schema::DataType::UInt8`].
     UInt8,
     /// An unsigned 16-bit integer.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::UInt16`].
+    /// Corresponds to [`arrow_schema::DataType::UInt16`].
     UInt16,
     /// An unsigned 32-bit integer.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::UInt32`].
+    /// Corresponds to [`arrow_schema::DataType::UInt32`].
     UInt32,
     /// An unsigned 64-bit integer.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::UInt64`].
+    /// Corresponds to [`arrow_schema::DataType::UInt64`].
     UInt64,
     /// A 16-bit floating point number.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Float16`].
+    /// Corresponds to [`arrow_schema::DataType::Float16`].
     Float16,
     /// A 32-bit floating point number.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Float32`].
+    /// Corresponds to [`arrow_schema::DataType::Float32`].
     Float32,
     /// A 64-bit floating point number.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Float64`].
+    /// Corresponds to [`arrow_schema::DataType::Float64`].
     Float64,
     /// A timestamp with an optional timezone.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Timestamp`].
+    /// Corresponds to [`arrow_schema::DataType::Timestamp`].
     Timestamp {
         time_unit: TimeUnit,
         timezone_info: TimeZoneInfo,
     },
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01) in days.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Date32`].
+    /// Corresponds to [`arrow_schema::DataType::Date32`].
     Date32,
     /// A signed 64-bit date representing the elapsed time since UNIX epoch (1970-01-01) in milliseconds.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Date64`].
+    /// Corresponds to [`arrow_schema::DataType::Date64`].
     Date64,
     /// A signed 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
     /// Must be either seconds or milliseconds.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Time32`].
+    /// Corresponds to [`arrow_schema::DataType::Time32`].
     Time32 {
         time_unit: TimeUnit,
     },
     /// A signed 64-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
     /// Must be either microseconds or nanoseconds.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Time64`].
+    /// Corresponds to [`arrow_schema::DataType::Time64`].
     Time64 {
         time_unit: TimeUnit,
     },
     /// Measure of elapsed time in either seconds, milliseconds, microseconds or nanoseconds.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Duration`].
+    /// Corresponds to [`arrow_schema::DataType::Duration`].
     Duration {
         time_unit: TimeUnit,
     },
     /// A "calendar" interval which models types that don't necessarily
     /// have a precise duration without the context of a base timestamp (e.g.
     /// days can differ in length during daylight savings time transitions).
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Interval`].
+    /// Corresponds to [`arrow_schema::DataType::Interval`].
     Interval {
         interval_unit: IntervalUnit,
         start_field: Option<IntervalFieldType>,
@@ -97,43 +104,43 @@ pub enum DataType {
     },
     /// Opaque binary data of variable length.
     /// A single Binary array can store up to [`i32::MAX`] bytes of binary data in total.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Binary`].
+    /// Corresponds to [`arrow_schema::DataType::Binary`].
     Binary,
     /// Opaque binary data of fixed size.
     /// Enum parameter specifies the number of bytes per value.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::FixedSizeBinary`].
+    /// Corresponds to [`arrow_schema::DataType::FixedSizeBinary`].
     FixedSizeBinary {
         size: i32,
     },
     /// Opaque binary data of variable length and 64-bit offsets.
     /// A single LargeBinary array can store up to [`i64::MAX`] bytes of binary data in total.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::LargeBinary`].
+    /// Corresponds to [`arrow_schema::DataType::LargeBinary`].
     LargeBinary,
     /// Opaque binary data of variable length.
     /// Logically the same as [`DataType::Binary`].
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::BinaryView`].
+    /// Corresponds to [`arrow_schema::DataType::BinaryView`].
     BinaryView,
     /// A variable-length string in Unicode with UTF-8 encoding.
     /// A single Utf8 array can store up to [`i32::MAX`] bytes of string data in total.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Utf8`].
+    /// Corresponds to [`arrow_schema::DataType::Utf8`].
     Utf8,
     /// A variable-length string in Unicode with UFT-8 encoding and 64-bit offsets.
     /// A single LargeUtf8 array can store up to [`i64::MAX`] bytes of string data in total.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::LargeUtf8`].
+    /// Corresponds to [`arrow_schema::DataType::LargeUtf8`].
     LargeUtf8,
     /// A variable-length string in Unicode with UTF-8 encoding
     /// Logically the same as [`DataType::Utf8`].
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Utf8View`].
+    /// Corresponds to [`arrow_schema::DataType::Utf8View`].
     Utf8View,
     /// A list of some logical data type with variable length.
     /// A single List array can store up to [`i32::MAX`] elements in total.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::List`].
+    /// Corresponds to [`arrow_schema::DataType::List`].
     List {
         data_type: Box<DataType>,
         nullable: bool,
     },
     /// A list of some logical data type with fixed length.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::FixedSizeList`].
+    /// Corresponds to [`arrow_schema::DataType::FixedSizeList`].
     FixedSizeList {
         data_type: Box<DataType>,
         nullable: bool,
@@ -141,53 +148,53 @@ pub enum DataType {
     },
     /// A list of some logical data type with variable length and 64-bit offsets.
     /// A single LargeList array can store up to [`i64::MAX`] elements in total.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::LargeList`].
+    /// Corresponds to [`arrow_schema::DataType::LargeList`].
     LargeList {
         data_type: Box<DataType>,
         nullable: bool,
     },
     /// A nested datatype that contains a number of sub-fields.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Struct`].
+    /// Corresponds to [`arrow_schema::DataType::Struct`].
     Struct {
         fields: Fields,
     },
     /// A nested datatype that can represent slots of differing types.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Union`].
+    /// Corresponds to [`arrow_schema::DataType::Union`].
     Union {
         union_fields: UnionFields,
         union_mode: UnionMode,
     },
     /// A dictionary encoded array (`key_type`, `value_type`), where each array element is an index
     /// of `key_type` into an associated dictionary of `value_type`.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Dictionary`].
+    /// Corresponds to [`arrow_schema::DataType::Dictionary`].
     Dictionary {
         key_type: Box<DataType>,
         value_type: Box<DataType>,
     },
     /// Exact 128-bit width decimal value with precision and scale.
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Decimal128`].
+    /// Corresponds to [`arrow_schema::DataType::Decimal128`].
     Decimal128 {
         precision: u8,
         scale: i8,
     },
-    /// Exact 256-bit width decimal value with precision and scale
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Decimal256`].
+    /// Exact 256-bit width decimal value with precision and scale.
+    /// Corresponds to [`arrow_schema::DataType::Decimal256`].
     Decimal256 {
         precision: u8,
         scale: i8,
     },
     /// A Map is a logical-nested type that is represented as
-    /// `List<entries: Struct<key: K, value: V>>`
-    /// Corresponds to [`datafusion::arrow::datatypes::DataType::Map`].
+    /// `List<entries: Struct<key: K, value: V>>`.
+    /// Corresponds to [`arrow_schema::DataType::Map`].
     Map {
         key_type: Box<DataType>,
         value_type: Box<DataType>,
         value_type_nullable: bool,
         keys_sorted: bool,
     },
-    ///
-    /// Everything below this line is not part of the Arrow specification.
-    ///
+    //
+    // Everything below this line is not part of the Arrow specification.
+    //
     UserDefined {
         jvm_class: Option<String>,
         python_class: Option<String>,
@@ -226,14 +233,12 @@ pub struct Field {
     pub metadata: Vec<(String, String)>,
 }
 
-/// [Credit]: The implementations for [`Field`], [`FieldRef`], [`Fields`], and [`UnionFields`] are
-/// copied from [`datafusion::arrow::datatypes::Field`], [`datafusion::arrow::datatypes::FieldRef`],
-/// [`datafusion::arrow::datatypes::Fields`], and [`datafusion::arrow::datatypes::UnionFields`].
-///
-/// A reference counted [`Field`]
+/// A reference counted [`Field`].
+/// The implementation is copied from [`arrow_schema::FieldRef`].
 pub type FieldRef = Arc<Field>;
 
-/// A cheaply cloneable, owned slice of [`FieldRef`]
+/// A cheaply cloneable, owned slice of [`FieldRef`].
+/// The implementation is copied from [`arrow_schema::Fields`].
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Fields(Arc<[FieldRef]>);
 
@@ -302,12 +307,13 @@ impl<'a> IntoIterator for &'a Fields {
     }
 }
 
-/// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding type ids
+/// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding type IDs.
+/// The implementation is copied from [`arrow_schema::UnionFields`].
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct UnionFields(Arc<[(i8, FieldRef)]>);
 
 impl UnionFields {
-    /// Create a new [`UnionFields`] with no fields
+    /// Create a new [`UnionFields`] with no fields.
     pub fn empty() -> Self {
         Self(Arc::from([]))
     }
@@ -327,7 +333,7 @@ impl FromIterator<(i8, FieldRef)> for UnionFields {
     }
 }
 
-/// Sparse or Dense union layouts
+/// Sparse or dense union layouts.
 #[derive(
     Debug,
     Clone,
@@ -345,9 +351,9 @@ impl FromIterator<(i8, FieldRef)> for UnionFields {
 #[num_enum(error_type(name = CommonError, constructor = UnionMode::invalid))]
 #[repr(i32)]
 pub enum UnionMode {
-    /// Sparse union layout
+    /// Sparse union layout.
     Sparse = 0,
-    /// Dense union layout
+    /// Dense union layout.
     Dense = 1,
 }
 

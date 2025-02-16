@@ -3,32 +3,32 @@
     {
       "input": "CACHE LAZY TABLE a.b.c",
       "output": {
-        "failure": "not implemented: SQL cache"
+        "failure": "not implemented: CACHE TABLE"
       }
     },
     {
       "input": "CACHE LAZY TABLE a.b.c OPTIONS('storageLevel' 'DISK_ONLY')",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: =, found: 'DISK_ONLY' at Line: 1, Column: 47"
+        "failure": "not implemented: CACHE TABLE"
       }
     },
     {
       "input": "CACHE TABLE a.b.c",
       "output": {
-        "failure": "not implemented: SQL cache"
+        "failure": "not implemented: CACHE TABLE"
       }
     },
     {
       "input": "CACHE TABLE a.b.c AS SELECT * FROM testData",
       "exception": "\nIt is not allowed to add catalog/namespace prefix a.b to the table name in CACHE TABLE AS SELECT.(line 1, pos 0)\n\n== SQL ==\nCACHE TABLE a.b.c AS SELECT * FROM testData\n^^^\n",
       "output": {
-        "failure": "not implemented: SQL cache"
+        "failure": "not implemented: CACHE TABLE"
       }
     },
     {
       "input": "CACHE TABLE t AS SELECT * FROM testData",
       "output": {
-        "failure": "not implemented: SQL cache"
+        "failure": "not implemented: CACHE TABLE"
       }
     }
   ]

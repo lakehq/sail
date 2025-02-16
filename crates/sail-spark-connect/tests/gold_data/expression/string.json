@@ -15,28 +15,14 @@
     {
       "input": "\"hello\" 'world'",
       "output": {
-        "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "utf8": {
-                  "value": "hello"
-                }
-              }
-            },
-            "name": [
-              "world"
-            ],
-            "metadata": null
-          }
-        }
+        "failure": "invalid argument: found 'world' at 8:15 expected end of input"
       }
     },
     {
       "input": "'''",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ''': extra input '''.(line 1, pos 2)\n\n== SQL ==\n'''\n--^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Unterminated string literal at Line: 1, Column: 1"
+        "failure": "invalid argument: found end of input expected '''"
       }
     },
     {
@@ -45,7 +31,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "\\\""
+              "value": "\""
             }
           }
         }
@@ -54,7 +40,13 @@
     {
       "input": "'\\''",
       "output": {
-        "failure": "invalid argument: sql parser error: Unterminated string literal at Line: 1, Column: 1"
+        "success": {
+          "literal": {
+            "utf8": {
+              "value": "'"
+            }
+          }
+        }
       }
     },
     {
@@ -63,7 +55,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "\\0"
+              "value": "\u0000"
             }
           }
         }
@@ -75,7 +67,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "\\110\\145\\154\\154\\157\\041"
+              "value": "Hello!"
             }
           }
         }
@@ -87,7 +79,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "\\Z"
+              "value": "Z"
             }
           }
         }
@@ -99,7 +91,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "\\b"
+              "value": "\b"
             }
           }
         }
@@ -111,7 +103,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "\\n"
+              "value": "\n"
             }
           }
         }
@@ -123,7 +115,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "\\r"
+              "value": "\r"
             }
           }
         }
@@ -135,7 +127,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "\\t"
+              "value": "\t"
             }
           }
         }
@@ -147,7 +139,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "\\u0057\\u006F\\u0072\\u006C\\u0064\\u0020\\u003A\\u0029"
+              "value": "World :)"
             }
           }
         }
@@ -168,7 +160,7 @@
     {
       "input": "'hello' \" \" 'world'",
       "output": {
-        "failure": "invalid argument: extra tokens after wildcard expression: 'world'"
+        "failure": "invalid argument: found \" \" at 8:11 expected end of input"
       }
     },
     {
@@ -177,7 +169,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "no-pattern\\%"
+              "value": "no-pattern%"
             }
           }
         }
@@ -201,7 +193,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "pattern\\\\%"
+              "value": "pattern\\%"
             }
           }
         }
@@ -213,7 +205,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "pattern\\\\\\%"
+              "value": "pattern\\%"
             }
           }
         }

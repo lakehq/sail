@@ -20,7 +20,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: unsupported function argument type"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
@@ -43,7 +43,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: unsupported function argument type"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: named function arguments"
       }
     },
     {
@@ -193,7 +193,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: named function arguments"
       }
     },
     {

@@ -1009,7 +1009,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Arrow error: Compute error: Regular expression did not compile: Syntax(\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nregex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n)"
       }
     },
     {
@@ -1053,7 +1053,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Arrow error: Compute error: Regular expression did not compile: Syntax(\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nregex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n)"
       }
     },
     {
@@ -1097,7 +1097,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Arrow error: Compute error: Regular expression did not compile: Syntax(\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nregex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n)"
       }
     },
     {

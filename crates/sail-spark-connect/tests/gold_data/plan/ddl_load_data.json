@@ -3,25 +3,25 @@
     {
       "input": "\nLOAD DATA LOCAL INPATH 'filepath' OVERWRITE INTO TABLE a.b.c\nPARTITION(ds='2017-06-10')\n         ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: `DATA` or an extension name after `LOAD`, found: LOCAL at Line: 2, Column: 11"
+        "failure": "invalid argument: found LOAD at 1:5 expected statement"
       }
     },
     {
       "input": "LOAD DATA INPATH 'filepath' INTO TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: `DATA` or an extension name after `LOAD`, found: INPATH at Line: 1, Column: 11"
+        "failure": "invalid argument: found LOAD at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "LOAD DATA LOCAL INPATH 'filepath' INTO TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: `DATA` or an extension name after `LOAD`, found: LOCAL at Line: 1, Column: 11"
+        "failure": "invalid argument: found LOAD at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "LOAD DATA LOCAL INPATH 'filepath' OVERWRITE INTO TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: `DATA` or an extension name after `LOAD`, found: LOCAL at Line: 1, Column: 11"
+        "failure": "invalid argument: found LOAD at 0:4 expected statement, or end of input"
       }
     }
   ]

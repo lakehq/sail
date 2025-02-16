@@ -147,10 +147,6 @@ def test_grouping_sets(sail):
     assert_frame_equal(actual, expected)
 
 
-# TODO: update sqlparser to support 'GROUP BY WITH' syntax
-#   https://github.com/sqlparser-rs/sqlparser-rs/pull/1323
-
-
 def test_rollup(sail):
     actual = sail.sql("""
         SELECT city, car_model, sum(quantity) AS sum

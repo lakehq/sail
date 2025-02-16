@@ -5,9 +5,8 @@ use std::hash::{Hash, Hasher};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::Result;
-
-use crate::impl_dyn_object_traits;
-use crate::object::DynObject;
+use sail_common::impl_dyn_object_traits;
+use sail_common::object::DynObject;
 
 /// Trait for implementing UDF to map input stream to output stream.
 pub trait StreamUDF: DynObject + Debug + Send + Sync {

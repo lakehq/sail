@@ -9,8 +9,8 @@ use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{internal_datafusion_err, Result};
-use sail_common::udf::StreamUDF;
-use sail_common::utils::record_batch_with_schema;
+use sail_common_datafusion::udf::StreamUDF;
+use sail_common_datafusion::utils::record_batch_with_schema;
 use tokio_stream::StreamExt;
 
 use crate::utils::ItemTaker;

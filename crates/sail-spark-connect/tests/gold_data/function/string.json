@@ -2725,7 +2725,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: FROM at Line: 1, Column: 27"
+        "success": "ok"
       }
     },
     {
@@ -2747,7 +2747,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: FROM at Line: 1, Column: 27"
+        "success": "ok"
       }
     },
     {
@@ -2769,7 +2769,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: FROM at Line: 1, Column: 27"
+        "success": "ok"
       }
     },
     {
@@ -3495,7 +3495,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: '    SparkSQL   ' at Line: 1, Column: 23"
+        "success": "ok"
       }
     },
     {
@@ -3539,7 +3539,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: '    SparkSQL   ' at Line: 1, Column: 26"
+        "success": "ok"
       }
     },
     {
@@ -3583,7 +3583,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: ), found: '    SparkSQL   ' at Line: 1, Column: 27"
+        "success": "ok"
       }
     },
     {

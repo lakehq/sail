@@ -2,8 +2,8 @@ use std::fmt;
 use std::fmt::Display;
 
 use datafusion::arrow::datatypes as adt;
-use sail_common::schema::escape_meta_characters;
 use sail_common::spec;
+use sail_common::string::escape_meta_characters;
 use sail_plan::resolver::PlanResolver;
 
 use crate::error::SparkResult;

@@ -403,121 +403,214 @@
     {
       "input": "-- single comment\\\nwith line continuity\nSELECT * FROM a",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: AS, found: continuity at Line: 2, Column: 11"
+        "failure": "invalid argument: found continuity at 29:39 expected '(', or 'AS'"
       }
     },
     {
       "input": "/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\n",
       "exception": "\n[UNCLOSED_BRACKETED_COMMENT] Found an unclosed bracketed comment. Please, append */ at the end of the comment.\n== SQL ==\n/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 10, Column: 1"
+        "failure": "invalid argument: found / at 22:23 expected statement, or end of input"
       }
     },
     {
       "input": "/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\nselect 4 as d\n",
       "exception": "\n[UNCLOSED_BRACKETED_COMMENT] Found an unclosed bracketed comment. Please, append */ at the end of the comment.\n== SQL ==\n/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\nselect 4 as d\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Unexpected EOF while in a multi-line comment at Line: 11, Column: 1"
+        "failure": "invalid argument: found / at 22:23 expected statement, or end of input"
       }
     },
     {
       "input": "TABLE testcat.db.tab",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: TABLE at Line: 1, Column: 1"
+        "failure": "invalid argument: found TABLE at 0:5 expected statement, or end of input"
       }
     },
     {
       "input": "from (from a union all from b) c select *",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'union'.(line 1, pos 13)\n\n== SQL ==\nfrom (from a union all from b) c select *\n-------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "from a",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 6)\n\n== SQL ==\nfrom a\n------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "from a insert into tbl1 select * insert into tbl2 select * where s < 10",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "from a select * from b",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 16)\n\n== SQL ==\nfrom a select * from b\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "from a select * select * from x where a.s < 10",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 25)\n\n== SQL ==\nfrom a select * select * from x where a.s < 10\n-------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "from a select * select * where s < 10",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "from a select b, c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "from a select distinct b, c",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "from db.a select b, c where d < 1",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "from t insert into s select * limit 1 insert into u select * where x > 5",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "from t1\nlateral view explode(x) expl as x\ninsert into t2\nselect *\nlateral view json_tuple(x, y) jtup q, z\ninsert into t3\nselect *\nwhere s < 10\n      ",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: from at Line: 1, Column: 1"
+        "failure": "invalid argument: found from at 0:4 expected statement, or end of input"
       }
     },
     {
       "input": "table d.t",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: table at Line: 1, Column: 1"
+        "failure": "invalid argument: found table at 0:5 expected statement, or end of input"
       }
     },
     {
       "input": "table t",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: an SQL statement, found: table at Line: 1, Column: 1"
+        "failure": "invalid argument: found table at 0:5 expected statement, or end of input"
       }
     },
     {
       "input": "values (1, 'a'), (2, 'b') as tbl(a, b)",
       "output": {
-        "failure": "invalid argument: extra tokens after statement: as"
+        "success": {
+          "query": {
+            "tableAlias": {
+              "input": {
+                "values": [
+                  [
+                    {
+                      "literal": {
+                        "int32": {
+                          "value": 1
+                        }
+                      }
+                    },
+                    {
+                      "literal": {
+                        "utf8": {
+                          "value": "a"
+                        }
+                      }
+                    }
+                  ],
+                  [
+                    {
+                      "literal": {
+                        "int32": {
+                          "value": 2
+                        }
+                      }
+                    },
+                    {
+                      "literal": {
+                        "utf8": {
+                          "value": "b"
+                        }
+                      }
+                    }
+                  ]
+                ],
+                "planId": null,
+                "sourceInfo": null
+              },
+              "name": "tbl",
+              "columns": [
+                "a",
+                "b"
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "values 1, 2, 3, 4",
       "output": {
-        "failure": "invalid argument: sql parser error: Expected: (, found: 1 at Line: 1, Column: 8"
+        "success": {
+          "query": {
+            "values": [
+              [
+                {
+                  "literal": {
+                    "int32": {
+                      "value": 1
+                    }
+                  }
+                }
+              ],
+              [
+                {
+                  "literal": {
+                    "int32": {
+                      "value": 2
+                    }
+                  }
+                }
+              ],
+              [
+                {
+                  "literal": {
+                    "int32": {
+                      "value": 3
+                    }
+                  }
+                }
+              ],
+              [
+                {
+                  "literal": {
+                    "int32": {
+                      "value": 4
+                    }
+                  }
+                }
+              ]
+            ],
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]

@@ -1,0 +1,15 @@
+[package]
+name = "sail-common-datafusion"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+
+chrono = { workspace = true }
+ryu = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+lexical-core = { workspace = true }
+futures = { workspace = true }

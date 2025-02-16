@@ -19,12 +19,10 @@ tonic-health = "0.12.3"
 tonic-types = "0.12.3"
 prost-build = "0.13.3"
 prost = "0.13.4"
-prost-types = "0.13.4"
 pbjson = "0.7.0"
 pbjson-types = "0.7.0"
 pbjson-build = "0.7.0"
 tower = { version = "0.5", features = ["full"] }
-tower-http = { version = "0.6.2", features = ["full"] }
 uuid = { version = "1.12.1", features = ["v4"] }
 async-trait = "0.1.86"
 async-recursion = "1.1.0"
@@ -80,7 +78,7 @@ base64 = "0.22.1"
 md-5 = "0.10.6"
 half = { version = "2.4.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.61"
-chumsky = { version = "=1.0.0-alpha.7", default-features = false, features = ["pratt"] }
+chumsky = { version = "=1.0.0-alpha.7", default-features = false, features = ["pratt", "label"] }
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -95,11 +93,11 @@ datafusion-functions-nested = { version = "45.0.0" }
 datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "453183d" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.23.4", features = ["auto-initialize", "serde"] }
+arrow-buffer = { version = "54.1.0" }
+arrow-schema = { version = "54.1.0" }
 arrow-flight = { version = "54.1.0" }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
-# We use a patched latest version of sqlparser. The version may be different from the one used in DataFusion.
-sqlparser = { git = "https://github.com/lakehq/sqlparser-rs.git", rev = "9ade53d", features = ["serde", "visitor"] }
 
 ######
 # This is the end of the manually managed dependencies.

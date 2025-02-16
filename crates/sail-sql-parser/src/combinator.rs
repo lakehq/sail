@@ -3,16 +3,9 @@ use chumsky::input::Input;
 use chumsky::{IterParser, Parser};
 use either::Either;
 
+use crate::common::Sequence;
+use crate::options::ParserOptions;
 use crate::tree::TreeParser;
-use crate::ParserOptions;
-
-/// A sequence of item type `T` and separator type `S`.
-#[allow(unused)]
-#[derive(Debug, Clone)]
-pub struct Sequence<T, S> {
-    pub head: Box<T>,
-    pub tail: Vec<(S, T)>,
-}
 
 /// Given an item parser [`P`] for type [`T`] and a separator parser [`S`] for type [`S`],
 /// return a parser for type [`Sequence<T,S>`].
@@ -60,26 +53,28 @@ where
 }
 
 /// Create a parser for type [`T`] with arguments [`A`].
-pub fn compose<'a, T, I, E, A>(
+pub fn compose<'a, 'opt, T, I, E, A>(
     args: A,
-    options: &ParserOptions,
-) -> impl Parser<'a, I, T, E> + Clone + use<'a, '_, T, I, E, A>
+    options: &'opt ParserOptions,
+) -> impl Parser<'a, I, T, E> + Clone + use<'a, 'opt, T, I, E, A>
 where
+    'opt: 'a,
     I: Input<'a>,
     E: ParserExtra<'a, I>,
-    T: TreeParser<'a, I, E, A>,
+    T: TreeParser<'a, 'opt, I, E, A>,
 {
     T::parser(args, options)
 }
 
 /// Create a parser for type [`T`] with unit arguments.
-pub fn unit<'a, T, I, E>(
-    options: &ParserOptions,
-) -> impl Parser<'a, I, T, E> + Clone + use<'a, '_, T, I, E>
+pub fn unit<'a, 'opt, T, I, E>(
+    options: &'opt ParserOptions,
+) -> impl Parser<'a, I, T, E> + Clone + use<'a, 'opt, T, I, E>
 where
+    'opt: 'a,
     I: Input<'a>,
     E: ParserExtra<'a, I>,
-    T: TreeParser<'a, I, E>,
+    T: TreeParser<'a, 'opt, I, E>,
 {
     T::parser((), options)
 }

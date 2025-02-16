@@ -1154,20 +1154,18 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::WildcardOptions> {
-        use datafusion::sql::sqlparser::ast as df_ast;
+        use datafusion::sql::sqlparser::ast;
 
         let ilike = wildcard_options
             .ilike_pattern
-            .map(|x| df_ast::IlikeSelectItem { pattern: x });
+            .map(|x| ast::IlikeSelectItem { pattern: x });
         let exclude = wildcard_options
             .exclude_columns
             .map(|x| {
                 let exclude = if x.len() > 1 {
-                    df_ast::ExcludeSelectItem::Multiple(
-                        x.into_iter().map(df_ast::Ident::new).collect(),
-                    )
+                    ast::ExcludeSelectItem::Multiple(x.into_iter().map(ast::Ident::new).collect())
                 } else if let Some(x) = x.into_iter().next() {
-                    df_ast::ExcludeSelectItem::Single(df_ast::Ident::new(x))
+                    ast::ExcludeSelectItem::Single(ast::Ident::new(x))
                 } else {
                     return Err(PlanError::invalid(
                         "exclude columns must have at least one column",
@@ -1184,14 +1182,14 @@ impl PlanResolver<'_> {
                     let first_element = deque.pop_front().ok_or_else(|| {
                         PlanError::invalid("except columns must have at least one column")
                     })?;
-                    let additional_elements = deque.into_iter().map(df_ast::Ident::new).collect();
-                    df_ast::ExceptSelectItem {
-                        first_element: df_ast::Ident::new(first_element),
+                    let additional_elements = deque.into_iter().map(ast::Ident::new).collect();
+                    ast::ExceptSelectItem {
+                        first_element: ast::Ident::new(first_element),
                         additional_elements,
                     }
                 } else if let Some(x) = x.into_iter().next() {
-                    df_ast::ExceptSelectItem {
-                        first_element: df_ast::Ident::new(x),
+                    ast::ExceptSelectItem {
+                        first_element: ast::Ident::new(x),
                         additional_elements: vec![],
                     }
                 } else {
@@ -1210,9 +1208,9 @@ impl PlanResolver<'_> {
                     let expression = self
                         .resolve_expression(*elem.expression, schema, state)
                         .await?;
-                    let item = df_ast::ReplaceSelectElement {
+                    let item = ast::ReplaceSelectElement {
                         expr: expr_to_sql(&expression)?,
-                        column_name: df_ast::Ident::new(elem.column_name),
+                        column_name: ast::Ident::new(elem.column_name),
                         as_keyword: elem.as_keyword,
                     };
                     items.push(item);
@@ -1229,18 +1227,18 @@ impl PlanResolver<'_> {
             .rename_columns
             .map(|x| {
                 let exclude = if x.len() > 1 {
-                    df_ast::RenameSelectItem::Multiple(
+                    ast::RenameSelectItem::Multiple(
                         x.into_iter()
-                            .map(|x| df_ast::IdentWithAlias {
-                                ident: df_ast::Ident::new(x.identifier),
-                                alias: df_ast::Ident::new(x.alias),
+                            .map(|x| ast::IdentWithAlias {
+                                ident: ast::Ident::new(x.identifier),
+                                alias: ast::Ident::new(x.alias),
                             })
                             .collect(),
                     )
                 } else if let Some(x) = x.into_iter().next() {
-                    df_ast::RenameSelectItem::Single(df_ast::IdentWithAlias {
-                        ident: df_ast::Ident::new(x.identifier),
-                        alias: df_ast::Ident::new(x.alias),
+                    ast::RenameSelectItem::Single(ast::IdentWithAlias {
+                        ident: ast::Ident::new(x.identifier),
+                        alias: ast::Ident::new(x.alias),
                     })
                 } else {
                     return Err(PlanError::invalid(
