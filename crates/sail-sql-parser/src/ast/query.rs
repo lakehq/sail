@@ -1,11 +1,7 @@
 use std::iter::Iterator;
 
-use chumsky::extra::ParserExtra;
-use chumsky::input::{Input, ValueInput};
-use chumsky::label::LabelError;
 use chumsky::pratt::{infix, left};
 use chumsky::prelude::choice;
-use chumsky::span::Span;
 use chumsky::{IterParser, Parser};
 use sail_sql_macro::TreeParser;
 
@@ -23,8 +19,8 @@ use crate::ast::keywords::{
 use crate::ast::operator::{Comma, LeftParenthesis, RightParenthesis};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
-use crate::span::{SpanContext, TokenSpan};
-use crate::token::{Token, TokenLabel};
+use crate::span::{TokenInput, TokenParserExtra};
+use crate::token::TokenLabel;
 use crate::tree::TreeParser;
 
 #[derive(Debug, Clone, TreeParser)]
@@ -89,16 +85,14 @@ pub enum QueryBody {
     },
 }
 
-impl<'a, I, E, P1, P2> TreeParser<'a, I, E, (P1, P2)> for QueryBody
+impl<'a, P1, P2> TreeParser<'a, TokenInput<'a>, TokenParserExtra<'a>, (P1, P2)> for QueryBody
 where
-    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
-    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
-    E::Error: LabelError<'a, I, TokenLabel>,
-    P1: Parser<'a, I, Query, E> + Clone + 'a,
-    P2: Parser<'a, I, Expr, E> + Clone + 'a,
+    P1: Parser<'a, TokenInput<'a>, Query, TokenParserExtra<'a>> + Clone + 'a,
+    P2: Parser<'a, TokenInput<'a>, Expr, TokenParserExtra<'a>> + Clone + 'a,
 {
-    fn parser((query, expr): (P1, P2)) -> impl Parser<'a, I, Self, E> + Clone {
+    fn parser(
+        (query, expr): (P1, P2),
+    ) -> impl Parser<'a, TokenInput<'a>, Self, TokenParserExtra<'a>> + Clone {
         let quantifier = SetQuantifier::parser(()).or_not();
         let term = QueryTerm::parser((query, expr)).map(QueryBody::Term);
         term.pratt((

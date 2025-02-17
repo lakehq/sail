@@ -1,31 +1,21 @@
 use chumsky::error::Error;
-use chumsky::extra::ParserExtra;
-use chumsky::input::{Input, ValueInput};
-use chumsky::label::LabelError;
 use chumsky::primitive::any;
 use chumsky::Parser;
 
 use crate::ast::whitespace::whitespace;
-use crate::span::TokenSpan;
+use crate::span::{TokenInput, TokenParserExtra, TokenSpan};
 use crate::token::{Keyword, Token, TokenLabel};
 use crate::tree::TreeParser;
 
-fn keyword_parser<'a, I, K, F, E>(keyword: Keyword, builder: F) -> impl Parser<'a, I, K, E> + Clone
-where
-    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
-    I::Span: std::convert::Into<TokenSpan>,
-    F: Fn(TokenSpan) -> K + Clone + 'static,
-    E: ParserExtra<'a, I>,
-    E::Error: LabelError<'a, I, TokenLabel>,
-{
+fn keyword_parser<'a>(
+    keyword: Keyword,
+) -> impl Parser<'a, TokenInput<'a>, TokenSpan, TokenParserExtra<'a>> + Clone {
     any()
-        .try_map(move |t: Token<'a>, span: I::Span| match t {
+        .try_map(move |token: Token<'a>, span| match token {
             Token::Word {
                 keyword: Some(k), ..
-            } if k == keyword => Ok(builder(<I::Span as std::convert::Into<TokenSpan>>::into(
-                span,
-            ))),
-            x => Err(Error::expected_found(
+            } if k == keyword => Ok(<_ as std::convert::Into<TokenSpan>>::into(span)),
+            x => Err(Error::<TokenInput<'a>>::expected_found(
                 vec![],
                 Some(std::convert::From::from(x)),
                 span,
@@ -50,15 +40,10 @@ macro_rules! keyword_types {
                 }
             }
 
-            impl<'a, I, E> TreeParser<'a, I, E> for $name
-            where
-                I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
-                I::Span: std::convert::Into<TokenSpan>,
-                E: ParserExtra<'a, I>,
-                E::Error: LabelError<'a, I, TokenLabel>,
+            impl<'a> TreeParser<'a, TokenInput<'a>, TokenParserExtra<'a>> for $name
             {
-                fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
-                    keyword_parser(Self::keyword(), |span| Self { span })
+                fn parser(_args: ()) -> impl Parser<'a, TokenInput<'a>, Self, TokenParserExtra<'a>> + Clone {
+                    keyword_parser(Self::keyword()).map(|span| Self { span })
                 }
             }
         )*

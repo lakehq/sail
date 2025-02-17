@@ -1,10 +1,9 @@
 use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
-use chumsky::input::{Input, MapExtra, ValueInput};
+use chumsky::input::{Input, MapExtra};
 use chumsky::label::LabelError;
 use chumsky::pratt::{infix, left, postfix, prefix};
 use chumsky::prelude::{any, choice};
-use chumsky::span::Span;
 use chumsky::Parser;
 use either::Either;
 use sail_sql_macro::TreeParser;
@@ -29,7 +28,7 @@ use crate::ast::operator::{
 use crate::ast::query::{NamedExpr, Query};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
-use crate::span::{SpanContext, TokenSpan};
+use crate::span::{TokenInput, TokenInputSpan, TokenParserExtra};
 use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
 
@@ -840,19 +839,17 @@ where
     }
 }
 
-impl<'a, I, E, P1, P2, P3> TreeParser<'a, I, E, (P1, P2, P3)> for Expr
+impl<'a, P1, P2, P3> TreeParser<'a, TokenInput<'a>, TokenParserExtra<'a>, (P1, P2, P3)> for Expr
 where
-    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
-    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
-    E::Error: LabelError<'a, I, TokenLabel>,
-    P1: Parser<'a, I, Expr, E> + Clone + 'a,
-    P2: Parser<'a, I, Query, E> + Clone + 'a,
-    P3: Parser<'a, I, DataType, E> + Clone + 'a,
+    P1: Parser<'a, TokenInput<'a>, Expr, TokenParserExtra<'a>> + Clone + 'a,
+    P2: Parser<'a, TokenInput<'a>, Query, TokenParserExtra<'a>> + Clone + 'a,
+    P3: Parser<'a, TokenInput<'a>, DataType, TokenParserExtra<'a>> + Clone + 'a,
 {
-    fn parser((expr, query, data_type): (P1, P2, P3)) -> impl Parser<'a, I, Self, E> + Clone {
+    fn parser(
+        (expr, query, data_type): (P1, P2, P3),
+    ) -> impl Parser<'a, TokenInput<'a>, Self, TokenParserExtra<'a>> + Clone {
         let atom = AtomExpr::parser((expr.clone(), query.clone(), data_type.clone()))
-            .map(|atom| <ExprFragment<Token<'a>, I::Span>>::Singleton(Expr::Atom(atom)));
+            .map(|atom| <ExprFragment<Token<'a>, TokenInputSpan<'a>>>::Singleton(Expr::Atom(atom)));
         atom.pratt((
             postfix(
                 26,
@@ -1027,7 +1024,7 @@ where
                 },
             ),
         ))
-        .try_map(|e, _| e.build::<I, E>())
+        .try_map(|e, _| e.build::<TokenInput<'a>, TokenParserExtra<'a>>())
         .labelled(TokenLabel::Expression)
     }
 }
