@@ -1,38 +1,37 @@
 use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
+use chumsky::input::{Input, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::primitive::any;
 use chumsky::Parser;
 
 use crate::ast::whitespace::whitespace;
-use crate::options::ParserOptions;
-use crate::token::{Keyword, Token, TokenLabel, TokenSpan, TokenValue};
+use crate::span::TokenSpan;
+use crate::token::{Keyword, Token, TokenLabel};
 use crate::tree::TreeParser;
 
-fn keyword_parser<'a, K, F, E>(
-    keyword: Keyword,
-    builder: F,
-) -> impl Parser<'a, &'a [Token<'a>], K, E> + Clone
+fn keyword_parser<'a, I, K, F, E>(keyword: Keyword, builder: F) -> impl Parser<'a, I, K, E> + Clone
 where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: std::convert::Into<TokenSpan>,
     F: Fn(TokenSpan) -> K + Clone + 'static,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     any()
-        .then_ignore(whitespace().repeated())
-        .try_map(move |t: Token<'a>, s| match t {
-            Token {
-                value: TokenValue::Word {
-                    keyword: Some(k), ..
-                },
+        .try_map(move |t: Token<'a>, span: I::Span| match t {
+            Token::Word {
+                keyword: Some(k), ..
+            } if k == keyword => Ok(builder(<I::Span as std::convert::Into<TokenSpan>>::into(
                 span,
-            } if k == keyword => Ok(builder(span)),
+            ))),
             x => Err(Error::expected_found(
                 vec![],
                 Some(std::convert::From::from(x)),
-                s,
+                span,
             )),
         })
+        .then_ignore(whitespace().repeated())
         .labelled(TokenLabel::Keyword(keyword))
 }
 
@@ -51,16 +50,14 @@ macro_rules! keyword_types {
                 }
             }
 
-            impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for $name
+            impl<'a, I, E> TreeParser<'a, I, E> for $name
             where
-                'opt: 'a,
-                E: ParserExtra<'a, &'a [Token<'a>]>,
-                E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+                I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+                I::Span: std::convert::Into<TokenSpan>,
+                E: ParserExtra<'a, I>,
+                E::Error: LabelError<'a, I, TokenLabel>,
             {
-                fn parser(
-                    _args: (),
-                    _options: &'opt ParserOptions,
-                ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
+                fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
                     keyword_parser(Self::keyword(), |span| Self { span })
                 }
             }

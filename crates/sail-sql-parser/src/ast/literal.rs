@@ -1,14 +1,16 @@
 use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
+use chumsky::input::ValueInput;
 use chumsky::label::LabelError;
-use chumsky::prelude::any;
+use chumsky::prelude::{any, Input};
+use chumsky::span::Span;
 use chumsky::Parser;
 
 use crate::ast::identifier::is_identifier_string;
 use crate::ast::whitespace::whitespace;
-use crate::options::ParserOptions;
+use crate::span::{SpanContext, TokenSpan};
 use crate::string::StringValue;
-use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel, TokenSpan, TokenValue};
+use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
 use crate::tree::TreeParser;
 
 #[derive(Debug, Clone)]
@@ -18,29 +20,24 @@ pub struct NumberLiteral {
     pub suffix: String,
 }
 
-impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for NumberLiteral
+impl<'a, I, E> TreeParser<'a, I, E> for NumberLiteral
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan>,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(
-        _args: (),
-        _options: &'opt ParserOptions,
-    ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
+    fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
         any()
-            .then_ignore(whitespace().repeated())
-            .try_map(|t: Token, s| match t {
-                Token {
-                    value: TokenValue::Number { value, suffix },
-                    span,
-                } => Ok(NumberLiteral {
-                    span,
+            .try_map(|t: Token, s: I::Span| match t {
+                Token::Number { value, suffix } => Ok(NumberLiteral {
+                    span: s.into(),
                     value: value.to_string(),
                     suffix: suffix.to_string(),
                 }),
                 _ => Err(Error::expected_found(vec![], Some(t.into()), s)),
             })
+            .then_ignore(whitespace().repeated())
             .labelled(TokenLabel::Number)
     }
 }
@@ -51,43 +48,32 @@ pub struct IntegerLiteral {
     pub value: i64,
 }
 
-impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for IntegerLiteral
+impl<'a, I, E> TreeParser<'a, I, E> for IntegerLiteral
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan>,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(
-        _args: (),
-        _options: &'opt ParserOptions,
-    ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        let negative = any()
-            .filter(|t: &Token<'a>| {
-                matches!(
-                    t,
-                    Token {
-                        value: TokenValue::Punctuation(Punctuation::Minus),
-                        ..
-                    }
-                )
-            })
-            .then_ignore(whitespace().repeated());
-        negative
+    fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
+        any()
+            .filter(|t| matches!(t, Token::Punctuation(Punctuation::Minus)))
+            .then_ignore(whitespace().repeated())
             .or_not()
-            .then(any().then_ignore(whitespace().repeated()))
-            .try_map(|(negative, token), s| {
-                if let Token {
-                    value: TokenValue::Number { value, suffix: "" },
-                    span,
-                } = token
-                {
+            .then(any())
+            .try_map(|(negative, token), span: I::Span| {
+                if let Token::Number { value, suffix: "" } = token {
                     let value = format!("{}{}", negative.map_or("", |_| "-"), value);
                     if let Ok(value) = value.parse() {
-                        return Ok(IntegerLiteral { span, value });
+                        return Ok(IntegerLiteral {
+                            span: span.into(),
+                            value,
+                        });
                     }
                 };
-                Err(Error::expected_found(vec![], Some(From::from(token)), s))
+                Err(Error::expected_found(vec![], Some(From::from(token)), span))
             })
+            .then_ignore(whitespace().repeated())
             .labelled(TokenLabel::Integer)
     }
 }
@@ -98,69 +84,59 @@ pub struct StringLiteral {
     pub value: StringValue,
 }
 
-impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for StringLiteral
+impl<'a, I, E> TreeParser<'a, I, E> for StringLiteral
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(
-        _args: (),
-        options: &'opt ParserOptions,
-    ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
+    fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
         let unicode_escape = any()
             .then_ignore(whitespace().repeated())
             .then(any())
-            .then_ignore(whitespace().repeated())
-            .try_map(|(u, t): (Token<'a>, Token<'a>), s| {
+            .try_map(|(u, t): (Token<'a>, Token<'a>), span: I::Span| {
                 #[allow(clippy::single_match)]
                 match (u, &t) {
                     (
-                        Token {
-                            value:
-                                TokenValue::Word {
-                                    keyword: Some(Keyword::Uescape),
-                                    ..
-                                },
+                        Token::Word {
+                            keyword: Some(Keyword::Uescape),
                             ..
                         },
-                        Token {
-                            value:
-                                TokenValue::String {
-                                    raw,
-                                    style: style @ StringStyle::SingleQuoted { prefix: None },
-                                },
-                            ..
+                        Token::String {
+                            raw,
+                            style: style @ StringStyle::SingleQuoted { prefix: None },
                         },
                     ) => return Ok((*raw, style.clone())),
                     _ => {}
                 }
-                Err(Error::expected_found(vec![], Some(t.into()), s))
+                Err(Error::expected_found(vec![], Some(t.into()), span))
             });
 
-        let options = options.clone();
         any()
             .then_ignore(whitespace().repeated())
             .then(unicode_escape.or_not())
             .try_map(
-                move |(t, escape): (Token<'a>, Option<(&'a str, StringStyle)>), s| {
-                    let escape = escape.map(|(raw, style)| style.parse(raw, &options));
+                |(t, escape): (Token<'a>, Option<(&'a str, StringStyle)>), span: I::Span| {
+                    let options = span.context().options;
+                    let escape = escape.map(|(raw, style)| style.parse(raw, options));
                     match t {
-                        Token {
-                            value: TokenValue::String { raw, style },
-                            span,
-                        } if !is_identifier_string(&style, &options) => {
+                        Token::String { raw, style } if !is_identifier_string(&style, options) => {
                             let value = match override_string_style(style, escape) {
-                                Ok(style) => style.parse(raw, &options),
+                                Ok(style) => style.parse(raw, options),
                                 Err(e) => StringValue::Invalid { reason: e },
                             };
-                            return Ok(StringLiteral { span, value });
+                            return Ok(StringLiteral {
+                                span: span.into(),
+                                value,
+                            });
                         }
                         _ => {}
                     }
-                    Err(Error::expected_found(vec![], Some(t.into()), s))
+                    Err(Error::expected_found(vec![], Some(t.into()), span))
                 },
             )
+            .then_ignore(whitespace().repeated())
             .labelled(TokenLabel::String)
     }
 }

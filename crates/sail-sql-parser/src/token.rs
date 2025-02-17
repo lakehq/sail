@@ -1,36 +1,9 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-/// A token in the SQL lexer output.
+/// A SQL token.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Token<'a> {
-    pub value: TokenValue<'a>,
-    pub span: TokenSpan,
-}
-
-impl<'a> Token<'a> {
-    pub fn new(value: TokenValue<'a>, span: impl Into<TokenSpan>) -> Self {
-        Self {
-            value,
-            span: span.into(),
-        }
-    }
-}
-
-impl Display for Token<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.value)?;
-        if !self.span.is_empty() {
-            // TODO: show token span as location
-            write!(f, " at {}:{}", self.span.start, self.span.end)?
-        }
-        Ok(())
-    }
-}
-
-/// A SQL token value.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TokenValue<'a> {
+pub enum Token<'a> {
     /// A word that is not quoted nor escaped.
     /// The word may match a SQL keyword.
     Word {
@@ -65,37 +38,37 @@ pub enum TokenValue<'a> {
     Punctuation(Punctuation),
 }
 
-impl Display for TokenValue<'_> {
+impl Display for Token<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            TokenValue::Word { raw, .. } => {
+            Token::Word { raw, .. } => {
                 write!(f, "{raw}")
             }
-            TokenValue::Number { value, suffix } => {
+            Token::Number { value, suffix } => {
                 write!(f, "{value}{suffix}")
             }
-            TokenValue::String { raw, .. } => {
+            Token::String { raw, .. } => {
                 write!(f, "{raw}")
             }
-            TokenValue::Tab { count } => {
+            Token::Tab { count } => {
                 write!(f, "{}", "<tab>".repeat(*count))
             }
-            TokenValue::LineFeed { count } => {
+            Token::LineFeed { count } => {
                 write!(f, "{}", "<lf>".repeat(*count))
             }
-            TokenValue::CarriageReturn { count } => {
+            Token::CarriageReturn { count } => {
                 write!(f, "{}", "<cr>".repeat(*count))
             }
-            TokenValue::Space { count } => {
+            Token::Space { count } => {
                 write!(f, "{}", "<space>".repeat(*count))
             }
-            TokenValue::SingleLineComment { raw, .. } => {
+            Token::SingleLineComment { raw, .. } => {
                 write!(f, "{raw}")
             }
-            TokenValue::MultiLineComment { raw, .. } => {
+            Token::MultiLineComment { raw, .. } => {
                 write!(f, "{raw}")
             }
-            TokenValue::Punctuation(p) => {
+            Token::Punctuation(p) => {
                 write!(f, "{}", p.to_char())
             }
         }
@@ -252,44 +225,6 @@ macro_rules! punctuation_enum {
 }
 
 for_all_punctuations!(punctuation_enum);
-
-/// A span in the source code.
-/// The offsets are measured in the number of characters from the beginning of the input,
-/// starting from 0.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TokenSpan {
-    /// The start offset of the span.
-    pub start: usize,
-    /// The end (exclusive) offset of the span.
-    pub end: usize,
-}
-
-impl TokenSpan {
-    pub fn is_empty(&self) -> bool {
-        self.start >= self.end
-    }
-
-    pub fn union(&self, other: &Self) -> Self {
-        match (self.is_empty(), other.is_empty()) {
-            (true, true) => TokenSpan::default(),
-            (true, false) => *other,
-            (false, true) => *self,
-            (false, false) => TokenSpan {
-                start: self.start.min(other.start),
-                end: self.end.max(other.end),
-            },
-        }
-    }
-
-    pub fn union_all<I>(iter: I) -> Self
-    where
-        I: IntoIterator<Item = TokenSpan>,
-    {
-        iter.into_iter()
-            .reduce(|acc, span| acc.union(&span))
-            .unwrap_or_default()
-    }
-}
 
 macro_rules! keyword_enum {
     ([$(($string:expr, $identifier:ident),)* $(,)?]) => {

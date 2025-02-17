@@ -7,7 +7,7 @@ use sail_sql_parser::ast::expression::{
     OrderDirection, OrderNulls, OverClause, PartitionBy, PatternEscape, PatternQuantifier,
     TableExpr, TrimExpr, UnaryOperator, WindowFrame, WindowFrameBound, WindowSpec,
 };
-use sail_sql_parser::ast::identifier::ObjectName;
+use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
 use sail_sql_parser::ast::query::{IdentList, NamedExpr};
 
 use crate::data_type::from_ast_data_type;
@@ -34,11 +34,20 @@ pub(crate) fn from_ast_function_argument(arg: FunctionArgument) -> SqlResult<spe
     }
 }
 
-pub(crate) fn from_ast_object_name(name: ObjectName) -> SqlResult<spec::ObjectName> {
-    Ok(name
-        .0
+pub fn from_ast_object_name(name: ObjectName) -> SqlResult<spec::ObjectName> {
+    let ObjectName(parts) = name;
+    Ok(parts
         .into_items()
         .map(|i| i.value)
+        .collect::<Vec<_>>()
+        .into())
+}
+
+pub fn from_ast_qualified_wildcard(wildcard: QualifiedWildcard) -> SqlResult<spec::ObjectName> {
+    let QualifiedWildcard(qualifier, _, _) = wildcard;
+    Ok(qualifier
+        .into_items()
+        .map(|x| x.value)
         .collect::<Vec<_>>()
         .into())
 }
@@ -140,7 +149,7 @@ fn from_ast_window_frame_bound(bound: WindowFrameBound) -> SqlResult<spec::Windo
     }
 }
 
-pub(crate) fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
+pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
     match expr {
         Expr::Atom(atom) => from_ast_atom_expression(atom),
         Expr::UnaryOperator(op, expr) => Ok(spec::Expr::UnresolvedFunction {

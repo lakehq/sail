@@ -1,9 +1,11 @@
 use std::iter::Iterator;
 
 use chumsky::extra::ParserExtra;
+use chumsky::input::{Input, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::pratt::{infix, left};
 use chumsky::prelude::choice;
+use chumsky::span::Span;
 use chumsky::{IterParser, Parser};
 use sail_sql_macro::TreeParser;
 
@@ -21,31 +23,31 @@ use crate::ast::keywords::{
 use crate::ast::operator::{Comma, LeftParenthesis, RightParenthesis};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
-use crate::options::ParserOptions;
+use crate::span::{SpanContext, TokenSpan};
 use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Query, Expr, DataType)", label = TokenLabel::Query)]
 pub struct Query {
-    #[parser(function = |(q, _, _), o| compose(q, o))]
+    #[parser(function = |(q, _, _)| compose(q))]
     pub with: Option<WithClause>,
-    #[parser(function = |(q, e, _), o| boxed(compose((q, e), o)))]
+    #[parser(function = |(q, e, _)| boxed(compose((q, e))))]
     pub body: Box<QueryBody>,
-    #[parser(function = |(_, e, _), o| compose(e, o))]
+    #[parser(function = |(_, e, _)| compose(e))]
     pub modifiers: Vec<QueryModifier>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub enum QueryModifier {
-    Window(#[parser(function = |e, o| compose(e, o))] WindowClause),
-    OrderBy(#[parser(function = |e, o| compose(e, o))] OrderByClause),
-    SortBy(#[parser(function = |e, o| compose(e, o))] SortByClause),
-    ClusterBy(#[parser(function = |e, o| compose(e, o))] ClusterByClause),
-    DistributeBy(#[parser(function = |e, o| compose(e, o))] DistributeByClause),
-    Limit(#[parser(function = |e, o| compose(e, o))] LimitClause),
-    Offset(#[parser(function = |e, o| compose(e, o))] OffsetClause),
+    Window(#[parser(function = |e| compose(e))] WindowClause),
+    OrderBy(#[parser(function = |e| compose(e))] OrderByClause),
+    SortBy(#[parser(function = |e| compose(e))] SortByClause),
+    ClusterBy(#[parser(function = |e| compose(e))] ClusterByClause),
+    DistributeBy(#[parser(function = |e| compose(e))] DistributeByClause),
+    Limit(#[parser(function = |e| compose(e))] LimitClause),
+    Offset(#[parser(function = |e| compose(e))] OffsetClause),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -53,7 +55,7 @@ pub enum QueryModifier {
 pub struct WithClause {
     pub with: With,
     pub recursive: Option<Recursive>,
-    #[parser(function = |q, o| sequence(compose(q, o), unit(o)))]
+    #[parser(function = |q| sequence(compose(q), unit()))]
     pub ctes: Sequence<NamedQuery, Comma>,
 }
 
@@ -64,7 +66,7 @@ pub struct NamedQuery {
     pub columns: Option<IdentList>,
     pub r#as: Option<As>,
     pub left: LeftParenthesis,
-    #[parser(function = |q, _| q)]
+    #[parser(function = |q| q)]
     pub query: Query,
     pub right: RightParenthesis,
 }
@@ -87,24 +89,22 @@ pub enum QueryBody {
     },
 }
 
-impl<'a, 'opt, E, P1, P2> TreeParser<'a, 'opt, &'a [Token<'a>], E, (P1, P2)> for QueryBody
+impl<'a, I, E, P1, P2> TreeParser<'a, I, E, (P1, P2)> for QueryBody
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
-    P1: Parser<'a, &'a [Token<'a>], Query, E> + Clone + 'a,
-    P2: Parser<'a, &'a [Token<'a>], Expr, E> + Clone + 'a,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+    P1: Parser<'a, I, Query, E> + Clone + 'a,
+    P2: Parser<'a, I, Expr, E> + Clone + 'a,
 {
-    fn parser(
-        (query, expr): (P1, P2),
-        options: &'opt ParserOptions,
-    ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        let quantifier = SetQuantifier::parser((), options).or_not();
-        let term = QueryTerm::parser((query, expr), options).map(QueryBody::Term);
+    fn parser((query, expr): (P1, P2)) -> impl Parser<'a, I, Self, E> + Clone {
+        let quantifier = SetQuantifier::parser(()).or_not();
+        let term = QueryTerm::parser((query, expr)).map(QueryBody::Term);
         term.pratt((
             infix(
                 left(2),
-                Intersect::parser((), options)
+                Intersect::parser(())
                     .map(SetOperator::Intersect)
                     .then(quantifier.clone()),
                 |left, (operator, quantifier), right| QueryBody::SetOperation {
@@ -117,9 +117,9 @@ where
             infix(
                 left(1),
                 choice((
-                    Union::parser((), options).map(SetOperator::Union),
-                    Except::parser((), options).map(SetOperator::Except),
-                    Minus::parser((), options).map(SetOperator::Minus),
+                    Union::parser(()).map(SetOperator::Union),
+                    Except::parser(()).map(SetOperator::Except),
+                    Minus::parser(()).map(SetOperator::Minus),
                 ))
                 .then(quantifier),
                 |left, (operator, quantifier), right| QueryBody::SetOperation {
@@ -153,11 +153,11 @@ pub enum SetQuantifier {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Query, Expr)")]
 pub enum QueryTerm {
-    Select(#[parser(function = |(q, e), o| compose((q, e), o))] QuerySelect),
-    Values(#[parser(function = |(_, e), o| compose(e, o))] ValuesClause),
+    Select(#[parser(function = |(q, e)| compose((q, e)))] QuerySelect),
+    Values(#[parser(function = |(_, e)| compose(e))] ValuesClause),
     Nested(
         LeftParenthesis,
-        #[parser(function = |(q, _), _| q)] Query,
+        #[parser(function = |(q, _)| q)] Query,
         RightParenthesis,
     ),
 }
@@ -165,17 +165,17 @@ pub enum QueryTerm {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Query, Expr)")]
 pub struct QuerySelect {
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e)| compose(e))]
     pub select: SelectClause,
-    #[parser(function = |(q, e), o| compose((q, e), o))]
+    #[parser(function = |(q, e)| compose((q, e)))]
     pub from: Option<FromClause>,
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e)| compose(e))]
     pub lateral_views: Vec<LateralViewClause>,
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e)| compose(e))]
     pub r#where: Option<WhereClause>,
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e)| compose(e))]
     pub group_by: Option<GroupByClause>,
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e)| compose(e))]
     pub having: Option<HavingClause>,
 }
 
@@ -183,7 +183,7 @@ pub struct QuerySelect {
 #[parser(dependency = "Expr")]
 pub struct ValuesClause {
     pub values: Values,
-    #[parser(function = |e, o| sequence(e, unit(o)))]
+    #[parser(function = |e| sequence(e, unit()))]
     pub expressions: Sequence<Expr, Comma>,
     pub alias: Option<AliasClause>,
 }
@@ -200,14 +200,14 @@ pub struct AliasClause {
 pub struct SelectClause {
     pub select: Select,
     pub quantifier: Option<DuplicateTreatment>,
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    #[parser(function = |e| sequence(compose(e), unit()))]
     pub projection: Sequence<SelectExpr, Comma>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct SelectExpr {
-    #[parser(function = |e, _| e)]
+    #[parser(function = |e| e)]
     pub expr: Expr,
     pub alias: Option<(Option<As>, ColumnIdent)>,
 }
@@ -215,7 +215,7 @@ pub struct SelectExpr {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct NamedExpr {
-    #[parser(function = |e, _| e)]
+    #[parser(function = |e| e)]
     pub expr: Expr,
     pub alias: Option<(Option<As>, Ident)>,
 }
@@ -224,7 +224,7 @@ pub struct NamedExpr {
 #[parser(dependency = "Expr")]
 pub struct NamedExprList {
     pub left: LeftParenthesis,
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    #[parser(function = |e| sequence(compose(e), unit()))]
     pub items: Sequence<NamedExpr, Comma>,
     pub right: RightParenthesis,
 }
@@ -233,7 +233,7 @@ pub struct NamedExprList {
 #[parser(dependency = "(Query, Expr)")]
 pub struct FromClause {
     pub from: From,
-    #[parser(function = |(q, e), o| sequence(compose((q, e), o), unit(o)))]
+    #[parser(function = |(q, e)| sequence(compose((q, e)), unit()))]
     pub tables: Sequence<TableWithJoins, Comma>,
 }
 
@@ -241,9 +241,9 @@ pub struct FromClause {
 #[parser(dependency = "(Query, Expr)")]
 pub struct TableWithJoins {
     pub lateral: Option<Lateral>,
-    #[parser(function = |(q, e), o| compose((q, e), o))]
+    #[parser(function = |(q, e)| compose((q, e)))]
     pub table: TableFactor,
-    #[parser(function = |(q, e), o| compose((q, e), o))]
+    #[parser(function = |(q, e)| compose((q, e)))]
     pub joins: Vec<TableJoin>,
 }
 
@@ -251,27 +251,27 @@ pub struct TableWithJoins {
 #[parser(dependency = "(Query, Expr)")]
 pub enum TableFactor {
     Values {
-        #[parser(function = |(_, e), o| compose(e, o))]
+        #[parser(function = |(_, e)| compose(e))]
         values: ValuesClause,
         alias: Option<AliasClause>,
     },
     Query {
         left: LeftParenthesis,
-        #[parser(function = |(q, _), _| q)]
+        #[parser(function = |(q, _)| q)]
         query: Query,
         right: RightParenthesis,
-        #[parser(function = |(_, e), o| compose(e, o))]
+        #[parser(function = |(_, e)| compose(e))]
         modifier: Option<TableModifier>,
         alias: Option<AliasClause>,
     },
     TableFunction {
-        #[parser(function = |(_, e), o| compose(e, o))]
+        #[parser(function = |(_, e)| compose(e))]
         function: TableFunction,
         alias: Option<AliasClause>,
     },
     Name {
         name: ObjectName,
-        #[parser(function = |(_, e), o| compose(e, o))]
+        #[parser(function = |(_, e)| compose(e))]
         modifier: Option<TableModifier>,
         alias: Option<AliasClause>,
     },
@@ -281,7 +281,7 @@ pub enum TableFactor {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub enum TableModifier {
-    Pivot(#[parser(function = |e, o| compose(e, o))] PivotClause),
+    Pivot(#[parser(function = |e| compose(e))] PivotClause),
     Unpivot(UnpivotClause),
 }
 
@@ -290,12 +290,12 @@ pub enum TableModifier {
 pub struct PivotClause {
     pub pivot: Pivot,
     pub left: LeftParenthesis,
-    #[parser(function = |e, o| PivotAggregateSequence::parser(e, o).map(|x| x.into()))]
+    #[parser(function = |e| PivotAggregateSequence::parser(e).map(|x| x.into()))]
     pub aggregates: Sequence<NamedExpr, Comma>,
     pub r#for: For,
     pub columns: IdentList,
     pub r#in: In,
-    #[parser(function = |e, o| compose(e, o))]
+    #[parser(function = |e| compose(e))]
     pub values: NamedExprList,
     pub right: RightParenthesis,
 }
@@ -305,9 +305,9 @@ pub struct PivotClause {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 struct PivotAggregateSequence {
-    #[parser(function = |e, o| compose(e, o).then(unit(o)).repeated().collect())]
+    #[parser(function = |e| compose(e).then(unit()).repeated().collect())]
     items: Vec<(NamedExpr, Comma)>,
-    #[parser(function = |e, _| e)]
+    #[parser(function = |e| e)]
     last: Expr,
     alias: Option<PivotAggregateLastAlias>,
 }
@@ -315,7 +315,7 @@ struct PivotAggregateSequence {
 #[derive(Debug, Clone, TreeParser)]
 struct PivotAggregateLastAlias(
     Option<As>,
-    #[parser(function = |(), o| For::parser((), o).not().rewind())] (),
+    #[parser(function = |()| For::parser(()).not().rewind())] (),
     Ident,
 );
 
@@ -384,7 +384,7 @@ pub enum UnpivotColumns {
 pub struct TableFunction {
     pub name: ObjectName,
     pub left: LeftParenthesis,
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    #[parser(function = |e| sequence(compose(e), unit()))]
     pub arguments: Sequence<FunctionArgument, Comma>,
     pub right: RightParenthesis,
 }
@@ -398,9 +398,9 @@ pub struct TableJoin {
     pub operator: Option<JoinOperator>,
     pub join: Join,
     pub lateral: Option<Lateral>,
-    #[parser(function = |(q, e), o| compose((q, e), o))]
+    #[parser(function = |(q, e)| compose((q, e)))]
     pub other: TableFactor,
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e)| compose(e))]
     pub criteria: Option<JoinCriteria>,
 }
 
@@ -426,7 +426,7 @@ pub enum JoinOperator {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub enum JoinCriteria {
-    On(On, #[parser(function = |e, _| e)] Expr),
+    On(On, #[parser(function = |e| e)] Expr),
     Using(Using, IdentList),
 }
 
@@ -437,10 +437,10 @@ pub struct LateralViewClause {
     pub outer: Option<Outer>,
     pub function: ObjectName,
     pub left: LeftParenthesis,
-    #[parser(function = |e, o| sequence(e, unit(o)))]
+    #[parser(function = |e| sequence(e, unit()))]
     pub arguments: Sequence<Expr, Comma>,
     pub right: RightParenthesis,
-    #[parser(function = |_, o| unit(o).and_is(As::parser((), o).not()).or_not())]
+    #[parser(function = |_| unit().and_is(As::parser(()).not()).or_not())]
     pub table: Option<ObjectName>,
     pub columns: Option<(Option<As>, Sequence<Ident, Comma>)>,
 }
@@ -449,7 +449,7 @@ pub struct LateralViewClause {
 #[parser(dependency = "Expr")]
 pub struct WhereClause {
     pub r#where: Where,
-    #[parser(function = |e, _| e)]
+    #[parser(function = |e| e)]
     pub condition: Expr,
 }
 
@@ -457,7 +457,7 @@ pub struct WhereClause {
 #[parser(dependency = "Expr")]
 pub struct GroupByClause {
     pub group_by: (Group, By),
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    #[parser(function = |e| sequence(compose(e), unit()))]
     pub expressions: Sequence<GroupingExpr, Comma>,
     pub modifier: Option<GroupByModifier>,
 }
@@ -472,7 +472,7 @@ pub enum GroupByModifier {
 #[parser(dependency = "Expr")]
 pub struct HavingClause {
     pub having: Having,
-    #[parser(function = |e, _| e)]
+    #[parser(function = |e| e)]
     pub condition: Expr,
 }
 
@@ -480,7 +480,7 @@ pub struct HavingClause {
 #[parser(dependency = "Expr")]
 pub struct WindowClause {
     pub window: Window,
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    #[parser(function = |e| sequence(compose(e), unit()))]
     pub items: Sequence<NamedWindow, Comma>,
 }
 
@@ -489,7 +489,7 @@ pub struct WindowClause {
 pub struct NamedWindow {
     pub name: Ident,
     pub r#as: As,
-    #[parser(function = |e, o| compose(e, o))]
+    #[parser(function = |e| compose(e))]
     pub window: WindowSpec,
 }
 
@@ -497,7 +497,7 @@ pub struct NamedWindow {
 #[parser(dependency = "Expr")]
 pub struct OrderByClause {
     pub order_by: (Order, By),
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    #[parser(function = |e| sequence(compose(e), unit()))]
     pub items: Sequence<OrderByExpr, Comma>,
 }
 
@@ -505,7 +505,7 @@ pub struct OrderByClause {
 #[parser(dependency = "Expr")]
 pub struct SortByClause {
     pub sort_by: (Sort, By),
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    #[parser(function = |e| sequence(compose(e), unit()))]
     pub items: Sequence<OrderByExpr, Comma>,
 }
 
@@ -513,7 +513,7 @@ pub struct SortByClause {
 #[parser(dependency = "Expr")]
 pub struct ClusterByClause {
     pub cluster_by: (Cluster, By),
-    #[parser(function = |e, o| sequence(e, unit(o)))]
+    #[parser(function = |e| sequence(e, unit()))]
     pub items: Sequence<Expr, Comma>,
 }
 
@@ -521,7 +521,7 @@ pub struct ClusterByClause {
 #[parser(dependency = "Expr")]
 pub struct DistributeByClause {
     pub distribute_by: (Cluster, By),
-    #[parser(function = |e, o| sequence(e, unit(o)))]
+    #[parser(function = |e| sequence(e, unit()))]
     pub items: Sequence<Expr, Comma>,
 }
 
@@ -529,7 +529,7 @@ pub struct DistributeByClause {
 #[parser(dependency = "Expr")]
 pub struct LimitClause {
     pub limit: Limit,
-    #[parser(function = |e, o| compose(e, o))]
+    #[parser(function = |e| compose(e))]
     pub value: LimitValue,
 }
 
@@ -537,13 +537,13 @@ pub struct LimitClause {
 #[parser(dependency = "Expr")]
 pub enum LimitValue {
     All(All),
-    Value(#[parser(function = |e, _| e)] Expr),
+    Value(#[parser(function = |e| e)] Expr),
 }
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct OffsetClause {
     pub offset: Offset,
-    #[parser(function = |e, _| e)]
+    #[parser(function = |e| e)]
     pub value: Expr,
 }

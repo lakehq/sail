@@ -1,7 +1,9 @@
 use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
+use chumsky::input::{Input, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::any;
+use chumsky::span::Span;
 use chumsky::Parser;
 use sail_sql_macro::TreeParser;
 
@@ -9,51 +11,44 @@ use crate::ast::operator::{Asterisk, Period};
 use crate::ast::whitespace::whitespace;
 use crate::common::Sequence;
 use crate::options::ParserOptions;
+use crate::span::{SpanContext, TokenSpan};
 use crate::string::StringValue;
-use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel, TokenSpan, TokenValue};
+use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
 use crate::tree::TreeParser;
 
-fn identifier_parser<'a, O, F, E>(
-    builder: F,
-    options: &ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], O, E> + Clone
+fn identifier_parser<'a, I, O, F, E>(builder: F) -> impl Parser<'a, I, O, E> + Clone
 where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
     F: Fn(String, Option<Keyword>, TokenSpan) -> Option<O> + Clone + 'static,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
-    let options = options.clone();
     any()
-        .then_ignore(whitespace().repeated())
-        .try_map(move |t: Token<'a>, s| {
-            #[allow(clippy::single_match)]
+        .try_map(move |t: Token<'a>, span: I::Span| {
+            let options = span.context().options;
             match &t {
-                Token {
-                    value: TokenValue::Word { keyword, raw },
-                    span,
-                } => {
-                    if let Some(ident) = builder(raw.to_string(), *keyword, *span) {
+                Token::Word { keyword, raw } => {
+                    if let Some(ident) = builder(raw.to_string(), *keyword, span.clone().into()) {
                         return Ok(ident);
                     }
                 }
-                Token {
-                    value: TokenValue::String { raw, style },
-                    span,
-                } if is_identifier_string(style, &options) => {
+                Token::String { raw, style } if is_identifier_string(style, options) => {
                     if let StringValue::Valid {
                         value,
                         prefix: None,
-                    } = style.parse(raw, &options)
+                    } = style.parse(raw, options)
                     {
-                        if let Some(ident) = builder(value, None, *span) {
+                        if let Some(ident) = builder(value, None, span.clone().into()) {
                             return Ok(ident);
                         }
                     }
                 }
                 _ => {}
             }
-            Err(Error::expected_found(vec![], Some(t.into()), s))
+            Err(Error::expected_found(vec![], Some(t.into()), span))
         })
+        .then_ignore(whitespace().repeated())
         .labelled(TokenLabel::Identifier)
 }
 
@@ -63,17 +58,15 @@ pub struct Ident {
     pub value: String,
 }
 
-impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for Ident
+impl<'a, I, E> TreeParser<'a, I, E> for Ident
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(
-        _args: (),
-        options: &'opt ParserOptions,
-    ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        identifier_parser(|value, _keyword, span| Some(Ident { span, value }), options)
+    fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
+        identifier_parser(|value, _keyword, span| Some(Ident { span, value }))
     }
 }
 
@@ -92,28 +85,23 @@ impl From<ColumnIdent> for Ident {
     }
 }
 
-impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for ColumnIdent
+impl<'a, I, E> TreeParser<'a, I, E> for ColumnIdent
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(
-        _args: (),
-        options: &'opt ParserOptions,
-    ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        identifier_parser(
-            |value, keyword, span| {
-                if keyword.is_some_and(|k| {
-                    k.is_reserved_in_ansi_mode() || k.is_reserved_for_column_alias()
-                }) {
-                    None
-                } else {
-                    Some(ColumnIdent { span, value })
-                }
-            },
-            options,
-        )
+    fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
+        identifier_parser(|value, keyword, span| {
+            if keyword
+                .is_some_and(|k| k.is_reserved_in_ansi_mode() || k.is_reserved_for_column_alias())
+            {
+                None
+            } else {
+                Some(ColumnIdent { span, value })
+            }
+        })
     }
 }
 
@@ -132,28 +120,23 @@ impl From<TableIdent> for Ident {
     }
 }
 
-impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for TableIdent
+impl<'a, I, E> TreeParser<'a, I, E> for TableIdent
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(
-        _args: (),
-        options: &'opt ParserOptions,
-    ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        identifier_parser(
-            |value, keyword, span| {
-                if keyword.is_some_and(|k| {
-                    k.is_reserved_in_ansi_mode() || k.is_reserved_for_table_alias()
-                }) {
-                    None
-                } else {
-                    Some(TableIdent { span, value })
-                }
-            },
-            options,
-        )
+    fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
+        identifier_parser(|value, keyword, span| {
+            if keyword
+                .is_some_and(|k| k.is_reserved_in_ansi_mode() || k.is_reserved_for_table_alias())
+            {
+                None
+            } else {
+                Some(TableIdent { span, value })
+            }
+        })
     }
 }
 
@@ -170,72 +153,51 @@ pub struct Variable {
     pub value: String,
 }
 
-impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for Variable
+impl<'a, I, E> TreeParser<'a, I, E> for Variable
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan>,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(
-        _args: (),
-        _options: &'opt ParserOptions,
-    ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-        let named =
-            any()
-                .then(any())
-                .then_ignore(whitespace().repeated())
-                .try_map(|(prefix, word): (Token<'a>, Token<'a>), s| {
-                    match (prefix, &word) {
-                        (
-                            Token {
-                                value:
-                                    TokenValue::Punctuation(
-                                        p @ (Punctuation::Dollar | Punctuation::Colon),
-                                    ),
-                                span: s1,
-                            },
-                            Token {
-                                value: TokenValue::Word { keyword: _, raw },
-                                span: s2,
-                            },
-                        ) => {
-                            return Ok(Variable {
-                                span: s1.union(s2),
-                                value: format!("{}{}", p.to_char(), raw),
-                            });
-                        }
-                        (
-                            Token {
-                                value:
-                                    TokenValue::Punctuation(
-                                        p @ (Punctuation::Dollar | Punctuation::Colon),
-                                    ),
-                                span: s1,
-                            },
-                            Token {
-                                value: TokenValue::Number { value, suffix },
-                                span: s2,
-                            },
-                        ) => {
-                            return Ok(Variable {
-                                span: s1.union(s2),
-                                value: format!("{}{}{}", p.to_char(), value, suffix),
-                            });
-                        }
-                        _ => {}
+    fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
+        let named = any()
+            .then(any())
+            .try_map(|(prefix, word): (Token<'a>, Token<'a>), span: I::Span| {
+                match (prefix, &word) {
+                    (
+                        Token::Punctuation(p @ (Punctuation::Dollar | Punctuation::Colon)),
+                        Token::Word { keyword: _, raw },
+                    ) => {
+                        return Ok(Variable {
+                            span: span.into(),
+                            value: format!("{}{}", p.to_char(), raw),
+                        });
                     }
-                    Err(Error::expected_found(vec![], Some(word.into()), s))
-                });
+                    (
+                        Token::Punctuation(p @ (Punctuation::Dollar | Punctuation::Colon)),
+                        Token::Number { value, suffix },
+                    ) => {
+                        return Ok(Variable {
+                            span: span.into(),
+                            value: format!("{}{}{}", p.to_char(), value, suffix),
+                        });
+                    }
+                    _ => {}
+                }
+                Err(Error::expected_found(vec![], Some(word.into()), span))
+            })
+            .then_ignore(whitespace().repeated());
 
         let unnamed = any()
-            .then_ignore(whitespace().repeated())
-            .try_map(|t: Token<'a>, s| match t.value {
-                TokenValue::Punctuation(p @ Punctuation::QuestionMark) => Ok(Variable {
-                    span: t.span,
+            .try_map(|t: Token<'a>, span: I::Span| match t {
+                Token::Punctuation(p @ Punctuation::QuestionMark) => Ok(Variable {
+                    span: span.into(),
                     value: format!("{}", p.to_char()),
                 }),
-                _ => Err(Error::expected_found(vec![], Some(t.into()), s)),
-            });
+                _ => Err(Error::expected_found(vec![], Some(t.into()), span)),
+            })
+            .then_ignore(whitespace().repeated());
 
         named.or(unnamed).labelled(TokenLabel::Variable)
     }

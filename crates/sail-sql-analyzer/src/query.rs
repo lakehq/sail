@@ -74,7 +74,7 @@ impl TryFrom<Vec<QueryModifier>> for QueryModifiers {
     }
 }
 
-pub(crate) fn from_ast_named_expression(expr: NamedExpr) -> SqlResult<spec::Expr> {
+pub fn from_ast_named_expression(expr: NamedExpr) -> SqlResult<spec::Expr> {
     let NamedExpr { expr, alias } = expr;
     let expr = from_ast_expression(expr)?;
     if let Some((_, name)) = alias {

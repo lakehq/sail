@@ -86,22 +86,22 @@ pub enum DataType {
     Array(
         Array,
         LessThan,
-        #[parser(function = |x, _| boxed(x))] Box<DataType>,
+        #[parser(function = |x| boxed(x))] Box<DataType>,
         GreaterThan,
     ),
     Struct(
         Struct,
         LessThan,
-        #[parser(function = |x, o| sequence(compose(x, o), unit(o)).or_not())]
+        #[parser(function = |x| sequence(compose(x), unit()).or_not())]
         Option<Sequence<StructField, Comma>>,
         GreaterThan,
     ),
     Map(
         Map,
         LessThan,
-        #[parser(function = |x, _| boxed(x))] Box<DataType>,
+        #[parser(function = |x| boxed(x))] Box<DataType>,
         Comma,
-        #[parser(function = |x, _| boxed(x))] Box<DataType>,
+        #[parser(function = |x| boxed(x))] Box<DataType>,
         GreaterThan,
     ),
 }
@@ -155,7 +155,7 @@ pub enum TimezoneType {
 pub struct StructField {
     pub identifier: Ident,
     pub colon: Option<Colon>,
-    #[parser(function = |x, _| x)]
+    #[parser(function = |x| x)]
     pub data_type: DataType,
     pub not_null: Option<(Not, Null)>,
     pub comment: Option<(Comment, StringLiteral)>,
