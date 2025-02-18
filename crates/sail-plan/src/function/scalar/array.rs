@@ -4,6 +4,8 @@ use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position_udf;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
+use datafusion_functions_nested::range::gen_series_udf;
+use datafusion_functions_nested::string::ArrayToString;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array_min_max::{ArrayMax, ArrayMin};
@@ -72,11 +74,6 @@ fn array_prepend(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_prepend(element, array)
 }
 
-// TODO: Add in optional third argument null replacement
-fn array_join(array: expr::Expr, delimiter: expr::Expr) -> expr::Expr {
-    expr_fn::array_to_string(array, delimiter)
-}
-
 fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     let element = expr::Expr::BinaryExpr(BinaryExpr {
         left: Box::new(element),
@@ -113,7 +110,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array_except", F::binary(expr_fn::array_except)),
         ("array_insert", F::unknown("array_insert")),
         ("array_intersect", F::binary(expr_fn::array_intersect)),
-        ("array_join", F::binary(array_join)),
+        ("array_join", F::udf(ArrayToString::new())),
         ("array_max", F::udf(ArrayMax::new())),
         ("array_min", F::udf(ArrayMin::new())),
         ("array_position", F::scalar_udf(array_position_udf)),
@@ -125,7 +122,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("arrays_zip", F::unknown("arrays_zip")),
         ("flatten", F::unary(expr_fn::flatten)),
         ("get", F::binary(array_element)),
-        ("sequence", F::ternary(expr_fn::gen_series)),
+        ("sequence", F::scalar_udf(gen_series_udf)),
         ("shuffle", F::unknown("shuffle")),
         ("slice", F::ternary(slice)),
         ("sort_array", F::custom(sort_array)),
@@ -153,7 +150,7 @@ mod tests {
             Some(4),
             Some(5),
         ])]);
-        let batch = RecordBatch::try_from_iter([("l1", Arc::new(l1) as _)]).unwrap();
+        let batch = RecordBatch::try_from_iter([("l1", Arc::new(l1) as _)])?;
 
         let start = lit(2);
         let length = lit(3);
