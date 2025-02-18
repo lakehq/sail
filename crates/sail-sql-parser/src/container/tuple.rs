@@ -3,6 +3,7 @@ use chumsky::prelude::Input;
 use chumsky::Parser;
 use paste::paste;
 
+use crate::options::ParserOptions;
 use crate::tree::TreeParser;
 
 macro_rules! nested {
@@ -21,9 +22,9 @@ macro_rules! impl_tree_parser_for_tuple {
             , E: ParserExtra<'a, I>
             , A: Clone
         {
-            fn parser(args: A) -> impl Parser<'a, I, Self, E> + Clone {
-                let parser = T1::parser(args.clone())
-                    $(.then($Ts::parser(args.clone())))*;
+            fn parser(args: A, options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
+                let parser = T1::parser(args.clone(), options)
+                    $(.then($Ts::parser(args.clone(), options)))*;
                 paste! {
                     parser.map(|nested!([<$T:lower>] $([<$Ts:lower>])*)| ([<$T:lower>], $([<$Ts:lower>],)*))
                 }

@@ -3,12 +3,12 @@ use chumsky::extra::ParserExtra;
 use chumsky::input::ValueInput;
 use chumsky::label::LabelError;
 use chumsky::prelude::{any, Input};
-use chumsky::span::Span;
 use chumsky::Parser;
 
 use crate::ast::identifier::is_identifier_string;
 use crate::ast::whitespace::whitespace;
-use crate::span::{SpanContext, TokenSpan};
+use crate::options::ParserOptions;
+use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
 use crate::tree::TreeParser;
@@ -27,7 +27,7 @@ where
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
+    fn parser(_args: (), _options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
         any()
             .try_map(|t: Token, s: I::Span| match t {
                 Token::Number { value, suffix } => Ok(NumberLiteral {
@@ -55,7 +55,7 @@ where
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
+    fn parser(_args: (), _options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
         any()
             .filter(|t| matches!(t, Token::Punctuation(Punctuation::Minus)))
             .then_ignore(whitespace().repeated())
@@ -87,11 +87,11 @@ pub struct StringLiteral {
 impl<'a, I, E> TreeParser<'a, I, E> for StringLiteral
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
-    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    I::Span: Into<TokenSpan> + Clone,
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(_args: ()) -> impl Parser<'a, I, Self, E> + Clone {
+    fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
         let unicode_escape = any()
             .then_ignore(whitespace().repeated())
             .then(any())
@@ -117,8 +117,7 @@ where
             .then_ignore(whitespace().repeated())
             .then(unicode_escape.or_not())
             .try_map(
-                |(t, escape): (Token<'a>, Option<(&'a str, StringStyle)>), span: I::Span| {
-                    let options = span.context().options;
+                move |(t, escape): (Token<'a>, Option<(&'a str, StringStyle)>), span: I::Span| {
                     let escape = escape.map(|(raw, style)| style.parse(raw, options));
                     match t {
                         Token::String { raw, style } if !is_identifier_string(&style, options) => {
@@ -138,6 +137,7 @@ where
             )
             .then_ignore(whitespace().repeated())
             .labelled(TokenLabel::String)
+            .boxed()
     }
 }
 

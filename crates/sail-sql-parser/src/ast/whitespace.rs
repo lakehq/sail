@@ -1,5 +1,5 @@
 use chumsky::extra::ParserExtra;
-use chumsky::input::{Input, ValueInput};
+use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::prelude::any;
 use chumsky::Parser;
 
@@ -11,16 +11,21 @@ where
     E: ParserExtra<'a, I>,
 {
     any()
-        .filter(|t: &Token| {
-            matches!(
-                t,
-                Token::Space { .. }
-                    | Token::Tab { .. }
-                    | Token::LineFeed { .. }
-                    | Token::CarriageReturn { .. }
-                    | Token::SingleLineComment { .. }
-                    | Token::MultiLineComment { .. }
-            )
-        })
+        .filter(|token: &Token| token.is_whitespace())
         .ignored()
+}
+
+pub fn skip_whitespace<'a, I, E>(input: &mut InputRef<'a, '_, I, E>)
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    E: ParserExtra<'a, I>,
+{
+    loop {
+        match input.peek() {
+            Some(token) if token.is_whitespace() => {
+                input.skip();
+            }
+            _ => break,
+        }
+    }
 }

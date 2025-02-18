@@ -26,7 +26,7 @@ use crate::token::TokenLabel;
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Statement, Query, Expr, DataType)", label = TokenLabel::Statement)]
 pub enum Statement {
-    Query(#[parser(function = |(_, q, _, _)| q)] Query),
+    Query(#[parser(function = |(_, q, _, _), _| q)] Query),
     SetCatalog {
         set: Set,
         catalog: Catalog,
@@ -71,32 +71,32 @@ pub enum Statement {
         table: Table,
         if_not_exists: Option<(If, Not, Exists)>,
         name: ObjectName,
-        #[parser(function = |(_, _, e, t)| compose((e, t)))]
+        #[parser(function = |(_, _, e, t), o| compose((e, t), o))]
         columns: Option<ColumnDefinitionList>,
         like: Option<(Like, ObjectName)>,
         using: Option<(Using, Ident)>,
-        #[parser(function = |(_, _, _, t)| compose(t))]
+        #[parser(function = |(_, _, _, t), o| compose(t, o))]
         clauses: Vec<CreateTableClause>,
-        #[parser(function = |(_, q, _, _)| compose(q))]
+        #[parser(function = |(_, q, _, _), o| compose(q, o))]
         r#as: Option<AsQueryClause>,
     },
     ReplaceTable {
         replace: Replace,
         table: Table,
         name: ObjectName,
-        #[parser(function = |(_, _, e, t)| compose((e, t)))]
+        #[parser(function = |(_, _, e, t), o| compose((e, t), o))]
         columns: Option<ColumnDefinitionList>,
         using: Option<(Using, Ident)>,
-        #[parser(function = |(_, _, _, t)| compose(t))]
+        #[parser(function = |(_, _, _, t), o| compose(t, o))]
         clauses: Vec<CreateTableClause>,
-        #[parser(function = |(_, q, _, _)| compose(q))]
+        #[parser(function = |(_, q, _, _), o| compose(q, o))]
         r#as: Option<AsQueryClause>,
     },
     AlterTable {
         alter: Alter,
         table: Table,
         name: ObjectName,
-        #[parser(function = |(_, _, e, t)| compose((e, t)))]
+        #[parser(function = |(_, _, e, t), o| compose((e, t), o))]
         operation: AlterTableOperation,
     },
     DropTable {
@@ -139,7 +139,7 @@ pub enum Statement {
         )>,
         clauses: Vec<CreateViewClause>,
         r#as: As,
-        #[parser(function = |(_, q, _, _)| q)]
+        #[parser(function = |(_, q, _, _), _| q)]
         query: Query,
     },
     DropView {
@@ -168,7 +168,7 @@ pub enum Statement {
     Explain {
         explain: Explain,
         format: Option<ExplainFormat>,
-        #[parser(function = |(_, q, _, _)| q)]
+        #[parser(function = |(_, q, _, _), _| q)]
         query: Query,
     },
     Insert {
@@ -176,19 +176,19 @@ pub enum Statement {
         into_or_overwrite: Option<Either<Into, Overwrite>>,
         table: Option<Table>,
         name: ObjectName,
-        #[parser(function = |(_, _, e, _)| compose(e))]
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
         partition: Option<PartitionSpec>,
         columns: Option<IdentList>,
-        #[parser(function = |(_, q, _, _)| q)]
+        #[parser(function = |(_, q, _, _), _| q)]
         query: Query,
     },
     Update {
         update: Update,
         name: ObjectName,
         alias: Option<UpdateTableAlias>,
-        #[parser(function = |(_, _, e, _)| compose(e))]
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
         set: SetClause,
-        #[parser(function = |(_, _, e, _)| compose(e))]
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
         r#where: Option<WhereClause>,
     },
     Delete {
@@ -196,7 +196,7 @@ pub enum Statement {
         from: From,
         name: ObjectName,
         alias: Option<DeleteTableAlias>,
-        #[parser(function = |(_, _, e, _)| compose(e))]
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
         r#where: Option<WhereClause>,
     },
     CacheTable {
@@ -205,7 +205,7 @@ pub enum Statement {
         table: Table,
         name: ObjectName,
         options: Option<(Options, PropertyList)>,
-        #[parser(function = |(_, q, _, _)| compose(q))]
+        #[parser(function = |(_, q, _, _), o| compose(q, o))]
         r#as: Option<AsQueryClause>,
     },
     UncacheTable {
@@ -281,7 +281,7 @@ pub enum AlterDatabaseOperation {
 #[parser(dependency = "Query")]
 pub struct AsQueryClause {
     pub r#as: Option<As>,
-    #[parser(function = |q| q)]
+    #[parser(function = |q, _| q)]
     pub query: Query,
 }
 
@@ -289,7 +289,7 @@ pub struct AsQueryClause {
 #[parser(dependency = "(Expr, DataType)")]
 pub struct ColumnDefinitionList {
     pub left: LeftParenthesis,
-    #[parser(function = |(e, t)| sequence(compose((e, t)), unit()))]
+    #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
     pub columns: Sequence<ColumnDefinition, Comma>,
     pub right: RightParenthesis,
 }
@@ -298,9 +298,9 @@ pub struct ColumnDefinitionList {
 #[parser(dependency = "(Expr, DataType)")]
 pub struct ColumnDefinition {
     pub name: Ident,
-    #[parser(function = |(_, t)| t)]
+    #[parser(function = |(_, t), _| t)]
     pub data_type: DataType,
-    #[parser(function = |(e, _)| compose(e))]
+    #[parser(function = |(e, _), o| compose(e, o))]
     pub options: Vec<ColumnDefinitionOption>,
 }
 
@@ -308,13 +308,13 @@ pub struct ColumnDefinition {
 #[parser(dependency = "Expr")]
 pub enum ColumnDefinitionOption {
     NotNull(Not, Null),
-    Default(Default, #[parser(function = |e| e)] Expr),
+    Default(Default, #[parser(function = |e, _| e)] Expr),
     Generated(
         Generated,
         Always,
         As,
         LeftParenthesis,
-        #[parser(function = |e| e)] Expr,
+        #[parser(function = |e, _| e)] Expr,
         RightParenthesis,
     ),
     Comment(Comment, StringLiteral),
@@ -325,7 +325,7 @@ pub enum ColumnDefinitionOption {
 pub struct ColumnTypeDefinition {
     pub name: Ident,
     pub colon: Option<Colon>,
-    #[parser(function = |x| x)]
+    #[parser(function = |x, _| x)]
     pub data_type: DataType,
     pub not_null: Option<(Not, Null)>,
     pub comment: Option<(Comment, StringLiteral)>,
@@ -334,7 +334,7 @@ pub struct ColumnTypeDefinition {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "DataType")]
 pub enum PartitionColumn {
-    Typed(#[parser(function = |t| compose(t))] ColumnTypeDefinition),
+    Typed(#[parser(function = |t, o| compose(t, o))] ColumnTypeDefinition),
     Name(Ident),
 }
 
@@ -342,7 +342,7 @@ pub enum PartitionColumn {
 #[parser(dependency = "DataType")]
 pub struct PartitionColumnList {
     pub left: LeftParenthesis,
-    #[parser(function = |t| sequence(compose(t), unit()))]
+    #[parser(function = |t, o| sequence(compose(t, o), unit(o)))]
     pub columns: Sequence<PartitionColumn, Comma>,
     pub right: RightParenthesis,
 }
@@ -351,7 +351,7 @@ pub struct PartitionColumnList {
 #[parser(dependency = "Expr")]
 pub struct PartitionSpec {
     pub partition: Partition,
-    #[parser(function = |e| compose(e))]
+    #[parser(function = |e, o| compose(e, o))]
     pub values: PartitionValueList,
 }
 
@@ -360,7 +360,7 @@ pub struct PartitionSpec {
 pub struct PartitionValue {
     pub column: Ident,
     pub eq: Equals,
-    #[parser(function = |e| e)]
+    #[parser(function = |e, _| e)]
     pub value: Expr,
 }
 
@@ -368,7 +368,7 @@ pub struct PartitionValue {
 #[parser(dependency = "Expr")]
 pub struct PartitionValueList {
     pub left: LeftParenthesis,
-    #[parser(function = |e| sequence(compose(e), unit()))]
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
     pub values: Sequence<PartitionValue, Comma>,
     pub right: RightParenthesis,
 }
@@ -386,7 +386,7 @@ pub enum CreateTableClause {
     PartitionedBy(
         Partitioned,
         By,
-        #[parser(function = |t| compose(t))] PartitionColumnList,
+        #[parser(function = |t, o| compose(t, o))] PartitionColumnList,
     ),
     ClusteredBy(
         Clustered,
@@ -473,17 +473,17 @@ pub enum AlterTableOperation {
         name: ObjectName,
     },
     RenamePartition {
-        #[parser(function = |(e, _)| compose(e))]
+        #[parser(function = |(e, _), o| compose(e, o))]
         old: PartitionSpec,
         rename: Rename,
         to: To,
-        #[parser(function = |(e, _)| compose(e))]
+        #[parser(function = |(e, _), o| compose(e, o))]
         new: PartitionSpec,
     },
     AddColumns {
         add: Add,
         columns: Either<Column, Columns>,
-        #[parser(function = |(e, t)| compose((e, t)))]
+        #[parser(function = |(e, t), o| compose((e, t), o))]
         items: ColumnAlterationList,
     },
     DropColumns {
@@ -501,25 +501,25 @@ pub enum AlterTableOperation {
         alter: Either<Alter, Change>,
         column: Column,
         name: ObjectName,
-        #[parser(function = |(e, t)| compose((e, t)))]
+        #[parser(function = |(e, t), o| compose((e, t), o))]
         operation: AlterColumnOperation,
     },
     ReplaceColumns {
         replace: Replace,
         columns: Either<Column, Columns>,
-        #[parser(function = |(e, t)| compose((e, t)))]
+        #[parser(function = |(e, t), o| compose((e, t), o))]
         items: ColumnAlterationList,
     },
     AddPartitions {
         add: Add,
         if_not_exists: Option<(If, Not, Exists)>,
-        #[parser(function = |(e, _)| compose(e))]
+        #[parser(function = |(e, _), o| compose(e, o))]
         partitions: Vec<PartitionSpec>,
     },
     DropPartition {
         drop: Drop,
         if_exists: Option<(If, Exists)>,
-        #[parser(function = |(e, _)| compose(e))]
+        #[parser(function = |(e, _), o| compose(e, o))]
         partition: PartitionSpec,
         purge: Option<Purge>,
     },
@@ -535,14 +535,14 @@ pub enum AlterTableOperation {
         properties: PropertyKeyList,
     },
     SetFileFormat {
-        #[parser(function = |(e, _)| compose(e))]
+        #[parser(function = |(e, _), o| compose(e, o))]
         partition: Option<PartitionSpec>,
         set: Set,
         file_format: Fileformat,
         format: FileFormat,
     },
     SetLocation {
-        #[parser(function = |(e, _)| compose(e))]
+        #[parser(function = |(e, _), o| compose(e, o))]
         partition: Option<PartitionSpec>,
         set: Set,
         location: Location,
@@ -557,12 +557,12 @@ pub enum AlterTableOperation {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Expr, DataType)")]
 pub enum AlterColumnOperation {
-    Type(Type, #[parser(function = |(_, t)| t)] DataType),
+    Type(Type, #[parser(function = |(_, t), _| t)] DataType),
     Comment(Comment, StringLiteral),
     SetNotNull(Set, Not, Null),
     DropNotNull(Drop, Not, Null),
     Position(ColumnPosition),
-    SetDefault(Set, Default, #[parser(function = |(e, _)| e)] Expr),
+    SetDefault(Set, Default, #[parser(function = |(e, _), _| e)] Expr),
     DropDefault(Drop, Default),
 }
 
@@ -571,12 +571,12 @@ pub enum AlterColumnOperation {
 pub enum ColumnAlterationList {
     Delimited {
         left: LeftParenthesis,
-        #[parser(function = |(e, t)| sequence(compose((e, t)), unit()))]
+        #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
         columns: Sequence<ColumnAlteration, Comma>,
         right: RightParenthesis,
     },
     NotDelimited {
-        #[parser(function = |(e, t)| sequence(compose((e, t)), unit()))]
+        #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
         columns: Sequence<ColumnAlteration, Comma>,
     },
 }
@@ -585,9 +585,9 @@ pub enum ColumnAlterationList {
 #[parser(dependency = "(Expr, DataType)")]
 pub struct ColumnAlteration {
     pub name: ObjectName,
-    #[parser(function = |(_, t)| t)]
+    #[parser(function = |(_, t), _| t)]
     pub data_type: DataType,
-    #[parser(function = |(e, _)| compose(e))]
+    #[parser(function = |(e, _), o| compose(e, o))]
     pub options: Vec<ColumnAlterationOption>,
 }
 
@@ -595,7 +595,7 @@ pub struct ColumnAlteration {
 #[parser(dependency = "Expr")]
 pub enum ColumnAlterationOption {
     NotNull(Not, Null),
-    Default(Default, #[parser(function = |e| e)] Expr),
+    Default(Default, #[parser(function = |e, _| e)] Expr),
     Comment(Comment, StringLiteral),
     Position(ColumnPosition),
 }
@@ -622,7 +622,7 @@ pub enum ColumnDropList {
 #[derive(Debug, Clone, TreeParser)]
 pub struct UpdateTableAlias {
     r#as: Option<As>,
-    #[parser(function = |()| unit().and_is(choice((Where::parser(()).ignored(), Set::parser(()).ignored())).not()))]
+    #[parser(function = |(), o| unit(o).and_is(choice((Where::parser((), o).ignored(), Set::parser((), o).ignored())).not()))]
     table: Ident,
     columns: Option<IdentList>,
 }
@@ -631,7 +631,7 @@ pub struct UpdateTableAlias {
 #[parser(dependency = "Expr")]
 pub struct SetClause {
     pub set: Set,
-    #[parser(function = |e| compose(e))]
+    #[parser(function = |e, o| compose(e, o))]
     pub assignments: AssignmentList,
 }
 
@@ -640,12 +640,12 @@ pub struct SetClause {
 pub enum AssignmentList {
     Delimited {
         left: LeftParenthesis,
-        #[parser(function = |a| sequence(compose(a), unit()))]
+        #[parser(function = |a, o| sequence(compose(a, o), unit(o)))]
         assignments: Sequence<Assignment, Comma>,
         right: RightParenthesis,
     },
     NotDelimited {
-        #[parser(function = |a| sequence(compose(a), unit()))]
+        #[parser(function = |a, o| sequence(compose(a, o), unit(o)))]
         assignments: Sequence<Assignment, Comma>,
     },
 }
@@ -655,7 +655,7 @@ pub enum AssignmentList {
 pub struct Assignment {
     pub target: ObjectName,
     pub equals: Equals,
-    #[parser(function = |e| e)]
+    #[parser(function = |e, _| e)]
     pub value: Expr,
 }
 
@@ -663,7 +663,7 @@ pub struct Assignment {
 #[derive(Debug, Clone, TreeParser)]
 pub struct DeleteTableAlias {
     r#as: Option<As>,
-    #[parser(function = |()| unit().and_is(Where::parser(()).not()))]
+    #[parser(function = |(), o| unit(o).and_is(Where::parser((), o).not()))]
     table: Ident,
     columns: Option<IdentList>,
 }

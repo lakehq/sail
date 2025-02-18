@@ -2,6 +2,7 @@ use chumsky::extra::ParserExtra;
 use chumsky::prelude::Input;
 use chumsky::Parser;
 
+use crate::options::ParserOptions;
 use crate::tree::TreeParser;
 
 impl<'a, T, I, E, A> TreeParser<'a, I, E, A> for Option<T>
@@ -10,7 +11,7 @@ where
     I: Input<'a>,
     E: ParserExtra<'a, I>,
 {
-    fn parser(args: A) -> impl Parser<'a, I, Self, E> + Clone {
-        T::parser(args).or_not()
+    fn parser(args: A, options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
+        T::parser(args, options).or_not()
     }
 }

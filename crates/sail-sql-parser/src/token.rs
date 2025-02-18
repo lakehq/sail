@@ -38,6 +38,20 @@ pub enum Token<'a> {
     Punctuation(Punctuation),
 }
 
+impl Token<'_> {
+    pub fn is_whitespace(&self) -> bool {
+        matches!(
+            self,
+            Token::Space { .. }
+                | Token::Tab { .. }
+                | Token::LineFeed { .. }
+                | Token::CarriageReturn { .. }
+                | Token::SingleLineComment { .. }
+                | Token::MultiLineComment { .. }
+        )
+    }
+}
+
 impl Display for Token<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {

@@ -13,7 +13,6 @@ use sail_sql_parser::parser::{
     create_named_expression_parser, create_object_name_parser, create_parser,
     create_qualified_wildcard_parser,
 };
-use sail_sql_parser::span::SpanContext;
 use sail_sql_parser::token::TokenLabel;
 
 use crate::error::{SqlError, SqlResult};
@@ -29,11 +28,9 @@ macro_rules! parse {
             .parse($input)
             .into_result()
             .map_err(SqlError::parser)?;
-        let tokens = tokens
-            .as_slice()
-            .spanned(SimpleSpan::new(length, length))
-            .with_context::<SimpleSpan<usize, SpanContext>>(SpanContext { options: &options });
-        let parser = $parser::<_, chumsky::extra::Err<chumsky::error::Rich<_, _, TokenLabel>>>();
+        let tokens = tokens.as_slice().spanned(SimpleSpan::new(length, length));
+        let parser =
+            $parser::<_, chumsky::extra::Err<chumsky::error::Rich<_, _, TokenLabel>>>(&options);
         parser.parse(tokens).into_result().map_err(SqlError::parser)
     }};
 }

@@ -1,7 +1,5 @@
 use chumsky::prelude::SimpleSpan;
 
-use crate::options::ParserOptions;
-
 /// A span in the source code.
 /// The offsets are measured in the number of characters from the beginning of the input,
 /// starting from 0.
@@ -47,9 +45,4 @@ impl<C> From<SimpleSpan<usize, C>> for TokenSpan {
             end: span.end,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct SpanContext<'a> {
-    pub options: &'a ParserOptions,
 }

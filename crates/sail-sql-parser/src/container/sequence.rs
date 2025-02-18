@@ -4,6 +4,7 @@ use chumsky::Parser;
 
 use crate::combinator::sequence;
 use crate::common::Sequence;
+use crate::options::ParserOptions;
 use crate::tree::TreeParser;
 
 impl<'a, T, S, I, E, A> TreeParser<'a, I, E, A> for Sequence<T, S>
@@ -14,7 +15,7 @@ where
     E: ParserExtra<'a, I>,
     A: Clone,
 {
-    fn parser(args: A) -> impl Parser<'a, I, Self, E> + Clone {
-        sequence(T::parser(args.clone()), S::parser(args))
+    fn parser(args: A, options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
+        sequence(T::parser(args.clone(), options), S::parser(args, options))
     }
 }

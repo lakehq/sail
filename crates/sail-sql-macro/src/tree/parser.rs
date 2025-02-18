@@ -27,6 +27,10 @@ impl AttributeArgument {
 /// must be less than that.
 const MAX_CHOICES: usize = 20;
 
+/// The minimum number of variants in an enum to use a boxed parser.
+/// The boxed parser can reduce compile times for large enum parsers.
+const BOXED_ENUM_MIN_VARIANTS: usize = 5;
+
 enum ParserDependency {
     None,
     One(Type),
@@ -79,9 +83,9 @@ fn derive_fields_inner<'a>(
                 .unwrap_or_else(|| format_ident!("v{}", i));
             let field_type = &field.ty;
             let field_parser = if let Some(function) = field_function {
-                quote! { { let f = #function; f(args.clone()) } }
+                quote! { { let f = #function; f(args.clone(), options) } }
             } else {
-                quote! { <#field_type>::parser(()) }
+                quote! { <#field_type>::parser((), options) }
             };
             match acc {
                 Some(ParseFields {
@@ -120,8 +124,9 @@ fn derive_fields(
                 args,
                 initializer,
             } = derive_fields_inner(spanned, &fields.named)?;
+            // Use boxed parser for structs or enum variants with named fields.
             Ok(quote! {
-                #parser.map(|#args| #name { #initializer })
+                #parser.map(|#args| #name { #initializer }).boxed()
             })
         }
         Fields::Unnamed(fields) => {
@@ -185,7 +190,13 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
                 .iter()
                 .map(|variant| derive_enum_variant(name, variant))
                 .collect::<syn::Result<Vec<_>>>()?;
-            derive_choices(choices)
+            let n = choices.len();
+            let parser = derive_choices(choices);
+            if n < BOXED_ENUM_MIN_VARIANTS {
+                quote! { #parser }
+            } else {
+                quote! { #parser.boxed() }
+            }
         }
         Data::Struct(data) => derive_struct(name, &data.fields)?,
         _ => {
@@ -203,13 +214,6 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
         let label = extractor.extract_argument_value(AttributeArgument::LABEL, Ok)?;
         extractor.expect_empty()?;
         (dependency, label)
-    };
-    // Use boxed parser to reduce compile times for large parsers.
-    // There may be a better heuristic to detect large parsers,
-    // but for now we consider the parser "large" if it has a dependency.
-    let parser = match dependency {
-        ParserDependency::None => parser,
-        _ => quote! { #parser.boxed() },
     };
     let parser = match label {
         Some(label) => quote! { #parser.labelled(#label) },
@@ -248,14 +252,15 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
         where
             I: chumsky::input::Input<'a, Token = crate::token::Token<'a>>
                 + chumsky::input::ValueInput<'a>,
-            I::Span: chumsky::span::Span<Context = crate::span::SpanContext<'a>>
-                + std::convert::Into<crate::span::TokenSpan>
-                + Clone,
+            I::Span: std::convert::Into<crate::span::TokenSpan> + Clone,
             E: chumsky::extra::ParserExtra<'a, I>,
             E::Error: chumsky::label::LabelError<'a, I, crate::token::TokenLabel>,
             #args_bounds
         {
-            fn parser(args: #args_type) -> impl chumsky::Parser<'a, I, Self, E> + Clone {
+            fn parser(
+                args: #args_type,
+                options: &'a crate::options::ParserOptions
+            ) -> impl chumsky::Parser<'a, I, Self, E> + Clone {
                 use chumsky::Parser;
 
                 #parser
