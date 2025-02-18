@@ -1,8 +1,6 @@
-use chumsky::input::{SpannedInput, WithContext};
 use chumsky::prelude::SimpleSpan;
 
 use crate::options::ParserOptions;
-use crate::token::{Token, TokenLabel};
 
 /// A span in the source code.
 /// The offsets are measured in the number of characters from the beginning of the input,
@@ -52,15 +50,6 @@ impl<C> From<SimpleSpan<usize, C>> for TokenSpan {
 }
 
 #[derive(Debug, Clone)]
-pub struct TokenContext<'a> {
+pub struct SpanContext<'a> {
     pub options: &'a ParserOptions,
 }
-
-pub type TokenInputSpan<'a> = SimpleSpan<usize, TokenContext<'a>>;
-pub type TokenInput<'a> = WithContext<
-    TokenInputSpan<'a>,
-    SpannedInput<Token<'a>, SimpleSpan<usize, ()>, &'a [(Token<'a>, SimpleSpan<usize, ()>)]>,
->;
-
-pub type TokenParserExtra<'a> =
-    chumsky::extra::Err<chumsky::error::Rich<'a, Token<'a>, TokenInputSpan<'a>, TokenLabel>>;

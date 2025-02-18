@@ -1,4 +1,8 @@
+use chumsky::extra::ParserExtra;
+use chumsky::input::{Input, ValueInput};
+use chumsky::label::LabelError;
 use chumsky::prelude::{end, Recursive};
+use chumsky::span::Span;
 use chumsky::{IterParser, Parser};
 
 use crate::ast::data_type::DataType;
@@ -8,10 +12,17 @@ use crate::ast::operator::Semicolon;
 use crate::ast::query::{NamedExpr, Query};
 use crate::ast::statement::Statement;
 use crate::ast::whitespace::whitespace;
-use crate::span::{TokenInput, TokenParserExtra};
+use crate::span::{SpanContext, TokenSpan};
+use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
 
-fn statement<'a>() -> impl Parser<'a, TokenInput<'a>, Statement, TokenParserExtra<'a>> + Clone {
+fn statement<'a, I, E>() -> impl Parser<'a, I, Statement, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
     let mut statement = Recursive::declare();
     let mut query = Recursive::declare();
     let mut expression = Recursive::declare();
@@ -38,22 +49,45 @@ fn statement<'a>() -> impl Parser<'a, TokenInput<'a>, Statement, TokenParserExtr
     statement
 }
 
-fn data_type<'a>() -> impl Parser<'a, TokenInput<'a>, DataType, TokenParserExtra<'a>> + Clone {
+fn data_type<'a, I, E>() -> impl Parser<'a, I, DataType, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
     let mut data_type = Recursive::declare();
     data_type.define(DataType::parser(data_type.clone()));
     data_type
 }
 
-fn object_name<'a>() -> impl Parser<'a, TokenInput<'a>, ObjectName, TokenParserExtra<'a>> + Clone {
+fn object_name<'a, I, E>() -> impl Parser<'a, I, ObjectName, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
     ObjectName::parser(())
 }
 
-fn qualified_wildcard<'a>(
-) -> impl Parser<'a, TokenInput<'a>, QualifiedWildcard, TokenParserExtra<'a>> + Clone {
+fn qualified_wildcard<'a, I, E>() -> impl Parser<'a, I, QualifiedWildcard, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
     QualifiedWildcard::parser(())
 }
 
-fn expression<'a>() -> impl Parser<'a, TokenInput<'a>, Expr, TokenParserExtra<'a>> + Clone {
+fn expression<'a, I, E>() -> impl Parser<'a, I, Expr, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
     let mut expression = Recursive::declare();
     let mut query = Recursive::declare();
     let mut data_type = Recursive::declare();
@@ -73,18 +107,33 @@ fn expression<'a>() -> impl Parser<'a, TokenInput<'a>, Expr, TokenParserExtra<'a
     expression
 }
 
-fn named_expression<'a>() -> impl Parser<'a, TokenInput<'a>, NamedExpr, TokenParserExtra<'a>> + Clone
+fn named_expression<'a, I, E>() -> impl Parser<'a, I, NamedExpr, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     NamedExpr::parser(expression())
 }
 
-fn interval_literal<'a>(
-) -> impl Parser<'a, TokenInput<'a>, IntervalLiteral, TokenParserExtra<'a>> + Clone {
+fn interval_literal<'a, I, E>() -> impl Parser<'a, I, IntervalLiteral, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
     IntervalLiteral::parser(expression())
 }
 
-pub fn create_parser<'a>(
-) -> impl Parser<'a, TokenInput<'a>, Vec<Statement>, TokenParserExtra<'a>> + Clone {
+pub fn create_parser<'a, I, E>() -> impl Parser<'a, I, Vec<Statement>, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
     statement()
         .padded_by(whitespace().or(Semicolon::parser(()).ignored()).repeated())
         .repeated()
@@ -94,7 +143,13 @@ pub fn create_parser<'a>(
 
 macro_rules! define_sub_parser {
     ($name:ident, $type:ty, $parse:ident $(,)?) => {
-        pub fn $name<'a>() -> impl Parser<'a, TokenInput<'a>, $type, TokenParserExtra<'a>> + Clone {
+        pub fn $name<'a, I, E>() -> impl Parser<'a, I, $type, E> + Clone
+        where
+            I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+            I::Span: Span<Context = SpanContext<'a>> + Into<TokenSpan> + Clone,
+            E: ParserExtra<'a, I>,
+            E::Error: LabelError<'a, I, TokenLabel>,
+        {
             $parse()
                 .padded_by(whitespace().repeated())
                 .then_ignore(end())

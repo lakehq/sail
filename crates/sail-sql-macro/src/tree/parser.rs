@@ -217,9 +217,9 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
     };
     let (generics, args_type, args_bounds) = match dependency {
         ParserDependency::One(t) => (
+            quote! { I, E, P },
             quote! { P },
-            quote! { P },
-            quote! { P: chumsky::Parser<'a, crate::span::TokenInput<'a>, #t, crate::span::TokenParserExtra<'a>> + Clone + 'a },
+            quote! { P: chumsky::Parser<'a, I, #t, E> + Clone + 'a },
         ),
         ParserDependency::Tuple(t) => {
             let params = (0..t.len())
@@ -229,30 +229,33 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
                 .iter()
                 .zip(params.iter())
                 .map(|(t, p)| {
-                    quote! { #p: chumsky::Parser<'a, crate::span::TokenInput<'a>, #t, crate::span::TokenParserExtra<'a>> + Clone + 'a }
+                    quote! { #p: chumsky::Parser<'a, I, #t, E> + Clone + 'a }
                 })
                 .collect::<Vec<_>>();
             (
-                quote! { #(#params),* },
+                quote! { I, E, #(#params),* },
                 quote! { (#(#params),*,) },
                 quote! { #(#bounds),* },
             )
         }
-        ParserDependency::None => (quote! {}, quote! { () }, quote! {}),
+        ParserDependency::None => (quote! { I, E }, quote! { () }, quote! {}),
     };
 
     let trait_name = format_ident!("{TRAIT}");
-    let where_clause = if args_bounds.is_empty() {
-        quote! {}
-    } else {
-        quote! { where #args_bounds }
-    };
 
     Ok(quote! {
-        impl <'a, #generics> crate::tree::#trait_name <'a, crate::span::TokenInput<'a>, crate::span::TokenParserExtra<'a>, #args_type> for #name
-        #where_clause
+        impl <'a, #generics> crate::tree::#trait_name <'a, I, E, #args_type> for #name
+        where
+            I: chumsky::input::Input<'a, Token = crate::token::Token<'a>>
+                + chumsky::input::ValueInput<'a>,
+            I::Span: chumsky::span::Span<Context = crate::span::SpanContext<'a>>
+                + std::convert::Into<crate::span::TokenSpan>
+                + Clone,
+            E: chumsky::extra::ParserExtra<'a, I>,
+            E::Error: chumsky::label::LabelError<'a, I, crate::token::TokenLabel>,
+            #args_bounds
         {
-            fn parser(args: #args_type) -> impl chumsky::Parser<'a, crate::span::TokenInput<'a>, Self, crate::span::TokenParserExtra<'a>> + Clone {
+            fn parser(args: #args_type) -> impl chumsky::Parser<'a, I, Self, E> + Clone {
                 use chumsky::Parser;
 
                 #parser
