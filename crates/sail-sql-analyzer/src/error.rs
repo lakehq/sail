@@ -1,6 +1,8 @@
 use std::fmt;
 
+use chumsky::span::SimpleSpan;
 use sail_common::error::CommonError;
+use sail_sql_parser::token::TokenLabel;
 use thiserror::Error;
 
 pub type SqlResult<T> = Result<T, SqlError>;
@@ -38,9 +40,9 @@ impl SqlError {
         SqlError::InvalidArgument(message.into())
     }
 
-    pub fn parser<E>(errors: Vec<E>) -> Self
+    pub fn parser<T>(errors: Vec<chumsky::error::Rich<'_, T, SimpleSpan, TokenLabel>>) -> Self
     where
-        E: fmt::Display,
+        T: fmt::Display,
     {
         SqlError::SqlParserError(
             errors

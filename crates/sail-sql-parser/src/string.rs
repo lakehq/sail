@@ -294,15 +294,17 @@ pub enum StringValue {
 }
 
 impl StringValue {
-    pub fn valid(value: String) -> Self {
+    pub fn valid(value: impl Into<String>) -> Self {
         StringValue::Valid {
-            value,
+            value: value.into(),
             prefix: None,
         }
     }
 
-    pub fn invalid(reason: String) -> Self {
-        StringValue::Invalid { reason }
+    pub fn invalid(reason: impl Into<String>) -> Self {
+        StringValue::Invalid {
+            reason: reason.into(),
+        }
     }
 
     pub fn with_prefix(self, prefix: Option<char>) -> Self {

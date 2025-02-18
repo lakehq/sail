@@ -1,47 +1,43 @@
-use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::custom;
 use chumsky::Parser;
 
-use crate::ast::whitespace::skip_whitespace;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Punctuation, Token, TokenLabel};
 use crate::tree::TreeParser;
+use crate::utils::{labelled_error, skip_whitespace};
 
-fn parse<'a, I, E>(
+fn parse_operator<'a, I, E>(
+    input: &mut InputRef<'a, '_, I, E>,
     punctuations: &'static [Punctuation],
-) -> impl (Fn(&mut InputRef<'a, '_, I, E>) -> Result<TokenSpan, E::Error>) + Clone
+) -> Result<TokenSpan, E::Error>
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan>,
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    move |input| {
-        let before = input.offset();
-        for punctuation in punctuations {
-            match input.next() {
-                Some(Token::Punctuation(p)) if p == *punctuation => {
-                    continue;
-                }
-                x => {
-                    let mut e = E::Error::expected_found(
-                        vec![],
-                        x.map(From::from),
-                        input.span_since(before),
-                    );
-                    e.label_with(TokenLabel::Operator(punctuations));
-                    return Err(e);
-                }
+    let before = input.offset();
+    for punctuation in punctuations {
+        match input.next() {
+            Some(Token::Punctuation(p)) if p == *punctuation => {
+                continue;
+            }
+            x => {
+                return Err(labelled_error::<I, E>(
+                    x,
+                    input.span_since(before),
+                    TokenLabel::Operator(punctuations),
+                ));
             }
         }
-        let span = input.span_since(before).into();
-        skip_whitespace(input);
-        Ok(span)
     }
+    let span = input.span_since(before).into();
+    skip_whitespace(input);
+    Ok(span)
 }
 
 macro_rules! define_operator {
@@ -72,8 +68,7 @@ macro_rules! define_operator {
                 _args: (),
                 _options: &'a ParserOptions
             ) -> impl Parser<'a, I, Self, E> + Clone {
-                let f = parse(Self::punctuations());
-                custom(move |input| f(input).map(Self::new))
+                custom(move |input| parse_operator(input, Self::punctuations()).map(Self::new))
             }
         }
     };

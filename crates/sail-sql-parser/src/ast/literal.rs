@@ -1,17 +1,16 @@
-use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
-use chumsky::input::ValueInput;
+use chumsky::input::{InputRef, ValueInput};
 use chumsky::label::LabelError;
-use chumsky::prelude::{any, Input};
+use chumsky::prelude::{custom, Input};
 use chumsky::Parser;
 
 use crate::ast::identifier::is_identifier_string;
-use crate::ast::whitespace::whitespace;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
 use crate::tree::TreeParser;
+use crate::utils::{labelled_error, skip_whitespace};
 
 #[derive(Debug, Clone)]
 pub struct NumberLiteral {
@@ -28,17 +27,24 @@ where
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), _options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
-        any()
-            .try_map(|t: Token, s: I::Span| match t {
-                Token::Number { value, suffix } => Ok(NumberLiteral {
-                    span: s.into(),
+        custom(|input: &mut InputRef<'a, '_, I, E>| {
+            let before = input.offset();
+            let token = input.next();
+            if let Some(Token::Number { value, suffix }) = token {
+                let node = NumberLiteral {
+                    span: input.span_since(before).into(),
                     value: value.to_string(),
                     suffix: suffix.to_string(),
-                }),
-                _ => Err(Error::expected_found(vec![], Some(t.into()), s)),
-            })
-            .then_ignore(whitespace().repeated())
-            .labelled(TokenLabel::Number)
+                };
+                skip_whitespace(input);
+                return Ok(node);
+            }
+            Err(labelled_error::<I, E>(
+                token,
+                input.span_since(before),
+                TokenLabel::Number,
+            ))
+        })
     }
 }
 
@@ -56,25 +62,36 @@ where
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), _options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
-        any()
-            .filter(|t| matches!(t, Token::Punctuation(Punctuation::Minus)))
-            .then_ignore(whitespace().repeated())
-            .or_not()
-            .then(any())
-            .try_map(|(negative, token), span: I::Span| {
-                if let Token::Number { value, suffix: "" } = token {
-                    let value = format!("{}{}", negative.map_or("", |_| "-"), value);
-                    if let Ok(value) = value.parse() {
-                        return Ok(IntegerLiteral {
-                            span: span.into(),
-                            value,
-                        });
-                    }
-                };
-                Err(Error::expected_found(vec![], Some(From::from(token)), span))
-            })
-            .then_ignore(whitespace().repeated())
-            .labelled(TokenLabel::Integer)
+        custom(|input: &mut InputRef<'a, '_, I, E>| {
+            let marker = input.save();
+            let negative = match input.next() {
+                Some(Token::Punctuation(Punctuation::Minus)) => {
+                    skip_whitespace(input);
+                    true
+                }
+                _ => {
+                    input.rewind(marker);
+                    false
+                }
+            };
+            let token = input.next();
+            if let Some(Token::Number { value, suffix: "" }) = &token {
+                let value = format!("{}{}", if negative { "-" } else { "" }, value);
+                if let Ok(value) = value.parse() {
+                    let node = IntegerLiteral {
+                        span: input.span_since(marker.offset()).into(),
+                        value,
+                    };
+                    skip_whitespace(input);
+                    return Ok(node);
+                }
+            }
+            Err(labelled_error::<I, E>(
+                token,
+                input.span_since(marker.offset()),
+                TokenLabel::Integer,
+            ))
+        })
     }
 }
 
@@ -82,6 +99,40 @@ where
 pub struct StringLiteral {
     pub span: TokenSpan,
     pub value: StringValue,
+}
+
+fn parse_unicode_escape<'a, I, E>(
+    input: &mut InputRef<'a, '_, I, E>,
+    options: &ParserOptions,
+) -> Option<StringValue>
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    E: ParserExtra<'a, I>,
+{
+    let marker = input.save();
+    if let Some(Token::Word {
+        keyword: Some(Keyword::Uescape),
+        ..
+    }) = input.next()
+    {
+        skip_whitespace(input);
+    } else {
+        input.rewind(marker);
+        return None;
+    };
+
+    let marker = input.save();
+    if let Some(Token::String {
+        raw,
+        style: style @ StringStyle::SingleQuoted { prefix: None },
+    }) = input.next()
+    {
+        skip_whitespace(input);
+        Some(style.parse(raw, options))
+    } else {
+        input.rewind(marker);
+        Some(StringValue::invalid("missing Unicode escape character"))
+    }
 }
 
 impl<'a, I, E> TreeParser<'a, I, E> for StringLiteral
@@ -92,52 +143,31 @@ where
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
-        let unicode_escape = any()
-            .then_ignore(whitespace().repeated())
-            .then(any())
-            .try_map(|(u, t): (Token<'a>, Token<'a>), span: I::Span| {
-                #[allow(clippy::single_match)]
-                match (u, &t) {
-                    (
-                        Token::Word {
-                            keyword: Some(Keyword::Uescape),
-                            ..
-                        },
-                        Token::String {
-                            raw,
-                            style: style @ StringStyle::SingleQuoted { prefix: None },
-                        },
-                    ) => return Ok((*raw, style.clone())),
-                    _ => {}
+        custom(move |input: &mut InputRef<'a, '_, I, E>| {
+            let before = input.offset();
+            let token = input.next();
+            match &token {
+                Some(Token::String { raw, style }) if !is_identifier_string(style, options) => {
+                    let escape = parse_unicode_escape(input, options);
+                    let value = match override_string_style(style.clone(), escape) {
+                        Ok(style) => style.parse(raw, options),
+                        Err(e) => StringValue::Invalid { reason: e },
+                    };
+                    let node = StringLiteral {
+                        span: input.span_since(before).into(),
+                        value,
+                    };
+                    skip_whitespace(input);
+                    return Ok(node);
                 }
-                Err(Error::expected_found(vec![], Some(t.into()), span))
-            });
-
-        any()
-            .then_ignore(whitespace().repeated())
-            .then(unicode_escape.or_not())
-            .try_map(
-                move |(t, escape): (Token<'a>, Option<(&'a str, StringStyle)>), span: I::Span| {
-                    let escape = escape.map(|(raw, style)| style.parse(raw, options));
-                    match t {
-                        Token::String { raw, style } if !is_identifier_string(&style, options) => {
-                            let value = match override_string_style(style, escape) {
-                                Ok(style) => style.parse(raw, options),
-                                Err(e) => StringValue::Invalid { reason: e },
-                            };
-                            return Ok(StringLiteral {
-                                span: span.into(),
-                                value,
-                            });
-                        }
-                        _ => {}
-                    }
-                    Err(Error::expected_found(vec![], Some(t.into()), span))
-                },
-            )
-            .then_ignore(whitespace().repeated())
-            .labelled(TokenLabel::String)
-            .boxed()
+                _ => {}
+            }
+            Err(labelled_error::<I, E>(
+                token,
+                input.span_since(before),
+                TokenLabel::String,
+            ))
+        })
     }
 }
 

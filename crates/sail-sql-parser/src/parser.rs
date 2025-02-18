@@ -10,11 +10,11 @@ use crate::ast::identifier::{ObjectName, QualifiedWildcard};
 use crate::ast::operator::Semicolon;
 use crate::ast::query::{NamedExpr, Query};
 use crate::ast::statement::Statement;
-use crate::ast::whitespace::whitespace;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
+use crate::utils::whitespace;
 
 fn statement<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, Statement, E> + Clone
 where
