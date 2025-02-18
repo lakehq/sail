@@ -13,6 +13,8 @@ pub mod lexer;
 pub mod location;
 pub mod options;
 pub mod parser;
+pub mod span;
 pub mod string;
 pub mod token;
 pub mod tree;
+mod utils;

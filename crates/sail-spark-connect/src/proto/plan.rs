@@ -1,5 +1,7 @@
 use sail_common::spec;
+use sail_sql_analyzer::expression::{from_ast_expression, from_ast_object_name};
 use sail_sql_analyzer::parser::{parse_expression, parse_object_name, parse_one_statement};
+use sail_sql_analyzer::statement::from_ast_statement;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
@@ -143,7 +145,9 @@ impl TryFrom<RelType> for RelationNode {
                             options,
                         } = x;
                         spec::ReadType::NamedTable(spec::ReadNamedTable {
-                            name: parse_object_name(unparsed_identifier.as_str())?,
+                            name: from_ast_object_name(parse_object_name(
+                                unparsed_identifier.as_str(),
+                            )?)?,
                             options: options.into_iter().collect(),
                         })
                     }
@@ -161,7 +165,7 @@ impl TryFrom<RelType> for RelationNode {
                             .map(|dt| dt.into_schema(DEFAULT_FIELD_NAME, true));
                         let predicates = predicates
                             .into_iter()
-                            .map(|x| Ok(parse_expression(x.as_str())?))
+                            .map(|x| Ok(from_ast_expression(parse_expression(x.as_str())?)?))
                             .collect::<SparkResult<Vec<_>>>()?;
                         spec::ReadType::DataSource(spec::ReadDataSource {
                             format,
@@ -395,7 +399,7 @@ impl TryFrom<RelType> for RelationNode {
                     args,
                     pos_args,
                 } = sql;
-                match parse_one_statement(query.as_str())? {
+                match from_ast_statement(parse_one_statement(query.as_str())?)? {
                     spec::Plan::Query(input) => {
                         let positional_arguments = pos_args
                             .into_iter()
@@ -1127,14 +1131,18 @@ impl TryFrom<Catalog> for spec::CommandNode {
             CatType::ListTables(x) => {
                 let sc::ListTables { db_name, pattern } = x;
                 Ok(spec::CommandNode::ListTables {
-                    database: db_name.map(|x| parse_object_name(x.as_str())).transpose()?,
+                    database: db_name
+                        .map(|x| from_ast_object_name(parse_object_name(x.as_str())?))
+                        .transpose()?,
                     table_pattern: pattern,
                 })
             }
             CatType::ListFunctions(x) => {
                 let sc::ListFunctions { db_name, pattern } = x;
                 Ok(spec::CommandNode::ListFunctions {
-                    database: db_name.map(|x| parse_object_name(x.as_str())).transpose()?,
+                    database: db_name
+                        .map(|x| from_ast_object_name(parse_object_name(x.as_str())?))
+                        .transpose()?,
                     function_pattern: pattern,
                 })
             }
@@ -1144,15 +1152,16 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
-                    None => parse_object_name(table_name.as_str())?,
+                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
+                        .child(table_name.into()),
+                    None => from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::ListColumns { table })
             }
             CatType::GetDatabase(x) => {
                 let sc::GetDatabase { db_name } = x;
                 Ok(spec::CommandNode::GetDatabase {
-                    database: parse_object_name(db_name.as_str())?,
+                    database: from_ast_object_name(parse_object_name(db_name.as_str())?)?,
                 })
             }
             CatType::GetTable(x) => {
@@ -1161,8 +1170,9 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
-                    None => parse_object_name(table_name.as_str())?,
+                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
+                        .child(table_name.into()),
+                    None => from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::GetTable { table })
             }
@@ -1172,7 +1182,8 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let function = match db_name {
-                    Some(x) => parse_object_name(x.as_str())?.child(function_name.into()),
+                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
+                        .child(function_name.into()),
                     None => spec::ObjectName::new_unqualified(function_name.into()),
                 };
                 Ok(spec::CommandNode::GetFunction { function })
@@ -1180,7 +1191,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
             CatType::DatabaseExists(x) => {
                 let sc::DatabaseExists { db_name } = x;
                 Ok(spec::CommandNode::DatabaseExists {
-                    database: parse_object_name(db_name.as_str())?,
+                    database: from_ast_object_name(parse_object_name(db_name.as_str())?)?,
                 })
             }
             CatType::TableExists(x) => {
@@ -1189,8 +1200,9 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => parse_object_name(x.as_str())?.child(table_name.into()),
-                    None => parse_object_name(table_name.as_str())?,
+                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
+                        .child(table_name.into()),
+                    None => from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::TableExists { table })
             }
@@ -1200,7 +1212,8 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let function = match db_name {
-                    Some(x) => parse_object_name(x.as_str())?.child(function_name.into()),
+                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
+                        .child(function_name.into()),
                     None => spec::ObjectName::new_unqualified(function_name.into()),
                 };
                 Ok(spec::CommandNode::FunctionExists { function })
@@ -1217,7 +1230,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
                 Ok(spec::CommandNode::CreateTable {
-                    table: parse_object_name(table_name.as_str())?,
+                    table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
                         schema,
                         comment: None,
@@ -1250,7 +1263,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
                 Ok(spec::CommandNode::CreateTable {
-                    table: parse_object_name(table_name.as_str())?,
+                    table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
                         schema,
                         comment: description,
@@ -1273,7 +1286,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
             CatType::DropTempView(x) => {
                 let sc::DropTempView { view_name } = x;
                 Ok(spec::CommandNode::DropView {
-                    view: parse_object_name(view_name.as_str())?,
+                    view: from_ast_object_name(parse_object_name(view_name.as_str())?)?,
                     kind: Some(spec::ViewKind::Temporary),
                     if_exists: true,
                 })
@@ -1281,7 +1294,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
             CatType::DropGlobalTempView(x) => {
                 let sc::DropGlobalTempView { view_name } = x;
                 Ok(spec::CommandNode::DropView {
-                    view: parse_object_name(view_name.as_str())?,
+                    view: from_ast_object_name(parse_object_name(view_name.as_str())?)?,
                     kind: Some(spec::ViewKind::GlobalTemporary),
                     if_exists: true,
                 })
@@ -1289,13 +1302,13 @@ impl TryFrom<Catalog> for spec::CommandNode {
             CatType::RecoverPartitions(x) => {
                 let sc::RecoverPartitions { table_name } = x;
                 Ok(spec::CommandNode::RecoverPartitions {
-                    table: parse_object_name(table_name.as_str())?,
+                    table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 })
             }
             CatType::IsCached(x) => {
                 let sc::IsCached { table_name } = x;
                 Ok(spec::CommandNode::IsCached {
-                    table: parse_object_name(table_name.as_str())?,
+                    table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 })
             }
             CatType::CacheTable(x) => {
@@ -1306,14 +1319,14 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 let storage_level: Option<spec::StorageLevel> =
                     storage_level.map(|s| s.try_into()).transpose()?;
                 Ok(spec::CommandNode::CacheTable {
-                    table: parse_object_name(table_name.as_str())?,
+                    table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     storage_level,
                 })
             }
             CatType::UncacheTable(x) => {
                 let sc::UncacheTable { table_name } = x;
                 Ok(spec::CommandNode::UncacheTable {
-                    table: parse_object_name(table_name.as_str())?,
+                    table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 })
             }
             CatType::ClearCache(x) => {
@@ -1323,7 +1336,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
             CatType::RefreshTable(x) => {
                 let sc::RefreshTable { table_name } = x;
                 Ok(spec::CommandNode::RefreshTable {
-                    table: parse_object_name(table_name.as_str())?,
+                    table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 })
             }
             CatType::RefreshByPath(x) => {
@@ -1401,7 +1414,7 @@ impl TryFrom<WriteOperation> for spec::Write {
                     table_name,
                     save_method,
                 } = table;
-                let table = parse_object_name(table_name.as_str())?;
+                let table = from_ast_object_name(parse_object_name(table_name.as_str())?)?;
                 let save_method = TableSaveMethod::try_from(save_method).required("save method")?;
                 let save_method = match save_method {
                     TableSaveMethod::Unspecified => {
@@ -1445,7 +1458,7 @@ impl TryFrom<WriteOperationV2> for spec::Write {
             overwrite_condition,
         } = write;
         let input = input.required("input")?.try_into()?;
-        let table = parse_object_name(table_name.as_str())?;
+        let table = from_ast_object_name(parse_object_name(table_name.as_str())?)?;
         let partitioning_columns = partitioning_columns
             .into_iter()
             .map(|x| {
@@ -1504,7 +1517,7 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
             replace,
         } = command;
         let input = input.required("input relation")?.try_into()?;
-        let view = parse_object_name(name.as_str())?;
+        let view = from_ast_object_name(parse_object_name(name.as_str())?)?;
         let kind = if is_global {
             spec::ViewKind::GlobalTemporary
         } else {
@@ -1527,6 +1540,7 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
 mod tests {
     use sail_common::tests::test_gold_set;
     use sail_sql_analyzer::parser::parse_one_statement;
+    use sail_sql_analyzer::statement::from_ast_statement;
 
     use crate::error::{SparkError, SparkResult};
 
@@ -1534,7 +1548,7 @@ mod tests {
     fn test_sql_to_plan() -> SparkResult<()> {
         test_gold_set(
             "tests/gold_data/plan/*.json",
-            |sql: String| Ok(parse_one_statement(&sql)?),
+            |sql: String| Ok(from_ast_statement(parse_one_statement(&sql)?)?),
             SparkError::internal,
         )
     }

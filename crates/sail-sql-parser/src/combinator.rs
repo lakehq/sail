@@ -53,28 +53,26 @@ where
 }
 
 /// Create a parser for type [`T`] with arguments [`A`].
-pub fn compose<'a, 'opt, T, I, E, A>(
+pub fn compose<'a, T, I, E, A>(
     args: A,
-    options: &'opt ParserOptions,
-) -> impl Parser<'a, I, T, E> + Clone + use<'a, 'opt, T, I, E, A>
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, T, E> + Clone + use<'a, T, I, E, A>
 where
-    'opt: 'a,
     I: Input<'a>,
     E: ParserExtra<'a, I>,
-    T: TreeParser<'a, 'opt, I, E, A>,
+    T: TreeParser<'a, I, E, A>,
 {
     T::parser(args, options)
 }
 
 /// Create a parser for type [`T`] with unit arguments.
-pub fn unit<'a, 'opt, T, I, E>(
-    options: &'opt ParserOptions,
-) -> impl Parser<'a, I, T, E> + Clone + use<'a, 'opt, T, I, E>
+pub fn unit<'a, T, I, E>(
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, T, E> + Clone + use<'a, T, I, E>
 where
-    'opt: 'a,
     I: Input<'a>,
     E: ParserExtra<'a, I>,
-    T: TreeParser<'a, 'opt, I, E>,
+    T: TreeParser<'a, I, E>,
 {
     T::parser((), options)
 }

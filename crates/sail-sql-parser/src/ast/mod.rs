@@ -6,4 +6,3 @@ pub mod literal;
 pub mod operator;
 pub mod query;
 pub mod statement;
-pub mod whitespace;

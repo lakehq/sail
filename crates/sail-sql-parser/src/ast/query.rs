@@ -1,6 +1,7 @@
 use std::iter::Iterator;
 
 use chumsky::extra::ParserExtra;
+use chumsky::input::{Input, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::pratt::{infix, left};
 use chumsky::prelude::choice;
@@ -22,6 +23,7 @@ use crate::ast::operator::{Comma, LeftParenthesis, RightParenthesis};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
 use crate::options::ParserOptions;
+use crate::span::TokenSpan;
 use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
 
@@ -87,18 +89,19 @@ pub enum QueryBody {
     },
 }
 
-impl<'a, 'opt, E, P1, P2> TreeParser<'a, 'opt, &'a [Token<'a>], E, (P1, P2)> for QueryBody
+impl<'a, I, E, P1, P2> TreeParser<'a, I, E, (P1, P2)> for QueryBody
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
-    P1: Parser<'a, &'a [Token<'a>], Query, E> + Clone + 'a,
-    P2: Parser<'a, &'a [Token<'a>], Expr, E> + Clone + 'a,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+    P1: Parser<'a, I, Query, E> + Clone + 'a,
+    P2: Parser<'a, I, Expr, E> + Clone + 'a,
 {
     fn parser(
         (query, expr): (P1, P2),
-        options: &'opt ParserOptions,
-    ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
+        options: &'a ParserOptions,
+    ) -> impl Parser<'a, I, Self, E> + Clone {
         let quantifier = SetQuantifier::parser((), options).or_not();
         let term = QueryTerm::parser((query, expr), options).map(QueryBody::Term);
         term.pratt((
