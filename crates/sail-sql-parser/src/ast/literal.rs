@@ -101,6 +101,9 @@ pub struct StringLiteral {
     pub value: StringValue,
 }
 
+/// Parse the `UESCAPE 'c'` clause following a Unicode string literal.
+/// Unlike other parsers, the whitespace handling logic is different here,
+/// due to how it is used in the string literal parser.
 fn parse_unicode_escape<'a, I, E>(
     input: &mut InputRef<'a, '_, I, E>,
     options: &ParserOptions,
@@ -110,6 +113,10 @@ where
     E: ParserExtra<'a, I>,
 {
     let marker = input.save();
+    // Skip the whitespace following the string literal.
+    // If parsing the `UESCAPE` keyword fails, we will rewind the input to the point
+    // before the whitespace.
+    skip_whitespace(input);
     if let Some(Token::Word {
         keyword: Some(Keyword::Uescape),
         ..
@@ -127,7 +134,8 @@ where
         style: style @ StringStyle::SingleQuoted { prefix: None },
     }) = input.next()
     {
-        skip_whitespace(input);
+        // Do not skip the following whitespace here, as the string literal parser
+        // will do that after calculating the span of the string literal.
         Some(style.parse(raw, options))
     } else {
         input.rewind(marker);
