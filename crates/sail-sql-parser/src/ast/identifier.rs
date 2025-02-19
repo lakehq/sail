@@ -60,12 +60,6 @@ pub struct Ident {
     pub value: String,
 }
 
-impl Ident {
-    pub fn new(span: TokenSpan, value: String) -> Self {
-        Self { span, value }
-    }
-}
-
 impl<'a, I, E> TreeParser<'a, I, E> for Ident
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
@@ -84,12 +78,6 @@ where
 pub struct ColumnIdent {
     pub span: TokenSpan,
     pub value: String,
-}
-
-impl ColumnIdent {
-    pub fn new(span: TokenSpan, value: String) -> Self {
-        Self { span, value }
-    }
 }
 
 impl From<ColumnIdent> for Ident {
@@ -125,12 +113,6 @@ where
 pub struct TableIdent {
     pub span: TokenSpan,
     pub value: String,
-}
-
-impl TableIdent {
-    pub fn new(span: TokenSpan, value: String) -> Self {
-        Self { span, value }
-    }
 }
 
 impl From<TableIdent> for Ident {
