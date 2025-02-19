@@ -19,5 +19,8 @@ where
     /// of the input is part of the type's AST, but the parser should consume all
     /// whitespace tokens **after** the AST. This contract must be respected by
     /// all implementations of this trait.
+    ///
+    /// The reference to [`ParserOptions`] has a lifetime no less than the lifetime
+    /// of the input. This makes the options available during parsing without cloning.
     fn parser(args: A, options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone;
 }

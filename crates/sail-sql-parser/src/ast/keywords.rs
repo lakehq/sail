@@ -37,6 +37,16 @@ where
     }
 }
 
+// The keyword parser is implemented as a custom parser so that its type remains simple.
+// A simple parser type for keywords is crucial to reduce the overall type complexity of the
+// SQL parser, since keywords are used heavily in the grammar. The same applies to operators,
+// literals, and identifiers.
+// We could have implemented the keyword parser using parser combinators and wrapped it in a
+// boxed parser to reduce type complexity, but this would result in allocation when creating
+// the parser at runtime. The custom parser avoids such a runtime cost. The custom parser
+// implementation for these "elementary" AST nodes is also quite readable, so it does not add
+// maintenance overhead.
+
 macro_rules! keyword_types {
     ([$(($_:expr, $name:ident),)* $(,)?]) => {
         $(
