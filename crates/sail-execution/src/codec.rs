@@ -44,6 +44,7 @@ use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
 use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
 use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
 use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
+use sail_plan::extension::function::datetime::spark_last_day::SparkLastDay;
 use sail_plan::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_plan::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
 use sail_plan::extension::function::datetime::timestamp_now::TimestampNow;
@@ -760,6 +761,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_element_at" | "try_element_at" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryElementAt::new())))
             }
+            "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -799,6 +801,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryToBinary>()
             || node.inner().as_any().is::<SparkElementAt>()
             || node.inner().as_any().is::<SparkTryElementAt>()
+            || node.inner().as_any().is::<SparkLastDay>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"

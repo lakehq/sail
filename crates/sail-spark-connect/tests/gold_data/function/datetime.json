@@ -1448,7 +1448,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: last_day"
+        "success": "ok"
       }
     },
     {

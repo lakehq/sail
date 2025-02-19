@@ -10,6 +10,7 @@ use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
+use crate::extension::function::datetime::spark_last_day::SparkLastDay;
 use crate::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use crate::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
 use crate::extension::function::datetime::timestamp_now::TimestampNow;
@@ -430,7 +431,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("from_unixtime", F::custom(from_unixtime)),
         ("from_utc_timestamp", F::binary(from_utc_timestamp)),
         ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),
-        ("last_day", F::unknown("last_day")),
+        ("last_day", F::udf(SparkLastDay::new())),
         (
             "localtimestamp",
             F::custom(current_localtimestamp_microseconds),
