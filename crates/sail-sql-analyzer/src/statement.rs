@@ -21,11 +21,7 @@ use crate::parser::parse_one_statement;
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
 
-pub(crate) fn from_ast_statements(statements: Vec<Statement>) -> SqlResult<Vec<spec::Plan>> {
-    statements.into_iter().map(from_ast_statement).collect()
-}
-
-pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
+pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
     // TODO: avoid using SQL string
     //   We should define a plan spec instead of constructing `information_schema` queries here.
     match statement {
@@ -109,9 +105,9 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowDatabases { .. } => {
-            parse_one_statement("SELECT * FROM information_schema.schemata;")
-        }
+        Statement::ShowDatabases { .. } => from_ast_statement(parse_one_statement(
+            "SELECT * FROM information_schema.schemata;",
+        )?),
         Statement::CreateTable {
             create: _,
             or_replace,
@@ -193,13 +189,13 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowTables { .. } => {
-            parse_one_statement("SELECT * FROM information_schema.tables;")
-        }
+        Statement::ShowTables { .. } => from_ast_statement(parse_one_statement(
+            "SELECT * FROM information_schema.tables;",
+        )?),
         Statement::ShowCreateTable { .. } => Err(SqlError::todo("SHOW CREATE TABLE")),
-        Statement::ShowColumns { .. } => {
-            parse_one_statement("SELECT * FROM information_schema.columns;")
-        }
+        Statement::ShowColumns { .. } => from_ast_statement(parse_one_statement(
+            "SELECT * FROM information_schema.columns;",
+        )?),
         Statement::CreateView {
             create: _,
             or_replace,
@@ -269,9 +265,9 @@ pub(crate) fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> 
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowViews { .. } => {
-            parse_one_statement("SELECT * FROM information_schema.views;")
-        }
+        Statement::ShowViews { .. } => from_ast_statement(parse_one_statement(
+            "SELECT * FROM information_schema.views;",
+        )?),
         Statement::DropFunction {
             drop: _,
             temporary,

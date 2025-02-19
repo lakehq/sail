@@ -575,14 +575,14 @@
       "input": "SELECT :",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 8)\n\n== SQL ==\nSELECT :\n--------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found : at 7:8 expected 'ALL', 'DISTINCT', or expression"
       }
     },
     {
       "input": "SELECT :-",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'.(line 1, pos 8)\n\n== SQL ==\nSELECT :-\n--------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found : at 7:8 expected 'ALL', 'DISTINCT', or expression"
       }
     },
     {

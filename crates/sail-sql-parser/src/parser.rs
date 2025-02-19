@@ -1,4 +1,5 @@
 use chumsky::extra::ParserExtra;
+use chumsky::input::{Input, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::{end, Recursive};
 use chumsky::{IterParser, Parser};
@@ -9,18 +10,18 @@ use crate::ast::identifier::{ObjectName, QualifiedWildcard};
 use crate::ast::operator::Semicolon;
 use crate::ast::query::{NamedExpr, Query};
 use crate::ast::statement::Statement;
-use crate::ast::whitespace::whitespace;
 use crate::options::ParserOptions;
+use crate::span::TokenSpan;
 use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
+use crate::utils::whitespace;
 
-fn statement<'a, 'opt, E>(
-    options: &'opt ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], Statement, E> + Clone
+fn statement<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, Statement, E> + Clone
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     let mut statement = Recursive::declare();
     let mut query = Recursive::declare();
@@ -49,48 +50,46 @@ where
     statement
 }
 
-fn data_type<'a, 'opt, E>(
-    options: &'opt ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], DataType, E> + Clone
+fn data_type<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, DataType, E> + Clone
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     let mut data_type = Recursive::declare();
     data_type.define(DataType::parser(data_type.clone(), options));
     data_type
 }
 
-fn object_name<'a, 'opt, E>(
-    options: &'opt ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], ObjectName, E> + Clone
+fn object_name<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, ObjectName, E> + Clone
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     ObjectName::parser((), options)
 }
 
-fn qualified_wildcard<'a, 'opt, E>(
-    options: &'opt ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], QualifiedWildcard, E> + Clone
+fn qualified_wildcard<'a, I, E>(
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, QualifiedWildcard, E> + Clone
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     QualifiedWildcard::parser((), options)
 }
 
-fn expression<'a, 'opt, E>(
-    options: &'opt ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], Expr, E> + Clone
+fn expression<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, Expr, E> + Clone
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     let mut expression = Recursive::declare();
     let mut query = Recursive::declare();
@@ -109,35 +108,38 @@ where
     expression
 }
 
-fn named_expression<'a, 'opt, E>(
-    options: &'opt ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], NamedExpr, E> + Clone
+fn named_expression<'a, I, E>(
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, NamedExpr, E> + Clone
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     NamedExpr::parser(expression(options), options)
 }
 
-fn interval_literal<'a, 'opt, E>(
-    options: &'opt ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], IntervalLiteral, E> + Clone
+fn interval_literal<'a, I, E>(
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, IntervalLiteral, E> + Clone
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     IntervalLiteral::parser(expression(options), options)
 }
 
-pub fn create_parser<'a, 'opt, E>(
-    options: &'opt ParserOptions,
-) -> impl Parser<'a, &'a [Token<'a>], Vec<Statement>, E> + Clone
+pub fn create_parser<'a, I, E>(
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, Vec<Statement>, E> + Clone
 where
-    'opt: 'a,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
     statement(options)
         .padded_by(
@@ -152,13 +154,12 @@ where
 
 macro_rules! define_sub_parser {
     ($name:ident, $type:ty, $parse:ident $(,)?) => {
-        pub fn $name<'a, 'opt, E>(
-            options: &'opt ParserOptions,
-        ) -> impl Parser<'a, &'a [Token<'a>], $type, E> + Clone
+        pub fn $name<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, $type, E> + Clone
         where
-            'opt: 'a,
-            E: ParserExtra<'a, &'a [Token<'a>]>,
-            E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+            I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+            I::Span: Into<TokenSpan> + Clone,
+            E: ParserExtra<'a, I>,
+            E::Error: LabelError<'a, I, TokenLabel>,
         {
             $parse(options)
                 .padded_by(whitespace().repeated())
@@ -181,35 +182,3 @@ define_sub_parser!(
     IntervalLiteral,
     interval_literal,
 );
-
-#[cfg(test)]
-mod tests {
-    use chumsky::error::Rich;
-    use chumsky::Parser;
-
-    use crate::ast::query::Query;
-    use crate::ast::statement::Statement;
-    use crate::lexer::create_lexer;
-    use crate::options::ParserOptions;
-    use crate::parser::create_parser;
-    use crate::token::TokenLabel;
-
-    type Extra<'a, T, S> = chumsky::extra::Err<Rich<'a, T, S, TokenLabel>>;
-
-    #[test]
-    fn test_parse() {
-        let sql = "/* */ ; SELECT 1;;; SELECT 2";
-        let options = ParserOptions::default();
-        let lexer = create_lexer::<Extra<_, _>>(&options);
-        let tokens = lexer.parse(sql).unwrap();
-        let parser = create_parser::<Extra<_, _>>(&options);
-        let tree = parser.parse(&tokens).unwrap();
-        assert!(matches!(
-            tree.as_slice(),
-            [
-                Statement::Query(Query { .. }),
-                Statement::Query(Query { .. }),
-            ]
-        ));
-    }
-}

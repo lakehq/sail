@@ -1,48 +1,43 @@
-use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
+use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::custom;
 use chumsky::Parser;
 
-use crate::ast::whitespace::whitespace;
 use crate::options::ParserOptions;
-use crate::token::{Punctuation, Token, TokenLabel, TokenSpan, TokenValue};
+use crate::span::TokenSpan;
+use crate::token::{Punctuation, Token, TokenLabel};
 use crate::tree::TreeParser;
+use crate::utils::{labelled_error, skip_whitespace};
 
-fn operator_parser<'a, O, F, E>(
+fn parse_operator<'a, I, E>(
+    input: &mut InputRef<'a, '_, I, E>,
     punctuations: &'static [Punctuation],
-    builder: F,
-) -> impl Parser<'a, &'a [Token<'a>], O, E> + Clone
+) -> Result<TokenSpan, E::Error>
 where
-    F: Fn(TokenSpan) -> O + Clone + 'static,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan>,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
-    custom(move |input| {
-        let mut span = TokenSpan::default();
-        for punctuation in punctuations {
-            let offset = input.offset();
-            match input.next() {
-                Some(Token {
-                    value: TokenValue::Punctuation(p),
-                    span: s,
-                }) if p == *punctuation => {
-                    span = span.union(&s);
-                }
-                x => {
-                    return Err(Error::expected_found(
-                        vec![],
-                        x.map(std::convert::From::from),
-                        input.span_since(offset),
-                    ))
-                }
+    let before = input.offset();
+    for punctuation in punctuations {
+        match input.next() {
+            Some(Token::Punctuation(p)) if p == *punctuation => {
+                continue;
+            }
+            x => {
+                return Err(labelled_error::<I, E>(
+                    x,
+                    input.span_since(before),
+                    TokenLabel::Operator(punctuations),
+                ));
             }
         }
-        Ok(span)
-    })
-    .then_ignore(whitespace().repeated())
-    .map(builder)
-    .labelled(TokenLabel::Operator(punctuations))
+    }
+    let span = input.span_since(before).into();
+    skip_whitespace(input);
+    Ok(span)
 }
 
 macro_rules! define_operator {
@@ -53,22 +48,27 @@ macro_rules! define_operator {
         }
 
         impl $name {
+            pub fn new(span: TokenSpan) -> Self {
+                Self { span }
+            }
+
             const fn punctuations() -> &'static [Punctuation] {
                 &[$(Punctuation::$punctuation),*]
             }
         }
 
-        impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for $name
+        impl<'a, I, E> TreeParser<'a, I, E> for $name
         where
-            'opt: 'a,
-            E: ParserExtra<'a, &'a [Token<'a>]>,
-            E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+            I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+            I::Span: Into<TokenSpan>,
+            E: ParserExtra<'a, I>,
+            E::Error: LabelError<'a, I, TokenLabel>,
         {
             fn parser(
                 _args: (),
-                _options: &'opt ParserOptions,
-            ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-                operator_parser(Self::punctuations(), |span| Self { span })
+                _options: &'a ParserOptions
+            ) -> impl Parser<'a, I, Self, E> + Clone {
+                custom(move |input| parse_operator(input, Self::punctuations()).map(Self::new))
             }
         }
     };

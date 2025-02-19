@@ -1,6 +1,8 @@
 use std::fmt;
 
+use chumsky::error::{Rich, RichReason};
 use sail_common::error::CommonError;
+use sail_sql_parser::span::TokenSpan;
 use thiserror::Error;
 
 pub type SqlResult<T> = Result<T, SqlError>;
@@ -38,14 +40,16 @@ impl SqlError {
         SqlError::InvalidArgument(message.into())
     }
 
-    pub fn parser<E>(errors: Vec<E>) -> Self
+    pub fn parser<T, S, L>(errors: Vec<Rich<'_, T, S, L>>) -> Self
     where
-        E: fmt::Display,
+        T: fmt::Display,
+        S: Into<TokenSpan> + Clone,
+        L: fmt::Display,
     {
         SqlError::SqlParserError(
             errors
                 .into_iter()
-                .map(|e| e.to_string())
+                .map(|e| format!("{}", ParserErrorDisplay(&e)))
                 .collect::<Vec<_>>()
                 .join("; "),
         )
@@ -60,5 +64,61 @@ impl From<CommonError> for SqlError {
             CommonError::NotSupported(message) => SqlError::NotSupported(message),
             CommonError::InternalError(message) => SqlError::InternalError(message),
         }
+    }
+}
+
+struct ParserErrorDisplay<'e, 'a, T, S, L>(&'e Rich<'a, T, S, L>);
+
+impl<T, S, L> fmt::Display for ParserErrorDisplay<'_, '_, T, S, L>
+where
+    T: fmt::Display,
+    S: Into<TokenSpan> + Clone,
+    L: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn write_span(f: &mut fmt::Formatter<'_>, span: &TokenSpan) -> fmt::Result {
+            if !span.is_empty() {
+                write!(f, " at {}:{}", span.start, span.end)?;
+            }
+            Ok(())
+        }
+
+        let Self(error) = self;
+        let span: TokenSpan = error.span().clone().into();
+        match error.reason() {
+            RichReason::ExpectedFound { expected, found } => {
+                write!(f, "found ")?;
+                match found {
+                    None => write!(f, "end of input")?,
+                    Some(x) => {
+                        write!(f, "{}", **x)?;
+                        write_span(f, &span)?;
+                    }
+                }
+                write!(f, " expected ")?;
+                match &expected[..] {
+                    [] => write!(f, "something else")?,
+                    [item] => write!(f, "{item}")?,
+                    [items @ .., last] => {
+                        for item in items {
+                            write!(f, "{item}, ")?;
+                        }
+                        write!(f, "or {last}")?;
+                    }
+                }
+            }
+            RichReason::Custom(message) => {
+                write!(f, "{message}")?;
+                write_span(f, &span)?;
+            }
+            RichReason::Many(_) => {
+                write!(f, "multiple errors")?;
+            }
+        }
+        for (label, span) in error.contexts() {
+            write!(f, " in {label}")?;
+            write_span(f, &span.clone().into())?;
+        }
+        Ok(())
     }
 }
