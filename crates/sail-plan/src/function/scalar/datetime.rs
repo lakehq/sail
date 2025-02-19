@@ -364,9 +364,6 @@ fn from_utc_timestamp(timestamp: Expr, timezone: Expr) -> Expr {
     })
 }
 
-// FIXME: Spark displays dates and timestamps according to the session time zone.
-//  We should be setting the DataFusion config `datafusion.execution.time_zone`
-//  and casting any datetime functions that don't use the DataFusion config.
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
