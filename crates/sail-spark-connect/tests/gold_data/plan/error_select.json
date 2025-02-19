@@ -4,42 +4,42 @@
       "input": "\nSELECT * FROM tab\nWINDOW window_ref AS window-ref\n        ",
       "exception": "\n[INVALID_IDENTIFIER] The identifier window-ref is invalid. Please, consider quoting it with back-quotes as `window-ref`.(line 3, pos 27)\n\n== SQL ==\n\nSELECT * FROM tab\nWINDOW window_ref AS window-ref\n---------------------------^^^\n        \n",
       "output": {
-        "failure": "invalid argument: found - at 46:47 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "SELECT (a - test_func(b-c)) FROM test-table",
       "exception": "\n[INVALID_IDENTIFIER] The identifier test-table is invalid. Please, consider quoting it with back-quotes as `test-table`.(line 1, pos 37)\n\n== SQL ==\nSELECT (a - test_func(b-c)) FROM test-table\n-------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found - at 37:38 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "SELECT * FROM table-with-hyphen",
       "exception": "\n[INVALID_IDENTIFIER] The identifier table-with-hyphen is invalid. Please, consider quoting it with back-quotes as `table-with-hyphen`.(line 1, pos 19)\n\n== SQL ==\nSELECT * FROM table-with-hyphen\n-------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found - at 19:20 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "SELECT a-b AS a-b FROM t",
       "exception": "\n[INVALID_IDENTIFIER] The identifier a-b is invalid. Please, consider quoting it with back-quotes as `a-b`.(line 1, pos 15)\n\n== SQL ==\nSELECT a-b AS a-b FROM t\n---------------^^^\n",
       "output": {
-        "failure": "invalid argument: found - at 15:16 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "SELECT a-b FROM table-hyphen WHERE a-b = 0",
       "exception": "\n[INVALID_IDENTIFIER] The identifier table-hyphen is invalid. Please, consider quoting it with back-quotes as `table-hyphen`.(line 1, pos 21)\n\n== SQL ==\nSELECT a-b FROM table-hyphen WHERE a-b = 0\n---------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found - at 21:22 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "SELECT a-b FROM table-with-hyphen",
       "exception": "\n[INVALID_IDENTIFIER] The identifier table-with-hyphen is invalid. Please, consider quoting it with back-quotes as `table-with-hyphen`.(line 1, pos 21)\n\n== SQL ==\nSELECT a-b FROM table-with-hyphen\n---------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found - at 21:22 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -60,14 +60,14 @@
       "input": "SELECT cast('a' as Varchar)",
       "exception": "\n[DATATYPE_MISSING_SIZE] DataType \"VARCHAR\" requires a length parameter, for example \"VARCHAR\"(10). Please specify the length.(line 1, pos 19)\n\n== SQL ==\nSELECT cast('a' as Varchar)\n-------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found 'a' at 12:15 expected query"
+        "failure": "invalid argument: found ) at 26:27 expected '('"
       }
     },
     {
       "input": "SELECT cast(1 as badtype)",
       "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"BADTYPE\".(line 1, pos 17)\n\n== SQL ==\nSELECT cast(1 as badtype)\n-----------------^^^\n",
       "output": {
-        "failure": "invalid argument: found 1 at 12:13 expected query"
+        "failure": "invalid argument: found badtype at 17:24 expected data type"
       }
     }
   ]

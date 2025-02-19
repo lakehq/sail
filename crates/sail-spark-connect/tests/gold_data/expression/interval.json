@@ -5013,7 +5013,7 @@
       "input": "interval '10' month to second",
       "exception": "\nIntervals FROM month TO second are not supported.(line 1, pos 9)\n\n== SQL ==\ninterval '10' month to second\n---------^^^\n",
       "output": {
-        "failure": "invalid argument: found second at 23:29 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -6173,7 +6173,7 @@
       "input": "interval 10 nanoseconds",
       "exception": "\nError parsing ' 10 nanoseconds' to interval, invalid unit 'nanoseconds'.(line 1, pos 9)\n\n== SQL ==\ninterval 10 nanoseconds\n---------^^^\n",
       "output": {
-        "failure": "invalid argument: found 10 at 9:11 expected end of input"
+        "failure": "invalid argument: found nanoseconds at 12:23 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'SIMILAR', 'AND', 'OR', 'YEAR', 'YEARS', 'MONTH', 'MONTHS', 'WEEK', 'WEEKS', 'DAY', 'DAYS', 'HOUR', 'HOURS', 'MINUTE', 'MINUTES', 'SECOND', 'SECONDS', 'MILLISECOND', 'MILLISECONDS', 'MICROSECOND', or 'MICROSECONDS'"
       }
     },
     {

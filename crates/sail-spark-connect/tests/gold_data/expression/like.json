@@ -49,7 +49,7 @@
       "input": "a ilike all()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike all()\n--^^^\n",
       "output": {
-        "failure": "invalid argument: found all at 8:11 expected end of input"
+        "failure": "invalid argument: found ) at 12:13 expected query, identifier, or expression"
       }
     },
     {
@@ -101,7 +101,7 @@
       "input": "a ilike any()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike any()\n--^^^\n",
       "output": {
-        "failure": "invalid argument: found any at 8:11 expected end of input"
+        "failure": "invalid argument: found ) at 12:13 expected query, identifier, or expression"
       }
     },
     {
@@ -153,7 +153,7 @@
       "input": "a ilike some()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike some()\n--^^^\n",
       "output": {
-        "failure": "invalid argument: found some at 8:12 expected end of input"
+        "failure": "invalid argument: found ) at 13:14 expected query, identifier, or expression"
       }
     },
     {
@@ -320,7 +320,7 @@
       "input": "a like all()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like all()\n--^^^\n",
       "output": {
-        "failure": "invalid argument: found all at 7:10 expected end of input"
+        "failure": "invalid argument: found ) at 11:12 expected query, identifier, or expression"
       }
     },
     {
@@ -372,7 +372,7 @@
       "input": "a like any()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like any()\n--^^^\n",
       "output": {
-        "failure": "invalid argument: found any at 7:10 expected end of input"
+        "failure": "invalid argument: found ) at 11:12 expected query, identifier, or expression"
       }
     },
     {
@@ -424,7 +424,7 @@
       "input": "a like some()",
       "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like some()\n--^^^\n",
       "output": {
-        "failure": "invalid argument: found some at 7:11 expected end of input"
+        "failure": "invalid argument: found ) at 12:13 expected query, identifier, or expression"
       }
     },
     {
