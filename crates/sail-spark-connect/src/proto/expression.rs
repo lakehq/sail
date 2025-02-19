@@ -64,9 +64,11 @@ impl TryFrom<Expression> for spec::Expr {
                 is_user_defined_function,
             }),
             ExprType::ExpressionString(ExpressionString { expression }) => {
-                let expr =
-                    from_ast_expression(parse_expression(expression.as_str())?).or_else(|_| {
-                        from_ast_named_expression(parse_named_expression(expression.as_str())?)
+                let expr = parse_expression(expression.as_str())
+                    .and_then(from_ast_expression)
+                    .or_else(|_| {
+                        parse_named_expression(expression.as_str())
+                            .and_then(from_ast_named_expression)
                     })?;
                 Ok(expr)
             }
