@@ -3,7 +3,7 @@
     {
       "input": "SELECT * FROM (src1 s1 INNER JOIN src2 s2 ON s1.id = s2.id) dst(a, b, c, d)",
       "output": {
-        "failure": "invalid argument: found FROM at 9:13 expected statement, or end of input"
+        "failure": "invalid argument: found src1 at 15:19 expected query"
       }
     },
     {
@@ -3367,26 +3367,26 @@
     {
       "input": "select * from t1 inner join (t2 inner join t3 on col3 = col2)",
       "output": {
-        "failure": "invalid argument: found inner at 17:22 expected statement, or end of input"
+        "failure": "invalid argument: found t2 at 29:31 expected query"
       }
     },
     {
       "input": "select * from t1 inner join (t2 inner join t3 on col3 = col2) on col3 = col1",
       "output": {
-        "failure": "invalid argument: found inner at 17:22 expected statement, or end of input"
+        "failure": "invalid argument: found t2 at 29:31 expected query"
       }
     },
     {
       "input": "select * from t1 inner join (t2 inner join t3) on col3 = col2",
       "output": {
-        "failure": "invalid argument: found inner at 17:22 expected statement, or end of input"
+        "failure": "invalid argument: found t2 at 29:31 expected query"
       }
     },
     {
       "input": "select * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'.(line 1, pos 60)\n\n== SQL ==\nselect * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1\n------------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found on at 60:62 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {

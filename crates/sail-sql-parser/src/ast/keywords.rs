@@ -8,7 +8,7 @@ use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Keyword, Token, TokenLabel};
 use crate::tree::TreeParser;
-use crate::utils::{labelled_error, skip_whitespace};
+use crate::utils::skip_whitespace;
 
 fn parse_keyword<'a, I, E>(
     input: &mut InputRef<'a, '_, I, E>,
@@ -20,19 +20,19 @@ where
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    let before = input.offset();
+    let before = input.cursor();
     match input.next() {
         Some(Token::Word {
             keyword: Some(k), ..
         }) if k == keyword => {
-            let span = <I::Span as std::convert::Into<TokenSpan>>::into(input.span_since(before));
+            let span = <I::Span as std::convert::Into<TokenSpan>>::into(input.span_since(&before));
             skip_whitespace(input);
             Ok(span)
         }
-        x => Err(labelled_error::<I, E>(
-            x,
-            input.span_since(before),
-            TokenLabel::Keyword(keyword),
+        x => Err(E::Error::expected_found(
+            vec![TokenLabel::Keyword(keyword)],
+            x.map(std::convert::Into::into),
+            input.span_since(&before),
         )),
     }
 }

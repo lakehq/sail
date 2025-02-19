@@ -3,49 +3,49 @@
     {
       "input": "COMMENT ON DATABASE a.b.c IS 'NULL'",
       "output": {
-        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "COMMENT ON DATABASE a.b.c IS NULL",
       "output": {
-        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "COMMENT ON NAMESPACE a.b.c IS ''",
       "output": {
-        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "COMMENT ON TABLE a.b.c IS 'xYz'",
       "output": {
-        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "REFRESH FUNCTION a.b.c",
       "output": {
-        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "REFRESH FUNCTION b.c",
       "output": {
-        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "REFRESH FUNCTION c",
       "output": {
-        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "REFRESH TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {

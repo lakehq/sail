@@ -645,7 +645,7 @@
       "input": "1 - f('o', o(bar)) hello * world",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '*'.(line 1, pos 25)\n\n== SQL ==\n1 - f('o', o(bar)) hello * world\n-------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found * at 25:26 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -671,7 +671,7 @@
     {
       "input": "1a.123_",
       "output": {
-        "failure": "invalid argument: found .123 at 2:6 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -690,7 +690,7 @@
       "input": "GEO '(10,-6)'",
       "exception": "\n[UNSUPPORTED_TYPED_LITERAL] Literals of the type \"GEO\" are not supported. Supported types are \"DATE\", \"TIMESTAMP_NTZ\", \"TIMESTAMP_LTZ\", \"TIMESTAMP\", \"INTERVAL\", \"X\".(line 1, pos 0)\n\n== SQL ==\nGEO '(10,-6)'\n^^^\n",
       "output": {
-        "failure": "invalid argument: found '(10,-6)' at 4:13 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -765,7 +765,7 @@
       "input": "`fo`o.`ba`r",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'.(line 1, pos 5)\n\n== SQL ==\n`fo`o.`ba`r\n-----^^^\n",
       "output": {
-        "failure": "invalid argument: found . at 5:6 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -841,7 +841,7 @@
     {
       "input": "a !< b",
       "output": {
-        "failure": "invalid argument: found ! at 2:3 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -877,7 +877,7 @@
     {
       "input": "a !> b",
       "output": {
-        "failure": "invalid argument: found ! at 2:3 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -1857,7 +1857,7 @@
     {
       "input": "a as (b, c)",
       "output": {
-        "failure": "invalid argument: found as at 2:4 expected end of input"
+        "failure": "invalid argument: found ( at 5:6 expected identifier"
       }
     },
     {
@@ -2188,7 +2188,7 @@
     {
       "input": "a not regexp 'pattern%'",
       "output": {
-        "failure": "invalid argument: found regexp at 6:12 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -2386,7 +2386,7 @@
     {
       "input": "a regexp 'pattern%'",
       "output": {
-        "failure": "invalid argument: found 'pattern%' at 9:19 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -2422,7 +2422,7 @@
     {
       "input": "a() (b, c)",
       "output": {
-        "failure": "invalid argument: found ( at 4:5 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -2455,25 +2455,25 @@
     {
       "input": "a.123A",
       "output": {
-        "failure": "invalid argument: found .123A at 1:6 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "a.123BD_column",
       "output": {
-        "failure": "invalid argument: found .123BD at 1:7 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "a.123D_column",
       "output": {
-        "failure": "invalid argument: found .123D at 1:6 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "a.123E3_column",
       "output": {
-        "failure": "invalid argument: found .123E3 at 1:7 expected end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -2718,7 +2718,7 @@
     {
       "input": "first(a ignore nulls)",
       "output": {
-        "failure": "invalid argument: found ( at 5:6 expected end of input"
+        "failure": "invalid argument: found ignore at 8:14 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'SIMILAR', 'AND', 'OR', '=>', ',', or ')'"
       }
     },
     {
@@ -2786,7 +2786,7 @@
       "input": "foo(a x)",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'x': extra input 'x'.(line 1, pos 6)\n\n== SQL ==\nfoo(a x)\n------^^^\n",
       "output": {
-        "failure": "invalid argument: found ( at 3:4 expected end of input"
+        "failure": "invalid argument: found x at 6:7 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'SIMILAR', 'AND', 'OR', '=>', ',', or ')'"
       }
     },
     {
@@ -2918,7 +2918,7 @@
     {
       "input": "last(a ignore nulls)",
       "output": {
-        "failure": "invalid argument: found ( at 4:5 expected end of input"
+        "failure": "invalid argument: found ignore at 7:13 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'SIMILAR', 'AND', 'OR', '=>', ',', or ')'"
       }
     },
     {

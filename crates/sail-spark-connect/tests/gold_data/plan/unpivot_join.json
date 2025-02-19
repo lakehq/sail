@@ -3,7 +3,7 @@
     {
       "input": "SELECT * FROM t1 JOIN (t2 UNPIVOT (val FOR col in (a, b)))",
       "output": {
-        "failure": "invalid argument: found JOIN at 17:21 expected statement, or end of input"
+        "failure": "invalid argument: found t2 at 23:25 expected query"
       }
     },
     {

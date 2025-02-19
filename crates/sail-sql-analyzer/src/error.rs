@@ -40,11 +40,10 @@ impl SqlError {
         SqlError::InvalidArgument(message.into())
     }
 
-    pub fn parser<T, S, L>(errors: Vec<Rich<'_, T, S, L>>) -> Self
+    pub fn parser<T, S>(errors: Vec<Rich<'_, T, S>>) -> Self
     where
         T: fmt::Display,
         S: Into<TokenSpan> + Clone,
-        L: fmt::Display,
     {
         SqlError::SqlParserError(
             errors
@@ -67,13 +66,12 @@ impl From<CommonError> for SqlError {
     }
 }
 
-struct ParserErrorDisplay<'e, 'a, T, S, L>(&'e Rich<'a, T, S, L>);
+struct ParserErrorDisplay<'e, 'a, T, S>(&'e Rich<'a, T, S>);
 
-impl<T, S, L> fmt::Display for ParserErrorDisplay<'_, '_, T, S, L>
+impl<T, S> fmt::Display for ParserErrorDisplay<'_, '_, T, S>
 where
     T: fmt::Display,
     S: Into<TokenSpan> + Clone,
-    L: fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn write_span(f: &mut fmt::Formatter<'_>, span: &TokenSpan) -> fmt::Result {
@@ -110,9 +108,6 @@ where
             RichReason::Custom(message) => {
                 write!(f, "{message}")?;
                 write_span(f, &span)?;
-            }
-            RichReason::Many(_) => {
-                write!(f, "multiple errors")?;
             }
         }
         for (label, span) in error.contexts() {

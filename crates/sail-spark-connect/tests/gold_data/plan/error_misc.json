@@ -11,14 +11,14 @@
       "input": "\nFROM test-table\nSELECT a\nSELECT b\n        ",
       "exception": "\n[INVALID_IDENTIFIER] The identifier test-table is invalid. Please, consider quoting it with back-quotes as `test-table`.(line 2, pos 9)\n\n== SQL ==\n\nFROM test-table\n---------^^^\nSELECT a\nSELECT b\n        \n",
       "output": {
-        "failure": "invalid argument: found FROM at 1:5 expected statement"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "CREATE DATABASE IF NOT EXISTS my-database",
       "exception": "\n[INVALID_IDENTIFIER] The identifier my-database is invalid. Please, consider quoting it with back-quotes as `my-database`.(line 1, pos 32)\n\n== SQL ==\nCREATE DATABASE IF NOT EXISTS my-database\n--------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found NOT at 19:22 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -32,7 +32,7 @@
       "input": "DROP DATABASE my-database",
       "exception": "\n[INVALID_IDENTIFIER] The identifier my-database is invalid. Please, consider quoting it with back-quotes as `my-database`.(line 1, pos 16)\n\n== SQL ==\nDROP DATABASE my-database\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: found - at 16:17 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -46,14 +46,14 @@
       "input": "SHOW COLUMNS IN t FROM test-db",
       "exception": "\n[INVALID_IDENTIFIER] The identifier test-db is invalid. Please, consider quoting it with back-quotes as `test-db`.(line 1, pos 27)\n\n== SQL ==\nSHOW COLUMNS IN t FROM test-db\n---------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found - at 27:28 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "SHOW FUNCTIONS LIKE test-func",
       "exception": "\n[INVALID_IDENTIFIER] The identifier test-func is invalid. Please, consider quoting it with back-quotes as `test-func`.(line 1, pos 24)\n\n== SQL ==\nSHOW FUNCTIONS LIKE test-func\n------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found LIKE at 15:19 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -67,7 +67,7 @@
       "input": "SHOW TABLES IN hyphen-database",
       "exception": "\n[INVALID_IDENTIFIER] The identifier hyphen-database is invalid. Please, consider quoting it with back-quotes as `hyphen-database`.(line 1, pos 21)\n\n== SQL ==\nSHOW TABLES IN hyphen-database\n---------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found - at 21:22 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {

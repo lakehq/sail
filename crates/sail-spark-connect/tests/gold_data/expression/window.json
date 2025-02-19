@@ -36,7 +36,7 @@
     {
       "input": "foo(*) over (cluster by a, b)",
       "output": {
-        "failure": "invalid argument: found ( at 12:13 expected end of input"
+        "failure": "invalid argument: found cluster at 13:20 expected 'PARTITION', 'DISTRIBUTE', 'ORDER', 'SORT', 'RANGE', 'ROWS', ')', or something else"
       }
     },
     {

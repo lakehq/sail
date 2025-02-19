@@ -78,7 +78,7 @@ base64 = "0.22.1"
 md-5 = "0.10.6"
 half = { version = "2.4.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.61"
-chumsky = { version = "=1.0.0-alpha.7", default-features = false, features = ["pratt", "label"] }
+chumsky = { version = "=1.0.0-alpha.8", default-features = false, features = ["pratt"] }
 
 ######
 # The versions of the following dependencies are managed manually.

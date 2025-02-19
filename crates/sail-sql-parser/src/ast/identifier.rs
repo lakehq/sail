@@ -12,7 +12,7 @@ use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
 use crate::tree::TreeParser;
-use crate::utils::{labelled_error, skip_whitespace};
+use crate::utils::skip_whitespace;
 
 fn parse_identifier<'a, F, I, E>(
     input: &mut InputRef<'a, '_, I, E>,
@@ -26,11 +26,11 @@ where
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    let before = input.offset();
+    let before = input.cursor();
     let token = input.next();
     match &token {
         Some(Token::Word { keyword, raw }) if matcher(keyword) => {
-            let output = (input.span_since(before).into(), raw.to_string());
+            let output = (input.span_since(&before).into(), raw.to_string());
             skip_whitespace(input);
             return Ok(output);
         }
@@ -40,17 +40,17 @@ where
                 prefix: None,
             } = style.parse(raw, options)
             {
-                let output = (input.span_since(before).into(), value.clone());
+                let output = (input.span_since(&before).into(), value.clone());
                 skip_whitespace(input);
                 return Ok(output);
             }
         }
         _ => {}
     }
-    Err(labelled_error::<I, E>(
-        token,
-        input.span_since(before),
-        TokenLabel::Identifier,
+    Err(E::Error::expected_found(
+        vec![TokenLabel::Identifier],
+        token.map(Into::into),
+        input.span_since(&before),
     ))
 }
 
@@ -171,7 +171,7 @@ where
             Some(Token::Word { keyword: _, raw }),
         ) => {
             let node = Variable {
-                span: input.span_since(marker.offset()).into(),
+                span: input.span_since(marker.cursor()).into(),
                 value: format!("{}{}", p.to_char(), raw),
             };
             skip_whitespace(input);
@@ -182,7 +182,7 @@ where
             Some(Token::Number { value, suffix }),
         ) => {
             let node = Variable {
-                span: input.span_since(marker.offset()).into(),
+                span: input.span_since(marker.cursor()).into(),
                 value: format!("{}{}{}", p.to_char(), value, suffix),
             };
             skip_whitespace(input);
@@ -206,7 +206,7 @@ where
     match input.next() {
         Some(Token::Punctuation(p @ Punctuation::QuestionMark)) => {
             let node = Variable {
-                span: input.span_since(marker.offset()).into(),
+                span: input.span_since(marker.cursor()).into(),
                 value: format!("{}", p.to_char()),
             };
             skip_whitespace(input);
@@ -234,12 +234,12 @@ where
             if let Some(unnamed) = parse_unnamed_variable(input) {
                 return Ok(unnamed);
             }
-            let before = input.offset();
+            let before = input.cursor();
             let token = input.next();
-            Err(labelled_error::<I, E>(
-                token,
-                input.span_since(before),
-                TokenLabel::Variable,
+            Err(E::Error::expected_found(
+                vec![TokenLabel::Variable],
+                token.map(Into::into),
+                input.span_since(&before),
             ))
         })
     }

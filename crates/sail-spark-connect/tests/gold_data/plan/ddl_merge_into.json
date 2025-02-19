@@ -3,98 +3,98 @@
     {
       "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING (SELECT * FROM testcat2.ns1.ns2.tbl) AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='delete') THEN DELETE\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update')\nTHEN UPDATE SET target.col3 = 'delete'\n      ",
       "output": {
-        "failure": "invalid argument: found MERGE at 1:6 expected statement"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING (WITH s as (SELECT * FROM testcat2.ns1.ns2.tbl) SELECT * FROM s) AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='delete') THEN DELETE\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update')\nTHEN UPDATE SET target.col3 = 'delete'\n      ",
       "output": {
-        "failure": "invalid argument: found MERGE at 1:6 expected statement"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET *\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT *\n      ",
       "output": {
-        "failure": "invalid argument: found MERGE at 1:6 expected statement"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = DEFAULT\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) VALUES (source.col1, DEFAULT)\nWHEN NOT MATCHED BY SOURCE AND (target.col2='delete') THEN DELETE\nWHEN NOT MATCHED BY SOURCE AND (target.col2='update') THEN UPDATE SET target.col2 = DEFAULT\n      ",
       "output": {
-        "failure": "invalid argument: found MERGE at 1:6 expected statement"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='delete') THEN DELETE\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update')\nTHEN UPDATE SET target.col3 = 'delete'\n      ",
       "output": {
-        "failure": "invalid argument: found MERGE at 1:6 expected statement"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update1') THEN UPDATE SET target.col2 = 1\nWHEN MATCHED AND (target.col2='update2') THEN UPDATE SET target.col2 = 2\nWHEN NOT MATCHED AND (target.col2='insert1')\nTHEN INSERT (target.col1, target.col2) values (source.col1, 1)\nWHEN NOT MATCHED AND (target.col2='insert2')\nTHEN INSERT (target.col1, target.col2) values (source.col1, 2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='delete') THEN DELETE\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update1') THEN UPDATE SET target.col3 = 1\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update2') THEN UPDATE SET target.col3 = 2\n      ",
       "output": {
-        "failure": "invalid argument: found MERGE at 1:6 expected statement"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE THEN DELETE\n      ",
       "output": {
-        "failure": "invalid argument: found MERGE at 1:6 expected statement"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN NOT MATCHED BY SOURCE THEN UPDATE *\n      ",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '*'.(line 5, pos 39)\n\n== SQL ==\n\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN NOT MATCHED BY SOURCE THEN UPDATE *\n---------------------------------------^^^\n      \n",
       "output": {
-        "failure": "invalid argument: found MERGE at 1:6 expected statement"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN NOT MATCHED BY TARGET AND (target.col3='insert1')\nTHEN INSERT (target.col1, target.col2) VALUES (source.col1, 0)\nWHEN NOT MATCHED AND (target.col3='insert2')\nTHEN INSERT (target.col1, target.col2) VALUES (1, source.col2)\nWHEN NOT MATCHED BY TARGET\nTHEN INSERT *\n      ",
       "output": {
-        "failure": "invalid argument: found MERGE at 1:6 expected statement"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1",
       "exception": "\nThere must be at least one WHEN clause in a MERGE statement.(line 1, pos 0)\n\n== SQL ==\nMERGE INTO testcat1.ns1.ns2.tbl AS target\n^^^\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\n",
       "output": {
-        "failure": "invalid argument: found MERGE at 0:5 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2 == 'update') THEN UPDATE SET target.col2 = source.col2\nWHEN MATCHED THEN DELETE\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update')\nTHEN UPDATE SET target.col3 = 'delete'\nWHEN NOT MATCHED BY SOURCE THEN UPDATE SET target.col3 = 'update'\nWHEN NOT MATCHED BY SOURCE THEN DELETE",
       "exception": "\n[NON_LAST_NOT_MATCHED_BY_SOURCE_CLAUSE_OMIT_CONDITION] When there are more than one NOT MATCHED BY SOURCE clauses in a MERGE statement, only the last NOT MATCHED BY SOURCE clause can omit the condition.(line 1, pos 0)\n\n== SQL ==\nMERGE INTO testcat1.ns1.ns2.tbl AS target\n^^^\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2 == 'update') THEN UPDATE SET target.col2 = source.col2\nWHEN MATCHED THEN DELETE\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\nWHEN NOT MATCHED BY SOURCE AND (target.col3='update')\nTHEN UPDATE SET target.col3 = 'delete'\nWHEN NOT MATCHED BY SOURCE THEN UPDATE SET target.col3 = 'update'\nWHEN NOT MATCHED BY SOURCE THEN DELETE\n",
       "output": {
-        "failure": "invalid argument: found MERGE at 0:5 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2 == 'update') THEN UPDATE SET target.col2 = source.col2\nWHEN MATCHED THEN DELETE\nWHEN NOT MATCHED AND (target.col2='insert1')\nTHEN INSERT (target.col1, target.col2) values (source.col1, 1)\nWHEN NOT MATCHED\nTHEN INSERT (target.col1, target.col2) values (source.col1, 2)\nWHEN NOT MATCHED\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)",
       "exception": "\n[NON_LAST_NOT_MATCHED_BY_TARGET_CLAUSE_OMIT_CONDITION] When there are more than one NOT MATCHED [BY TARGET] clauses in a MERGE statement, only the last NOT MATCHED [BY TARGET] clause can omit the condition.(line 1, pos 0)\n\n== SQL ==\nMERGE INTO testcat1.ns1.ns2.tbl AS target\n^^^\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2 == 'update') THEN UPDATE SET target.col2 = source.col2\nWHEN MATCHED THEN DELETE\nWHEN NOT MATCHED AND (target.col2='insert1')\nTHEN INSERT (target.col1, target.col2) values (source.col1, 1)\nWHEN NOT MATCHED\nTHEN INSERT (target.col1, target.col2) values (source.col1, 2)\nWHEN NOT MATCHED\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\n",
       "output": {
-        "failure": "invalid argument: found MERGE at 0:5 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2 == 'update1') THEN UPDATE SET target.col2 = 1\nWHEN MATCHED THEN UPDATE SET target.col2 = 2\nWHEN MATCHED THEN DELETE\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)",
       "exception": "\n[NON_LAST_MATCHED_CLAUSE_OMIT_CONDITION] When there are more than one MATCHED clauses in a MERGE statement, only the last MATCHED clause can omit the condition.(line 1, pos 0)\n\n== SQL ==\nMERGE INTO testcat1.ns1.ns2.tbl AS target\n^^^\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2 == 'update1') THEN UPDATE SET target.col2 = 1\nWHEN MATCHED THEN UPDATE SET target.col2 = 2\nWHEN MATCHED THEN DELETE\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\n",
       "output": {
-        "failure": "invalid argument: found MERGE at 0:5 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source(c1, c2)\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)",
       "exception": "\n[COLUMN_ALIASES_IS_NOT_ALLOWED] Columns aliases are not allowed in MERGE.(line 2, pos 36)\n\n== SQL ==\nMERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source(c1, c2)\n------------------------------------^^^\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\n",
       "output": {
-        "failure": "invalid argument: found MERGE at 0:5 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target(c1, c2)\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)",
       "exception": "\n[COLUMN_ALIASES_IS_NOT_ALLOWED] Columns aliases are not allowed in MERGE.(line 1, pos 41)\n\n== SQL ==\nMERGE INTO testcat1.ns1.ns2.tbl AS target(c1, c2)\n-----------------------------------------^^^\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN MATCHED AND (target.col2='delete') THEN DELETE\nWHEN MATCHED AND (target.col2='update') THEN UPDATE SET target.col2 = source.col2\nWHEN NOT MATCHED AND (target.col2='insert')\nTHEN INSERT (target.col1, target.col2) values (source.col1, source.col2)\n",
       "output": {
-        "failure": "invalid argument: found MERGE at 0:5 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     }
   ]

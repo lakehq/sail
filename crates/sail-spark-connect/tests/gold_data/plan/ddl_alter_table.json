@@ -857,21 +857,21 @@
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found COMMENT at 54:61 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found COMMENT at 54:61 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found COMMENT at 54:61 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -956,13 +956,13 @@
     {
       "input": "ALTER TABLE table_name DROP COLUMN IF EXISTS a.b.c",
       "output": {
-        "failure": "invalid argument: found EXISTS at 38:44 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
       "input": "ALTER TABLE table_name DROP COLUMN IF EXISTS x, y, a.b.c",
       "output": {
-        "failure": "invalid argument: found EXISTS at 38:44 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
@@ -1004,7 +1004,7 @@
     {
       "input": "ALTER TABLE table_name DROP COLUMNS IF EXISTS x, y, a.b.c",
       "output": {
-        "failure": "invalid argument: found EXISTS at 39:45 expected statement, or end of input"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {
