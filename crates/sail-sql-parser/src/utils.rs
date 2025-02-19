@@ -1,12 +1,9 @@
-use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, InputRef, ValueInput};
-use chumsky::label::LabelError;
 use chumsky::prelude::any;
 use chumsky::Parser;
 
-use crate::span::TokenSpan;
-use crate::token::{Token, TokenLabel};
+use crate::token::Token;
 
 pub(crate) fn whitespace<'a, I, E>() -> impl Parser<'a, I, (), E> + Clone
 where
@@ -31,20 +28,4 @@ where
             _ => break,
         }
     }
-}
-
-pub(crate) fn labelled_error<'a, I, E>(
-    found: Option<Token<'a>>,
-    span: I::Span,
-    label: TokenLabel,
-) -> E::Error
-where
-    I: Input<'a, Token = Token<'a>>,
-    I::Span: Into<TokenSpan>,
-    E: ParserExtra<'a, I>,
-    E::Error: LabelError<'a, I, TokenLabel>,
-{
-    let mut e = E::Error::expected_found(vec![], found.map(|x| x.into()), span);
-    e.label_with(label);
-    e
 }

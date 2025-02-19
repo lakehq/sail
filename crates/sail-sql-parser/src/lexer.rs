@@ -269,7 +269,7 @@ where
 {
     any().try_map_with(|c: char, e| match Punctuation::from_char(c) {
         Some(p) => Ok((Token::Punctuation(p), e.span())),
-        None => Err(chumsky::error::Error::expected_found(
+        None => Err(chumsky::error::LabelError::expected_found(
             vec![],
             Some(c.into()),
             e.span(),

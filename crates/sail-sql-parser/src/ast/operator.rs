@@ -8,7 +8,7 @@ use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Punctuation, Token, TokenLabel};
 use crate::tree::TreeParser;
-use crate::utils::{labelled_error, skip_whitespace};
+use crate::utils::skip_whitespace;
 
 fn parse_operator<'a, I, E>(
     input: &mut InputRef<'a, '_, I, E>,
@@ -20,22 +20,22 @@ where
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    let before = input.offset();
+    let before = input.cursor();
     for punctuation in punctuations {
         match input.next() {
             Some(Token::Punctuation(p)) if p == *punctuation => {
                 continue;
             }
             x => {
-                return Err(labelled_error::<I, E>(
-                    x,
-                    input.span_since(before),
-                    TokenLabel::Operator(punctuations),
+                return Err(E::Error::expected_found(
+                    vec![TokenLabel::Operator(punctuations)],
+                    x.map(Into::into),
+                    input.span_since(&before),
                 ));
             }
         }
     }
-    let span = input.span_since(before).into();
+    let span = input.span_since(&before).into();
     skip_whitespace(input);
     Ok(span)
 }
