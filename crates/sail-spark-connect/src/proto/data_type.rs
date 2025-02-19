@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use sail_common::spec;
 use sail_common::spec::ARROW_DECIMAL128_MAX_PRECISION;
+use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser::parse_data_type;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -25,9 +26,11 @@ pub(crate) const SPARK_DECIMAL_SYSTEM_DEFAULT_SCALE: i8 = 18;
 /// Parse a Spark data type string of various forms.
 /// Reference: org.apache.spark.sql.connect.planner.SparkConnectPlanner#parseDatatypeString
 pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType> {
-    if let Ok(dt) = parse_data_type(schema) {
+    if let Ok(dt) = parse_data_type(schema).and_then(from_ast_data_type) {
         Ok(dt)
-    } else if let Ok(dt) = parse_data_type(format!("struct<{schema}>").as_str()) {
+    } else if let Ok(dt) =
+        parse_data_type(format!("struct<{schema}>").as_str()).and_then(from_ast_data_type)
+    {
         // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
         // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
         // to parse table schema input (`name type, ...`).

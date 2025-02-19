@@ -1,40 +1,51 @@
-use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
+use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
-use chumsky::primitive::any;
+use chumsky::prelude::custom;
 use chumsky::Parser;
 
-use crate::ast::whitespace::whitespace;
 use crate::options::ParserOptions;
-use crate::token::{Keyword, Token, TokenLabel, TokenSpan, TokenValue};
+use crate::span::TokenSpan;
+use crate::token::{Keyword, Token, TokenLabel};
 use crate::tree::TreeParser;
+use crate::utils::{labelled_error, skip_whitespace};
 
-fn keyword_parser<'a, K, F, E>(
+fn parse_keyword<'a, I, E>(
+    input: &mut InputRef<'a, '_, I, E>,
     keyword: Keyword,
-    builder: F,
-) -> impl Parser<'a, &'a [Token<'a>], K, E> + Clone
+) -> Result<TokenSpan, E::Error>
 where
-    F: Fn(TokenSpan) -> K + Clone + 'static,
-    E: ParserExtra<'a, &'a [Token<'a>]>,
-    E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: std::convert::Into<TokenSpan>,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
 {
-    any()
-        .then_ignore(whitespace().repeated())
-        .try_map(move |t: Token<'a>, s| match t {
-            Token {
-                value: TokenValue::Word {
-                    keyword: Some(k), ..
-                },
-                span,
-            } if k == keyword => Ok(builder(span)),
-            x => Err(Error::expected_found(
-                vec![],
-                Some(std::convert::From::from(x)),
-                s,
-            )),
-        })
-        .labelled(TokenLabel::Keyword(keyword))
+    let before = input.offset();
+    match input.next() {
+        Some(Token::Word {
+            keyword: Some(k), ..
+        }) if k == keyword => {
+            let span = <I::Span as std::convert::Into<TokenSpan>>::into(input.span_since(before));
+            skip_whitespace(input);
+            Ok(span)
+        }
+        x => Err(labelled_error::<I, E>(
+            x,
+            input.span_since(before),
+            TokenLabel::Keyword(keyword),
+        )),
+    }
 }
+
+// The keyword parser is implemented as a custom parser so that its type remains simple.
+// A simple parser type for keywords is crucial to reduce the overall type complexity of the
+// SQL parser, since keywords are used heavily in the grammar. The same applies to operators,
+// literals, and identifiers.
+// We could have implemented the keyword parser using parser combinators and wrapped it in a
+// boxed parser to reduce type complexity, but this would result in allocation when creating
+// the parser at runtime. The custom parser avoids such a runtime cost. The custom parser
+// implementation for these "elementary" AST nodes is also quite readable, so it does not add
+// maintenance overhead.
 
 macro_rules! keyword_types {
     ([$(($_:expr, $name:ident),)* $(,)?]) => {
@@ -46,22 +57,27 @@ macro_rules! keyword_types {
             }
 
             impl $name {
+                pub fn new(span: TokenSpan) -> Self {
+                    Self { span }
+                }
+
                 pub const fn keyword() -> Keyword {
                     Keyword::$name
                 }
             }
 
-            impl<'a, 'opt, E> TreeParser<'a, 'opt, &'a [Token<'a>], E> for $name
+            impl<'a, I, E> TreeParser<'a, I, E> for $name
             where
-                'opt: 'a,
-                E: ParserExtra<'a, &'a [Token<'a>]>,
-                E::Error: LabelError<'a, &'a [Token<'a>], TokenLabel>,
+                I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+                I::Span: std::convert::Into<TokenSpan>,
+                E: ParserExtra<'a, I>,
+                E::Error: LabelError<'a, I, TokenLabel>,
             {
                 fn parser(
                     _args: (),
-                    _options: &'opt ParserOptions,
-                ) -> impl Parser<'a, &'a [Token<'a>], Self, E> + Clone {
-                    keyword_parser(Self::keyword(), |span| Self { span })
+                    _options: &'a ParserOptions
+                ) -> impl Parser<'a, I, Self, E> + Clone {
+                    custom(move |input| parse_keyword(input, Self::keyword()).map(Self::new))
                 }
             }
         )*

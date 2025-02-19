@@ -1,10 +1,15 @@
 use std::collections::HashMap;
 
 use sail_common::spec;
+use sail_sql_analyzer::data_type::from_ast_data_type;
+use sail_sql_analyzer::expression::{
+    from_ast_expression, from_ast_object_name, from_ast_qualified_wildcard,
+};
 use sail_sql_analyzer::parser::{
     parse_data_type, parse_expression, parse_named_expression, parse_object_name,
     parse_qualified_wildcard,
 };
+use sail_sql_analyzer::query::from_ast_named_expression;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect::expression::cast::CastToType;
@@ -40,6 +45,7 @@ impl TryFrom<Expression> for spec::Expr {
                 // cannot be parsed. Therefore, when parsing fails, we create an object name
                 // containing the single raw identifier.
                 let name = parse_object_name(unparsed_identifier.as_str())
+                    .and_then(from_ast_object_name)
                     .unwrap_or_else(|_| spec::ObjectName::from(vec![unparsed_identifier]));
                 Ok(spec::Expr::UnresolvedAttribute { name, plan_id })
             }
@@ -59,12 +65,16 @@ impl TryFrom<Expression> for spec::Expr {
             }),
             ExprType::ExpressionString(ExpressionString { expression }) => {
                 let expr = parse_expression(expression.as_str())
-                    .or_else(|_| parse_named_expression(expression.as_str()))?;
+                    .and_then(from_ast_expression)
+                    .or_else(|_| {
+                        parse_named_expression(expression.as_str())
+                            .and_then(from_ast_named_expression)
+                    })?;
                 Ok(expr)
             }
             ExprType::UnresolvedStar(UnresolvedStar { unparsed_target }) => {
                 let target = unparsed_target
-                    .map(|x| parse_qualified_wildcard(x.as_str()))
+                    .map(|x| from_ast_qualified_wildcard(parse_qualified_wildcard(x.as_str())?))
                     .transpose()?;
                 Ok(spec::Expr::UnresolvedStar {
                     target,
@@ -106,7 +116,7 @@ impl TryFrom<Expression> for spec::Expr {
                 let cast_to_type = cast_to_type.required("cast type")?;
                 let cast_to_type = match cast_to_type {
                     CastToType::Type(x) => x.try_into()?,
-                    CastToType::TypeStr(s) => parse_data_type(s.as_str())?,
+                    CastToType::TypeStr(s) => from_ast_data_type(parse_data_type(s.as_str())?)?,
                 };
                 Ok(spec::Expr::Cast {
                     expr: Box::new((*expr).try_into()?),
@@ -170,7 +180,7 @@ impl TryFrom<Expression> for spec::Expr {
                 let struct_expression = struct_expression.required("struct expression")?;
                 Ok(spec::Expr::UpdateFields {
                     struct_expression: Box::new((*struct_expression).try_into()?),
-                    field_name: parse_object_name(field_name.as_str())?,
+                    field_name: from_ast_object_name(parse_object_name(field_name.as_str())?)?,
                     value_expression: value_expression
                         .map(|x| -> SparkResult<_> { Ok(Box::new((*x).try_into()?)) })
                         .transpose()?,
@@ -186,7 +196,8 @@ impl TryFrom<Expression> for spec::Expr {
                 function_name,
                 arguments,
             }) => {
-                let function_name = parse_object_name(function_name.as_str())?;
+                let function_name =
+                    from_ast_object_name(parse_object_name(function_name.as_str())?)?;
                 Ok(spec::Expr::CallFunction {
                     function_name,
                     arguments: arguments
@@ -444,6 +455,7 @@ mod tests {
     use sail_common::spec;
     use sail_common::tests::test_gold_set;
     use sail_sql_analyzer::parser::parse_named_expression;
+    use sail_sql_analyzer::query::from_ast_named_expression;
 
     use crate::error::SparkError;
 
@@ -456,7 +468,7 @@ mod tests {
             test_gold_set(
                 "tests/gold_data/expression/*.json",
                 |sql: String| {
-                    let expr = parse_named_expression(&sql)?;
+                    let expr = from_ast_named_expression(parse_named_expression(&sql)?)?;
                     if sql.len() > 128 {
                         Ok(spec::Expr::Literal(spec::Literal::Utf8 {
                             value: Some("Result omitted for long expression.".to_string()),

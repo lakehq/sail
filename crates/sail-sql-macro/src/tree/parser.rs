@@ -27,6 +27,10 @@ impl AttributeArgument {
 /// must be less than that.
 const MAX_CHOICES: usize = 20;
 
+/// The minimum number of variants in an enum to use a boxed parser.
+/// The boxed parser can reduce compile times for large enum parsers.
+const BOXED_ENUM_MIN_VARIANTS: usize = 5;
+
 enum ParserDependency {
     None,
     One(Type),
@@ -120,8 +124,9 @@ fn derive_fields(
                 args,
                 initializer,
             } = derive_fields_inner(spanned, &fields.named)?;
+            // Use boxed parser for structs or enum variants with named fields.
             Ok(quote! {
-                #parser.map(|#args| #name { #initializer })
+                #parser.map(|#args| #name { #initializer }).boxed()
             })
         }
         Fields::Unnamed(fields) => {
@@ -185,7 +190,13 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
                 .iter()
                 .map(|variant| derive_enum_variant(name, variant))
                 .collect::<syn::Result<Vec<_>>>()?;
-            derive_choices(choices)
+            let n = choices.len();
+            let parser = derive_choices(choices);
+            if n < BOXED_ENUM_MIN_VARIANTS {
+                quote! { #parser }
+            } else {
+                quote! { #parser.boxed() }
+            }
         }
         Data::Struct(data) => derive_struct(name, &data.fields)?,
         _ => {
@@ -204,22 +215,15 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
         extractor.expect_empty()?;
         (dependency, label)
     };
-    // Use boxed parser to reduce compile times for large parsers.
-    // There may be a better heuristic to detect large parsers,
-    // but for now we consider the parser "large" if it has a dependency.
-    let parser = match dependency {
-        ParserDependency::None => parser,
-        _ => quote! { #parser.boxed() },
-    };
     let parser = match label {
         Some(label) => quote! { #parser.labelled(#label) },
         None => parser,
     };
     let (generics, args_type, args_bounds) = match dependency {
         ParserDependency::One(t) => (
-            quote! { E, P },
+            quote! { I, E, P },
             quote! { P },
-            quote! { P: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t, E> + Clone + 'a },
+            quote! { P: chumsky::Parser<'a, I, #t, E> + Clone + 'a },
         ),
         ParserDependency::Tuple(t) => {
             let params = (0..t.len())
@@ -229,34 +233,34 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
                 .iter()
                 .zip(params.iter())
                 .map(|(t, p)| {
-                    quote! {
-                        #p: chumsky::Parser<'a, &'a [crate::token::Token<'a>], #t, E> + Clone + 'a
-                    }
+                    quote! { #p: chumsky::Parser<'a, I, #t, E> + Clone + 'a }
                 })
                 .collect::<Vec<_>>();
             (
-                quote! { E, #(#params),* },
+                quote! { I, E, #(#params),* },
                 quote! { (#(#params),*,) },
                 quote! { #(#bounds),* },
             )
         }
-        ParserDependency::None => (quote! { E }, quote! { () }, quote! {}),
+        ParserDependency::None => (quote! { I, E }, quote! { () }, quote! {}),
     };
 
     let trait_name = format_ident!("{TRAIT}");
 
     Ok(quote! {
-        impl <'a, 'opt, #generics> crate::tree::#trait_name <'a, 'opt, &'a [crate::token::Token<'a>], E, #args_type> for #name
+        impl <'a, #generics> crate::tree::#trait_name <'a, I, E, #args_type> for #name
         where
-            'opt: 'a,
-            E: chumsky::extra::ParserExtra<'a, &'a [crate::token::Token<'a>]>,
-            E::Error: chumsky::label::LabelError<'a, &'a [crate::token::Token<'a>], crate::token::TokenLabel>,
+            I: chumsky::input::Input<'a, Token = crate::token::Token<'a>>
+                + chumsky::input::ValueInput<'a>,
+            I::Span: std::convert::Into<crate::span::TokenSpan> + Clone,
+            E: chumsky::extra::ParserExtra<'a, I>,
+            E::Error: chumsky::label::LabelError<'a, I, crate::token::TokenLabel>,
             #args_bounds
         {
             fn parser(
                 args: #args_type,
-                options: &'opt crate::options::ParserOptions
-            ) -> impl chumsky::Parser<'a, &'a [crate::token::Token<'a>], Self, E> + Clone {
+                options: &'a crate::options::ParserOptions
+            ) -> impl chumsky::Parser<'a, I, Self, E> + Clone {
                 use chumsky::Parser;
 
                 #parser
