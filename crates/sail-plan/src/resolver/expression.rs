@@ -395,12 +395,14 @@ impl PlanResolver<'_> {
             }
             Expr::Window {
                 window_function,
+                cluster_spec,
                 partition_spec,
                 order_spec,
                 frame_spec,
             } => {
                 self.resolve_expression_window(
                     *window_function,
+                    cluster_spec,
                     partition_spec,
                     order_spec,
                     frame_spec,
@@ -906,12 +908,18 @@ impl PlanResolver<'_> {
     async fn resolve_expression_window(
         &self,
         window_function: spec::Expr,
+        cluster_spec: Vec<spec::Expr>,
         partition_spec: Vec<spec::Expr>,
         order_spec: Vec<spec::SortOrder>,
         frame_spec: Option<spec::WindowFrame>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        if !cluster_spec.is_empty() {
+            return Err(PlanError::unsupported(
+                "CLUSTER BY clause in window expression",
+            ));
+        }
         let (function, function_name, argument_names, arguments, is_distinct) =
             match window_function {
                 spec::Expr::UnresolvedFunction {

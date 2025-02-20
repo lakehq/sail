@@ -3,32 +3,175 @@
     {
       "input": "CACHE LAZY TABLE a.b.c",
       "output": {
-        "failure": "not implemented: CACHE TABLE"
+        "success": {
+          "command": {
+            "cacheTable": {
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "lazy": true,
+              "storageLevel": null,
+              "query": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CACHE LAZY TABLE a.b.c OPTIONS('storageLevel' 'DISK_ONLY')",
       "output": {
-        "failure": "not implemented: CACHE TABLE"
+        "success": {
+          "command": {
+            "cacheTable": {
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "lazy": true,
+              "storageLevel": {
+                "useDisk": true,
+                "useMemory": false,
+                "useOffHeap": false,
+                "deserialized": false,
+                "replication": 1
+              },
+              "query": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CACHE TABLE a.b.c",
       "output": {
-        "failure": "not implemented: CACHE TABLE"
+        "success": {
+          "command": {
+            "cacheTable": {
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "lazy": false,
+              "storageLevel": null,
+              "query": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CACHE TABLE a.b.c AS SELECT * FROM testData",
       "exception": "\nIt is not allowed to add catalog/namespace prefix a.b to the table name in CACHE TABLE AS SELECT.(line 1, pos 0)\n\n== SQL ==\nCACHE TABLE a.b.c AS SELECT * FROM testData\n^^^\n",
       "output": {
-        "failure": "not implemented: CACHE TABLE"
+        "success": {
+          "command": {
+            "cacheTable": {
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "lazy": false,
+              "storageLevel": null,
+              "query": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "testData"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "CACHE TABLE t AS SELECT * FROM testData",
       "output": {
-        "failure": "not implemented: CACHE TABLE"
+        "success": {
+          "command": {
+            "cacheTable": {
+              "table": [
+                "t"
+              ],
+              "lazy": false,
+              "storageLevel": null,
+              "query": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "testData"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]

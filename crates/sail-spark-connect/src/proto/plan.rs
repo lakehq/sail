@@ -1320,13 +1320,16 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     storage_level.map(|s| s.try_into()).transpose()?;
                 Ok(spec::CommandNode::CacheTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
+                    lazy: false,
                     storage_level,
+                    query: None,
                 })
             }
             CatType::UncacheTable(x) => {
                 let sc::UncacheTable { table_name } = x;
                 Ok(spec::CommandNode::UncacheTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
+                    if_exists: false,
                 })
             }
             CatType::ClearCache(x) => {

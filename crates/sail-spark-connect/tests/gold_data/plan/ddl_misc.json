@@ -27,25 +27,70 @@
     {
       "input": "REFRESH FUNCTION a.b.c",
       "output": {
-        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
+        "success": {
+          "command": {
+            "refreshFunction": {
+              "function": [
+                "a",
+                "b",
+                "c"
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "REFRESH FUNCTION b.c",
       "output": {
-        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
+        "success": {
+          "command": {
+            "refreshFunction": {
+              "function": [
+                "b",
+                "c"
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "REFRESH FUNCTION c",
       "output": {
-        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
+        "success": {
+          "command": {
+            "refreshFunction": {
+              "function": [
+                "c"
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "REFRESH TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: found REFRESH at 0:7 expected statement, or end of input"
+        "success": {
+          "command": {
+            "refreshTable": {
+              "table": [
+                "a",
+                "b",
+                "c"
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

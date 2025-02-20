@@ -3,12 +3,15 @@ use std::iter::once;
 use sail_common::spec;
 use sail_sql_parser::ast::expression::{
     AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, FunctionArgument,
-    FunctionExpr, GroupingExpr, GroupingSet, LambdaFunctionParameters, OrderBy, OrderByExpr,
-    OrderDirection, OrderNulls, OverClause, PartitionBy, PatternEscape, PatternQuantifier,
-    TableExpr, TrimExpr, UnaryOperator, WindowFrame, WindowFrameBound, WindowSpec,
+    FunctionExpr, GroupingExpr, GroupingSet, LambdaFunctionParameters, OrderByExpr, OrderDirection,
+    OrderNulls, OverClause, PatternEscape, PatternQuantifier, TableExpr, TrimExpr, UnaryOperator,
+    WindowFrame, WindowFrameBound, WindowModifier, WindowSpec,
 };
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
-use sail_sql_parser::ast::query::{IdentList, NamedExpr};
+use sail_sql_parser::ast::query::{
+    ClusterByClause, DistributeByClause, IdentList, NamedExpr, OrderByClause, PartitionByClause,
+    SortByClause,
+};
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
@@ -18,6 +21,65 @@ use crate::value::{
     from_ast_boolean_literal, from_ast_number_literal, from_ast_string, from_ast_string_literal,
 };
 
+#[derive(Default)]
+struct WindowModifiers {
+    cluster_by: Option<Vec<Expr>>,
+    partition_by: Option<Vec<Expr>>,
+    order_by: Option<Vec<OrderByExpr>>,
+}
+
+impl TryFrom<Vec<WindowModifier>> for WindowModifiers {
+    type Error = SqlError;
+
+    fn try_from(value: Vec<WindowModifier>) -> SqlResult<Self> {
+        let mut output = Self::default();
+        for modifier in value {
+            match modifier {
+                WindowModifier::ClusterBy(ClusterByClause {
+                    cluster_by: _,
+                    items,
+                }) => {
+                    if output
+                        .cluster_by
+                        .replace(items.into_items().collect())
+                        .is_some()
+                    {
+                        return Err(SqlError::invalid("duplicated CLUSTER BY clause"));
+                    }
+                }
+                WindowModifier::PartitionBy(PartitionByClause {
+                    partition_by: _,
+                    items,
+                })
+                | WindowModifier::DistributeBy(DistributeByClause {
+                    distribute_by: _,
+                    items,
+                }) => {
+                    if output
+                        .partition_by
+                        .replace(items.into_items().collect())
+                        .is_some()
+                    {
+                        return Err(SqlError::invalid(
+                            "duplicated PARTITION BY or DISTRIBUTED BY clause",
+                        ));
+                    }
+                }
+                WindowModifier::OrderBy(OrderByClause { order_by: _, items })
+                | WindowModifier::SortBy(SortByClause { sort_by: _, items }) => {
+                    if output
+                        .order_by
+                        .replace(items.into_items().collect())
+                        .is_some()
+                    {
+                        return Err(SqlError::invalid("duplicated ORDER BY or SORT BY clause"));
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+}
 fn negated(expr: spec::Expr) -> spec::Expr {
     spec::Expr::UnresolvedFunction {
         function_name: "not".to_string(),
@@ -77,6 +139,8 @@ fn from_ast_binary_operator(op: BinaryOperator) -> SqlResult<String> {
         BinaryOperator::Spaceship(_) => Ok("<=>".to_string()),
         BinaryOperator::EqEq(_) => Ok("==".to_string()),
         BinaryOperator::NotEq(_) => Ok("!=".to_string()),
+        BinaryOperator::NotGt(_) => Ok("<=".to_string()),
+        BinaryOperator::NotLt(_) => Ok(">=".to_string()),
         BinaryOperator::And(_) => Ok("and".to_string()),
         BinaryOperator::Or(_) => Ok("or".to_string()),
         BinaryOperator::BitwiseOr(_) => Ok("|".to_string()),
@@ -327,9 +391,25 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         }
         Expr::RLike(expr, not, _, pattern) => {
             let expr = from_ast_expression(*expr)?;
+            let pattern = from_ast_expression(*pattern)?;
             let expr = spec::Expr::UnresolvedFunction {
                 function_name: "rlike".to_string(),
-                arguments: vec![expr, from_ast_expression(*pattern)?],
+                arguments: vec![expr, pattern],
+                is_distinct: false,
+                is_user_defined_function: false,
+            };
+            if not.is_some() {
+                Ok(negated(expr))
+            } else {
+                Ok(expr)
+            }
+        }
+        Expr::RegExp(expr, not, _, pattern) => {
+            let expr = from_ast_expression(*expr)?;
+            let pattern = from_ast_expression(*pattern)?;
+            let expr = spec::Expr::UnresolvedFunction {
+                function_name: "regexp".to_string(),
+                arguments: vec![expr, pattern],
                 is_distinct: false,
                 is_user_defined_function: false,
             };
@@ -546,6 +626,48 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             is_distinct: false,
             is_user_defined_function: false,
         }),
+        AtomExpr::First(_, _, e, ignore_nulls, _) => {
+            let mut arguments = vec![from_ast_expression(*e)?];
+            if ignore_nulls.is_some() {
+                arguments.push(spec::Expr::Literal(spec::Literal::Boolean {
+                    value: Some(true),
+                }));
+            }
+            Ok(spec::Expr::UnresolvedFunction {
+                function_name: "first".to_string(),
+                arguments,
+                is_distinct: false,
+                is_user_defined_function: false,
+            })
+        }
+        AtomExpr::Last(_, _, e, ignore_nulls, _) => {
+            let mut arguments = vec![from_ast_expression(*e)?];
+            if ignore_nulls.is_some() {
+                arguments.push(spec::Expr::Literal(spec::Literal::Boolean {
+                    value: Some(true),
+                }));
+            }
+            Ok(spec::Expr::UnresolvedFunction {
+                function_name: "last".to_string(),
+                arguments,
+                is_distinct: false,
+                is_user_defined_function: false,
+            })
+        }
+        AtomExpr::AnyValue(_, _, e, ignore_nulls, _) => {
+            let mut arguments = vec![from_ast_expression(*e)?];
+            if ignore_nulls.is_some() {
+                arguments.push(spec::Expr::Literal(spec::Literal::Boolean {
+                    value: Some(true),
+                }));
+            }
+            Ok(spec::Expr::UnresolvedFunction {
+                function_name: "any_value".to_string(),
+                arguments,
+                is_distinct: false,
+                is_user_defined_function: false,
+            })
+        }
         AtomExpr::CurrentUser(_, _) => Ok(spec::Expr::UnresolvedFunction {
             function_name: "current_user".to_string(),
             arguments: vec![],
@@ -607,39 +729,30 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                     WindowSpec::Named(_) => Err(SqlError::todo("named window function")),
                     WindowSpec::Detailed {
                         left: _,
-                        partition_by,
-                        order_by,
+                        modifiers,
                         window_frame,
                         right: _,
                     } => {
+                        let WindowModifiers {
+                            cluster_by,
+                            partition_by,
+                            order_by,
+                        } = modifiers.try_into()?;
+                        let cluster_spec = cluster_by
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(from_ast_expression)
+                            .collect::<SqlResult<Vec<_>>>()?;
                         let partition_spec = partition_by
-                            .map(|x| {
-                                let PartitionBy {
-                                    partition: _,
-                                    by: _,
-                                    columns: partition_by,
-                                } = x;
-                                partition_by
-                                    .into_items()
-                                    .map(from_ast_expression)
-                                    .collect::<SqlResult<Vec<_>>>()
-                            })
-                            .transpose()?
-                            .unwrap_or_default();
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(from_ast_expression)
+                            .collect::<SqlResult<Vec<_>>>()?;
                         let order_spec = order_by
-                            .map(|x| {
-                                let OrderBy {
-                                    order: _,
-                                    by: _,
-                                    expressions: order_by,
-                                } = x;
-                                order_by
-                                    .into_items()
-                                    .map(from_ast_order_by)
-                                    .collect::<SqlResult<Vec<_>>>()
-                            })
-                            .transpose()?
-                            .unwrap_or_default();
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(from_ast_order_by)
+                            .collect::<SqlResult<Vec<_>>>()?;
                         let frame_spec = window_frame.map(from_ast_window_frame).transpose()?;
                         let function = spec::Expr::UnresolvedFunction {
                             function_name,
@@ -649,6 +762,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                         };
                         Ok(spec::Expr::Window {
                             window_function: Box::new(function),
+                            cluster_spec,
                             partition_spec,
                             order_spec,
                             frame_spec,

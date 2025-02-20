@@ -162,6 +162,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::RefreshTable {
+            refresh: _,
+            table: _,
+            name,
+        } => {
+            let node = spec::CommandNode::RefreshTable {
+                table: from_ast_object_name(name)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::AlterTable {
             alter: _,
             table: _,
@@ -252,6 +262,19 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::AlterView {
+            alter: _,
+            view: _,
+            name,
+            operation: _,
+        } => {
+            let node = spec::CommandNode::AlterView {
+                view: from_ast_object_name(name)?,
+                if_exists: false,
+                operation: spec::AlterViewOperation::Unknown,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::DropView {
             drop: _,
             view: _,
@@ -268,6 +291,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         Statement::ShowViews { .. } => from_ast_statement(parse_one_statement(
             "SELECT * FROM information_schema.views;",
         )?),
+        Statement::RefreshFunction {
+            refresh: _,
+            function: _,
+            name,
+        } => {
+            let node = spec::CommandNode::RefreshFunction {
+                function: from_ast_object_name(name)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::DropFunction {
             drop: _,
             temporary,
@@ -354,9 +387,65 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::CacheTable { .. } => Err(SqlError::todo("CACHE TABLE")),
-        Statement::UncacheTable { .. } => Err(SqlError::todo("UNCACHE TABLE")),
-        Statement::ClearCache { .. } => Err(SqlError::todo("CLEAR CACHE")),
+        Statement::CacheTable {
+            cache: _,
+            lazy,
+            table: _,
+            name,
+            options,
+            r#as,
+        } => {
+            let storage_level = options
+                .map(|x| {
+                    let (_, properties) = x;
+                    let properties = from_ast_property_list(properties)?;
+                    let mut output = None;
+                    for (key, value) in properties {
+                        if key.eq_ignore_ascii_case("storageLevel") {
+                            if output.replace(value).is_some() {
+                                return Err(SqlError::invalid("duplicate 'storageLevel' option"));
+                            }
+                        } else {
+                            return Err(SqlError::invalid(format!("unknown option: {key}")));
+                        }
+                    }
+                    Ok(output)
+                })
+                .transpose()?
+                .flatten()
+                .map(|x| x.parse())
+                .transpose()?;
+            let query = r#as
+                .map(|x| {
+                    let AsQueryClause { r#as: _, query } = x;
+                    from_ast_query(query)
+                })
+                .transpose()?
+                .map(Box::new);
+            let node = spec::CommandNode::CacheTable {
+                table: from_ast_object_name(name)?,
+                lazy: lazy.is_some(),
+                storage_level,
+                query,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::UncacheTable {
+            uncache: _,
+            table: _,
+            if_exists,
+            name,
+        } => {
+            let node = spec::CommandNode::UncacheTable {
+                table: from_ast_object_name(name)?,
+                if_exists: if_exists.is_some(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ClearCache { clear: _, cache: _ } => {
+            let node = spec::CommandNode::ClearCache;
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::SetTimeZone { .. } => Err(SqlError::todo("SET TIME ZONE")),
         Statement::SetProperty { set: _, property } => {
             let Some(property) = property else {

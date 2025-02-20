@@ -9,12 +9,13 @@ use crate::ast::keywords::{
     Add, After, Alter, Always, Analyze, As, Buckets, By, Cache, Cascade, Catalog, Change, Clear,
     Clustered, Codegen, Collection, Column, Columns, Comment, Cost, Create, Database, Databases,
     Dbproperties, Default, Defined, Delete, Delimited, Drop, Escaped, Exists, Explain, Extended,
-    External, Fields, Fileformat, First, Format, Formatted, From, Functions, Generated, Global, If,
-    In, Inputformat, Insert, Into, Items, Keys, Lazy, Like, Lines, Local, Location, Map, Not, Null,
-    Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge,
-    Recover, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
-    Sorted, Stored, Table, Tables, Tblproperties, Temp, Temporary, Terminated, Time, To, Type,
-    Uncache, Unset, Update, Use, Using, Verbose, View, Views, Where, With, Zone,
+    External, Fields, Fileformat, First, Format, Formatted, From, Function, Functions, Generated,
+    Global, If, In, Inputformat, Insert, Into, Items, Keys, Lazy, Like, Lines, Local, Location,
+    Map, Not, Null, Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions,
+    Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde,
+    Serdeproperties, Set, Show, Sorted, Stored, Table, Tables, Tblproperties, Temp, Temporary,
+    Terminated, Time, To, Type, Uncache, Unset, Update, Use, Using, Verbose, View, Views, Where,
+    With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{Colon, Comma, Equals, LeftParenthesis, Minus, Plus, RightParenthesis};
@@ -92,6 +93,11 @@ pub enum Statement {
         #[parser(function = |(_, q, _, _), o| compose(q, o))]
         r#as: Option<AsQueryClause>,
     },
+    RefreshTable {
+        refresh: Refresh,
+        table: Table,
+        name: ObjectName,
+    },
     AlterTable {
         alter: Alter,
         table: Table,
@@ -142,6 +148,13 @@ pub enum Statement {
         #[parser(function = |(_, q, _, _), _| q)]
         query: Query,
     },
+    AlterView {
+        alter: Alter,
+        view: View,
+        name: ObjectName,
+        #[parser(function = |(_, q, e, _), o| compose((q, e), o))]
+        operation: AlterViewOperation,
+    },
     DropView {
         drop: Drop,
         view: View,
@@ -153,6 +166,11 @@ pub enum Statement {
         views: Views,
         from: Option<(Either<From, In>, ObjectName)>,
         like: Option<(Option<Like>, StringLiteral)>,
+    },
+    RefreshFunction {
+        refresh: Refresh,
+        function: Function,
+        name: ObjectName,
     },
     DropFunction {
         drop: Drop,
@@ -552,6 +570,41 @@ pub enum AlterTableOperation {
         recover: Recover,
         partitions: Partitions,
     },
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "(Query, Expr)")]
+pub enum AlterViewOperation {
+    RenameView {
+        rename: Rename,
+        to: To,
+        name: ObjectName,
+    },
+    AddPartitions {
+        add: Add,
+        if_not_exists: Option<(If, Not, Exists)>,
+        #[parser(function = |(_, e), o| compose(e, o))]
+        partitions: Vec<PartitionSpec>,
+    },
+    DropPartition {
+        drop: Drop,
+        if_exists: Option<(If, Exists)>,
+        #[parser(function = |(_, e), o| compose(e, o))]
+        partition: PartitionSpec,
+        purge: Option<Purge>,
+    },
+    SetViewProperties {
+        set: Set,
+        table_properties: Tblproperties,
+        properties: PropertyList,
+    },
+    UnsetViewProperties {
+        unset: Unset,
+        table_properties: Tblproperties,
+        if_exists: Option<(If, Exists)>,
+        properties: PropertyKeyList,
+    },
+    Query(#[parser(function = |(q, _), o| compose(q, o))] AsQueryClause),
 }
 
 #[derive(Debug, Clone, TreeParser)]
