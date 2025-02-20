@@ -118,7 +118,8 @@ fn spark_last_day(days: i32) -> Result<i32> {
                 "Spark `last_day`: Unable to parse date from {next_year}, {next_month}, 1"
             )
         })?;
-    let last_day_date = first_day_next_month - Duration::days(1);
 
-    Ok(Date32Type::from_naive_date(last_day_date))
+    Ok(Date32Type::from_naive_date(
+        first_day_next_month - Duration::days(1),
+    ))
 }

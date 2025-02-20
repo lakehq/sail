@@ -11,6 +11,7 @@ use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
 use crate::extension::function::datetime::spark_last_day::SparkLastDay;
+use crate::extension::function::datetime::spark_next_day::SparkNextDay;
 use crate::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use crate::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
 use crate::extension::function::datetime::timestamp_now::TimestampNow;
@@ -446,7 +447,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
         ("months_between", F::unknown("months_between")),
-        ("next_day", F::unknown("next_day")),
+        ("next_day", F::udf(SparkNextDay::new())),
         ("now", F::custom(current_timestamp_microseconds)),
         ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
         ("second", F::unary(|arg| integer_part(arg, "SECOND"))),
