@@ -2,10 +2,10 @@ use std::any::Any;
 use std::sync::Arc;
 
 use chrono::{Datelike, Duration, Weekday};
-use datafusion::arrow::array::{ArrayRef, AsArray, Date32Array, StringArrayType};
+use datafusion::arrow::array::{new_null_array, ArrayRef, AsArray, Date32Array, StringArrayType};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::types::NativeType;
-use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -58,11 +58,13 @@ impl ScalarUDFImpl for SparkNextDay {
                     (ScalarValue::Date32(days), ScalarValue::Utf8(day_of_week) | ScalarValue::Utf8View(day_of_week) | ScalarValue::LargeUtf8(day_of_week)) => {
                         if let Some(days) = days {
                             if let Some(day_of_week) = day_of_week {
-                                Ok(ColumnarValue::Scalar(ScalarValue::Date32(Some(
-                                    spark_next_day(*days, day_of_week.as_str())?,
-                                ))))
+                                Ok(ColumnarValue::Scalar(ScalarValue::Date32(
+                                    spark_next_day(*days, day_of_week.as_str()),
+                                )))
                             } else {
-                                exec_err!("Spark `next_day` function: second arg `day_of_week` can not be null")
+                                // TODO: if spark.sql.ansi.enabled is false,
+                                //  returns NULL instead of an error for a malformed dayOfWeek.
+                                Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
                             }
                         } else {
                             Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
@@ -77,11 +79,13 @@ impl ScalarUDFImpl for SparkNextDay {
                         if let Some(day_of_week) = day_of_week {
                             let result: Date32Array = date_array
                                 .as_primitive::<Date32Type>()
-                                .try_unary(|days| spark_next_day(days, day_of_week.as_str()))?
+                                .unary_opt(|days| spark_next_day(days, day_of_week.as_str()))
                                 .with_data_type(DataType::Date32);
                             Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
                         } else {
-                            exec_err!("Spark `next_day` function: second arg `day_of_week` can not be null")
+                            // TODO: if spark.sql.ansi.enabled is false,
+                            //  returns NULL instead of an error for a malformed dayOfWeek.
+                            Ok(ColumnarValue::Array(Arc::new(new_null_array(&DataType::Date32, date_array.len()))))
                         }
                     }
                     _ => exec_err!("Spark `next_day` function: first arg must be date, second arg must be string. Got {args:?}"),
@@ -170,38 +174,51 @@ where
             if let Some(days) = days {
                 if let Some(day_of_week) = day_of_week {
                     spark_next_day(days, day_of_week)
-                        .map(Some)
-                        .map_err(|e| exec_datafusion_err!("Spark `next_day` function: {e}"))
                 } else {
-                    exec_err!("Spark `next_day` function: second arg `day_of_week` can not be null")
+                    // TODO: if spark.sql.ansi.enabled is false,
+                    //  returns NULL instead of an error for a malformed dayOfWeek.
+                    None
                 }
             } else {
-                Ok(None)
+                None
             }
         })
-        .collect::<Result<Date32Array>>()?;
+        .collect::<Date32Array>();
     Ok(Arc::new(result) as ArrayRef)
 }
 
-fn spark_next_day(days: i32, day_of_week: &str) -> Result<i32> {
+fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
     let date = Date32Type::to_naive_date(days);
 
     let day_of_week = day_of_week.trim().to_uppercase();
     let day_of_week = match day_of_week.as_str() {
-        "MO" | "MON" | "MONDAY" => "MONDAY",
-        "TU" | "TUE" | "TUESDAY" => "TUESDAY",
-        "WE" | "WED" | "WEDNESDAY" => "WEDNESDAY",
-        "TH" | "THU" | "THURSDAY" => "THURSDAY",
-        "FR" | "FRI" | "FRIDAY" => "FRIDAY",
-        "SA" | "SAT" | "SATURDAY" => "SATURDAY",
-        "SU" | "SUN" | "SUNDAY" => "SUNDAY",
-        other => return exec_err!("Spark `next_day` function: invalid day_of_week `{other}`"),
+        "MO" | "MON" | "MONDAY" => Some("MONDAY"),
+        "TU" | "TUE" | "TUESDAY" => Some("TUESDAY"),
+        "WE" | "WED" | "WEDNESDAY" => Some("WEDNESDAY"),
+        "TH" | "THU" | "THURSDAY" => Some("THURSDAY"),
+        "FR" | "FRI" | "FRIDAY" => Some("FRIDAY"),
+        "SA" | "SAT" | "SATURDAY" => Some("SATURDAY"),
+        "SU" | "SUN" | "SUNDAY" => Some("SUNDAY"),
+        _ => {
+            // TODO: if spark.sql.ansi.enabled is false,
+            //  returns NULL instead of an error for a malformed dayOfWeek.
+            None
+        }
     };
-    let day_of_week = day_of_week.parse::<Weekday>().map_err(|e| {
-        exec_datafusion_err!("Spark `next_day` function: invalid day_of_week {day_of_week}: {e}")
-    })?;
 
-    Ok(Date32Type::from_naive_date(
-        date + Duration::days((7 - date.weekday().days_since(day_of_week)) as i64),
-    ))
+    if let Some(day_of_week) = day_of_week {
+        let day_of_week = day_of_week.parse::<Weekday>();
+        match day_of_week {
+            Ok(day_of_week) => Some(Date32Type::from_naive_date(
+                date + Duration::days((7 - date.weekday().days_since(day_of_week)) as i64),
+            )),
+            Err(_) => {
+                // TODO: if spark.sql.ansi.enabled is false,
+                //  returns NULL instead of an error for a malformed dayOfWeek.
+                None
+            }
+        }
+    } else {
+        None
+    }
 }

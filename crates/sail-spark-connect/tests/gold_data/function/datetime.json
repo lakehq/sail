@@ -2108,7 +2108,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: next_day"
+        "success": "ok"
       }
     },
     {
