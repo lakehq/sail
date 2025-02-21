@@ -5,21 +5,21 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::Expr;
 
 use crate::error::PlanResult;
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{Function, FunctionInput};
 use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
-fn timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<Expr> {
-    if args.len() == 1 {
-        let arg = args.one()?;
+fn timestamp(input: FunctionInput) -> PlanResult<Expr> {
+    if input.arguments.len() == 1 {
+        let arg = input.arguments.one()?;
         match arg {
             Expr::Literal(ScalarValue::Utf8(Some(timestamp_string))) => {
                 let timestamp_micros =
                     string_to_timestamp_nanos(&timestamp_string).map(|x| x / 1_000)?;
                 let timezone = PlanResolver::resolve_timezone(
                     &sail_common::spec::TimeZoneInfo::SQLConfigured,
-                    function_context.plan_config().system_timezone.as_str(),
-                    &function_context.plan_config().timestamp_type,
+                    input.plan_config.system_timezone.as_str(),
+                    &input.plan_config.timestamp_type,
                 )?;
                 Ok(Expr::Literal(ScalarValue::TimestampMicrosecond(
                     Some(timestamp_micros),
@@ -29,7 +29,7 @@ fn timestamp(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<
             _ => Ok(expr_fn::to_timestamp_micros(vec![arg])),
         }
     } else {
-        Ok(expr_fn::to_timestamp_micros(args))
+        Ok(expr_fn::to_timestamp_micros(input.arguments))
     }
 }
 

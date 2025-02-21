@@ -8,11 +8,12 @@ use crate::error::PlanResult;
 use crate::extension::function::spark_hex_unhex::SparkHex;
 use crate::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use crate::extension::function::spark_xxhash64::SparkXxhash64;
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
-fn sha2(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
-    let (expr, bit_length) = args.two()?;
+fn sha2(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput { arguments, .. } = input;
+    let (expr, bit_length) = arguments.two()?;
     let result = match bit_length {
         expr::Expr::Literal(ScalarValue::Int32(Some(0)))
         | expr::Expr::Literal(ScalarValue::Int32(Some(256))) => expr_fn::sha256(expr),

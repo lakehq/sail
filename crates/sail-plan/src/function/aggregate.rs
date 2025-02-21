@@ -7,6 +7,7 @@ use datafusion::functions_aggregate::{
     correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
     variance,
 };
+use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::{expr, AggregateUDF};
@@ -17,7 +18,7 @@ use crate::extension::function::kurtosis::KurtosisFunction;
 use crate::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use crate::extension::function::mode::ModeFunction;
 use crate::extension::function::skewness::SkewnessFunc;
-use crate::function::common::{AggFunction, AggFunctionContext};
+use crate::function::common::{get_null_treatment, AggFunction, AggFunctionInput};
 use crate::utils::ItemTaker;
 
 lazy_static! {
@@ -25,56 +26,71 @@ lazy_static! {
         HashMap::from_iter(list_built_in_aggregate_functions());
 }
 
-fn first_last_value(
+fn get_arguments_and_null_treatment(
     args: Vec<expr::Expr>,
-    agg_function_context: AggFunctionContext,
-    first_value: bool,
-) -> PlanResult<expr::Expr> {
-    use datafusion_expr::sqlparser::ast::NullTreatment;
-
-    let (args, ignore_nulls) = if args.len() == 1 {
+    ignore_nulls: Option<bool>,
+) -> PlanResult<(Vec<expr::Expr>, Option<NullTreatment>)> {
+    if args.len() == 1 {
         let expr = args.one()?;
-        (vec![expr], NullTreatment::RespectNulls)
+        Ok((vec![expr], get_null_treatment(ignore_nulls)))
     } else if args.len() == 2 {
+        if ignore_nulls.is_some() {
+            return Err(PlanError::invalid(
+                "first/last value arguments conflict with IGNORE NULLS clause",
+            ));
+        }
         let (expr, ignore_nulls) = args.two()?;
-        let ignore_nulls = match ignore_nulls {
+        let null_treatment = match ignore_nulls {
             expr::Expr::Literal(ScalarValue::Boolean(Some(ignore_nulls))) => {
                 if ignore_nulls {
-                    NullTreatment::IgnoreNulls
+                    Some(NullTreatment::IgnoreNulls)
                 } else {
-                    NullTreatment::RespectNulls
+                    Some(NullTreatment::RespectNulls)
                 }
             }
             _ => {
                 return Err(PlanError::invalid(
-                    "any_value requires a boolean literal as the second argument",
+                    "first/last value requires a boolean literal as the second argument",
                 ))
             }
         };
-        (vec![expr], ignore_nulls)
+        Ok((vec![expr], null_treatment))
     } else {
-        return Err(PlanError::invalid("any_value requires 1 or 2 arguments"));
-    };
-    let func = if first_value {
-        first_last::first_value_udaf()
-    } else {
-        first_last::last_value_udaf()
-    };
+        Err(PlanError::invalid(
+            "first/last value requires 1 or 2 arguments",
+        ))
+    }
+}
+
+fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let (args, null_treatment) =
+        get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func,
+        func: first_last::first_value_udaf(),
         args,
-        distinct: agg_function_context.distinct(),
-        filter: None,
-        order_by: None,
-        null_treatment: Some(ignore_nulls),
+        distinct: input.distinct,
+        filter: input.filter,
+        order_by: input.order_by,
+        null_treatment,
     }))
 }
 
-fn kurtosis(
-    args: Vec<expr::Expr>,
-    agg_function_context: AggFunctionContext,
-) -> PlanResult<expr::Expr> {
-    let args = args
+fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let (args, null_treatment) =
+        get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: first_last::last_value_udaf(),
+        args,
+        distinct: input.distinct,
+        filter: input.filter,
+        order_by: input.order_by,
+        null_treatment,
+    }))
+}
+
+fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = input
+        .arguments
         .into_iter()
         .map(|arg| {
             expr::Expr::Cast(expr::Cast {
@@ -86,57 +102,49 @@ fn kurtosis(
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(KurtosisFunction::new())),
         args,
-        distinct: agg_function_context.distinct(),
-        filter: None,
-        order_by: None,
-        null_treatment: None,
+        distinct: input.distinct,
+        filter: input.filter,
+        order_by: input.order_by,
+        null_treatment: get_null_treatment(input.ignore_nulls),
     }))
 }
 
-fn max_by(
-    args: Vec<expr::Expr>,
-    agg_function_context: AggFunctionContext,
-) -> PlanResult<expr::Expr> {
+fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MaxByFunction::new())),
-        args,
-        distinct: agg_function_context.distinct(),
-        filter: None,
-        order_by: None,
-        null_treatment: None,
+        args: input.arguments,
+        distinct: input.distinct,
+        filter: input.filter,
+        order_by: input.order_by,
+        null_treatment: get_null_treatment(input.ignore_nulls),
     }))
 }
 
-fn min_by(
-    args: Vec<expr::Expr>,
-    agg_function_context: AggFunctionContext,
-) -> PlanResult<expr::Expr> {
+fn min_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MinByFunction::new())),
-        args,
-        distinct: agg_function_context.distinct(),
-        filter: None,
-        order_by: None,
-        null_treatment: None,
+        args: input.arguments,
+        distinct: input.distinct,
+        filter: input.filter,
+        order_by: input.order_by,
+        null_treatment: get_null_treatment(input.ignore_nulls),
     }))
 }
 
-fn mode(args: Vec<expr::Expr>, agg_function_context: AggFunctionContext) -> PlanResult<expr::Expr> {
+fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(ModeFunction::new())),
-        args,
-        distinct: agg_function_context.distinct(),
-        filter: None,
-        order_by: None,
-        null_treatment: None,
+        args: input.arguments,
+        distinct: input.distinct,
+        filter: input.filter,
+        order_by: input.order_by,
+        null_treatment: get_null_treatment(input.ignore_nulls),
     }))
 }
 
-fn skewness(
-    args: Vec<expr::Expr>,
-    agg_function_context: AggFunctionContext,
-) -> PlanResult<expr::Expr> {
-    let args = args
+fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = input
+        .arguments
         .into_iter()
         .map(|arg| {
             expr::Expr::Cast(expr::Cast {
@@ -148,10 +156,10 @@ fn skewness(
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(SkewnessFunc::new())),
         args,
-        distinct: agg_function_context.distinct(),
-        filter: None,
-        order_by: None,
-        null_treatment: None,
+        distinct: input.distinct,
+        filter: input.filter,
+        order_by: input.order_by,
+        null_treatment: get_null_treatment(input.ignore_nulls),
     }))
 }
 
@@ -160,12 +168,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
 
     vec![
         ("any", F::default(bool_and_or::bool_or_udaf)),
-        (
-            "any_value",
-            F::custom(|args, agg_function_context| {
-                first_last_value(args, agg_function_context, true)
-            }),
-        ),
+        ("any_value", F::custom(first_value)),
         (
             "approx_count_distinct",
             F::default(approx_distinct::approx_distinct_udaf),
@@ -192,36 +195,16 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("covar_pop", F::default(covariance::covar_pop_udaf)),
         ("covar_samp", F::default(covariance::covar_samp_udaf)),
         ("every", F::default(bool_and_or::bool_and_udaf)),
-        (
-            "first",
-            F::custom(|args, agg_function_context| {
-                first_last_value(args, agg_function_context, true)
-            }),
-        ),
-        (
-            "first_value",
-            F::custom(|args, agg_function_context| {
-                first_last_value(args, agg_function_context, true)
-            }),
-        ),
+        ("first", F::custom(first_value)),
+        ("first_value", F::custom(first_value)),
         ("grouping", F::default(grouping::grouping_udaf)),
         ("grouping_id", F::unknown("grouping_id")),
         ("histogram_numeric", F::unknown("histogram_numeric")),
         ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
         ("hll_union_agg", F::unknown("hll_union_agg")),
         ("kurtosis", F::custom(kurtosis)),
-        (
-            "last",
-            F::custom(|args, agg_function_context| {
-                first_last_value(args, agg_function_context, false)
-            }),
-        ),
-        (
-            "last_value",
-            F::custom(|args, agg_function_context| {
-                first_last_value(args, agg_function_context, false)
-            }),
-        ),
+        ("last", F::custom(last_value)),
+        ("last_value", F::custom(last_value)),
         ("max", F::default(min_max::max_udaf)),
         ("max_by", F::custom(max_by)),
         ("mean", F::default(average::avg_udaf)),

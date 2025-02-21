@@ -17,7 +17,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -49,7 +52,10 @@
                   }
                 ],
                 "isDistinct": false,
-                "isUserDefinedFunction": false
+                "isUserDefinedFunction": false,
+                "ignoreNulls": null,
+                "filter": null,
+                "orderBy": null
               }
             },
             "extraction": {
@@ -105,7 +111,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -195,7 +204,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -227,7 +239,10 @@
                   }
                 ],
                 "isDistinct": false,
-                "isUserDefinedFunction": false
+                "isUserDefinedFunction": false,
+                "ignoreNulls": null,
+                "filter": null,
+                "orderBy": null
               }
             },
             "subquery": {
@@ -297,7 +312,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -337,7 +355,10 @@
                   }
                 ],
                 "isDistinct": false,
-                "isUserDefinedFunction": false
+                "isUserDefinedFunction": false,
+                "ignoreNulls": null,
+                "filter": null,
+                "orderBy": null
               }
             },
             "subquery": {
@@ -429,7 +450,10 @@
                               }
                             ],
                             "isDistinct": false,
-                            "isUserDefinedFunction": false
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
                           }
                         }
                       ]
@@ -449,7 +473,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -481,7 +508,10 @@
                   }
                 ],
                 "isDistinct": false,
-                "isUserDefinedFunction": false
+                "isUserDefinedFunction": false,
+                "ignoreNulls": null,
+                "filter": null,
+                "orderBy": null
               }
             },
             "arguments": [
@@ -529,22 +559,34 @@
                                 }
                               ],
                               "isDistinct": false,
-                              "isUserDefinedFunction": false
+                              "isUserDefinedFunction": false,
+                              "ignoreNulls": null,
+                              "filter": null,
+                              "orderBy": null
                             }
                           }
                         ],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -576,7 +618,10 @@
                   }
                 ],
                 "isDistinct": false,
-                "isUserDefinedFunction": false
+                "isUserDefinedFunction": false,
+                "ignoreNulls": null,
+                "filter": null,
+                "orderBy": null
               }
             },
             "name": [
@@ -626,17 +671,26 @@
                           }
                         ],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -806,7 +860,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -863,7 +920,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -893,7 +953,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -923,7 +986,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -953,7 +1019,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -983,7 +1052,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1013,7 +1085,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1047,7 +1122,10 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               },
               {
@@ -1100,7 +1178,10 @@
                                       }
                                     ],
                                     "isDistinct": false,
-                                    "isUserDefinedFunction": false
+                                    "isUserDefinedFunction": false,
+                                    "ignoreNulls": null,
+                                    "filter": null,
+                                    "orderBy": null
                                   }
                                 },
                                 {
@@ -1137,7 +1218,10 @@
                                                         }
                                                       ],
                                                       "isDistinct": false,
-                                                      "isUserDefinedFunction": false
+                                                      "isUserDefinedFunction": false,
+                                                      "ignoreNulls": null,
+                                                      "filter": null,
+                                                      "orderBy": null
                                                     }
                                                   },
                                                   {
@@ -1150,7 +1234,10 @@
                                                   }
                                                 ],
                                                 "isDistinct": false,
-                                                "isUserDefinedFunction": false
+                                                "isUserDefinedFunction": false,
+                                                "ignoreNulls": null,
+                                                "filter": null,
+                                                "orderBy": null
                                               }
                                             },
                                             {
@@ -1163,7 +1250,10 @@
                                             }
                                           ],
                                           "isDistinct": false,
-                                          "isUserDefinedFunction": false
+                                          "isUserDefinedFunction": false,
+                                          "ignoreNulls": null,
+                                          "filter": null,
+                                          "orderBy": null
                                         }
                                       },
                                       {
@@ -1176,27 +1266,42 @@
                                       }
                                     ],
                                     "isDistinct": false,
-                                    "isUserDefinedFunction": false
+                                    "isUserDefinedFunction": false,
+                                    "ignoreNulls": null,
+                                    "filter": null,
+                                    "orderBy": null
                                   }
                                 }
                               ],
                               "isDistinct": false,
-                              "isUserDefinedFunction": false
+                              "isUserDefinedFunction": false,
+                              "ignoreNulls": null,
+                              "filter": null,
+                              "orderBy": null
                             }
                           }
                         ],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1226,7 +1331,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1256,7 +1364,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1286,7 +1397,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1316,7 +1430,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1346,7 +1463,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1376,7 +1496,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1406,7 +1529,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1461,7 +1587,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1491,7 +1620,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1522,7 +1654,10 @@
                 }
               ],
               "isDistinct": false,
-              "isUserDefinedFunction": false
+              "isUserDefinedFunction": false,
+              "ignoreNulls": null,
+              "filter": null,
+              "orderBy": null
             }
           }
         }
@@ -1554,7 +1689,10 @@
                 }
               ],
               "isDistinct": false,
-              "isUserDefinedFunction": false
+              "isUserDefinedFunction": false,
+              "ignoreNulls": null,
+              "filter": null,
+              "orderBy": null
             }
           }
         }
@@ -1585,7 +1723,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1615,7 +1756,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1645,7 +1789,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1675,7 +1822,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1705,7 +1855,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1735,7 +1888,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1781,7 +1937,10 @@
                                       }
                                     ],
                                     "isDistinct": false,
-                                    "isUserDefinedFunction": false
+                                    "isUserDefinedFunction": false,
+                                    "ignoreNulls": null,
+                                    "filter": null,
+                                    "orderBy": null
                                   }
                                 },
                                 {
@@ -1794,7 +1953,10 @@
                                 }
                               ],
                               "isDistinct": false,
-                              "isUserDefinedFunction": false
+                              "isUserDefinedFunction": false,
+                              "ignoreNulls": null,
+                              "filter": null,
+                              "orderBy": null
                             }
                           },
                           {
@@ -1807,7 +1969,10 @@
                           }
                         ],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     },
                     {
@@ -1820,7 +1985,10 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               },
               {
@@ -1833,7 +2001,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1867,7 +2038,10 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               },
               {
@@ -1892,12 +2066,18 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2261,12 +2441,18 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2296,7 +2482,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2330,7 +2519,10 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               },
               {
@@ -2355,12 +2547,18 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2406,7 +2604,10 @@
                                       }
                                     ],
                                     "isDistinct": false,
-                                    "isUserDefinedFunction": false
+                                    "isUserDefinedFunction": false,
+                                    "ignoreNulls": null,
+                                    "filter": null,
+                                    "orderBy": null
                                   }
                                 },
                                 {
@@ -2419,7 +2620,10 @@
                                 }
                               ],
                               "isDistinct": false,
-                              "isUserDefinedFunction": false
+                              "isUserDefinedFunction": false,
+                              "ignoreNulls": null,
+                              "filter": null,
+                              "orderBy": null
                             }
                           },
                           {
@@ -2432,7 +2636,10 @@
                           }
                         ],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     },
                     {
@@ -2445,7 +2652,10 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               },
               {
@@ -2458,7 +2668,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2487,7 +2700,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2517,7 +2733,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2646,7 +2865,10 @@
                   }
                 ],
                 "isDistinct": false,
-                "isUserDefinedFunction": false
+                "isUserDefinedFunction": false,
+                "ignoreNulls": null,
+                "filter": null,
+                "orderBy": null
               }
             }
           }
@@ -2712,7 +2934,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2793,7 +3018,10 @@
                           }
                         ],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   },
@@ -2832,17 +3060,13 @@
                   ],
                   "planId": null
                 }
-              },
-              {
-                "literal": {
-                  "boolean": {
-                    "value": true
-                  }
-                }
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": true,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2864,7 +3088,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2877,7 +3104,10 @@
             "functionName": "foo",
             "arguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2903,7 +3133,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2940,7 +3173,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -2970,7 +3206,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -3000,7 +3239,10 @@
               }
             ],
             "isDistinct": true,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -3036,7 +3278,10 @@
               }
             ],
             "isDistinct": true,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -3055,17 +3300,13 @@
                   ],
                   "planId": null
                 }
-              },
-              {
-                "literal": {
-                  "boolean": {
-                    "value": true
-                  }
-                }
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": true,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -3087,7 +3328,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -3109,7 +3353,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -3141,12 +3388,18 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -3196,12 +3449,18 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -3233,7 +3492,10 @@
                   }
                 ],
                 "isDistinct": false,
-                "isUserDefinedFunction": false
+                "isUserDefinedFunction": false,
+                "ignoreNulls": null,
+                "filter": null,
+                "orderBy": null
               }
             },
             "extraction": {
@@ -3286,7 +3548,10 @@
                   }
                 ],
                 "isDistinct": false,
-                "isUserDefinedFunction": false
+                "isUserDefinedFunction": false,
+                "ignoreNulls": null,
+                "filter": null,
+                "orderBy": null
               }
             },
             "arguments": [
@@ -3339,7 +3604,10 @@
               }
             ],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }

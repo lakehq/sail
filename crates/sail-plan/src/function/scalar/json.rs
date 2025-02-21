@@ -3,15 +3,13 @@ use datafusion_expr::{expr, lit};
 use datafusion_functions_json::udfs;
 
 use crate::error::PlanResult;
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
-fn get_json_object(
-    args: Vec<expr::Expr>,
-    _function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
+fn get_json_object(input: FunctionInput) -> PlanResult<expr::Expr> {
     // > 1 path means nested access e.g. json_as_text(json, p1, p2) => json.p1.p2
-    let (expr, paths) = args.at_least_one()?;
+    let FunctionInput { arguments, .. } = input;
+    let (expr, paths) = arguments.at_least_one()?;
     let paths: Vec<expr::Expr> = paths
         .into_iter()
         .map(|path| match &path {

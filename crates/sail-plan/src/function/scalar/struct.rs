@@ -5,12 +5,13 @@ use datafusion_expr::{expr, Expr, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::struct_function::StructFunction;
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{Function, FunctionInput};
 
-fn r#struct(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<Expr> {
-    let field_names: Vec<String> = args
+fn r#struct(input: FunctionInput) -> PlanResult<Expr> {
+    let field_names: Vec<String> = input
+        .arguments
         .iter()
-        .zip(function_context.argument_names())
+        .zip(input.argument_names)
         .enumerate()
         .map(|(i, (expr, name))| -> PlanResult<_> {
             match expr {
@@ -24,7 +25,7 @@ fn r#struct(args: Vec<Expr>, function_context: &FunctionContext) -> PlanResult<E
         .collect::<PlanResult<_>>()?;
     Ok(Expr::ScalarFunction(expr::ScalarFunction {
         func: Arc::new(ScalarUDF::from(StructFunction::new(field_names))),
-        args,
+        args: input.arguments,
     }))
 }
 

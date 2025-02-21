@@ -8,14 +8,15 @@ use crate::extension::function::least_greatest;
 use crate::extension::function::randn::Randn;
 use crate::extension::function::random::Random;
 use crate::extension::function::spark_hex_unhex::{SparkHex, SparkUnHex};
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
-fn plus(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
-    if args.len() < 2 {
-        Ok(args.one()?)
+fn plus(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput { arguments, .. } = input;
+    if arguments.len() < 2 {
+        Ok(arguments.one()?)
     } else {
-        let (left, right) = args.two()?;
+        let (left, right) = arguments.two()?;
         Ok(expr::Expr::BinaryExpr(BinaryExpr {
             left: Box::new(left),
             op: Operator::Plus,
@@ -24,11 +25,12 @@ fn plus(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResul
     }
 }
 
-fn minus(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
-    if args.len() < 2 {
-        Ok(expr::Expr::Negative(Box::new(args.one()?)))
+fn minus(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput { arguments, .. } = input;
+    if arguments.len() < 2 {
+        Ok(expr::Expr::Negative(Box::new(arguments.one()?)))
     } else {
-        let (left, right) = args.two()?;
+        let (left, right) = arguments.two()?;
         Ok(expr::Expr::BinaryExpr(BinaryExpr {
             left: Box::new(left),
             op: Operator::Minus,
@@ -72,15 +74,18 @@ fn power(base: expr::Expr, exponent: expr::Expr) -> expr::Expr {
 }
 
 // FIXME: Implement the UDF for better numerical precision.
-fn expm1(args: Vec<expr::Expr>, function_context: &FunctionContext) -> PlanResult<expr::Expr> {
-    let num = args.one()?;
-    minus(
-        vec![
+fn expm1(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let num = input.arguments.one()?;
+    let name = input.argument_names.to_vec().one()?;
+    minus(FunctionInput {
+        arguments: vec![
             expr_fn::exp(num),
             expr::Expr::Literal(ScalarValue::Float64(Some(1.0))),
         ],
-        function_context,
-    )
+        argument_names: &[name, "1.0".to_string()],
+        plan_config: input.plan_config,
+        session_context: input.session_context,
+    })
 }
 
 fn hypot(expr1: expr::Expr, expr2: expr::Expr) -> expr::Expr {
