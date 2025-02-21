@@ -14,10 +14,10 @@ use crate::ast::expression::{
 };
 use crate::ast::identifier::{ColumnIdent, Ident, ObjectName, TableIdent};
 use crate::ast::keywords::{
-    All, Anti, As, By, Cluster, Cross, Cube, Distinct, Except, Exclude, For, From, Full, Group,
-    Having, In, Include, Inner, Intersect, Join, Lateral, Left, Limit, Minus, Name, Natural, Nulls,
-    Offset, On, Order, Outer, Pivot, Recursive, Right, Rollup, Select, Semi, Sort, Union, Unpivot,
-    Using, Values, View, Where, Window, With,
+    All, Anti, As, By, Cluster, Cross, Cube, Distinct, Distribute, Except, Exclude, For, From,
+    Full, Group, Having, In, Include, Inner, Intersect, Join, Lateral, Left, Limit, Minus, Name,
+    Natural, Nulls, Offset, On, Order, Outer, Partition, Pivot, Recursive, Right, Rollup, Select,
+    Semi, Sort, Union, Unpivot, Using, Values, View, Where, Window, With,
 };
 use crate::ast::operator::{Comma, LeftParenthesis, RightParenthesis};
 use crate::combinator::{boxed, compose, sequence, unit};
@@ -522,8 +522,16 @@ pub struct ClusterByClause {
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
+pub struct PartitionByClause {
+    pub partition_by: (Partition, By),
+    #[parser(function = |e, o| sequence(e, unit(o)))]
+    pub items: Sequence<Expr, Comma>,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
 pub struct DistributeByClause {
-    pub distribute_by: (Cluster, By),
+    pub distribute_by: (Distribute, By),
     #[parser(function = |e, o| sequence(e, unit(o)))]
     pub items: Sequence<Expr, Comma>,
 }

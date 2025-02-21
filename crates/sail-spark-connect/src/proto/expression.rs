@@ -151,6 +151,7 @@ impl TryFrom<Expression> for spec::Expr {
                 let window_function = window_function.required("window function")?;
                 Ok(spec::Expr::Window {
                     window_function: Box::new((*window_function).try_into()?),
+                    cluster_spec: vec![],
                     partition_spec: partition_spec
                         .into_iter()
                         .map(|x| x.try_into())

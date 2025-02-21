@@ -1,5 +1,8 @@
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
+use crate::error::CommonError;
 use crate::spec::data_type::Schema;
 use crate::spec::expression::{
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, Expr, ObjectName,
@@ -326,10 +329,13 @@ pub enum CommandNode {
     },
     CacheTable {
         table: ObjectName,
+        lazy: bool,
         storage_level: Option<StorageLevel>,
+        query: Option<Box<QueryPlan>>,
     },
     UncacheTable {
         table: ObjectName,
+        if_exists: bool,
     },
     ClearCache,
     RefreshTable {
@@ -363,6 +369,9 @@ pub enum CommandNode {
     },
     RegisterFunction(CommonInlineUserDefinedFunction),
     RegisterTableFunction(CommonInlineUserDefinedTableFunction),
+    RefreshFunction {
+        function: ObjectName,
+    },
     DropFunction {
         function: ObjectName,
         if_exists: bool,
@@ -415,6 +424,11 @@ pub enum CommandNode {
         table: ObjectName,
         if_exists: bool,
         operation: AlterTableOperation,
+    },
+    AlterView {
+        view: ObjectName,
+        if_exists: bool,
+        operation: AlterViewOperation,
     },
 }
 
@@ -797,6 +811,107 @@ pub struct StorageLevel {
     pub replication: usize,
 }
 
+impl FromStr for StorageLevel {
+    type Err = CommonError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_uppercase().as_str() {
+            "NONE" => Ok(Self {
+                use_disk: false,
+                use_memory: false,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 1,
+            }),
+            "DISK_ONLY" => Ok(Self {
+                use_disk: true,
+                use_memory: false,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 1,
+            }),
+            "DISK_ONLY_2" => Ok(Self {
+                use_disk: true,
+                use_memory: false,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 2,
+            }),
+            "DISK_ONLY_3" => Ok(Self {
+                use_disk: true,
+                use_memory: false,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 3,
+            }),
+            "MEMORY_ONLY" => Ok(Self {
+                use_disk: false,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: true,
+                replication: 1,
+            }),
+            "MEMORY_ONLY_2" => Ok(Self {
+                use_disk: false,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: true,
+                replication: 2,
+            }),
+            "MEMORY_ONLY_SER" => Ok(Self {
+                use_disk: false,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 1,
+            }),
+            "MEMORY_ONLY_SER_2" => Ok(Self {
+                use_disk: false,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 2,
+            }),
+            "MEMORY_AND_DISK" => Ok(Self {
+                use_disk: true,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: true,
+                replication: 1,
+            }),
+            "MEMORY_AND_DISK_2" => Ok(Self {
+                use_disk: true,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: true,
+                replication: 2,
+            }),
+            "MEMORY_AND_DISK_SER" => Ok(Self {
+                use_disk: true,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 1,
+            }),
+            "MEMORY_AND_DISK_SER_2" => Ok(Self {
+                use_disk: true,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 2,
+            }),
+            "OFF_HEAP" => Ok(Self {
+                use_disk: true,
+                use_memory: true,
+                use_off_heap: true,
+                deserialized: false,
+                replication: 1,
+            }),
+            _ => Err(CommonError::invalid(format!("storage level: {s}"))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TableConstraint {
@@ -857,4 +972,11 @@ pub enum ExplainMode {
 pub enum AlterTableOperation {
     Unknown,
     // TODO: add all the alter table operations
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AlterViewOperation {
+    Unknown,
+    // TODO: add all the alter view operations
 }

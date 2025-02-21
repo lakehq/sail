@@ -87,7 +87,7 @@
       "input": "select * from t order by a distribute by a",
       "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t order by a distribute by a\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: found distribute at 27:37 expected statement, or end of input"
+        "failure": "not implemented: DISTRIBUTE BY"
       }
     },
     {

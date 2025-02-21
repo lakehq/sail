@@ -11,21 +11,24 @@ use sail_sql_macro::TreeParser;
 use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit};
 use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
-    All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate,
-    CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Distribute, Div, Else, End,
-    Escape, Exists, Extract, False, First, Following, For, From, Grouping, Hour, Hours, Ilike, In,
+    All, And, Any, AnyValue, As, Asc, Between, Both, Case, Cast, Cube, Current, CurrentDate,
+    CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Div, Else, End, Escape, Exists,
+    Extract, False, First, Following, For, From, Grouping, Hour, Hours, Ignore, Ilike, In,
     Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond, Milliseconds,
-    Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay, Partition, Placing,
-    Position, Preceding, Range, Rlike, Rollup, Row, Rows, Second, Seconds, Sets, Similar, Sort,
-    Struct, Substr, Substring, Table, Then, Timestamp, TimestampLtz, TimestampNtz, To, Trailing,
-    Trim, True, Unbounded, Unknown, Week, Weeks, When, Year, Years,
+    Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Over, Overlay, Placing, Position,
+    Preceding, Range, Regexp, Rlike, Rollup, Row, Rows, Second, Seconds, Sets, Similar, Struct,
+    Substr, Substring, Table, Then, Timestamp, TimestampLtz, TimestampNtz, To, Trailing, Trim,
+    True, Unbounded, Unknown, Week, Weeks, When, Year, Years,
 };
 use crate::ast::literal::{NumberLiteral, StringLiteral};
 use crate::ast::operator;
 use crate::ast::operator::{
     Comma, DoubleColon, LeftBracket, LeftParenthesis, Period, RightBracket, RightParenthesis,
 };
-use crate::ast::query::{NamedExpr, Query};
+use crate::ast::query::{
+    ClusterByClause, DistributeByClause, NamedExpr, OrderByClause, PartitionByClause, Query,
+    SortByClause,
+};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
 use crate::options::ParserOptions;
@@ -81,6 +84,7 @@ pub enum Expr {
         Option<PatternEscape>,
     ),
     RLike(Box<Expr>, Option<Not>, Rlike, Box<Expr>),
+    RegExp(Box<Expr>, Option<Not>, Regexp, Box<Expr>),
     SimilarTo(
         Box<Expr>,
         Option<Not>,
@@ -193,6 +197,27 @@ pub enum AtomExpr {
         #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
         In,
         #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        RightParenthesis,
+    ),
+    First(
+        First,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        Option<(Ignore, Nulls)>,
+        RightParenthesis,
+    ),
+    Last(
+        Last,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        Option<(Ignore, Nulls)>,
+        RightParenthesis,
+    ),
+    AnyValue(
+        AnyValue,
+        LeftParenthesis,
+        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
+        Option<(Ignore, Nulls)>,
         RightParenthesis,
     ),
     CurrentUser(CurrentUser, Option<(LeftParenthesis, RightParenthesis)>),
@@ -390,31 +415,22 @@ pub enum WindowSpec {
     Detailed {
         left: LeftParenthesis,
         #[parser(function = |e, o| compose(e, o))]
-        partition_by: Option<PartitionBy>,
-        #[parser(function = |e, o| compose(e, o))]
-        order_by: Option<OrderBy>,
+        modifiers: Vec<WindowModifier>,
         #[parser(function = |e, o| compose(e, o))]
         window_frame: Option<WindowFrame>,
         right: RightParenthesis,
     },
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
-pub struct PartitionBy {
-    pub partition: Either<Partition, Distribute>,
-    pub by: By,
-    #[parser(function = |e, o| sequence(e, unit(o)))]
-    pub columns: Sequence<Expr, Comma>,
-}
-
-#[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "Expr")]
-pub struct OrderBy {
-    pub order: Either<Order, Sort>,
-    pub by: By,
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
-    pub expressions: Sequence<OrderByExpr, Comma>,
+pub enum WindowModifier {
+    ClusterBy(#[parser(function = |e, o| compose(e, o))] ClusterByClause),
+    PartitionBy(#[parser(function = |e, o| compose(e, o))] PartitionByClause),
+    DistributeBy(#[parser(function = |e, o| compose(e, o))] DistributeByClause),
+    OrderBy(#[parser(function = |e, o| compose(e, o))] OrderByClause),
+    SortBy(#[parser(function = |e, o| compose(e, o))] SortByClause),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -498,6 +514,8 @@ pub enum BinaryOperator {
     Eq(operator::Equals),
     EqEq(operator::DoubleEquals),
     NotEq(operator::NotEquals),
+    NotLt(operator::NotLessThan),
+    NotGt(operator::NotGreaterThan),
     LtGt(operator::LessThanGreaterThan),
     Lt(operator::LessThan),
     LtEq(operator::LessThanEquals),
@@ -624,6 +642,7 @@ enum ExprInfixPredicate {
     Like(Option<Not>, Like, Option<PatternQuantifier>),
     ILike(Option<Not>, Ilike, Option<PatternQuantifier>),
     RLike(Option<Not>, Rlike),
+    RegExp(Option<Not>, Regexp),
     SimilarTo(Option<Not>, Similar, To),
 }
 
@@ -774,6 +793,12 @@ where
                     ))
                 }
                 (left, ExprInfixPredicate::RLike(x1, x2), right) => Ok(Expr::RLike(
+                    Box::new(left.build::<I, E>()?),
+                    x1,
+                    x2,
+                    Box::new(right.build::<I, E>()?),
+                )),
+                (left, ExprInfixPredicate::RegExp(x1, x2), right) => Ok(Expr::RegExp(
                     Box::new(left.build::<I, E>()?),
                     x1,
                     x2,
@@ -978,6 +1003,8 @@ where
                 left(18),
                 choice((
                     operator::NotEquals::parser((), options).map(BinaryOperator::NotEq),
+                    operator::NotGreaterThan::parser((), options).map(BinaryOperator::NotGt),
+                    operator::NotLessThan::parser((), options).map(BinaryOperator::NotLt),
                     operator::DoubleEquals::parser((), options).map(BinaryOperator::EqEq),
                     operator::Equals::parser((), options).map(BinaryOperator::Eq),
                     operator::GreaterThanEquals::parser((), options).map(BinaryOperator::GtEq),

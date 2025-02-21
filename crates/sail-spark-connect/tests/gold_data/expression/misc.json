@@ -841,7 +841,31 @@
     {
       "input": "a !< b",
       "output": {
-        "failure": "invalid argument: found ! at 2:3 expected end of input"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": ">=",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -877,7 +901,31 @@
     {
       "input": "a !> b",
       "output": {
-        "failure": "invalid argument: found ! at 2:3 expected end of input"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "<=",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "b"
+                  ],
+                  "planId": null
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -2188,7 +2236,39 @@
     {
       "input": "a not regexp 'pattern%'",
       "output": {
-        "failure": "invalid argument: found regexp at 6:12 expected end of input"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "not",
+            "arguments": [
+              {
+                "unresolvedFunction": {
+                  "functionName": "regexp",
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "literal": {
+                        "utf8": {
+                          "value": "pattern%"
+                        }
+                      }
+                    }
+                  ],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -2386,7 +2466,30 @@
     {
       "input": "a regexp 'pattern%'",
       "output": {
-        "failure": "invalid argument: found 'pattern%' at 9:19 expected end of input"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "regexp",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "literal": {
+                  "utf8": {
+                    "value": "pattern%"
+                  }
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -2718,7 +2821,30 @@
     {
       "input": "first(a ignore nulls)",
       "output": {
-        "failure": "invalid argument: found ( at 5:6 expected end of input"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "first",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "literal": {
+                  "boolean": {
+                    "value": true
+                  }
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
@@ -2918,7 +3044,30 @@
     {
       "input": "last(a ignore nulls)",
       "output": {
-        "failure": "invalid argument: found ( at 4:5 expected end of input"
+        "success": {
+          "unresolvedFunction": {
+            "functionName": "last",
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null
+                }
+              },
+              {
+                "literal": {
+                  "boolean": {
+                    "value": true
+                  }
+                }
+              }
+            ],
+            "isDistinct": false,
+            "isUserDefinedFunction": false
+          }
+        }
       }
     },
     {
