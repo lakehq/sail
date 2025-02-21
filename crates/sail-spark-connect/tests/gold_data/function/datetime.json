@@ -1668,7 +1668,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -1690,7 +1690,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp"
+        "failure": "not implemented: make_timestamp with timezone is not yet implemented"
       }
     },
     {
@@ -1712,7 +1712,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -1734,7 +1734,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -1756,7 +1756,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -1866,7 +1866,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp_ntz"
+        "success": "ok"
       }
     },
     {
@@ -1888,7 +1888,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp_ntz"
+        "success": "ok"
       }
     },
     {
@@ -1910,7 +1910,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp_ntz"
+        "success": "ok"
       }
     },
     {

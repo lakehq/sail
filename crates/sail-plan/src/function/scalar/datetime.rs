@@ -11,6 +11,7 @@ use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
 use crate::extension::function::datetime::spark_last_day::SparkLastDay;
+use crate::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use crate::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use crate::extension::function::datetime::spark_next_day::SparkNextDay;
 use crate::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
@@ -379,6 +380,23 @@ fn make_ym_interval(args: Vec<Expr>, _function_context: &FunctionContext) -> Pla
     }))
 }
 
+fn make_timestamp(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
+    if args.len() == 6 {
+        Ok(Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())),
+            args,
+        }))
+    } else if args.len() == 7 {
+        Err(PlanError::todo(
+            "make_timestamp with timezone is not yet implemented",
+        ))
+    } else {
+        Err(PlanError::invalid(format!(
+            "make_timestamp requires 6 or 7 arguments, got {args:?}"
+        )))
+    }
+}
+
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -453,9 +471,9 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("make_date", F::ternary(make_date)),
         ("make_dt_interval", F::unknown("make_dt_interval")),
         ("make_interval", F::unknown("make_interval")),
-        ("make_timestamp", F::unknown("make_timestamp")),
+        ("make_timestamp", F::custom(make_timestamp)),
         ("make_timestamp_ltz", F::unknown("make_timestamp_ltz")),
-        ("make_timestamp_ntz", F::unknown("make_timestamp_ntz")),
+        ("make_timestamp_ntz", F::udf(SparkMakeTimestampNtz::new())),
         ("make_ym_interval", F::custom(make_ym_interval)),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),

@@ -45,6 +45,7 @@ use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosit
 use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
 use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
 use sail_plan::extension::function::datetime::spark_last_day::SparkLastDay;
+use sail_plan::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_plan::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_plan::extension::function::datetime::spark_next_day::SparkNextDay;
 use sail_plan::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
@@ -768,6 +769,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_make_ym_interval" | "make_ym_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
+            "spark_make_timestamp_ntz" | "make_timestamp_ntz" => {
+                Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
+            }
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -810,6 +814,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkLastDay>()
             || node.inner().as_any().is::<SparkNextDay>()
             || node.inner().as_any().is::<SparkMakeYmInterval>()
+            || node.inner().as_any().is::<SparkMakeTimestampNtz>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"
