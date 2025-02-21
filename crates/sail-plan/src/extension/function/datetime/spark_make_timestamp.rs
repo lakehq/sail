@@ -76,7 +76,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                     Ok(Int32Array::from_value(*value, number_rows))
                 }
                 other => {
-                    return exec_err!(
+                    exec_err!(
                     "Unsupported {arg_name} arg {other:?} for Spark function `make_timestamp_ntz`"
                 )
                 }
@@ -89,7 +89,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                     Ok(UInt32Array::from_value(*value, number_rows))
                 }
                 other => {
-                    return exec_err!(
+                    exec_err!(
                     "Unsupported {arg_name} arg {other:?} for Spark function `make_timestamp_ntz`"
                 )
                 }
@@ -102,7 +102,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                     Ok(Float32Array::from_value(*value, number_rows))
                 }
                 other => {
-                    return exec_err!(
+                    exec_err!(
                     "Unsupported {arg_name} arg {other:?} for Spark function `make_timestamp_ntz`"
                 )
                 }
