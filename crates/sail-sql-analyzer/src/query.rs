@@ -1,12 +1,12 @@
 use sail_common::spec;
-use sail_sql_parser::ast::expression::{AtomExpr, DuplicateTreatment, Expr};
+use sail_sql_parser::ast::expression::{AtomExpr, DuplicateTreatment, Expr, OrderByExpr};
 use sail_sql_parser::ast::operator::Comma;
 use sail_sql_parser::ast::query::{
     AliasClause, ClusterByClause, DistributeByClause, FromClause, GroupByClause, GroupByModifier,
     HavingClause, IdentList, JoinCriteria, JoinOperator, LateralViewClause, LimitClause,
-    LimitValue, NamedExpr, NamedExprList, NamedQuery, OffsetClause, OrderByClause, PivotClause,
-    Query, QueryBody, QueryModifier, QuerySelect, QueryTerm, SelectClause, SelectExpr, SetOperator,
-    SetQuantifier, SortByClause, TableFactor, TableFunction, TableJoin, TableModifier,
+    LimitValue, NamedExpr, NamedExprList, NamedQuery, NamedWindow, OffsetClause, OrderByClause,
+    PivotClause, Query, QueryBody, QueryModifier, QuerySelect, QueryTerm, SelectClause, SelectExpr,
+    SetOperator, SetQuantifier, SortByClause, TableFactor, TableFunction, TableJoin, TableModifier,
     TableWithJoins, UnpivotClause, UnpivotColumns, UnpivotNulls, ValuesClause, WhereClause,
     WindowClause, WithClause,
 };
@@ -21,13 +21,13 @@ use crate::literal::LiteralValue;
 
 #[derive(Default)]
 struct QueryModifiers {
-    sort_by: Option<SortByClause>,
-    order_by: Option<OrderByClause>,
-    cluster_by: Option<ClusterByClause>,
-    distribute_by: Option<DistributeByClause>,
-    offset: Option<OffsetClause>,
-    limit: Option<LimitClause>,
-    window: Vec<WindowClause>,
+    sort_by: Option<Vec<OrderByExpr>>,
+    order_by: Option<Vec<OrderByExpr>>,
+    cluster_by: Option<Vec<Expr>>,
+    distribute_by: Option<Vec<Expr>>,
+    offset: Option<Expr>,
+    limit: Option<LimitValue>,
+    window: Vec<NamedWindow>,
 }
 
 impl TryFrom<Vec<QueryModifier>> for QueryModifiers {
@@ -37,34 +37,58 @@ impl TryFrom<Vec<QueryModifier>> for QueryModifiers {
         let mut output = Self::default();
         for modifier in value {
             match modifier {
-                QueryModifier::Window(x) => output.window.push(x),
-                QueryModifier::OrderBy(x) => {
-                    if output.order_by.replace(x).is_some() {
+                QueryModifier::Window(WindowClause { window: _, items }) => {
+                    output.window.extend(items.into_items())
+                }
+                QueryModifier::OrderBy(OrderByClause { order_by: _, items }) => {
+                    if output
+                        .order_by
+                        .replace(items.into_items().collect())
+                        .is_some()
+                    {
                         return Err(SqlError::invalid("duplicated ORDER BY clause"));
                     }
                 }
-                QueryModifier::SortBy(x) => {
-                    if output.sort_by.replace(x).is_some() {
+                QueryModifier::SortBy(SortByClause { sort_by: _, items }) => {
+                    if output
+                        .sort_by
+                        .replace(items.into_items().collect())
+                        .is_some()
+                    {
                         return Err(SqlError::invalid("duplicated SORT BY clause"));
                     }
                 }
-                QueryModifier::ClusterBy(x) => {
-                    if output.cluster_by.replace(x).is_some() {
+                QueryModifier::ClusterBy(ClusterByClause {
+                    cluster_by: _,
+                    items,
+                }) => {
+                    if output
+                        .cluster_by
+                        .replace(items.into_items().collect())
+                        .is_some()
+                    {
                         return Err(SqlError::invalid("duplicated CLUSTER BY clause"));
                     }
                 }
-                QueryModifier::DistributeBy(x) => {
-                    if output.distribute_by.replace(x).is_some() {
+                QueryModifier::DistributeBy(DistributeByClause {
+                    distribute_by: _,
+                    items,
+                }) => {
+                    if output
+                        .distribute_by
+                        .replace(items.into_items().collect())
+                        .is_some()
+                    {
                         return Err(SqlError::invalid("duplicated DISTRIBUTE BY clause"));
                     }
                 }
-                QueryModifier::Limit(x) => {
-                    if output.limit.replace(x).is_some() {
+                QueryModifier::Limit(LimitClause { limit: _, value }) => {
+                    if output.limit.replace(value).is_some() {
                         return Err(SqlError::invalid("duplicated LIMIT clause"));
                     }
                 }
-                QueryModifier::Offset(x) => {
-                    if output.offset.replace(x).is_some() {
+                QueryModifier::Offset(OffsetClause { offset: _, value }) => {
+                    if output.offset.replace(value).is_some() {
                         return Err(SqlError::invalid("duplicated OFFSET clause"));
                     }
                 }
@@ -115,9 +139,9 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
         return Err(SqlError::todo("DISTRIBUTE BY"));
     }
 
-    let plan = if let Some(SortByClause { sort_by: _, items }) = sort_by {
+    let plan = if let Some(items) = sort_by {
         let sort_by = items
-            .into_items()
+            .into_iter()
             .map(from_ast_order_by)
             .collect::<SqlResult<_>>()?;
         spec::QueryPlan::new(spec::QueryNode::Sort {
@@ -129,9 +153,9 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
-    let plan = if let Some(OrderByClause { order_by: _, items }) = order_by {
+    let plan = if let Some(items) = order_by {
         let order_by = items
-            .into_items()
+            .into_iter()
             .map(from_ast_order_by)
             .collect::<SqlResult<_>>()?;
         spec::QueryPlan::new(spec::QueryNode::Sort {
@@ -143,7 +167,7 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
-    let plan = if let Some(OffsetClause { offset: _, value }) = offset {
+    let plan = if let Some(value) = offset {
         let offset = LiteralValue::<i128>::try_from(value)?.0;
         let offset = usize::try_from(offset).map_err(|e| SqlError::invalid(e.to_string()))?;
         spec::QueryPlan::new(spec::QueryNode::Offset {
@@ -154,20 +178,17 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
-    let plan = if let Some(LimitClause {
-        limit: _,
-        value: LimitValue::Value(value),
-    }) = limit
-    {
-        let limit = LiteralValue::<i128>::try_from(value)?.0;
-        let limit = usize::try_from(limit).map_err(|e| SqlError::invalid(e.to_string()))?;
-        spec::QueryPlan::new(spec::QueryNode::Limit {
-            input: Box::new(plan),
-            skip: 0,
-            limit,
-        })
-    } else {
-        plan
+    let plan = match limit {
+        Some(LimitValue::Value(value)) => {
+            let limit = LiteralValue::<i128>::try_from(value)?.0;
+            let limit = usize::try_from(limit).map_err(|e| SqlError::invalid(e.to_string()))?;
+            spec::QueryPlan::new(spec::QueryNode::Limit {
+                input: Box::new(plan),
+                skip: 0,
+                limit,
+            })
+        }
+        Some(LimitValue::All(_)) | None => plan,
     };
 
     if let Some(WithClause {

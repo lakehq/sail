@@ -46,6 +46,7 @@ pub enum Expr {
     },
     Window {
         window_function: Box<Expr>,
+        cluster_spec: Vec<Expr>,
         partition_spec: Vec<Expr>,
         order_spec: Vec<SortOrder>,
         frame_spec: Option<WindowFrame>,

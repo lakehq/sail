@@ -1984,7 +1984,7 @@
       "input": "select * from t cluster by a distribute by a",
       "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t cluster by a distribute by a\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: found distribute at 29:39 expected statement, or end of input"
+        "failure": "not implemented: CLUSTER BY"
       }
     },
     {
@@ -2611,13 +2611,151 @@
     {
       "input": "select a, b from db.c where x !< 1",
       "output": {
-        "failure": "invalid argument: found ! at 30:31 expected statement, or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "db",
+                          "c"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": ">=",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "x"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        {
+                          "literal": {
+                            "int32": {
+                              "value": 1
+                            }
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select a, b from db.c where x !> 1",
       "output": {
-        "failure": "invalid argument: found ! at 30:31 expected statement, or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "filter": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "db",
+                          "c"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "condition": {
+                    "unresolvedFunction": {
+                      "functionName": "<=",
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "x"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        {
+                          "literal": {
+                            "int32": {
+                              "value": 1
+                            }
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false
+                    }
+                  }
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

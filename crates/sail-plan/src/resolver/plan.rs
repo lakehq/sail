@@ -563,6 +563,9 @@ impl PlanResolver<'_> {
             CommandNode::RegisterTableFunction(function) => {
                 self.resolve_catalog_register_table_function(function, state)
             }
+            CommandNode::RefreshFunction { .. } => {
+                Err(PlanError::todo("CommandNode::RefreshFunction"))
+            }
             CommandNode::CreateView { view, definition } => {
                 self.resolve_catalog_create_view(view, definition, state)
                     .await
@@ -604,6 +607,7 @@ impl PlanResolver<'_> {
                 self.resolve_command_delete(table, condition, state).await
             }
             CommandNode::AlterTable { .. } => Err(PlanError::todo("CommandNode::AlterTable")),
+            CommandNode::AlterView { .. } => Err(PlanError::todo("CommandNode::AlterView")),
         }
     }
 

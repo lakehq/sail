@@ -3,13 +3,39 @@
     {
       "input": "UNCACHE TABLE IF EXISTS a.b.c",
       "output": {
-        "failure": "not implemented: UNCACHE TABLE"
+        "success": {
+          "command": {
+            "uncacheTable": {
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "ifExists": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "UNCACHE TABLE a.b.c",
       "output": {
-        "failure": "not implemented: UNCACHE TABLE"
+        "success": {
+          "command": {
+            "uncacheTable": {
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "ifExists": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]
