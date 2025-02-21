@@ -1932,7 +1932,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_ym_interval"
+        "success": "ok"
       }
     },
     {
@@ -1954,7 +1954,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_ym_interval"
+        "success": "ok"
       }
     },
     {
@@ -1976,7 +1976,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_ym_interval"
+        "success": "ok"
       }
     },
     {
@@ -1998,7 +1998,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_ym_interval"
+        "success": "ok"
       }
     },
     {

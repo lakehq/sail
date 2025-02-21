@@ -11,6 +11,7 @@ use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
 use crate::extension::function::datetime::spark_last_day::SparkLastDay;
+use crate::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use crate::extension::function::datetime::spark_next_day::SparkNextDay;
 use crate::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use crate::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
@@ -366,6 +367,18 @@ fn from_utc_timestamp(timestamp: Expr, timezone: Expr) -> Expr {
     })
 }
 
+fn make_ym_interval(args: Vec<Expr>, _function_context: &FunctionContext) -> PlanResult<Expr> {
+    let (years, months) = if args.len() == 2 {
+        args.two()?
+    } else {
+        (args.one()?, lit(ScalarValue::Int32(Some(0))))
+    };
+    Ok(Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())),
+        args: vec![years, months],
+    }))
+}
+
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -443,7 +456,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("make_timestamp", F::unknown("make_timestamp")),
         ("make_timestamp_ltz", F::unknown("make_timestamp_ltz")),
         ("make_timestamp_ntz", F::unknown("make_timestamp_ntz")),
-        ("make_ym_interval", F::unknown("make_ym_interval")),
+        ("make_ym_interval", F::custom(make_ym_interval)),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
         ("months_between", F::unknown("months_between")),
