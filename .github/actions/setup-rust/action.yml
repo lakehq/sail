@@ -35,7 +35,7 @@ runs:
       # In the script below, the outer heredoc is interpreted by the shell,
       # while the inner heredoc is interpreted by the `GITHUB_OUTPUT` file.
       run: |
-        cat <<EOF
+        cat <<EOF >> "$GITHUB_OUTPUT"
         path<<TEXT
         ~/.cargo/bin/
         ~/.cargo/registry/index/
@@ -45,7 +45,7 @@ runs:
         target/**/deps/
         target/**/.fingerprint/
         TEXT
-        EOF >> "$GITHUB_OUTPUT"
+        EOF
         echo "label=${{ steps.versions.outputs.rust_release }}-${{ runner.os }}-${{ runner.arch }}" >> "$GITHUB_OUTPUT"
         echo "hash=${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}" >> "$GITHUB_OUTPUT"
       shell: bash
