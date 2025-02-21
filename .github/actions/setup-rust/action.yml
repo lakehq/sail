@@ -30,17 +30,43 @@ runs:
         echo "rust_release=${rust_release}" >> "$GITHUB_OUTPUT"
       shell: bash
 
+    - name: Configure cache
+      id: config
+      # In the script below, the outer heredoc is interpreted by the shell,
+      # while the inner heredoc is interpreted by the `GITHUB_OUTPUT` file.
+      run: |
+        cat <<EOF
+        path<<TEXT
+        ~/.cargo/bin/
+        ~/.cargo/registry/index/
+        ~/.cargo/registry/cache/
+        ~/.cargo/git/
+        target/**/build/
+        target/**/deps/
+        target/**/.fingerprint/
+        TEXT
+        EOF >> "$GITHUB_OUTPUT"
+        echo "label=${{ steps.versions.outputs.rust_release }}-${{ runner.os }}-${{ runner.arch }}" >> "$GITHUB_OUTPUT"
+        echo "hash=${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}" >> "$GITHUB_OUTPUT"
+      shell: bash
+
     - uses: actions/cache@v4
+      if: ${{ github.event_name == 'push' }}
       with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/
-          target/**/build/
-          target/**/deps/
-          target/**/.fingerprint/
-        key: setup-rust-${{ steps.versions.outputs.rust_release }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}
+        path: ${{ steps.config.outputs.path }}
+        key: setup-rust-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
+
+    # We do not save the cache for pull requests, so that more cache space can be reserved
+    # for the default branch and cache eviction is less likely to happen.
+    # We always use caches of the default branch for pull requests. The cache is still useful
+    # if the dependencies do not differ too much between the default branch and the feature branch.
+    - uses: actions/cache/restore@v4
+      if: ${{ github.event_name != 'push' }}
+      with:
+        path: ${{ steps.config.outputs.path }}
+        key: setup-rust-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
+        restore-keys: |
+          setup-rust-${{ steps.config.outputs.label }}-
 
     # Incremental compilation is not beneficial for CI builds.
     # So we turn it off to speed up the build and reduce the cache size.

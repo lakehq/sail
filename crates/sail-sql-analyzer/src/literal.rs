@@ -320,7 +320,7 @@ impl TryFrom<&str> for LiteralValue<Vec<u8>> {
                 try_decode_hex_char(hex_bytes[i])?,
                 try_decode_hex_char(hex_bytes[i + 1])?,
             ) {
-                (Some(high), Some(low)) => decoded_bytes.push(high << 4 | low),
+                (Some(high), Some(low)) => decoded_bytes.push((high << 4) | low),
                 _ => return Err(SqlError::invalid(format!("hex string: {value}"))),
             }
         }
