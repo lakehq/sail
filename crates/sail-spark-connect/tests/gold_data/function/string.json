@@ -1557,7 +1557,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1579,7 +1579,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1601,7 +1601,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1623,7 +1623,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1645,7 +1645,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1667,7 +1667,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1689,7 +1689,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1711,7 +1711,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1733,7 +1733,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1755,7 +1755,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1777,7 +1777,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1799,7 +1799,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {
@@ -1821,7 +1821,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: mask"
+        "success": "ok"
       }
     },
     {

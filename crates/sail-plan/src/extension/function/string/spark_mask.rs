@@ -1,11 +1,12 @@
-use datafusion::arrow::array::{ArrayRef, AsArray, GenericStringBuilder};
+use std::any::Any;
+use std::sync::Arc;
+
+use datafusion::arrow::array::{new_null_array, ArrayRef, AsArray, GenericStringBuilder};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::ScalarUDFImpl;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
-use std::any::Any;
-use std::sync::Arc;
 
 // Default character to replace upper-case characters
 const MASKED_UPPERCASE: char = 'X';
@@ -57,14 +58,14 @@ impl ScalarUDFImpl for SparkMask {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !(arg_types.len() >= 1 && arg_types.len() <= 5) {
+        if arg_types.is_empty() || arg_types.len() > 5 {
             return exec_err!(
                 "Spark `mask` function requires 1 to 5 arguments, got {}",
                 arg_types.len()
             );
         }
         match arg_types[0] {
-            DataType::Utf8 | DataType::Utf8View => Ok(DataType::Utf8),
+            DataType::Utf8 | DataType::Utf8View | DataType::Null => Ok(DataType::Utf8),
             DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
             _ => exec_err!(
                 "Spark `mask` function: first arg must be string, got {}",
@@ -73,8 +74,8 @@ impl ScalarUDFImpl for SparkMask {
         }
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-        if !(args.len() >= 1 && args.len() <= 5) {
+    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
+        if args.is_empty() || args.len() > 5 {
             return exec_err!(
                 "Spark `mask` function requires 1 to 5 arguments, got {}",
                 args.len()
@@ -209,6 +210,9 @@ impl ScalarUDFImpl for SparkMask {
                     Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)))
                 }
             }
+            ColumnarValue::Scalar(ScalarValue::Null) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+            }
             ColumnarValue::Array(array) => {
                 let result = match array.data_type() {
                     DataType::Utf8 => {
@@ -265,6 +269,7 @@ impl ScalarUDFImpl for SparkMask {
                         });
                         Ok(Arc::new(builder.finish()) as ArrayRef)
                     }
+                    DataType::Null => Ok(new_null_array(&DataType::Utf8, array.len())),
                     other => exec_err!(
                         "Spark `mask` function: first arg must be string, got {}",
                         other
