@@ -362,7 +362,8 @@ fn make_timestamp(input: FunctionInput) -> PlanResult<Expr> {
         ))
     } else {
         Err(PlanError::invalid(format!(
-            "make_timestamp requires 6 or 7 arguments, got {args:?}"
+            "make_timestamp requires 6 or 7 arguments, got {:?}",
+            input.arguments
         )))
     }
 }
