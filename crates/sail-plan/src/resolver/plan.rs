@@ -692,12 +692,15 @@ impl PlanResolver<'_> {
         };
         let canonical_function_name = function_name.to_ascii_lowercase();
         if is_built_in_generator_function(&canonical_function_name) {
-            let expr = spec::Expr::UnresolvedFunction {
+            let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: function_name.to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
-            };
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            });
             self.resolve_query_project(None, vec![expr], state).await
         } else {
             let udf = self.ctx.udf(&canonical_function_name).ok();
@@ -2289,12 +2292,15 @@ impl PlanResolver<'_> {
         } else {
             function_name
         };
-        let expression = spec::Expr::UnresolvedFunction {
+        let expression = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
             function_name,
             arguments,
             is_distinct: false,
             is_user_defined_function: false,
-        };
+            ignore_nulls: None,
+            filter: None,
+            order_by: None,
+        });
         let expression = if let Some(aliases) = column_aliases {
             spec::Expr::Alias {
                 expr: Box::new(expression),

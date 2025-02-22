@@ -241,7 +241,7 @@ impl TryFrom<LiteralValue<Signed<IntervalExpr>>> for spec::Literal {
         match interval.clone() {
             IntervalExpr::Standard { value, qualifier } => {
                 let kind = from_ast_interval_qualifier(qualifier)?;
-                parse_standard_interval(*value, kind, negated)
+                parse_standard_interval(value, kind, negated)
             }
             IntervalExpr::MultiUnit {
                 head,
@@ -280,10 +280,10 @@ impl TryFrom<LiteralValue<Signed<IntervalExpr>>> for spec::Literal {
                                 negated,
                             )
                         }
-                        _ => parse_multi_unit_interval(vec![*head], negated),
+                        _ => parse_multi_unit_interval(vec![head], negated),
                     }
                 } else {
-                    let values = once(*head).chain(tail).collect();
+                    let values = once(head).chain(tail).collect();
                     parse_multi_unit_interval(values, negated)
                 }
             }

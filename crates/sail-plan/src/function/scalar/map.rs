@@ -4,14 +4,12 @@ use datafusion_expr::expr;
 use crate::error::PlanResult;
 use crate::extension::function::map_function::MapFunction;
 use crate::extension::function::spark_element_at::{SparkElementAt, SparkTryElementAt};
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
-fn map_contains_key(
-    args: Vec<expr::Expr>,
-    _function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    let (map, key) = args.two()?;
+fn map_contains_key(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput { arguments, .. } = input;
+    let (map, key) = arguments.two()?;
     Ok(expr::Expr::Not(Box::new(expr_fn::array_empty(
         expr_fn::map_extract(map, key),
     ))))

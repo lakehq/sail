@@ -54,7 +54,7 @@ impl TryFrom<Expression> for spec::Expr {
                 arguments,
                 is_distinct,
                 is_user_defined_function,
-            }) => Ok(spec::Expr::UnresolvedFunction {
+            }) => Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name,
                 arguments: arguments
                     .into_iter()
@@ -62,7 +62,10 @@ impl TryFrom<Expression> for spec::Expr {
                     .collect::<SparkResult<_>>()?,
                 is_distinct,
                 is_user_defined_function,
-            }),
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            })),
             ExprType::ExpressionString(ExpressionString { expression }) => {
                 let expr = parse_expression(expression.as_str())
                     .and_then(from_ast_expression)
@@ -151,16 +154,18 @@ impl TryFrom<Expression> for spec::Expr {
                 let window_function = window_function.required("window function")?;
                 Ok(spec::Expr::Window {
                     window_function: Box::new((*window_function).try_into()?),
-                    cluster_spec: vec![],
-                    partition_spec: partition_spec
-                        .into_iter()
-                        .map(|x| x.try_into())
-                        .collect::<SparkResult<_>>()?,
-                    order_spec: order_spec
-                        .into_iter()
-                        .map(|x| x.try_into())
-                        .collect::<SparkResult<_>>()?,
-                    frame_spec: frame_spec.map(|x| (*x).try_into()).transpose()?,
+                    window: spec::Window::Unnamed {
+                        cluster_by: vec![],
+                        partition_by: partition_spec
+                            .into_iter()
+                            .map(|x| x.try_into())
+                            .collect::<SparkResult<_>>()?,
+                        order_by: order_spec
+                            .into_iter()
+                            .map(|x| x.try_into())
+                            .collect::<SparkResult<_>>()?,
+                        frame: frame_spec.map(|x| (*x).try_into()).transpose()?,
+                    },
                 })
             }
             ExprType::UnresolvedExtractValue(extract) => {

@@ -2,10 +2,11 @@ use std::iter::once;
 
 use sail_common::spec;
 use sail_sql_parser::ast::expression::{
-    AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, FunctionArgument,
-    FunctionExpr, GroupingExpr, GroupingSet, LambdaFunctionParameters, OrderByExpr, OrderDirection,
-    OrderNulls, OverClause, PatternEscape, PatternQuantifier, TableExpr, TrimExpr, UnaryOperator,
-    WindowFrame, WindowFrameBound, WindowModifier, WindowSpec,
+    AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, FilterClause,
+    FunctionArgument, FunctionArgumentList, FunctionExpr, GroupingExpr, GroupingSet,
+    LambdaFunctionParameters, NullTreatment, OrderByExpr, OrderDirection, OrderNulls, OverClause,
+    PatternEscape, PatternQuantifier, TableExpr, TrimExpr, UnaryOperator, WindowFrame,
+    WindowFrameBound, WindowModifier, WindowSpec, WithinGroupClause,
 };
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
 use sail_sql_parser::ast::query::{
@@ -81,12 +82,15 @@ impl TryFrom<Vec<WindowModifier>> for WindowModifiers {
     }
 }
 fn negated(expr: spec::Expr) -> spec::Expr {
-    spec::Expr::UnresolvedFunction {
+    spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
         function_name: "not".to_string(),
         arguments: vec![expr],
         is_distinct: false,
         is_user_defined_function: false,
-    }
+        ignore_nulls: None,
+        filter: None,
+        order_by: None,
+    })
 }
 
 pub(crate) fn from_ast_function_argument(arg: FunctionArgument) -> SqlResult<spec::Expr> {
@@ -208,7 +212,7 @@ fn from_ast_window_frame_bound(bound: WindowFrameBound) -> SqlResult<spec::Windo
             Ok(spec::WindowFrameBoundary::Unbounded)
         }
         WindowFrameBound::Preceding(e, _) | WindowFrameBound::Following(e, _) => Ok(
-            spec::WindowFrameBoundary::Value(Box::new(from_ast_expression(*e)?)),
+            spec::WindowFrameBoundary::Value(Box::new(from_ast_expression(e)?)),
         ),
     }
 }
@@ -216,20 +220,28 @@ fn from_ast_window_frame_bound(bound: WindowFrameBound) -> SqlResult<spec::Windo
 pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
     match expr {
         Expr::Atom(atom) => from_ast_atom_expression(atom),
-        Expr::UnaryOperator(op, expr) => Ok(spec::Expr::UnresolvedFunction {
-            function_name: from_ast_unary_operator(op)?,
-            arguments: vec![from_ast_expression(*expr)?],
-            is_distinct: false,
-            is_user_defined_function: false,
-        }),
+        Expr::UnaryOperator(op, expr) => {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name: from_ast_unary_operator(op)?,
+                arguments: vec![from_ast_expression(*expr)?],
+                is_distinct: false,
+                is_user_defined_function: false,
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
+        }
         Expr::BinaryOperator(left, op, right) => {
             let op = from_ast_binary_operator(op)?;
-            Ok(spec::Expr::UnresolvedFunction {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: op,
                 arguments: vec![from_ast_expression(*left)?, from_ast_expression(*right)?],
                 is_distinct: false,
                 is_user_defined_function: false,
-            })
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
         Expr::Wildcard(expr, _, _) => {
             let expr = from_ast_expression(*expr)?;
@@ -358,12 +370,15 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             if let Some(escape) = from_ast_pattern_escape_string(escape)? {
                 arguments.push(LiteralValue(escape.to_string()).try_into()?);
             };
-            let expr = spec::Expr::UnresolvedFunction {
+            let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: "like".to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
-            };
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            });
             if not.is_some() {
                 Ok(negated(expr))
             } else {
@@ -377,12 +392,15 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             if let Some(escape) = from_ast_pattern_escape_string(escape)? {
                 arguments.push(LiteralValue(escape.to_string()).try_into()?);
             };
-            let expr = spec::Expr::UnresolvedFunction {
+            let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: "ilike".to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
-            };
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            });
             if not.is_some() {
                 Ok(negated(expr))
             } else {
@@ -392,12 +410,15 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         Expr::RLike(expr, not, _, pattern) => {
             let expr = from_ast_expression(*expr)?;
             let pattern = from_ast_expression(*pattern)?;
-            let expr = spec::Expr::UnresolvedFunction {
+            let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: "rlike".to_string(),
                 arguments: vec![expr, pattern],
                 is_distinct: false,
                 is_user_defined_function: false,
-            };
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            });
             if not.is_some() {
                 Ok(negated(expr))
             } else {
@@ -407,12 +428,15 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         Expr::RegExp(expr, not, _, pattern) => {
             let expr = from_ast_expression(*expr)?;
             let pattern = from_ast_expression(*pattern)?;
-            let expr = spec::Expr::UnresolvedFunction {
+            let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: "regexp".to_string(),
                 arguments: vec![expr, pattern],
                 is_distinct: false,
                 is_user_defined_function: false,
-            };
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            });
             if not.is_some() {
                 Ok(negated(expr))
             } else {
@@ -443,7 +467,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             negated: false,
         }),
         AtomExpr::Table(_, expr) => {
-            let arg = match expr {
+            let expr = match expr {
                 TableExpr::Name(x) | TableExpr::NestedName(_, x, _) => {
                     spec::Expr::UnresolvedAttribute {
                         name: from_ast_object_name(x)?,
@@ -454,11 +478,8 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                     subquery: Box::new(from_ast_query(query)?),
                 },
             };
-            Ok(spec::Expr::UnresolvedFunction {
-                function_name: "table".to_string(),
-                arguments: vec![arg],
-                is_distinct: false,
-                is_user_defined_function: false,
+            Ok(spec::Expr::Table {
+                expr: Box::new(expr),
             })
         }
         AtomExpr::LambdaFunction {
@@ -488,36 +509,43 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 .into_items()
                 .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
-            Ok(spec::Expr::UnresolvedFunction {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: "struct".to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
-            })
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
         AtomExpr::Struct(_, _, expressions, _) => {
             let arguments = expressions
                 .into_items()
                 .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
-            Ok(spec::Expr::UnresolvedFunction {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: "struct".to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
-            })
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
         AtomExpr::Case {
             case: _,
             operand,
-            conditions: (head, tail),
+            first_condition,
+            other_conditions,
             r#else,
             end: _,
         } => {
             let operand = operand.map(|x| from_ast_expression(*x)).transpose()?;
             let mut arguments = vec![];
-            once(head)
-                .chain(tail.into_iter())
+            once(*first_condition)
+                .chain(other_conditions.into_iter())
                 .try_for_each::<_, SqlResult<_>>(|x| {
                     let CaseWhen {
                         when: _,
@@ -525,45 +553,56 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                         then: _,
                         result,
                     } = x;
-                    let condition = from_ast_expression(*condition)?;
+                    let condition = from_ast_expression(condition)?;
                     let condition = if let Some(ref operand) = operand {
-                        spec::Expr::UnresolvedFunction {
+                        spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                             function_name: "==".to_string(),
                             arguments: vec![operand.clone(), condition],
                             is_distinct: false,
                             is_user_defined_function: false,
-                        }
+                            ignore_nulls: None,
+                            filter: None,
+                            order_by: None,
+                        })
                     } else {
                         condition
                     };
                     arguments.push(condition);
-                    arguments.push(from_ast_expression(*result)?);
+                    arguments.push(from_ast_expression(result)?);
                     Ok(())
                 })?;
             if let Some(r#else) = r#else {
-                let CaseElse { r#else: _, result } = r#else;
-                arguments.push(from_ast_expression(*result)?);
+                let CaseElse { r#else: _, result } = *r#else;
+                arguments.push(from_ast_expression(result)?);
             }
-            Ok(spec::Expr::UnresolvedFunction {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: "when".to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
-            })
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
         AtomExpr::Cast(_, _, expr, _, data_type, _) => Ok(spec::Expr::Cast {
             expr: Box::new(from_ast_expression(*expr)?),
             cast_to_type: from_ast_data_type(data_type)?,
         }),
-        AtomExpr::Extract(_, _, ident, _, expr, _) => Ok(spec::Expr::UnresolvedFunction {
-            function_name: "extract".to_string(),
-            arguments: vec![
-                LiteralValue(ident.value).try_into()?,
-                from_ast_expression(*expr)?,
-            ],
-            is_distinct: false,
-            is_user_defined_function: false,
-        }),
+        AtomExpr::Extract(_, _, ident, _, expr, _) => {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name: "extract".to_string(),
+                arguments: vec![
+                    LiteralValue(ident.value).try_into()?,
+                    from_ast_expression(*expr)?,
+                ],
+                is_distinct: false,
+                is_user_defined_function: false,
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
+        }
         AtomExpr::Substring(_, _, expr, r#from, r#for, _) => {
             let mut arguments = vec![from_ast_expression(*expr)?];
             if let Some((_, pos)) = r#from {
@@ -572,37 +611,43 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             if let Some((_, len)) = r#for {
                 arguments.push(from_ast_expression(*len)?);
             }
-            Ok(spec::Expr::UnresolvedFunction {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: "substring".to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
-            })
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
         AtomExpr::Trim(_, _, trim, _) => {
-            let (name, arguments) = match trim {
-                TrimExpr::LeadingSpace(_, _, e) => ("ltrim", vec![from_ast_expression(*e)?]),
+            let (name, arguments) = match *trim {
+                TrimExpr::LeadingSpace(_, _, e) => ("ltrim", vec![from_ast_expression(e)?]),
                 TrimExpr::Leading(_, what, _, e) => (
                     "ltrim",
-                    vec![from_ast_expression(*e)?, from_ast_expression(*what)?],
+                    vec![from_ast_expression(e)?, from_ast_expression(what)?],
                 ),
-                TrimExpr::TrailingSpace(_, _, e) => ("rtrim", vec![from_ast_expression(*e)?]),
+                TrimExpr::TrailingSpace(_, _, e) => ("rtrim", vec![from_ast_expression(e)?]),
                 TrimExpr::Trailing(_, what, _, e) => (
                     "rtrim",
-                    vec![from_ast_expression(*e)?, from_ast_expression(*what)?],
+                    vec![from_ast_expression(e)?, from_ast_expression(what)?],
                 ),
-                TrimExpr::BothSpace(_, _, e) => ("trim", vec![from_ast_expression(*e)?]),
+                TrimExpr::BothSpace(_, _, e) => ("trim", vec![from_ast_expression(e)?]),
                 TrimExpr::Both(_, what, _, e) => (
                     "trim",
-                    vec![from_ast_expression(*e)?, from_ast_expression(*what)?],
+                    vec![from_ast_expression(e)?, from_ast_expression(what)?],
                 ),
             };
-            Ok(spec::Expr::UnresolvedFunction {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: name.to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
-            })
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
         AtomExpr::Overlay(_, _, e, _, what, _, pos, r#for, _) => {
             let mut arguments = vec![
@@ -613,79 +658,60 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             if let Some((_, len)) = r#for {
                 arguments.push(from_ast_expression(*len)?);
             }
-            Ok(spec::Expr::UnresolvedFunction {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: "overlay".to_string(),
                 arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
-            })
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
-        AtomExpr::Position(_, _, what, _, e, _) => Ok(spec::Expr::UnresolvedFunction {
-            function_name: "strpos".to_string(),
-            arguments: vec![from_ast_expression(*e)?, from_ast_expression(*what)?],
-            is_distinct: false,
-            is_user_defined_function: false,
-        }),
-        AtomExpr::First(_, _, e, ignore_nulls, _) => {
-            let mut arguments = vec![from_ast_expression(*e)?];
-            if ignore_nulls.is_some() {
-                arguments.push(spec::Expr::Literal(spec::Literal::Boolean {
-                    value: Some(true),
-                }));
-            }
-            Ok(spec::Expr::UnresolvedFunction {
-                function_name: "first".to_string(),
-                arguments,
+        AtomExpr::Position(_, _, what, _, e, _) => {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name: "strpos".to_string(),
+                arguments: vec![from_ast_expression(*e)?, from_ast_expression(*what)?],
                 is_distinct: false,
                 is_user_defined_function: false,
-            })
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
-        AtomExpr::Last(_, _, e, ignore_nulls, _) => {
-            let mut arguments = vec![from_ast_expression(*e)?];
-            if ignore_nulls.is_some() {
-                arguments.push(spec::Expr::Literal(spec::Literal::Boolean {
-                    value: Some(true),
-                }));
-            }
-            Ok(spec::Expr::UnresolvedFunction {
-                function_name: "last".to_string(),
-                arguments,
+        AtomExpr::CurrentUser(_, _) => {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name: "current_user".to_string(),
+                arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
-            })
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
-        AtomExpr::AnyValue(_, _, e, ignore_nulls, _) => {
-            let mut arguments = vec![from_ast_expression(*e)?];
-            if ignore_nulls.is_some() {
-                arguments.push(spec::Expr::Literal(spec::Literal::Boolean {
-                    value: Some(true),
-                }));
-            }
-            Ok(spec::Expr::UnresolvedFunction {
-                function_name: "any_value".to_string(),
-                arguments,
+        AtomExpr::CurrentTimestamp(_, _) => {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name: "current_timestamp".to_string(),
+                arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
-            })
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
         }
-        AtomExpr::CurrentUser(_, _) => Ok(spec::Expr::UnresolvedFunction {
-            function_name: "current_user".to_string(),
-            arguments: vec![],
-            is_distinct: false,
-            is_user_defined_function: false,
-        }),
-        AtomExpr::CurrentTimestamp(_, _) => Ok(spec::Expr::UnresolvedFunction {
-            function_name: "current_timestamp".to_string(),
-            arguments: vec![],
-            is_distinct: false,
-            is_user_defined_function: false,
-        }),
-        AtomExpr::CurrentDate(_, _) => Ok(spec::Expr::UnresolvedFunction {
-            function_name: "current_date".to_string(),
-            arguments: vec![],
-            is_distinct: false,
-            is_user_defined_function: false,
-        }),
+        AtomExpr::CurrentDate(_, _) => {
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name: "current_date".to_string(),
+                arguments: vec![],
+                is_distinct: false,
+                is_user_defined_function: false,
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
+        }
         AtomExpr::Timestamp(_, _, value, _)
         | AtomExpr::TimestampLiteral(_, value)
         | AtomExpr::TimestampLtzLiteral(_, value)
@@ -701,20 +727,23 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::Function(function) => {
             let FunctionExpr {
                 name: ObjectName(name),
+                arguments,
+                null_treatment,
+                within_group,
+                filter,
+                over_clause,
+            } = *function;
+            let FunctionArgumentList {
                 left: _,
                 duplicate_treatment,
                 arguments,
+                null_treatment: inner_null_treatment,
                 right: _,
-                over_clause,
-            } = function;
+            } = arguments;
             if !name.tail.is_empty() {
                 return Err(SqlError::unsupported("qualified function name"));
             }
             let function_name = name.head.value;
-            let is_distinct = match duplicate_treatment {
-                Some(DuplicateTreatment::All(_)) | None => false,
-                Some(DuplicateTreatment::Distinct(_)) => true,
-            };
             let arguments = arguments
                 .map(|x| {
                     x.into_items()
@@ -723,11 +752,64 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 })
                 .transpose()?
                 .unwrap_or_default();
+            let is_distinct = match duplicate_treatment {
+                Some(DuplicateTreatment::All(_)) | None => false,
+                Some(DuplicateTreatment::Distinct(_)) => true,
+            };
+            let null_treatment = match (inner_null_treatment, null_treatment) {
+                (Some(x), None) => Some(x),
+                (None, Some(x)) => Some(x),
+                (Some(_), Some(_)) => return Err(SqlError::invalid(
+                    "conflicting null treatment clause inside and outside function argument list",
+                )),
+                (None, None) => None,
+            };
+            let ignore_nulls = match null_treatment {
+                Some(NullTreatment::IgnoreNulls(_, _)) => Some(true),
+                Some(NullTreatment::RespectNulls(_, _)) => Some(false),
+                None => None,
+            };
+            let filter = filter
+                .map(|x| {
+                    let FilterClause {
+                        filter: _,
+                        left: _,
+                        r#where: _,
+                        condition,
+                        right: _,
+                    } = x;
+                    from_ast_expression(condition).map(Box::new)
+                })
+                .transpose()?;
+            let order_by = within_group
+                .map(|x| {
+                    let WithinGroupClause {
+                        within_group: _,
+                        left: _,
+                        order_by: _,
+                        expressions,
+                        right: _,
+                    } = x;
+                    expressions
+                        .into_items()
+                        .map(from_ast_order_by)
+                        .collect::<SqlResult<Vec<_>>>()
+                })
+                .transpose()?;
+            let function = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name,
+                arguments,
+                is_distinct,
+                is_user_defined_function: false,
+                ignore_nulls,
+                filter,
+                order_by,
+            });
             if let Some(over_clause) = over_clause {
                 let OverClause { over: _, window } = over_clause;
-                match window {
-                    WindowSpec::Named(_) => Err(SqlError::todo("named window function")),
-                    WindowSpec::Detailed {
+                let window = match window {
+                    WindowSpec::Named(x) => spec::Window::Named(x.value.into()),
+                    WindowSpec::Unnamed {
                         left: _,
                         modifiers,
                         window_frame,
@@ -738,44 +820,36 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                             partition_by,
                             order_by,
                         } = modifiers.try_into()?;
-                        let cluster_spec = cluster_by
+                        let cluster_by = cluster_by
                             .unwrap_or_default()
                             .into_iter()
                             .map(from_ast_expression)
                             .collect::<SqlResult<Vec<_>>>()?;
-                        let partition_spec = partition_by
+                        let partition_by = partition_by
                             .unwrap_or_default()
                             .into_iter()
                             .map(from_ast_expression)
                             .collect::<SqlResult<Vec<_>>>()?;
-                        let order_spec = order_by
+                        let order_by = order_by
                             .unwrap_or_default()
                             .into_iter()
                             .map(from_ast_order_by)
                             .collect::<SqlResult<Vec<_>>>()?;
-                        let frame_spec = window_frame.map(from_ast_window_frame).transpose()?;
-                        let function = spec::Expr::UnresolvedFunction {
-                            function_name,
-                            arguments,
-                            is_distinct,
-                            is_user_defined_function: false,
-                        };
-                        Ok(spec::Expr::Window {
-                            window_function: Box::new(function),
-                            cluster_spec,
-                            partition_spec,
-                            order_spec,
-                            frame_spec,
-                        })
+                        let frame = window_frame.map(from_ast_window_frame).transpose()?;
+                        spec::Window::Unnamed {
+                            cluster_by,
+                            partition_by,
+                            order_by,
+                            frame,
+                        }
                     }
-                }
-            } else {
-                Ok(spec::Expr::UnresolvedFunction {
-                    function_name,
-                    arguments,
-                    is_distinct,
-                    is_user_defined_function: false,
+                };
+                Ok(spec::Expr::Window {
+                    window_function: Box::new(function),
+                    window,
                 })
+            } else {
+                Ok(function)
             }
         }
         AtomExpr::Wildcard(_) => Ok(spec::Expr::UnresolvedStar {
@@ -787,7 +861,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::BooleanLiteral(value) => from_ast_boolean_literal(value),
         AtomExpr::Null(_) => Ok(spec::Expr::Literal(spec::Literal::Null)),
         AtomExpr::Interval(_, value) => Ok(spec::Expr::Literal(spec::Literal::try_from(
-            LiteralValue(Signed::Positive(value)),
+            LiteralValue(Signed::Positive(*value)),
         )?)),
         AtomExpr::Placeholder(variable) => Ok(spec::Expr::Placeholder(variable.value)),
         AtomExpr::Identifier(x) => Ok(spec::Expr::UnresolvedAttribute {
@@ -867,12 +941,15 @@ fn from_ast_quantified_pattern(
             from_ast_expression(expr)
         })
         .collect::<SqlResult<Vec<_>>>()?;
-    Ok(spec::Expr::UnresolvedFunction {
+    Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
         function_name: quantifier.to_string(),
         arguments,
         is_distinct: false,
         is_user_defined_function: false,
-    })
+        ignore_nulls: None,
+        filter: None,
+        order_by: None,
+    }))
 }
 
 fn from_ast_pattern_escape_string(escape: Option<PatternEscape>) -> SqlResult<Option<char>> {

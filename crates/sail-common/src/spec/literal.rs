@@ -1,5 +1,8 @@
+use std::str::FromStr;
+
 pub use arrow_buffer::i256;
 use half::f16;
+use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::{CommonError, CommonResult};
@@ -153,14 +156,18 @@ pub enum Literal {
     Decimal128 {
         precision: u8,
         scale: i8,
+        #[serde(
+            serialize_with = "serialize_optional",
+            deserialize_with = "deserialize_optional"
+        )]
         value: Option<i128>,
     },
     Decimal256 {
         precision: u8,
         scale: i8,
         #[serde(
-            serialize_with = "serialize_i256",
-            deserialize_with = "deserialize_i256"
+            serialize_with = "serialize_optional",
+            deserialize_with = "deserialize_optional"
         )]
         value: Option<i256>,
     },
@@ -185,31 +192,27 @@ pub struct IntervalMonthDayNano {
     pub nanoseconds: i64,
 }
 
-#[derive(Serialize, Deserialize)]
-struct Int256 {
-    low: u128,
-    high: i128,
-}
-
-fn serialize_i256<S>(value: &Option<i256>, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_optional<T, S>(value: &Option<T>, serializer: S) -> Result<S::Ok, S::Error>
 where
+    T: ToString,
     S: Serializer,
 {
     match value {
-        Some(num) => {
-            let (low, high) = num.to_parts();
-            serializer.serialize_some(&Int256 { low, high })
-        }
+        Some(num) => serializer.serialize_some(&num.to_string()),
         None => serializer.serialize_none(),
     }
 }
 
-fn deserialize_i256<'de, D>(deserializer: D) -> Result<Option<i256>, D::Error>
+fn deserialize_optional<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
 where
+    T: FromStr,
+    T::Err: std::fmt::Display,
     D: Deserializer<'de>,
 {
-    let parts = Int256::deserialize(deserializer)?;
-    Ok(Some(i256::from_parts(parts.low, parts.high)))
+    let s = String::deserialize(deserializer)?;
+    Ok(Some(
+        T::from_str(&s).map_err(|e| Error::custom(e.to_string()))?,
+    ))
 }
 
 pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Literal> {

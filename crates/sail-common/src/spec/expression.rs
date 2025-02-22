@@ -14,12 +14,7 @@ pub enum Expr {
         name: ObjectName,
         plan_id: Option<i64>,
     },
-    UnresolvedFunction {
-        function_name: String,
-        arguments: Vec<Expr>,
-        is_distinct: bool,
-        is_user_defined_function: bool,
-    },
+    UnresolvedFunction(UnresolvedFunction),
     UnresolvedStar {
         target: Option<ObjectName>,
         wildcard_options: WildcardOptions,
@@ -46,10 +41,7 @@ pub enum Expr {
     },
     Window {
         window_function: Box<Expr>,
-        cluster_spec: Vec<Expr>,
-        partition_spec: Vec<Expr>,
-        order_spec: Vec<SortOrder>,
-        frame_spec: Option<WindowFrame>,
+        window: Window,
     },
     UnresolvedExtractValue {
         child: Box<Expr>,
@@ -116,6 +108,9 @@ pub enum Expr {
         negated: bool,
         escape_char: Option<char>,
         case_insensitive: bool,
+    },
+    Table {
+        expr: Box<Expr>,
     },
 }
 
@@ -220,6 +215,30 @@ pub enum NullOrdering {
     Unspecified,
     NullsFirst,
     NullsLast,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnresolvedFunction {
+    pub function_name: String,
+    pub arguments: Vec<Expr>,
+    pub is_distinct: bool,
+    pub is_user_defined_function: bool,
+    pub ignore_nulls: Option<bool>,
+    pub filter: Option<Box<Expr>>,
+    pub order_by: Option<Vec<SortOrder>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Window {
+    Named(Identifier),
+    Unnamed {
+        cluster_by: Vec<Expr>,
+        partition_by: Vec<Expr>,
+        order_by: Vec<SortOrder>,
+        frame: Option<WindowFrame>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
