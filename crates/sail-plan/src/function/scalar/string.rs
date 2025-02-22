@@ -8,9 +8,10 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::levenshtein::Levenshtein;
-use crate::extension::function::spark_base64::{SparkBase64, SparkUnbase64};
-use crate::extension::function::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use crate::extension::function::string::levenshtein::Levenshtein;
+use crate::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
+use crate::extension::function::string::spark_mask::SparkMask;
+use crate::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
@@ -270,7 +271,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("lpad", F::var_arg(expr_fn::lpad)),
         ("ltrim", F::var_arg(expr_fn::ltrim)),
         ("luhn_check", F::unknown("luhn_check")),
-        ("mask", F::unknown("mask")),
+        ("mask", F::udf(SparkMask::new())),
         ("octet_length", F::unary(octet_length)),
         ("overlay", F::custom(overlay)),
         ("position", F::custom(position)),

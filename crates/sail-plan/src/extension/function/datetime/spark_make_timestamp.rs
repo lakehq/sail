@@ -82,6 +82,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                 }
             }
         };
+
         let to_uint32_array_fn = |col: &ColumnarValue, arg_name: &str| -> Result<UInt32Array> {
             match col {
                 ColumnarValue::Array(array) => Ok(array.as_primitive::<UInt32Type>().to_owned()),
@@ -95,6 +96,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
                 }
             }
         };
+
         let to_float32_array_fn = |col: &ColumnarValue, arg_name: &str| -> Result<Float32Array> {
             match col {
                 ColumnarValue::Array(array) => Ok(array.as_primitive::<Float32Type>().to_owned()),

@@ -55,7 +55,6 @@ use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::least_greatest::{Greatest, Least};
-use sail_plan::extension::function::levenshtein::Levenshtein;
 use sail_plan::extension::function::map_function::MapFunction;
 use sail_plan::extension::function::math::spark_abs::SparkAbs;
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
@@ -72,13 +71,15 @@ use sail_plan::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
 use sail_plan::extension::function::spark_array::SparkArray;
-use sail_plan::extension::function::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_plan::extension::function::spark_concat::SparkConcat;
 use sail_plan::extension::function::spark_element_at::{SparkElementAt, SparkTryElementAt};
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_plan::extension::function::spark_reverse::SparkReverse;
-use sail_plan::extension::function::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
+use sail_plan::extension::function::string::levenshtein::Levenshtein;
+use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_plan::extension::function::string::spark_mask::SparkMask;
+use sail_plan::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_plan::extension::function::struct_function::StructFunction;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
@@ -772,6 +773,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_make_timestamp_ntz" | "make_timestamp_ntz" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
             }
+            "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -815,6 +817,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkNextDay>()
             || node.inner().as_any().is::<SparkMakeYmInterval>()
             || node.inner().as_any().is::<SparkMakeTimestampNtz>()
+            || node.inner().as_any().is::<SparkMask>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"
