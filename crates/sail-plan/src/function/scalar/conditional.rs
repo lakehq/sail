@@ -2,12 +2,13 @@ use datafusion::functions::expr_fn;
 use datafusion_expr::expr;
 
 use crate::error::PlanResult;
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
-fn case(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
+fn case(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput { arguments, .. } = input;
     let mut when_then_expr = Vec::new();
-    let mut iter = args.into_iter();
+    let mut iter = arguments.into_iter();
     let mut else_expr: Option<Box<expr::Expr>> = None;
     while let Some(condition) = iter.next() {
         if let Some(result) = iter.next() {
@@ -24,8 +25,9 @@ fn case(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResul
     }))
 }
 
-fn if_expr(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
-    let (when_expr, then_expr, else_expr) = args.three()?;
+fn if_expr(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput { arguments, .. } = input;
+    let (when_expr, then_expr, else_expr) = arguments.three()?;
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(Box::new(when_expr), Box::new(then_expr))],

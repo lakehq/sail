@@ -10,27 +10,25 @@ use crate::extension::function::raise_error::RaiseError;
 use crate::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
-fn assert_true(
-    args: Vec<expr::Expr>,
-    _function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    let (err_msg, col) = if args.len() == 1 {
-        let col = args.one()?;
+fn assert_true(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput { arguments, .. } = input;
+    let (err_msg, col) = if arguments.len() == 1 {
+        let col = arguments.one()?;
         (
             // Need to do this order to avoid the "value used after being moved" error.
             lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", &col)))),
             col,
         )
-    } else if args.len() == 2 {
-        let (col, err_msg) = args.two()?;
+    } else if arguments.len() == 2 {
+        let (col, err_msg) = arguments.two()?;
         (err_msg, col)
     } else {
         return Err(PlanError::invalid(format!(
             "assert_true expects at most two arguments, got {}",
-            args.len()
+            arguments.len()
         )));
     };
 
@@ -49,36 +47,21 @@ fn assert_true(
     }))
 }
 
-fn current_catalog(
-    args: Vec<expr::Expr>,
-    function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    args.zero()?;
-    let catalog_manager = CatalogManager::new(
-        function_context.session_context(),
-        function_context.plan_config().clone(),
-    );
+fn current_catalog(input: FunctionInput) -> PlanResult<expr::Expr> {
+    input.arguments.zero()?;
+    let catalog_manager = CatalogManager::new(input.session_context, input.plan_config.clone());
     Ok(lit(catalog_manager.default_catalog()?))
 }
 
-fn current_database(
-    args: Vec<expr::Expr>,
-    function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    args.zero()?;
-    let catalog_manager = CatalogManager::new(
-        function_context.session_context(),
-        function_context.plan_config().clone(),
-    );
+fn current_database(input: FunctionInput) -> PlanResult<expr::Expr> {
+    input.arguments.zero()?;
+    let catalog_manager = CatalogManager::new(input.session_context, input.plan_config.clone());
     Ok(lit(catalog_manager.default_database()?))
 }
 
-fn current_user(
-    args: Vec<expr::Expr>,
-    function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    args.zero()?;
-    Ok(lit(function_context.plan_config().session_user_id.clone()))
+fn current_user(input: FunctionInput) -> PlanResult<expr::Expr> {
+    input.arguments.zero()?;
+    Ok(lit(input.plan_config.session_user_id.clone()))
 }
 
 pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {

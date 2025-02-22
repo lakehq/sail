@@ -683,7 +683,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -735,7 +738,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -787,7 +793,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -846,7 +855,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -898,7 +910,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -943,7 +958,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -981,7 +999,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -1026,7 +1047,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -1064,7 +1088,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -1109,7 +1136,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -1147,7 +1177,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -1181,7 +1214,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -1215,7 +1251,10 @@
                       }
                     ],
                     "isDistinct": false,
-                    "isUserDefinedFunction": false
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
                   }
                 }
               ]
@@ -1465,7 +1504,10 @@
                                     }
                                   ],
                                   "isDistinct": false,
-                                  "isUserDefinedFunction": false
+                                  "isUserDefinedFunction": false,
+                                  "ignoreNulls": null,
+                                  "filter": null,
+                                  "orderBy": null
                                 }
                               }
                             ]
@@ -1682,55 +1724,45 @@
                     ],
                     "arguments": [
                       {
-                        "unresolvedFunction": {
-                          "functionName": "table",
-                          "arguments": [
-                            {
-                              "unresolvedAttribute": {
-                                "name": [
-                                  "v1"
-                                ],
-                                "planId": null
-                              }
+                        "table": {
+                          "expr": {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "v1"
+                              ],
+                              "planId": null
                             }
-                          ],
-                          "isDistinct": false,
-                          "isUserDefinedFunction": false
+                          }
                         }
                       },
                       {
-                        "unresolvedFunction": {
-                          "functionName": "table",
-                          "arguments": [
-                            {
-                              "scalarSubquery": {
-                                "subquery": {
-                                  "project": {
-                                    "input": {
-                                      "empty": {
-                                        "produceOneRow": true
-                                      },
-                                      "planId": null,
-                                      "sourceInfo": null
+                        "table": {
+                          "expr": {
+                            "scalarSubquery": {
+                              "subquery": {
+                                "project": {
+                                  "input": {
+                                    "empty": {
+                                      "produceOneRow": true
                                     },
-                                    "expressions": [
-                                      {
-                                        "literal": {
-                                          "int32": {
-                                            "value": 1
-                                          }
+                                    "planId": null,
+                                    "sourceInfo": null
+                                  },
+                                  "expressions": [
+                                    {
+                                      "literal": {
+                                        "int32": {
+                                          "value": 1
                                         }
                                       }
-                                    ]
-                                  },
-                                  "planId": null,
-                                  "sourceInfo": null
-                                }
+                                    }
+                                  ]
+                                },
+                                "planId": null,
+                                "sourceInfo": null
                               }
                             }
-                          ],
-                          "isDistinct": false,
-                          "isUserDefinedFunction": false
+                          }
                         }
                       }
                     ],
@@ -2274,7 +2306,10 @@
                         }
                       ],
                       "isDistinct": false,
-                      "isUserDefinedFunction": false
+                      "isUserDefinedFunction": false,
+                      "ignoreNulls": null,
+                      "filter": null,
+                      "orderBy": null
                     }
                   }
                 },
@@ -2597,7 +2632,10 @@
                     }
                   ],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               },
               "withGroupingExpressions": false
@@ -2651,7 +2689,10 @@
                         }
                       ],
                       "isDistinct": false,
-                      "isUserDefinedFunction": false
+                      "isUserDefinedFunction": false,
+                      "ignoreNulls": null,
+                      "filter": null,
+                      "orderBy": null
                     }
                   }
                 },
@@ -2726,7 +2767,10 @@
                         }
                       ],
                       "isDistinct": false,
-                      "isUserDefinedFunction": false
+                      "isUserDefinedFunction": false,
+                      "ignoreNulls": null,
+                      "filter": null,
+                      "orderBy": null
                     }
                   }
                 },
@@ -2801,7 +2845,10 @@
                         }
                       ],
                       "isDistinct": false,
-                      "isUserDefinedFunction": false
+                      "isUserDefinedFunction": false,
+                      "ignoreNulls": null,
+                      "filter": null,
+                      "orderBy": null
                     }
                   }
                 },

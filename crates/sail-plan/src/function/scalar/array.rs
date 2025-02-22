@@ -8,7 +8,7 @@ use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array_min_max::{ArrayMax, ArrayMin};
 use crate::extension::function::spark_array::SparkArray;
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
 fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
@@ -44,11 +44,9 @@ fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr
     expr_fn::array_slice(array, start, end, None)
 }
 
-fn sort_array(
-    args: Vec<expr::Expr>,
-    _function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    let (array, asc) = args.two()?;
+fn sort_array(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput { arguments, .. } = input;
+    let (array, asc) = arguments.two()?;
     let (sort, nulls) = match asc {
         expr::Expr::Literal(ScalarValue::Boolean(Some(true))) => (
             lit(ScalarValue::Utf8(Some("ASC".to_string()))),

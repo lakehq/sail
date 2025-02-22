@@ -8,7 +8,10 @@
             "functionName": "current_date",
             "arguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -21,7 +24,10 @@
             "functionName": "current_timestamp",
             "arguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }

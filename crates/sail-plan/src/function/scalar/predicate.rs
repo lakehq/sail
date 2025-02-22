@@ -2,7 +2,7 @@ use datafusion::functions::expr_fn;
 use datafusion_expr::{expr, not, Operator};
 
 use crate::error::PlanResult;
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
 fn like(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
@@ -41,11 +41,9 @@ fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
     expr_fn::regexp_like(expr, pattern, None)
 }
 
-fn is_in_list(
-    args: Vec<expr::Expr>,
-    _function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    let (value, list) = args.at_least_one()?;
+fn is_in_list(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput { arguments, .. } = input;
+    let (value, list) = arguments.at_least_one()?;
     Ok(expr::Expr::InList(expr::InList {
         expr: Box::new(value),
         list,

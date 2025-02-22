@@ -29,7 +29,7 @@ use crate::extension::function::drop_struct_field::DropStructField;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::function::table_input::TableInput;
 use crate::extension::function::update_struct_field::UpdateStructField;
-use crate::function::common::{AggFunctionContext, FunctionContext};
+use crate::function::common::{AggFunctionInput, FunctionInput};
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
 };
@@ -336,28 +336,9 @@ impl PlanResolver<'_> {
             Expr::UnresolvedAttribute { name, plan_id } => {
                 self.resolve_expression_attribute(name, plan_id, schema, state)
             }
-            Expr::UnresolvedFunction {
-                function_name,
-                arguments,
-                ..
-            } if function_name.to_lowercase() == "table" => {
-                self.resolve_expression_table_function(arguments, state)
+            Expr::UnresolvedFunction(function) => {
+                self.resolve_expression_function(function, schema, state)
                     .await
-            }
-            Expr::UnresolvedFunction {
-                function_name,
-                arguments,
-                is_distinct,
-                is_user_defined_function: _, // FIXME: is_user_defined_function is always false.
-            } => {
-                self.resolve_expression_function(
-                    function_name,
-                    arguments,
-                    is_distinct,
-                    schema,
-                    state,
-                )
-                .await
             }
             Expr::UnresolvedStar {
                 target,
@@ -395,21 +376,10 @@ impl PlanResolver<'_> {
             }
             Expr::Window {
                 window_function,
-                cluster_spec,
-                partition_spec,
-                order_spec,
-                frame_spec,
+                window,
             } => {
-                self.resolve_expression_window(
-                    *window_function,
-                    cluster_spec,
-                    partition_spec,
-                    order_spec,
-                    frame_spec,
-                    schema,
-                    state,
-                )
-                .await
+                self.resolve_expression_window(*window_function, window, schema, state)
+                    .await
             }
             Expr::UnresolvedExtractValue { child, extraction } => {
                 self.resolve_expression_extract_value(*child, *extraction, schema, state)
@@ -535,6 +505,7 @@ impl PlanResolver<'_> {
                 )
                 .await
             }
+            Expr::Table { expr } => self.resolve_expression_table(*expr, state).await,
         }
     }
 
@@ -739,17 +710,17 @@ impl PlanResolver<'_> {
         }
     }
 
-    async fn resolve_expression_table_function(
+    async fn resolve_expression_table(
         &self,
-        arguments: Vec<spec::Expr>,
+        expr: spec::Expr,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let query = match arguments.one() {
-            Ok(spec::Expr::ScalarSubquery { subquery }) => *subquery,
-            Ok(spec::Expr::UnresolvedAttribute {
+        let query = match expr {
+            spec::Expr::ScalarSubquery { subquery } => *subquery,
+            spec::Expr::UnresolvedAttribute {
                 name,
                 plan_id: None,
-            }) => spec::QueryPlan::new(spec::QueryNode::Read {
+            } => spec::QueryPlan::new(spec::QueryNode::Read {
                 read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
                     name,
                     options: vec![],
@@ -771,14 +742,21 @@ impl PlanResolver<'_> {
 
     async fn resolve_expression_function(
         &self,
-        function_name: String,
-        arguments: Vec<spec::Expr>,
-        is_distinct: bool,
+        function: spec::UnresolvedFunction,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
+        let spec::UnresolvedFunction {
+            function_name,
+            arguments,
+            is_distinct,
+            is_user_defined_function: _,
+            ignore_nulls,
+            filter,
+            order_by,
+        } = function;
         let canonical_function_name = function_name.to_ascii_lowercase();
         if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
             if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
@@ -793,6 +771,9 @@ impl PlanResolver<'_> {
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
         let func = if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
+            if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
+                return Err(PlanError::invalid("invalid scalar function clause"));
+            }
             if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
                 let function = PythonUdf {
                     python_version: f.python_version().to_string(),
@@ -816,12 +797,33 @@ impl PlanResolver<'_> {
                 })
             }
         } else if let Ok(func) = get_built_in_function(&canonical_function_name) {
-            let function_context =
-                FunctionContext::new(self.config.clone(), self.ctx, &argument_names);
-            func(arguments.clone(), &function_context)?
+            if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
+                return Err(PlanError::invalid("invalid scalar function clause"));
+            }
+            let input = FunctionInput {
+                arguments,
+                argument_names: &argument_names,
+                plan_config: &self.config,
+                session_context: self.ctx,
+            };
+            func(input)?
         } else if let Ok(func) = get_built_in_aggregate_function(&canonical_function_name) {
-            let agg_function_context = AggFunctionContext::new(is_distinct);
-            func(arguments.clone(), agg_function_context)?
+            let filter = match filter {
+                Some(x) => Some(Box::new(self.resolve_expression(*x, schema, state).await?)),
+                None => None,
+            };
+            let order_by = match order_by {
+                Some(x) => Some(self.resolve_sort_orders(x, true, schema, state).await?),
+                None => None,
+            };
+            let input = AggFunctionInput {
+                arguments,
+                distinct: is_distinct,
+                ignore_nulls,
+                filter,
+                order_by,
+            };
+            func(input)?
         } else {
             return Err(PlanError::unsupported(format!(
                 "unknown function: {function_name}",
@@ -908,32 +910,35 @@ impl PlanResolver<'_> {
     async fn resolve_expression_window(
         &self,
         window_function: spec::Expr,
-        cluster_spec: Vec<spec::Expr>,
-        partition_spec: Vec<spec::Expr>,
-        order_spec: Vec<spec::SortOrder>,
-        frame_spec: Option<spec::WindowFrame>,
+        window: spec::Window,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        if !cluster_spec.is_empty() {
+        let spec::Window::Unnamed {
+            cluster_by,
+            partition_by,
+            order_by,
+            frame,
+        } = window
+        else {
+            return Err(PlanError::todo("named window"));
+        };
+        if !cluster_by.is_empty() {
             return Err(PlanError::unsupported(
                 "CLUSTER BY clause in window expression",
             ));
         }
         let (function, function_name, argument_names, arguments, is_distinct) =
             match window_function {
-                spec::Expr::UnresolvedFunction {
+                spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                     function_name,
                     arguments,
-                    is_user_defined_function,
+                    is_user_defined_function: false,
                     is_distinct,
-                } => {
-                    if is_user_defined_function {
-                        return Err(PlanError::unsupported("user defined window function"));
-                    }
-                    if is_distinct {
-                        return Err(PlanError::unsupported("distinct window function"));
-                    }
+                    ignore_nulls: None,
+                    filter: None,
+                    order_by: None,
+                }) => {
                     let canonical_function_name = function_name.to_ascii_lowercase();
                     let (argument_names, arguments) = self
                         .resolve_expressions_and_names(arguments, schema, state)
@@ -1002,13 +1007,13 @@ impl PlanResolver<'_> {
                 }
             };
         let partition_by = self
-            .resolve_expressions(partition_spec, schema, state)
+            .resolve_expressions(partition_by, schema, state)
             .await?;
         // Spark treats literals as constants in ORDER BY window definition
         let order_by = self
-            .resolve_sort_orders(order_spec, false, schema, state)
+            .resolve_sort_orders(order_by, false, schema, state)
             .await?;
-        let window_frame = if let Some(frame) = frame_spec {
+        let window_frame = if let Some(frame) = frame {
             self.resolve_window_frame(frame, &order_by, schema, state)?
         } else {
             window_frame::WindowFrame::new(if order_by.is_empty() {
@@ -1423,7 +1428,16 @@ impl PlanResolver<'_> {
         let Ok(function_name) = function_name.one() else {
             return Err(PlanError::todo("qualified function name"));
         };
-        self.resolve_expression_function(function_name, arguments, false, schema, state)
+        let function = spec::UnresolvedFunction {
+            function_name,
+            arguments,
+            is_distinct: false,
+            is_user_defined_function: false,
+            ignore_nulls: None,
+            filter: None,
+            order_by: None,
+        };
+        self.resolve_expression_function(function, schema, state)
             .await
     }
 
@@ -1984,14 +1998,17 @@ mod tests {
         assert_eq!(
             resolve(
                 &resolver,
-                spec::Expr::UnresolvedFunction {
+                spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                     function_name: "not".to_string(),
                     arguments: vec![spec::Expr::Literal(spec::Literal::Boolean {
                         value: Some(true)
                     })],
                     is_distinct: false,
                     is_user_defined_function: false,
-                }
+                    ignore_nulls: None,
+                    filter: None,
+                    order_by: None,
+                })
             )
             .await?,
             NamedExpr {
@@ -2009,7 +2026,7 @@ mod tests {
                     expr: Box::new(spec::Expr::Alias {
                         // The resolver assigns a name (a human-readable string) for the function,
                         // and is then overridden by the explicitly specified outer name.
-                        expr: Box::new(spec::Expr::UnresolvedFunction {
+                        expr: Box::new(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                             function_name: "+".to_string(),
                             arguments: vec![
                                 spec::Expr::Alias {
@@ -2026,7 +2043,10 @@ mod tests {
                             ],
                             is_distinct: false,
                             is_user_defined_function: false,
-                        }),
+                            ignore_nulls: None,
+                            filter: None,
+                            order_by: None
+                        })),
                         name: vec!["b".to_string().into()],
                         metadata: None,
                     }),

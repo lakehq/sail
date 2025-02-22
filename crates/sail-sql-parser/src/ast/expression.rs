@@ -11,14 +11,15 @@ use sail_sql_macro::TreeParser;
 use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit};
 use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
-    All, And, Any, AnyValue, As, Asc, Between, Both, Case, Cast, Cube, Current, CurrentDate,
+    All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate,
     CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Div, Else, End, Escape, Exists,
-    Extract, False, First, Following, For, From, Grouping, Hour, Hours, Ignore, Ilike, In,
-    Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond, Milliseconds,
-    Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Over, Overlay, Placing, Position,
-    Preceding, Range, Regexp, Rlike, Rollup, Row, Rows, Second, Seconds, Sets, Similar, Struct,
-    Substr, Substring, Table, Then, Timestamp, TimestampLtz, TimestampNtz, To, Trailing, Trim,
-    True, Unbounded, Unknown, Week, Weeks, When, Year, Years,
+    Extract, False, Filter, First, Following, For, From, Group, Grouping, Hour, Hours, Ignore,
+    Ilike, In, Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond,
+    Milliseconds, Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay,
+    Placing, Position, Preceding, Range, Regexp, Respect, Rlike, Rollup, Row, Rows, Second,
+    Seconds, Sets, Similar, Struct, Substr, Substring, Table, Then, Timestamp, TimestampLtz,
+    TimestampNtz, To, Trailing, Trim, True, Unbounded, Unknown, Week, Weeks, When, Where, Within,
+    Year, Years,
 };
 use crate::ast::literal::{NumberLiteral, StringLiteral};
 use crate::ast::operator;
@@ -141,10 +142,12 @@ pub enum AtomExpr {
         case: Case,
         #[parser(function = |(e, _, _), o| When::parser((), o).not().rewind().ignore_then(boxed(e)).or_not())]
         operand: Option<Box<Expr>>,
+        #[parser(function = |(e, _, _), o| boxed(compose(e, o)))]
+        first_condition: Box<CaseWhen>,
         #[parser(function = |(e, _, _), o| compose(e, o))]
-        conditions: (CaseWhen, Vec<CaseWhen>),
-        #[parser(function = |(e, _, _), o| compose(e, o))]
-        r#else: Option<CaseElse>,
+        other_conditions: Vec<CaseWhen>,
+        #[parser(function = |(e, _, _), o| boxed(compose(e, o)).or_not())]
+        r#else: Option<Box<CaseElse>>,
         end: End,
     },
     Cast(
@@ -176,7 +179,7 @@ pub enum AtomExpr {
     Trim(
         Trim,
         LeftParenthesis,
-        #[parser(function = |(e, _, _), o| compose(e, o))] TrimExpr,
+        #[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<TrimExpr>,
         RightParenthesis,
     ),
     Overlay(
@@ -199,27 +202,6 @@ pub enum AtomExpr {
         #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
         RightParenthesis,
     ),
-    First(
-        First,
-        LeftParenthesis,
-        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
-        Option<(Ignore, Nulls)>,
-        RightParenthesis,
-    ),
-    Last(
-        Last,
-        LeftParenthesis,
-        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
-        Option<(Ignore, Nulls)>,
-        RightParenthesis,
-    ),
-    AnyValue(
-        AnyValue,
-        LeftParenthesis,
-        #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
-        Option<(Ignore, Nulls)>,
-        RightParenthesis,
-    ),
     CurrentUser(CurrentUser, Option<(LeftParenthesis, RightParenthesis)>),
     CurrentTimestamp(
         CurrentTimestamp,
@@ -229,7 +211,7 @@ pub enum AtomExpr {
     // TODO: handle `timestamp(value)` and `date(value)` as normal functions in the plan resolver
     Timestamp(Timestamp, LeftParenthesis, StringLiteral, RightParenthesis),
     Date(Date, LeftParenthesis, StringLiteral, RightParenthesis),
-    Function(#[parser(function = |(e, _, _), o| compose(e, o))] FunctionExpr),
+    Function(#[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<FunctionExpr>),
     Wildcard(operator::Asterisk),
     StringLiteral(StringLiteral),
     NumberLiteral(NumberLiteral),
@@ -241,7 +223,7 @@ pub enum AtomExpr {
     Null(Null),
     Interval(
         Interval,
-        #[parser(function = |(e, _, _), o| compose(e, o))] IntervalExpr,
+        #[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<IntervalExpr>,
     ),
     Placeholder(Variable),
     Identifier(Ident),
@@ -283,8 +265,8 @@ pub enum IntervalExpr {
     // Note that interval expressions such as `1 millisecond` can only be parsed as
     // multi-unit intervals since the unit is not recognized in the standard pattern.
     MultiUnit {
-        #[parser(function = |e, o| boxed(compose(e, o)))]
-        head: Box<IntervalValueWithUnit>,
+        #[parser(function = |e, o| compose(e, o))]
+        head: IntervalValueWithUnit,
         // If the unit is followed by `TO` (e.g. `'1 1' DAY TO HOUR`), it must be parsed
         // as a standard interval,
         #[parser(function = |_, o| To::parser((), o).not().rewind())]
@@ -293,8 +275,8 @@ pub enum IntervalExpr {
         tail: Vec<IntervalValueWithUnit>,
     },
     Standard {
-        #[parser(function = |e, _| boxed(e))]
-        value: Box<Expr>,
+        #[parser(function = |e, _| e)]
+        value: Expr,
         qualifier: IntervalQualifier,
     },
     Literal(StringLiteral),
@@ -339,34 +321,26 @@ pub enum IntervalQualifier {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub enum TrimExpr {
-    LeadingSpace(
-        Leading,
-        From,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
-    ),
+    LeadingSpace(Leading, From, #[parser(function = |e, _| e)] Expr),
     Leading(
         Leading,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
         From,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
     ),
-    TrailingSpace(
-        Trailing,
-        From,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
-    ),
+    TrailingSpace(Trailing, From, #[parser(function = |e, _| e)] Expr),
     Trailing(
         Trailing,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
         From,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
     ),
-    BothSpace(Both, From, #[parser(function = |e, _| boxed(e))] Box<Expr>),
+    BothSpace(Both, From, #[parser(function = |e, _| e)] Expr),
     Both(
         Option<Both>,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
         From,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
     ),
 }
 
@@ -374,13 +348,28 @@ pub enum TrimExpr {
 #[parser(dependency = "Expr")]
 pub struct FunctionExpr {
     pub name: ObjectName,
+    #[parser(function = |e, o| compose(e, o))]
+    pub arguments: FunctionArgumentList,
+    // The null treatment can be inside or outside the function argument list.
+    // The SQL analyzer should handle conflicts between the two.
+    pub null_treatment: Option<NullTreatment>,
+    #[parser(function = |e, o| compose(e, o))]
+    pub within_group: Option<WithinGroupClause>,
+    #[parser(function = |e, o| compose(e, o))]
+    pub filter: Option<FilterClause>,
+    #[parser(function = |e, o| compose(e, o))]
+    pub over_clause: Option<OverClause>,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct FunctionArgumentList {
     pub left: LeftParenthesis,
     pub duplicate_treatment: Option<DuplicateTreatment>,
     #[parser(function = |e, o| sequence(compose(e, o), unit(o)).or_not())]
     pub arguments: Option<Sequence<FunctionArgument, Comma>>,
+    pub null_treatment: Option<NullTreatment>,
     pub right: RightParenthesis,
-    #[parser(function = |e, o| compose(e, o))]
-    pub over_clause: Option<OverClause>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -401,6 +390,34 @@ pub enum DuplicateTreatment {
 }
 
 #[derive(Debug, Clone, TreeParser)]
+pub enum NullTreatment {
+    RespectNulls(Respect, Nulls),
+    IgnoreNulls(Ignore, Nulls),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct WithinGroupClause {
+    pub within_group: (Within, Group),
+    pub left: LeftParenthesis,
+    pub order_by: (Order, By),
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    pub expressions: Sequence<OrderByExpr, Comma>,
+    pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct FilterClause {
+    pub filter: Filter,
+    pub left: LeftParenthesis,
+    pub r#where: Where,
+    #[parser(function = |e, _| e)]
+    pub condition: Expr,
+    pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct OverClause {
     pub over: Over,
@@ -412,7 +429,7 @@ pub struct OverClause {
 #[parser(dependency = "Expr")]
 pub enum WindowSpec {
     Named(Ident),
-    Detailed {
+    Unnamed {
         left: LeftParenthesis,
         #[parser(function = |e, o| compose(e, o))]
         modifiers: Vec<WindowModifier>,
@@ -485,10 +502,10 @@ pub enum WindowFrame {
 #[parser(dependency = "Expr")]
 pub enum WindowFrameBound {
     UnboundedPreceding(Unbounded, Preceding),
-    Preceding(#[parser(function = |e, _| boxed(e))] Box<Expr>, Preceding),
+    Preceding(#[parser(function = |e, _| e)] Expr, Preceding),
     CurrentRow(Current, Row),
     UnboundedFollowing(Unbounded, Following),
-    Following(#[parser(function = |e, _| boxed(e))] Box<Expr>, Following),
+    Following(#[parser(function = |e, _| e)] Expr, Following),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -534,19 +551,19 @@ pub enum BinaryOperator {
 #[parser(dependency = "Expr")]
 pub struct CaseWhen {
     pub when: When,
-    #[parser(function = |e, _| boxed(e))]
-    pub condition: Box<Expr>,
+    #[parser(function = |e, _| e)]
+    pub condition: Expr,
     pub then: Then,
-    #[parser(function = |e, _| boxed(e))]
-    pub result: Box<Expr>,
+    #[parser(function = |e, _| e)]
+    pub result: Expr,
 }
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct CaseElse {
     pub r#else: Else,
-    #[parser(function = |e, _| boxed(e))]
-    pub result: Box<Expr>,
+    #[parser(function = |e, _| e)]
+    pub result: Expr,
 }
 
 #[derive(Debug, Clone, TreeParser)]

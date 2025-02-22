@@ -3,37 +3,389 @@
     {
       "input": "SELECT PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY col DESC)",
       "output": {
-        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "PERCENTILE_CONT",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "decimal128": {
+                            "precision": 1,
+                            "scale": 1,
+                            "value": "1"
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": [
+                      {
+                        "child": {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "col"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        "direction": "descending",
+                        "nullOrdering": "unspecified"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY col)",
       "output": {
-        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "PERCENTILE_CONT",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "decimal128": {
+                            "precision": 1,
+                            "scale": 1,
+                            "value": "1"
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": [
+                      {
+                        "child": {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "col"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        "direction": "unspecified",
+                        "nullOrdering": "unspecified"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY col) FILTER (WHERE id > 10)",
       "output": {
-        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "PERCENTILE_CONT",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "decimal128": {
+                            "precision": 1,
+                            "scale": 1,
+                            "value": "1"
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": {
+                      "unresolvedFunction": {
+                        "functionName": ">",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "id"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 10
+                              }
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    },
+                    "orderBy": [
+                      {
+                        "child": {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "col"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        "direction": "unspecified",
+                        "nullOrdering": "unspecified"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT PERCENTILE_DISC(0.1) WITHIN GROUP (ORDER BY col DESC)",
       "output": {
-        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "PERCENTILE_DISC",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "decimal128": {
+                            "precision": 1,
+                            "scale": 1,
+                            "value": "1"
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": [
+                      {
+                        "child": {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "col"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        "direction": "descending",
+                        "nullOrdering": "unspecified"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT PERCENTILE_DISC(0.1) WITHIN GROUP (ORDER BY col)",
       "output": {
-        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "PERCENTILE_DISC",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "decimal128": {
+                            "precision": 1,
+                            "scale": 1,
+                            "value": "1"
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": [
+                      {
+                        "child": {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "col"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        "direction": "unspecified",
+                        "nullOrdering": "unspecified"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT PERCENTILE_DISC(0.1) WITHIN GROUP (ORDER BY col) FILTER (WHERE id > 10)",
       "output": {
-        "failure": "invalid argument: found WITHIN at 28:34 expected statement, or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "empty": {
+                  "produceOneRow": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": "PERCENTILE_DISC",
+                    "arguments": [
+                      {
+                        "literal": {
+                          "decimal128": {
+                            "precision": 1,
+                            "scale": 1,
+                            "value": "1"
+                          }
+                        }
+                      }
+                    ],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "ignoreNulls": null,
+                    "filter": {
+                      "unresolvedFunction": {
+                        "functionName": ">",
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "id"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "literal": {
+                              "int32": {
+                                "value": 10
+                              }
+                            }
+                          }
+                        ],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    },
+                    "orderBy": [
+                      {
+                        "child": {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "col"
+                            ],
+                            "planId": null
+                          }
+                        },
+                        "direction": "unspecified",
+                        "nullOrdering": "unspecified"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
