@@ -397,7 +397,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkArray { signature: Signature { type_signature: OneOf([UserDefined, Any(0)]), volatility: Immutable }, aliases: [\"spark_make_array\"] } }, args: [Literal(Utf8(\"hello\")), Literal(NULL), Literal(Utf8(\"world\"))] }), Literal(Utf8(\" \")), Literal(Utf8(\",\"))]"
+        "success": "ok"
       }
     },
     {
@@ -871,7 +871,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: three values expected: [Literal(Int32(1)), Literal(Int32(5))]"
+        "success": "ok"
       }
     },
     {
@@ -897,7 +897,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: three values expected: [Literal(Int32(5)), Literal(Int32(1))]"
+        "success": "ok"
       }
     },
     {

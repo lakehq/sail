@@ -2,8 +2,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike};
-use datafusion::arrow::array::Int64Array;
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::arrow::array::{AsArray, PrimitiveBuilder};
+use datafusion::arrow::datatypes::{DataType, Int64Type, TimeUnit, UInt32Type};
 use datafusion::functions::datetime::to_timestamp::ToTimestampNanosFunc;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -53,8 +53,11 @@ impl ScalarUDFImpl for SparkWeekOfYear {
     }
 
     fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-        if args.is_empty() {
-            return exec_err!("Spark `weekofyear` function requires 1 argument, got 0");
+        if args.len() != 1 {
+            return exec_err!(
+                "Spark `weekofyear` function requires 1 argument, got {}",
+                args.len()
+            );
         }
 
         let timestamp_nanos = match args[0].data_type() {
@@ -93,20 +96,14 @@ impl ScalarUDFImpl for SparkWeekOfYear {
                 ))))
             }
             ColumnarValue::Array(array) => {
-                let int_array = array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
-                    datafusion_common::DataFusionError::Internal(
-                        "Spark `weekofyear` function failed to downcast to Int64Array".to_string(),
-                    )
-                })?;
-                if int_array.len() != 1 {
-                    return exec_err!("Spark `weekofyear` function expected single value array, got array {int_array:?}");
+                let array_len = array.len();
+                let int64_array = array.as_primitive::<Int64Type>();
+                let mut builder = PrimitiveBuilder::<UInt32Type>::with_capacity(array_len);
+                for i in 0..array_len {
+                    let value = int64_array.value(i);
+                    builder.append_value(DateTime::from_timestamp_nanos(value).iso_week().week())
                 }
-                let value = int_array.value(0);
-                let datetime = DateTime::from_timestamp_nanos(value);
-                let week_of_year = datetime.iso_week().week();
-                Ok(ColumnarValue::Scalar(ScalarValue::UInt32(Some(
-                    week_of_year,
-                ))))
+                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
             }
             other => exec_err!(
                 "Spark `weekofyear` function requires a valid timestamp value, got: {other:?}"

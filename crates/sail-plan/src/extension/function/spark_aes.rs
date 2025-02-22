@@ -107,6 +107,7 @@ impl SparkAESEncrypt {
     }
 }
 
+// TODO: Support array batch
 impl ScalarUDFImpl for SparkAESEncrypt {
     fn as_any(&self) -> &dyn Any {
         self
@@ -556,6 +557,7 @@ impl SparkAESDecrypt {
     }
 }
 
+// TODO: Support array batch
 impl ScalarUDFImpl for SparkAESDecrypt {
     fn as_any(&self) -> &dyn Any {
         self

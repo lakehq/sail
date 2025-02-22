@@ -1,11 +1,10 @@
 /// [Credit]: <https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs>
 use core::any::type_name;
-use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, ListArray};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
+use datafusion_expr::ColumnarValue;
 
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
@@ -17,11 +16,13 @@ macro_rules! downcast_arg {
 pub(crate) use downcast_arg;
 
 /// array function wrapper that differentiates between scalar (length 1) and array.
-pub(crate) fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
+pub(crate) fn make_scalar_function<F>(
+    inner: F,
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue>
 where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef>,
 {
-    Arc::new(move |args: &[ColumnarValue]| {
+    move |args: &[ColumnarValue]| {
         // first, identify if any of the arguments is an Array. If yes, store its `len`,
         // as any scalar will need to be converted to an array of len `len`.
         let len = args
@@ -44,7 +45,7 @@ where
         } else {
             result.map(ColumnarValue::Array)
         }
-    })
+    }
 }
 
 /// Returns the length of each array dimension

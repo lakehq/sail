@@ -7,12 +7,13 @@ use datafusion::arrow::array::{
     StringArray,
 };
 use datafusion::arrow::datatypes::{DataType, Int32Type};
-use datafusion::logical_expr::TypeSignature::Exact;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::cast::{
     as_binary_array, as_fixed_size_binary_array, as_generic_string_array, as_int64_array,
+    as_string_view_array,
 };
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr_common::signature::TypeSignature;
 
 #[derive(Debug)]
 pub struct SparkHex {
@@ -89,8 +90,9 @@ impl SparkUnHex {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![DataType::Utf8]),
-                    Exact(vec![DataType::LargeUtf8]),
+                    TypeSignature::Exact(vec![DataType::Utf8]),
+                    TypeSignature::Exact(vec![DataType::Utf8View]),
+                    TypeSignature::Exact(vec![DataType::LargeUtf8]),
                 ],
                 Volatility::Immutable,
             ),
@@ -182,6 +184,16 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
 
                 Ok(ColumnarValue::Array(Arc::new(hexed)))
             }
+            DataType::Utf8View => {
+                let array = as_string_view_array(array)?;
+
+                let hexed: StringArray = array
+                    .iter()
+                    .map(|v| v.map(hex_bytes).transpose())
+                    .collect::<Result<_, _>>()?;
+
+                Ok(ColumnarValue::Array(Arc::new(hexed)))
+            }
             DataType::LargeUtf8 => {
                 let array = as_largestring_array(array);
 
@@ -221,6 +233,14 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
                         .map(|v| v.map(hex_int64))
                         .collect::<Vec<_>>(),
                     DataType::Utf8 => as_string_array(dict.values())
+                        .iter()
+                        .map(|v| v.map(hex_bytes).transpose())
+                        .collect::<Result<_, _>>()?,
+                    DataType::Utf8View => as_string_view_array(dict.values())?
+                        .iter()
+                        .map(|v| v.map(hex_bytes).transpose())
+                        .collect::<Result<_, _>>()?,
+                    DataType::LargeUtf8 => as_largestring_array(dict.values())
                         .iter()
                         .map(|v| v.map(hex_bytes).transpose())
                         .collect::<Result<_, _>>()?,
@@ -319,7 +339,9 @@ fn spark_unhex_inner<T: OffsetSizeTrait>(
             }
             Ok(ColumnarValue::Array(Arc::new(builder.finish())))
         }
-        ColumnarValue::Scalar(ScalarValue::Utf8(Some(string))) => {
+        ColumnarValue::Scalar(ScalarValue::Utf8(Some(string)))
+        | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(string)))
+        | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(string))) => {
             let mut encoded = Vec::new();
 
             if unhex(string, &mut encoded).is_ok() {
@@ -330,7 +352,9 @@ fn spark_unhex_inner<T: OffsetSizeTrait>(
                 Ok(ColumnarValue::Scalar(ScalarValue::Binary(None)))
             }
         }
-        ColumnarValue::Scalar(ScalarValue::Utf8(None)) => {
+        ColumnarValue::Scalar(ScalarValue::Utf8(None))
+        | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
+        | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {
             Ok(ColumnarValue::Scalar(ScalarValue::Binary(None)))
         }
         _ => {
@@ -364,11 +388,10 @@ pub fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionEr
     };
 
     match val_to_unhex.data_type() {
-        DataType::Utf8 => spark_unhex_inner::<i32>(val_to_unhex, fail_on_error),
+        DataType::Utf8 | DataType::Utf8View => {
+            spark_unhex_inner::<i32>(val_to_unhex, fail_on_error)
+        }
         DataType::LargeUtf8 => spark_unhex_inner::<i64>(val_to_unhex, fail_on_error),
-        other => exec_err!(
-            "The first argument must be a Utf8 or LargeUtf8: {:?}",
-            other
-        ),
+        other => exec_err!("The first argument must be a Utf8, Utf8View, or LargeUtf8: {other:?}"),
     }
 }

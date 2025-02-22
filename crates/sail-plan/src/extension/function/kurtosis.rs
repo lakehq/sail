@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-/// TODO: This file is no longer needed after datafusion-functions-extra upgrades to DataFusion 43.0.0
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/kurtosis.rs>
 use datafusion::arrow::array::{ArrayRef, Float64Array, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field};
