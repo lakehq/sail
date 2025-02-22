@@ -33,7 +33,7 @@ impl SparkArray {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::UserDefined, TypeSignature::Any(0)],
+                vec![TypeSignature::UserDefined, TypeSignature::Nullary],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("spark_make_array")],
