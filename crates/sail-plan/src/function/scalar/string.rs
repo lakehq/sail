@@ -10,6 +10,7 @@ use datafusion_expr::{expr, lit, ScalarUDF};
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::string::levenshtein::Levenshtein;
 use crate::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
+use crate::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use crate::extension::function::string::spark_mask::SparkMask;
 use crate::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use crate::function::common::{Function, FunctionInput};
@@ -36,10 +37,28 @@ fn substr(input: FunctionInput) -> PlanResult<expr::Expr> {
     let FunctionInput { arguments, .. } = input;
     if arguments.len() == 2 {
         let (first, second) = arguments.two()?;
+        let first = match first {
+            expr::Expr::Literal(ScalarValue::Utf8(_))
+            | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
+            | expr::Expr::Literal(ScalarValue::Utf8View(_)) => first,
+            _ => expr::Expr::Cast(expr::Cast {
+                expr: Box::new(first),
+                data_type: DataType::Utf8,
+            }),
+        };
         return Ok(expr_fn::substr(first, second));
     }
     if arguments.len() == 3 {
         let (first, second, third) = arguments.three()?;
+        let first = match first {
+            expr::Expr::Literal(ScalarValue::Utf8(_))
+            | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
+            | expr::Expr::Literal(ScalarValue::Utf8View(_)) => first,
+            _ => expr::Expr::Cast(expr::Cast {
+                expr: Box::new(first),
+                data_type: DataType::Utf8,
+            }),
+        };
         return Ok(expr_fn::substring(first, second, third));
     }
     Err(PlanError::invalid("substr requires 2 or 3 arguments"))
@@ -252,9 +271,9 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("chr", F::unary(expr_fn::chr)),
         ("concat_ws", F::custom(concat_ws)),
         ("contains", F::binary(contains)),
-        ("decode", F::unknown("decode")),
+        ("decode", F::udf(SparkDecode::new())),
         ("elt", F::unknown("elt")),
-        ("encode", F::unknown("encode")),
+        ("encode", F::udf(SparkEncode::new())),
         ("endswith", F::binary(endswith)),
         ("find_in_set", F::binary(expr_fn::find_in_set)),
         ("format_number", F::unknown("format_number")),

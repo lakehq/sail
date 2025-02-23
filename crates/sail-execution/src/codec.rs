@@ -81,6 +81,7 @@ use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::string::levenshtein::Levenshtein;
 use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_plan::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_plan::extension::function::string::spark_mask::SparkMask;
 use sail_plan::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_plan::extension::function::struct_function::StructFunction;
@@ -780,6 +781,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
+            "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
+            "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -825,6 +828,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkMakeTimestampNtz>()
             || node.inner().as_any().is::<SparkMask>()
             || node.inner().as_any().is::<SparkSequence>()
+            || node.inner().as_any().is::<SparkEncode>()
+            || node.inner().as_any().is::<SparkDecode>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"

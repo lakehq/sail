@@ -943,7 +943,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: decode"
+        "success": "ok"
       }
     },
     {

@@ -55,7 +55,7 @@ impl ScalarUDFImpl for SparkNextDay {
         match (&args[0], &args[1]) {
             (ColumnarValue::Scalar(date), ColumnarValue::Scalar(day_of_week)) => {
                 match (date, day_of_week) {
-                    (ScalarValue::Date32(days), ScalarValue::Utf8(day_of_week) | ScalarValue::Utf8View(day_of_week) | ScalarValue::LargeUtf8(day_of_week)) => {
+                    (ScalarValue::Date32(days), ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {
                         if let Some(days) = days {
                             if let Some(day_of_week) = day_of_week {
                                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(
@@ -75,7 +75,7 @@ impl ScalarUDFImpl for SparkNextDay {
             }
             (ColumnarValue::Array(date_array), ColumnarValue::Scalar(day_of_week)) => {
                 match (date_array.data_type(), day_of_week) {
-                    (DataType::Date32, ScalarValue::Utf8(day_of_week) | ScalarValue::Utf8View(day_of_week) | ScalarValue::LargeUtf8(day_of_week)) => {
+                    (DataType::Date32, ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {
                         if let Some(day_of_week) = day_of_week {
                             let result: Date32Array = date_array
                                 .as_primitive::<Date32Type>()
@@ -95,7 +95,7 @@ impl ScalarUDFImpl for SparkNextDay {
                 let result = match (date_array.data_type(), day_of_week_array.data_type()) {
                     (
                         DataType::Date32,
-                        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                     ) => {
                         let date_array: &Date32Array = date_array.as_primitive::<Date32Type>();
                         match day_of_week_array.data_type() {
@@ -142,8 +142,8 @@ impl ScalarUDFImpl for SparkNextDay {
             || matches!(current_native_type, NativeType::Null)
         {
             if matches!(&arg_types[1], DataType::Utf8)
-                || matches!(&arg_types[1], DataType::Utf8View)
                 || matches!(&arg_types[1], DataType::LargeUtf8)
+                || matches!(&arg_types[1], DataType::Utf8View)
             {
                 Ok(vec![DataType::Date32, arg_types[1].clone()])
             } else {

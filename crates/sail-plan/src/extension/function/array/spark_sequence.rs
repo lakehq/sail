@@ -84,6 +84,12 @@ impl ScalarUDFImpl for SparkSequence {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.is_empty() || arg_types.len() > 3 {
+            return exec_err!(
+                "Spark `sequence` function requires 1 to 3 arguments, got {}",
+                arg_types.len()
+            );
+        }
         arg_types
             .iter()
             .map(|arg_type| {
@@ -91,6 +97,9 @@ impl ScalarUDFImpl for SparkSequence {
                     Ok(arg_type.clone())
                 } else {
                     match arg_type {
+                        DataType::UInt8 => Ok(DataType::Int16),
+                        DataType::UInt16 => Ok(DataType::Int32),
+                        DataType::UInt32 | DataType::UInt64 => Ok(DataType::Int64),
                         DataType::Null => Ok(DataType::Null),
                         DataType::Timestamp(_time_unit, tz) => {
                             Ok(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
