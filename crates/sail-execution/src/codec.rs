@@ -47,6 +47,9 @@ use sail_plan::extension::function::array::spark_array_item_with_position::Array
 use sail_plan::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_plan::extension::function::array::spark_map_to_array::MapToArray;
 use sail_plan::extension::function::array::spark_sequence::SparkSequence;
+use sail_plan::extension::function::collection::spark_concat::SparkConcat;
+use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
+use sail_plan::extension::function::collection::spark_size::SparkSize;
 use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
 use sail_plan::extension::function::datetime::spark_last_day::SparkLastDay;
 use sail_plan::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
@@ -70,14 +73,11 @@ use sail_plan::extension::function::multi_expr::MultiExpr;
 use sail_plan::extension::function::raise_error::RaiseError;
 use sail_plan::extension::function::randn::Randn;
 use sail_plan::extension::function::random::Random;
-use sail_plan::extension::function::size::Size;
 use sail_plan::extension::function::skewness::SkewnessFunc;
 use sail_plan::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
-use sail_plan::extension::function::spark_concat::SparkConcat;
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_plan::extension::function::spark_reverse::SparkReverse;
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::string::levenshtein::Levenshtein;
 use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
@@ -729,7 +729,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
-            "size" | "cardinality" => Ok(Arc::new(ScalarUDF::from(Size::new()))),
+            "spark_size" | "size" | "spark_cardinality" | "cardinality" => {
+                Ok(Arc::new(ScalarUDF::from(SparkSize::new())))
+            }
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
             }
@@ -796,7 +798,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<RaiseError>()
             || node.inner().as_any().is::<Randn>()
             || node.inner().as_any().is::<Random>()
-            || node.inner().as_any().is::<Size>()
+            || node.inner().as_any().is::<SparkSize>()
             || node.inner().as_any().is::<SparkArray>()
             || node.inner().as_any().is::<SparkConcat>()
             || node.inner().as_any().is::<SparkHex>()

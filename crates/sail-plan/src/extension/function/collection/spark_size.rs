@@ -19,17 +19,17 @@ use crate::extension::function::functions_nested_utils::{
 // `cardinality`: https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.cardinality.html
 // `size`: https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.size.html
 #[derive(Debug)]
-pub struct Size {
+pub struct SparkSize {
     signature: Signature,
 }
 
-impl Default for Size {
+impl Default for SparkSize {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Size {
+impl SparkSize {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
@@ -43,13 +43,13 @@ impl Size {
     }
 }
 
-impl ScalarUDFImpl for Size {
+impl ScalarUDFImpl for SparkSize {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "size"
+        "spark_size"
     }
 
     fn signature(&self) -> &Signature {
