@@ -41,8 +41,12 @@ use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
-use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
-use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
+use sail_plan::extension::function::array::spark_array::SparkArray;
+use sail_plan::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
+use sail_plan::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
+use sail_plan::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
+use sail_plan::extension::function::array::spark_map_to_array::MapToArray;
+use sail_plan::extension::function::array::spark_sequence::SparkSequence;
 use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
 use sail_plan::extension::function::datetime::spark_last_day::SparkLastDay;
 use sail_plan::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
@@ -55,7 +59,8 @@ use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::least_greatest::{Greatest, Least};
-use sail_plan::extension::function::map_function::MapFunction;
+use sail_plan::extension::function::map::map_function::MapFunction;
+use sail_plan::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
 use sail_plan::extension::function::math::spark_abs::SparkAbs;
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::math::spark_signum::SparkSignum;
@@ -70,9 +75,7 @@ use sail_plan::extension::function::skewness::SkewnessFunc;
 use sail_plan::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
-use sail_plan::extension::function::spark_array::SparkArray;
 use sail_plan::extension::function::spark_concat::SparkConcat;
-use sail_plan::extension::function::spark_element_at::{SparkElementAt, SparkTryElementAt};
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_plan::extension::function::spark_reverse::SparkReverse;
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
@@ -774,6 +777,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
             }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
+            "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -818,6 +822,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkMakeYmInterval>()
             || node.inner().as_any().is::<SparkMakeTimestampNtz>()
             || node.inner().as_any().is::<SparkMask>()
+            || node.inner().as_any().is::<SparkSequence>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"

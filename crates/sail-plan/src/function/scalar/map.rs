@@ -2,8 +2,8 @@ use datafusion::functions_nested::expr_fn;
 use datafusion_expr::expr;
 
 use crate::error::PlanResult;
-use crate::extension::function::map_function::MapFunction;
-use crate::extension::function::spark_element_at::{SparkElementAt, SparkTryElementAt};
+use crate::extension::function::map::map_function::MapFunction;
+use crate::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
 use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 

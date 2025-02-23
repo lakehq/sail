@@ -4,12 +4,12 @@ use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position_udf;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
-use datafusion_functions_nested::range::gen_series_udf;
 use datafusion_functions_nested::string::ArrayToString;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::array_min_max::{ArrayMax, ArrayMin};
-use crate::extension::function::spark_array::SparkArray;
+use crate::extension::function::array::spark_array::SparkArray;
+use crate::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
+use crate::extension::function::array::spark_sequence::SparkSequence;
 use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
@@ -120,7 +120,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("arrays_zip", F::unknown("arrays_zip")),
         ("flatten", F::unary(expr_fn::flatten)),
         ("get", F::binary(array_element)),
-        ("sequence", F::scalar_udf(gen_series_udf)),
+        ("sequence", F::udf(SparkSequence::new())),
         ("shuffle", F::unknown("shuffle")),
         ("slice", F::ternary(slice)),
         ("sort_array", F::custom(sort_array)),
