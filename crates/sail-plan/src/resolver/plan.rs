@@ -32,8 +32,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
-    DmlStatement, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
-    WriteOp,
+    ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
 };
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
@@ -574,13 +573,24 @@ impl PlanResolver<'_> {
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
             }
+            CommandNode::InsertOverwriteDirectory { .. } => {
+                Err(PlanError::todo("CommandNode::InsertOverwriteDirectory"))
+            }
             CommandNode::InsertInto {
                 input,
                 table,
                 columns,
                 partition_spec,
+                replace,
+                if_not_exists,
                 overwrite,
             } => {
+                if replace.is_some() {
+                    return Err(PlanError::todo("INSERT INTO ... REPLACE"));
+                }
+                if if_not_exists {
+                    return Err(PlanError::todo("IF NOT EXISTS for INSERT"));
+                }
                 self.resolve_command_insert_into(
                     *input,
                     table,
@@ -594,20 +604,36 @@ impl PlanResolver<'_> {
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
-            CommandNode::Update {
-                input,
-                table,
-                table_alias,
-                assignments,
-            } => {
-                self.resolve_command_update(*input, table, table_alias, assignments, state)
-                    .await
-            }
-            CommandNode::Delete { table, condition } => {
-                self.resolve_command_delete(table, condition, state).await
-            }
+            CommandNode::Update { .. } => Err(PlanError::todo("CommandNode::Update")),
+            CommandNode::Delete { .. } => Err(PlanError::todo("CommandNode::Delete")),
             CommandNode::AlterTable { .. } => Err(PlanError::todo("CommandNode::AlterTable")),
             CommandNode::AlterView { .. } => Err(PlanError::todo("CommandNode::AlterView")),
+            CommandNode::LoadData { .. } => Err(PlanError::todo("CommandNode::LoadData")),
+            CommandNode::AnalyzeTable { .. } => Err(PlanError::todo("CommandNode::AnalyzeTable")),
+            CommandNode::AnalyzeTables { .. } => Err(PlanError::todo("CommandNode::AnalyzeTables")),
+            CommandNode::DescribeQuery { .. } => Err(PlanError::todo("CommandNode::DescribeQuery")),
+            CommandNode::DescribeFunction { .. } => {
+                Err(PlanError::todo("CommandNode::DescribeFunction"))
+            }
+            CommandNode::DescribeCatalog { .. } => {
+                Err(PlanError::todo("CommandNode::DescribeCatalog"))
+            }
+            CommandNode::DescribeDatabase { .. } => {
+                Err(PlanError::todo("CommandNode::DescribeDatabase"))
+            }
+            CommandNode::DescribeTable { .. } => Err(PlanError::todo("CommandNode::DescribeTable")),
+            CommandNode::CommentOnCatalog { .. } => {
+                Err(PlanError::todo("CommandNode::CommentOnCatalog"))
+            }
+            CommandNode::CommentOnDatabase { .. } => {
+                Err(PlanError::todo("CommandNode::CommentOnDatabase"))
+            }
+            CommandNode::CommentOnTable { .. } => {
+                Err(PlanError::todo("CommandNode::CommentOnTable"))
+            }
+            CommandNode::CommentOnColumn { .. } => {
+                Err(PlanError::todo("CommandNode::CommentOnColumn"))
+            }
         }
     }
 
@@ -2951,7 +2977,7 @@ impl PlanResolver<'_> {
         input: spec::QueryPlan,
         table: spec::ObjectName,
         columns: Vec<spec::Identifier>,
-        partition_spec: Vec<(String, spec::Expr)>,
+        partition_spec: Vec<(String, Option<spec::Expr>)>,
         overwrite: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
@@ -3007,105 +3033,6 @@ impl PlanResolver<'_> {
             LogicalPlanBuilder::insert_into(input, table_reference, schema.as_ref(), insert_op)?
                 .build()?;
         Ok(plan)
-    }
-
-    async fn resolve_command_update(
-        &self,
-        input: spec::QueryPlan,
-        table: spec::ObjectName,
-        _table_alias: Option<spec::Identifier>, // We don't need table alias, leaving it here in case we need it in the future.
-        assignments: Vec<(spec::ObjectName, spec::Expr)>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        // TODO:
-        //  1. Implement `ExecutionPlan` for `WriteOp::Update`.
-        //  2. Support UPDATE using Column values.
-        let input = self.resolve_query_plan(input, state).await?;
-        let table_reference = self.resolve_table_reference(&table)?;
-        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
-        let table_schema = table_provider.schema();
-        let fields = table_schema
-            .fields
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>();
-        let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
-            table_reference.clone(),
-            &table_schema,
-        )?);
-
-        let mut assignments_map: HashMap<String, Expr> = HashMap::with_capacity(assignments.len());
-        for (column, expr) in assignments {
-            let expr = self.resolve_expression(expr, &table_schema, state).await?;
-            let column_parts: Vec<String> = column.into();
-            let column = column_parts
-                .last()
-                .ok_or_else(|| PlanError::invalid("Expected at least one column in assignment"))?;
-            assignments_map.insert(column.into(), expr);
-        }
-
-        let exprs: Vec<Expr> = table_schema
-            .iter()
-            .map(|(_qualifier, field)| {
-                let expr = match assignments_map.remove(field.name()) {
-                    Some(mut expr) => {
-                        if let Expr::Placeholder(placeholder) = &mut expr {
-                            placeholder.data_type = placeholder
-                                .data_type
-                                .take()
-                                .or_else(|| Some(field.data_type().clone()));
-                        }
-                        expr.cast_to(field.data_type(), &input.schema())?
-                    }
-                    None => Expr::Column(Column::from_name(field.name())),
-                };
-                Ok(expr.alias(field.name()))
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
-
-        Ok(LogicalPlan::Dml(DmlStatement::new(
-            table_reference,
-            table_schema,
-            WriteOp::Update,
-            Arc::new(project(rename_logical_plan(input, &fields)?, exprs)?),
-        )))
-    }
-
-    async fn resolve_command_delete(
-        &self,
-        table: spec::ObjectName,
-        condition: Option<spec::Expr>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        // TODO:
-        //  1. Implement `ExecutionPlan` for `WriteOp::Delete`.
-        //  2. Filter condition not working (unable to resolve column name).
-        let table_reference = self.resolve_table_reference(&table)?;
-        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
-        let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
-            table_reference.clone(),
-            &table_provider.schema(),
-        )?);
-        let table_source = provider_as_source(table_provider);
-
-        let input =
-            LogicalPlanBuilder::scan(table_reference.clone(), table_source, None)?.build()?;
-        let input = match condition {
-            Some(condition) => {
-                let condition = self
-                    .resolve_expression(condition, input.schema(), state)
-                    .await?;
-                LogicalPlan::Filter(plan::Filter::try_new(condition, Arc::new(input))?)
-            }
-            None => input,
-        };
-
-        Ok(LogicalPlan::Dml(DmlStatement::new(
-            table_reference,
-            table_schema,
-            WriteOp::Delete,
-            Arc::new(input),
-        )))
     }
 
     async fn resolve_query_fill_na(

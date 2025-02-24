@@ -141,14 +141,19 @@ where
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    statement(options)
-        .padded_by(
-            whitespace()
-                .or(Semicolon::parser((), options).ignored())
-                .repeated(),
-        )
+    let semicolon = Semicolon::parser((), options);
+    // We only need to consume whitespaces explicitly at the beginning.
+    // All other whitespaces are consumed implicitly by the statement or semicolon parsers.
+    whitespace()
         .repeated()
-        .collect()
+        .ignore_then(semicolon.clone().repeated())
+        .ignore_then(
+            statement(options)
+                .then_ignore(semicolon.clone().ignored().or(end()))
+                .then_ignore(semicolon.repeated())
+                .repeated()
+                .collect(),
+        )
         .then_ignore(end())
 }
 

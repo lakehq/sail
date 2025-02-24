@@ -2,20 +2,22 @@ use chumsky::prelude::choice;
 use either::Either;
 use sail_sql_macro::TreeParser;
 
+use crate::ast;
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use crate::ast::identifier::{Ident, ObjectName};
 use crate::ast::keywords::{
-    Add, After, Alter, Always, Analyze, As, Buckets, By, Cache, Cascade, Catalog, Change, Clear,
-    Clustered, Codegen, Collection, Column, Columns, Comment, Cost, Create, Database, Databases,
-    Dbproperties, Default, Defined, Delete, Delimited, Drop, Escaped, Exists, Explain, Extended,
-    External, Fields, Fileformat, First, Format, Formatted, From, Function, Functions, Generated,
-    Global, If, In, Inputformat, Insert, Into, Items, Keys, Lazy, Like, Lines, Local, Location,
-    Map, Not, Null, Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions,
+    Add, After, All, Alter, Always, Analyze, As, Buckets, By, Cache, Cascade, Catalog, Change,
+    Clear, Clustered, Codegen, Collection, Column, Columns, Comment, Compute, Cost, Create, Data,
+    Database, Databases, Dbproperties, Default, Defined, Delete, Delimited, Desc, Describe,
+    Directory, Drop, Escaped, Exists, Explain, Extended, External, Fields, Fileformat, First, For,
+    Format, Formatted, From, Function, Functions, Generated, Global, If, In, Inpath, Inputformat,
+    Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Name, Noscan,
+    Not, Null, On, Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions,
     Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde,
-    Serdeproperties, Set, Show, Sorted, Stored, Table, Tables, Tblproperties, Temp, Temporary,
-    Terminated, Time, To, Type, Uncache, Unset, Update, Use, Using, Verbose, View, Views, Where,
-    With, Zone,
+    Serdeproperties, Set, Show, Sorted, Statistics, Stored, Table, Tables, Tblproperties, Temp,
+    Temporary, Terminated, Time, To, Type, Uncache, Unset, Update, Use, Using, Verbose, View,
+    Views, Where, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{Colon, Comma, Equals, LeftParenthesis, Minus, Plus, RightParenthesis};
@@ -189,14 +191,35 @@ pub enum Statement {
         #[parser(function = |(_, q, _, _), _| q)]
         query: Query,
     },
-    Insert {
+    InsertOverwriteDirectory {
         insert: Insert,
-        into_or_overwrite: Option<Either<Into, Overwrite>>,
+        overwrite: Overwrite,
+        local: Option<Local>,
+        directory: Directory,
+        destination: InsertDirectoryDestination,
+        #[parser(function = |(_, q, _, _), _| q)]
+        query: Query,
+    },
+    InsertIntoAndReplace {
+        insert: Insert,
+        into: Into,
+        table: Option<Table>,
+        name: ObjectName,
+        replace: Replace,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        r#where: WhereClause,
+        #[parser(function = |(_, q, _, _), _| q)]
+        query: Query,
+    },
+    InsertInto {
+        insert: Insert,
+        into_or_overwrite: Either<Into, Overwrite>,
         table: Option<Table>,
         name: ObjectName,
         #[parser(function = |(_, _, e, _), o| compose(e, o))]
-        partition: Option<PartitionSpec>,
-        columns: Option<IdentList>,
+        partition: Option<PartitionClause>,
+        if_not_exists: Option<(If, Not, Exists)>,
+        columns: Option<Either<(By, Name), IdentList>>,
         #[parser(function = |(_, q, _, _), _| q)]
         query: Query,
     },
@@ -216,6 +239,16 @@ pub enum Statement {
         alias: Option<DeleteTableAlias>,
         #[parser(function = |(_, _, e, _), o| compose(e, o))]
         r#where: Option<WhereClause>,
+    },
+    LoadData {
+        load_data: (Load, Data),
+        local: Option<Local>,
+        path: (Inpath, StringLiteral),
+        overwrite: Option<Overwrite>,
+        into_table: (Into, Table),
+        name: ObjectName,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        partition: Option<PartitionClause>,
     },
     CacheTable {
         cache: Cache,
@@ -243,6 +276,49 @@ pub enum Statement {
     SetTimeZone {
         set: (Set, Time, Zone),
         timezone: Either<Local, StringLiteral>,
+    },
+    AnalyzeTable {
+        analyze: (Analyze, Table),
+        name: ObjectName,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        partition: Option<PartitionClause>,
+        compute: (Compute, Statistics),
+        modifier: Option<AnalyzeTableModifier>,
+    },
+    AnalyzeTables {
+        analyze: (Analyze, Tables),
+        from: Option<(Either<From, In>, ObjectName)>,
+        compute: (Compute, Statistics),
+        no_scan: Option<Noscan>,
+    },
+    Describe {
+        describe: Either<Desc, Describe>,
+        #[parser(function = |(_, q, e, _), o| compose((q, e), o))]
+        item: DescribeItem,
+    },
+    CommentOnCatalog {
+        comment: (Comment, On, Catalog),
+        name: ObjectName,
+        is: Is,
+        value: CommentValue,
+    },
+    CommentOnDatabase {
+        comment: (Comment, On, Either<Database, Schema>),
+        name: ObjectName,
+        is: Is,
+        value: CommentValue,
+    },
+    CommentOnTable {
+        comment: (Comment, On, Table),
+        name: ObjectName,
+        is: Is,
+        value: CommentValue,
+    },
+    CommentOnColumn {
+        comment: (Comment, On, Column),
+        name: ObjectName,
+        is: Is,
+        value: CommentValue,
     },
 }
 
@@ -367,7 +443,7 @@ pub struct PartitionColumnList {
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
-pub struct PartitionSpec {
+pub struct PartitionClause {
     pub partition: Partition,
     #[parser(function = |e, o| compose(e, o))]
     pub values: PartitionValueList,
@@ -377,9 +453,8 @@ pub struct PartitionSpec {
 #[parser(dependency = "Expr")]
 pub struct PartitionValue {
     pub column: Ident,
-    pub eq: Equals,
-    #[parser(function = |e, _| e)]
-    pub value: Expr,
+    #[parser(function = |e, o| unit(o).then(e).or_not())]
+    pub value: Option<(Equals, Expr)>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -492,11 +567,11 @@ pub enum AlterTableOperation {
     },
     RenamePartition {
         #[parser(function = |(e, _), o| compose(e, o))]
-        old: PartitionSpec,
+        old: PartitionClause,
         rename: Rename,
         to: To,
         #[parser(function = |(e, _), o| compose(e, o))]
-        new: PartitionSpec,
+        new: PartitionClause,
     },
     AddColumns {
         add: Add,
@@ -507,6 +582,7 @@ pub enum AlterTableOperation {
     DropColumns {
         drop: Drop,
         columns: Either<Column, Columns>,
+        if_exists: Option<(If, Exists)>,
         names: ColumnDropList,
     },
     RenameColumn {
@@ -532,13 +608,13 @@ pub enum AlterTableOperation {
         add: Add,
         if_not_exists: Option<(If, Not, Exists)>,
         #[parser(function = |(e, _), o| compose(e, o))]
-        partitions: Vec<PartitionSpec>,
+        partitions: Vec<PartitionClause>,
     },
     DropPartition {
         drop: Drop,
         if_exists: Option<(If, Exists)>,
         #[parser(function = |(e, _), o| compose(e, o))]
-        partition: PartitionSpec,
+        partition: PartitionClause,
         purge: Option<Purge>,
     },
     SetTableProperties {
@@ -554,14 +630,14 @@ pub enum AlterTableOperation {
     },
     SetFileFormat {
         #[parser(function = |(e, _), o| compose(e, o))]
-        partition: Option<PartitionSpec>,
+        partition: Option<PartitionClause>,
         set: Set,
         file_format: Fileformat,
         format: FileFormat,
     },
     SetLocation {
         #[parser(function = |(e, _), o| compose(e, o))]
-        partition: Option<PartitionSpec>,
+        partition: Option<PartitionClause>,
         set: Set,
         location: Location,
         value: StringLiteral,
@@ -584,13 +660,13 @@ pub enum AlterViewOperation {
         add: Add,
         if_not_exists: Option<(If, Not, Exists)>,
         #[parser(function = |(_, e), o| compose(e, o))]
-        partitions: Vec<PartitionSpec>,
+        partitions: Vec<PartitionClause>,
     },
     DropPartition {
         drop: Drop,
         if_exists: Option<(If, Exists)>,
         #[parser(function = |(_, e), o| compose(e, o))]
-        partition: PartitionSpec,
+        partition: PartitionClause,
         purge: Option<Purge>,
     },
     SetViewProperties {
@@ -671,13 +747,27 @@ pub enum ColumnDropList {
     },
 }
 
-#[allow(unused)]
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, TreeParser)]
+pub enum InsertDirectoryDestination {
+    Spark {
+        path: Option<StringLiteral>,
+        using: (Using, Ident),
+        options: Option<(Options, PropertyList)>,
+    },
+    Hive {
+        path: StringLiteral,
+        row_format: Option<(Row, Format, RowFormat)>,
+        stored_as: Option<(Stored, As, FileFormat)>,
+    },
+}
+
 #[derive(Debug, Clone, TreeParser)]
 pub struct UpdateTableAlias {
-    r#as: Option<As>,
+    pub r#as: Option<As>,
     #[parser(function = |(), o| unit(o).and_is(choice((Where::parser((), o).ignored(), Set::parser((), o).ignored())).not()))]
-    table: Ident,
-    columns: Option<IdentList>,
+    pub table: Ident,
+    pub columns: Option<IdentList>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -712,11 +802,59 @@ pub struct Assignment {
     pub value: Expr,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, TreeParser)]
 pub struct DeleteTableAlias {
-    r#as: Option<As>,
+    pub r#as: Option<As>,
     #[parser(function = |(), o| unit(o).and_is(Where::parser((), o).not()))]
-    table: Ident,
-    columns: Option<IdentList>,
+    pub table: Ident,
+    pub columns: Option<IdentList>,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+pub enum AnalyzeTableModifier {
+    NoScan(Noscan),
+    ForAllColumns(For, All, Columns),
+    ForColumns(For, Columns, Sequence<ObjectName, Comma>),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "(Query, Expr)")]
+pub enum DescribeItem {
+    // We need to try `DESCRIBE QUERY` first since the `QUERY` keyword
+    // is optional. We will fall back to other choices if there is
+    // no valid query following the `DESCRIBE` keyword.
+    Query {
+        query: Option<ast::keywords::Query>,
+        #[parser(function = |(q, _), _| q)]
+        item: Query,
+    },
+    Function {
+        function: Function,
+        extended: Option<Extended>,
+        item: Either<ObjectName, StringLiteral>,
+    },
+    Catalog {
+        catalog: Catalog,
+        extended: Option<Extended>,
+        item: ObjectName,
+    },
+    Database {
+        database: Either<Database, Schema>,
+        extended: Option<Extended>,
+        item: ObjectName,
+    },
+    Table {
+        table: Option<Table>,
+        extended: Option<Extended>,
+        name: ObjectName,
+        #[parser(function = |(_, e), o| compose(e, o))]
+        partition: Option<PartitionClause>,
+        column: Option<ObjectName>,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser)]
+pub enum CommentValue {
+    NotNull(StringLiteral),
+    Null(Null),
 }
