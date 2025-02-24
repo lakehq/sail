@@ -6,7 +6,7 @@ use datafusion::functions::datetime::to_timestamp::ToTimestampSecondsFunc;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 
-use crate::extension::function::datetime_utils::validate_data_types;
+use crate::extension::function::datetime::datetime_utils::validate_data_types;
 
 #[derive(Debug)]
 pub struct SparkUnixTimestamp {

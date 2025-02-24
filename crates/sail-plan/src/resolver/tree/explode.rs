@@ -12,7 +12,9 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::ident;
 use either::Either;
 
-use crate::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
+use crate::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
+use crate::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
+use crate::extension::function::array::spark_map_to_array::MapToArray;
 use crate::extension::function::explode::{Explode, ExplodeKind};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::resolver::state::PlanResolverState;

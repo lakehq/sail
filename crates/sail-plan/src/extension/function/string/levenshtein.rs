@@ -4,10 +4,11 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array};
+use datafusion_common::types::{logical_int64, logical_string};
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::*;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr_common::signature::{TypeSignature, TypeSignatureClass};
 
 use crate::extension::function::functions_utils::{make_scalar_function, utf8_to_int_type};
 
@@ -27,13 +28,11 @@ impl Levenshtein {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![DataType::Utf8, DataType::Utf8]),
-                    Exact(vec![DataType::Utf8, DataType::Utf8, DataType::Int64]),
-                    Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
-                    Exact(vec![
-                        DataType::LargeUtf8,
-                        DataType::LargeUtf8,
-                        DataType::Int64,
+                    TypeSignature::String(2),
+                    TypeSignature::Coercible(vec![
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Native(logical_string()),
+                        TypeSignatureClass::Native(logical_int64()),
                     ]),
                 ],
                 Volatility::Immutable,
@@ -61,7 +60,9 @@ impl ScalarUDFImpl for Levenshtein {
 
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(levenshtein::<i32>, vec![])(args),
+            DataType::Utf8 | DataType::Utf8View => {
+                make_scalar_function(levenshtein::<i32>, vec![])(args)
+            }
             DataType::LargeUtf8 => make_scalar_function(levenshtein::<i64>, vec![])(args),
             other => {
                 exec_err!("Unsupported data type {other:?} for function levenshtein")
@@ -93,7 +94,7 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     match args[0].data_type() {
-        DataType::Utf8 => {
+        DataType::Utf8 | DataType::Utf8View => {
             let result = str1_array
                 .iter()
                 .zip(str2_array.iter())
@@ -129,7 +130,7 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         other => {
             exec_err!(
-                "levenshtein was called with {other} datatype arguments. It requires Utf8 or LargeUtf8."
+                "levenshtein was called with {other} datatype arguments. It requires Utf8, Utf8View, or LargeUtf8."
             )
         }
     }
