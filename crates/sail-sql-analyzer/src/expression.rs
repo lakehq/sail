@@ -208,12 +208,18 @@ fn from_ast_window_frame(frame: WindowFrame) -> SqlResult<spec::WindowFrame> {
 fn from_ast_window_frame_bound(bound: WindowFrameBound) -> SqlResult<spec::WindowFrameBoundary> {
     match bound {
         WindowFrameBound::CurrentRow(_, _) => Ok(spec::WindowFrameBoundary::CurrentRow),
-        WindowFrameBound::UnboundedPreceding(_, _) | WindowFrameBound::UnboundedFollowing(_, _) => {
-            Ok(spec::WindowFrameBoundary::Unbounded)
+        WindowFrameBound::UnboundedPreceding(_, _) => {
+            Ok(spec::WindowFrameBoundary::UnboundedPreceding)
         }
-        WindowFrameBound::Preceding(e, _) | WindowFrameBound::Following(e, _) => Ok(
-            spec::WindowFrameBoundary::Value(Box::new(from_ast_expression(e)?)),
-        ),
+        WindowFrameBound::UnboundedFollowing(_, _) => {
+            Ok(spec::WindowFrameBoundary::UnboundedFollowing)
+        }
+        WindowFrameBound::Preceding(e, _) => Ok(spec::WindowFrameBoundary::Preceding(Box::new(
+            from_ast_expression(e)?,
+        ))),
+        WindowFrameBound::Following(e, _) => Ok(spec::WindowFrameBoundary::Following(Box::new(
+            from_ast_expression(e)?,
+        ))),
     }
 }
 

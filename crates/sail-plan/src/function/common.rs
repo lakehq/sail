@@ -181,7 +181,7 @@ impl AggFunctionBuilder {
     }
 }
 
-pub(super) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreatment> {
+pub(crate) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreatment> {
     match ignore_nulls {
         Some(true) => Some(NullTreatment::IgnoreNulls),
         Some(false) => Some(NullTreatment::RespectNulls),
