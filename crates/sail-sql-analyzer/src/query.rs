@@ -420,17 +420,6 @@ pub fn from_ast_table_factor_with_joins(
 
 fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
     match table {
-        TableFactor::Nested {
-            left: _,
-            inner,
-            right: _,
-            modifiers,
-            alias,
-        } => {
-            let plan = from_ast_table(None, *inner)?;
-            let plan = query_plan_with_table_modifiers(plan, modifiers)?;
-            query_plan_with_table_alias(plan, alias)
-        }
         TableFactor::Name {
             name,
             modifiers,
@@ -454,6 +443,17 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
             alias,
         } => {
             let plan = from_ast_query(query)?;
+            let plan = query_plan_with_table_modifiers(plan, modifiers)?;
+            query_plan_with_table_alias(plan, alias)
+        }
+        TableFactor::Nested {
+            left: _,
+            table,
+            right: _,
+            modifiers,
+            alias,
+        } => {
+            let plan = from_ast_table(None, *table)?;
             let plan = query_plan_with_table_modifiers(plan, modifiers)?;
             query_plan_with_table_alias(plan, alias)
         }

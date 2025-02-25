@@ -2486,7 +2486,7 @@
     {
       "input": "select a from 1k.2m",
       "output": {
-        "failure": "invalid argument: found 1k at 14:16 expected 'LATERAL', '(', 'VALUES', or identifier"
+        "failure": "invalid argument: found 1k at 14:16 expected 'LATERAL', 'VALUES', '(', or identifier"
       }
     },
     {

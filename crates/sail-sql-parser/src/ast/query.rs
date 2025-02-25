@@ -253,15 +253,6 @@ pub struct TableWithJoins {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub enum TableFactor {
-    Nested {
-        left: LeftParenthesis,
-        #[parser(function = |(_, _, t), _| boxed(t))]
-        inner: Box<TableWithJoins>,
-        right: RightParenthesis,
-        #[parser(function = |(_, e, _), o| compose(e, o))]
-        modifiers: Vec<TableModifier>,
-        alias: Option<AliasClause>,
-    },
     Values {
         #[parser(function = |(_, e, _), o| compose(e, o))]
         values: ValuesClause,
@@ -271,6 +262,15 @@ pub enum TableFactor {
         left: LeftParenthesis,
         #[parser(function = |(q, _, _), _| q)]
         query: Query,
+        right: RightParenthesis,
+        #[parser(function = |(_, e, _), o| compose(e, o))]
+        modifiers: Vec<TableModifier>,
+        alias: Option<AliasClause>,
+    },
+    Nested {
+        left: LeftParenthesis,
+        #[parser(function = |(_, _, t), _| boxed(t))]
+        table: Box<TableWithJoins>,
         right: RightParenthesis,
         #[parser(function = |(_, e, _), o| compose(e, o))]
         modifiers: Vec<TableModifier>,
