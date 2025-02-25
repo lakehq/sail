@@ -378,28 +378,29 @@ fn from_ast_values(values: ValuesClause) -> SqlResult<spec::QueryPlan> {
     query_plan_with_table_alias(plan, alias)
 }
 
+fn from_ast_table(
+    input: Option<spec::QueryPlan>,
+    table: TableWithJoins,
+) -> SqlResult<spec::QueryPlan> {
+    let TableWithJoins {
+        lateral,
+        table,
+        joins,
+    } = table;
+    if lateral.is_some() {
+        if !joins.is_empty() {
+            return Err(SqlError::unsupported("lateral table with join"));
+        }
+        query_plan_with_lateral_table_factor(input, table, true)
+    } else {
+        query_plan_with_table_factor(input, table, joins)
+    }
+}
+
 pub fn from_ast_tables(tables: Vec<TableWithJoins>) -> SqlResult<spec::QueryPlan> {
     let plan = tables
         .into_iter()
-        .try_fold(
-            None,
-            |plan: Option<spec::QueryPlan>, table| -> SqlResult<Option<spec::QueryPlan>> {
-                let TableWithJoins {
-                    lateral,
-                    table,
-                    joins,
-                } = table;
-                let plan = if lateral.is_some() {
-                    if !joins.is_empty() {
-                        return Err(SqlError::unsupported("lateral table with join"));
-                    }
-                    query_plan_with_lateral_table_factor(plan, table, true)?
-                } else {
-                    query_plan_with_table_factor(plan, table, joins)?
-                };
-                Ok(Some(plan))
-            },
-        )?
+        .try_fold(None, |plan, table| from_ast_table(plan, table).map(Some))?
         .unwrap_or_else(|| {
             spec::QueryPlan::new(spec::QueryNode::Empty {
                 produce_one_row: true,
@@ -419,9 +420,20 @@ pub fn from_ast_table_factor_with_joins(
 
 fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
     match table {
+        TableFactor::Nested {
+            left: _,
+            inner,
+            right: _,
+            modifiers,
+            alias,
+        } => {
+            let plan = from_ast_table(None, *inner)?;
+            let plan = query_plan_with_table_modifiers(plan, modifiers)?;
+            query_plan_with_table_alias(plan, alias)
+        }
         TableFactor::Name {
             name,
-            modifier,
+            modifiers,
             alias,
         } => {
             let plan = spec::QueryPlan::new(spec::QueryNode::Read {
@@ -431,18 +443,18 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
                     options: Default::default(),
                 }),
             });
-            let plan = query_plan_with_table_modifier(plan, modifier)?;
+            let plan = query_plan_with_table_modifiers(plan, modifiers)?;
             query_plan_with_table_alias(plan, alias)
         }
         TableFactor::Query {
             left: _,
             query,
             right: _,
-            modifier,
+            modifiers,
             alias,
         } => {
             let plan = from_ast_query(query)?;
-            let plan = query_plan_with_table_modifier(plan, modifier)?;
+            let plan = query_plan_with_table_modifiers(plan, modifiers)?;
             query_plan_with_table_alias(plan, alias)
         }
         TableFactor::TableFunction { function, alias } => {
@@ -473,12 +485,21 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
     }
 }
 
+fn query_plan_with_table_modifiers(
+    plan: spec::QueryPlan,
+    modifier: Vec<TableModifier>,
+) -> SqlResult<spec::QueryPlan> {
+    modifier
+        .into_iter()
+        .try_fold(plan, query_plan_with_table_modifier)
+}
+
 fn query_plan_with_table_modifier(
     plan: spec::QueryPlan,
-    modifier: Option<TableModifier>,
+    modifier: TableModifier,
 ) -> SqlResult<spec::QueryPlan> {
     match modifier {
-        Some(TableModifier::Pivot(pivot)) => {
+        TableModifier::Pivot(pivot) => {
             let PivotClause {
                 pivot: _,
                 left: _,
@@ -551,7 +572,7 @@ fn query_plan_with_table_modifier(
                 values,
             })))
         }
-        Some(TableModifier::Unpivot(unpivot)) => {
+        TableModifier::Unpivot(unpivot) => {
             let UnpivotClause {
                 unpivot: _,
                 nulls,
@@ -635,7 +656,6 @@ fn query_plan_with_table_modifier(
                 },
             )))
         }
-        None => Ok(plan),
     }
 }
 

@@ -8,7 +8,7 @@ use crate::ast::data_type::DataType;
 use crate::ast::expression::{Expr, IntervalLiteral};
 use crate::ast::identifier::{ObjectName, QualifiedWildcard};
 use crate::ast::operator::Semicolon;
-use crate::ast::query::{NamedExpr, Query};
+use crate::ast::query::{NamedExpr, Query, TableWithJoins};
 use crate::ast::statement::Statement;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
@@ -27,6 +27,7 @@ where
     let mut query = Recursive::declare();
     let mut expression = Recursive::declare();
     let mut data_type = Recursive::declare();
+    let mut table_with_joins = Recursive::declare();
 
     statement.define(Statement::parser(
         (
@@ -38,7 +39,7 @@ where
         options,
     ));
     query.define(Query::parser(
-        (query.clone(), expression.clone(), data_type.clone()),
+        (query.clone(), expression.clone(), table_with_joins.clone()),
         options,
     ));
     expression.define(Expr::parser(
@@ -46,6 +47,10 @@ where
         options,
     ));
     data_type.define(DataType::parser(data_type.clone(), options));
+    table_with_joins.define(TableWithJoins::parser(
+        (query.clone(), expression.clone(), table_with_joins.clone()),
+        options,
+    ));
 
     statement
 }
@@ -94,16 +99,21 @@ where
     let mut expression = Recursive::declare();
     let mut query = Recursive::declare();
     let mut data_type = Recursive::declare();
+    let mut table_with_joins = Recursive::declare();
 
     expression.define(Expr::parser(
         (expression.clone(), query.clone(), data_type.clone()),
         options,
     ));
     query.define(Query::parser(
-        (query.clone(), expression.clone(), data_type.clone()),
+        (query.clone(), expression.clone(), table_with_joins.clone()),
         options,
     ));
     data_type.define(DataType::parser(data_type.clone(), options));
+    table_with_joins.define(TableWithJoins::parser(
+        (query.clone(), expression.clone(), table_with_joins.clone()),
+        options,
+    ));
 
     expression
 }
