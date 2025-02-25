@@ -61,9 +61,11 @@ use sail_plan::extension::function::datetime::timestamp_now::TimestampNow;
 use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
-use sail_plan::extension::function::least_greatest::{Greatest, Least};
 use sail_plan::extension::function::map::map_function::MapFunction;
 use sail_plan::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
+use sail_plan::extension::function::math::least_greatest::{Greatest, Least};
+use sail_plan::extension::function::math::randn::Randn;
+use sail_plan::extension::function::math::random::Random;
 use sail_plan::extension::function::math::spark_abs::SparkAbs;
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::math::spark_signum::SparkSignum;
@@ -71,8 +73,6 @@ use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
 use sail_plan::extension::function::raise_error::RaiseError;
-use sail_plan::extension::function::randn::Randn;
-use sail_plan::extension::function::random::Random;
 use sail_plan::extension::function::skewness::SkewnessFunc;
 use sail_plan::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
