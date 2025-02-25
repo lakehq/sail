@@ -5,7 +5,7 @@ use datafusion::arrow::array::Float64Array;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility};
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, StandardNormal};
 
@@ -106,7 +106,7 @@ impl ScalarUDFImpl for Randn {
     }
 
     fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let values = std::iter::repeat_with(|| StandardNormal.sample(&mut rng)).take(num_rows);
         let array = Float64Array::from_iter_values(values);
         Ok(ColumnarValue::Array(Arc::new(array)))
@@ -114,6 +114,6 @@ impl ScalarUDFImpl for Randn {
 }
 
 fn invoke_no_seed() -> Result<ColumnarValue> {
-    let value = thread_rng().sample(StandardNormal);
+    let value = rng().sample(StandardNormal);
     Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(value))))
 }

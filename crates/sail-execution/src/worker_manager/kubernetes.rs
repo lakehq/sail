@@ -7,7 +7,7 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use k8s_openapi::Resource;
 use kube::Api;
-use rand::distributions::Uniform;
+use rand::distr::Uniform;
 use rand::Rng;
 use sail_common::config::ClusterConfigEnv;
 use sail_server::RetryStrategy;
@@ -43,8 +43,8 @@ impl KubernetesWorkerManager {
     }
 
     pub fn generate_name() -> String {
-        rand::thread_rng()
-            .sample_iter(Uniform::new(0, 36))
+        rand::rng()
+            .sample_iter(Uniform::new(0, 36).unwrap())
             .take(10)
             .map(|i| if i < 10 { b'0' + i } else { b'a' + i - 10 })
             .map(char::from)
