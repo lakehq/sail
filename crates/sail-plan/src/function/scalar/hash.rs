@@ -5,7 +5,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, ScalarUDF};
 
 use crate::error::PlanResult;
-use crate::extension::function::spark_hex_unhex::SparkHex;
+use crate::extension::function::math::spark_hex_unhex::SparkHex;
 use crate::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use crate::extension::function::spark_xxhash64::SparkXxhash64;
 use crate::function::common::{Function, FunctionInput};

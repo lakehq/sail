@@ -403,21 +403,32 @@ pub enum CommandNode {
         input: Box<QueryPlan>,
         table: ObjectName,
         columns: Vec<Identifier>,
-        partition_spec: Vec<(String, Expr)>,
+        partition_spec: Vec<(String, Option<Expr>)>,
+        replace: Option<Expr>,
+        if_not_exists: bool,
         overwrite: bool,
+    },
+    InsertOverwriteDirectory {
+        input: Box<QueryPlan>,
+        local: bool,
+        location: Option<String>,
+        file_format: Option<TableFileFormat>,
+        row_format: Option<TableRowFormat>,
+        options: Vec<(String, String)>,
     },
     SetVariable {
         variable: String,
         value: String,
     },
     Update {
-        input: Box<QueryPlan>,
         table: ObjectName,
         table_alias: Option<Identifier>,
         assignments: Vec<(ObjectName, Expr)>,
+        condition: Option<Expr>,
     },
     Delete {
         table: ObjectName,
+        table_alias: Option<Identifier>,
         condition: Option<Expr>,
     },
     AlterTable {
@@ -429,6 +440,60 @@ pub enum CommandNode {
         view: ObjectName,
         if_exists: bool,
         operation: AlterViewOperation,
+    },
+    LoadData {
+        local: bool,
+        location: String,
+        table: ObjectName,
+        overwrite: bool,
+        partition: Vec<(String, Option<Expr>)>,
+    },
+    AnalyzeTable {
+        table: ObjectName,
+        partition: Vec<(String, Option<Expr>)>,
+        columns: Vec<ObjectName>,
+        no_scan: bool,
+    },
+    AnalyzeTables {
+        from: Option<ObjectName>,
+        no_scan: bool,
+    },
+    DescribeQuery {
+        query: Box<QueryPlan>,
+    },
+    DescribeFunction {
+        function: ObjectName,
+        extended: bool,
+    },
+    DescribeCatalog {
+        catalog: ObjectName,
+        extended: bool,
+    },
+    DescribeDatabase {
+        database: ObjectName,
+        extended: bool,
+    },
+    DescribeTable {
+        table: ObjectName,
+        extended: bool,
+        partition: Vec<(String, Option<Expr>)>,
+        column: Option<ObjectName>,
+    },
+    CommentOnCatalog {
+        catalog: ObjectName,
+        value: Option<String>,
+    },
+    CommentOnDatabase {
+        database: ObjectName,
+        value: Option<String>,
+    },
+    CommentOnTable {
+        table: ObjectName,
+        value: Option<String>,
+    },
+    CommentOnColumn {
+        column: ObjectName,
+        value: Option<String>,
     },
 }
 

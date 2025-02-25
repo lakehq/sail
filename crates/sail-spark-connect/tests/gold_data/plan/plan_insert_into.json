@@ -44,6 +44,8 @@
               ],
               "columns": [],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -96,6 +98,8 @@
               ],
               "columns": [],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -169,6 +173,8 @@
                   }
                 ]
               ],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,

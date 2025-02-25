@@ -19,7 +19,11 @@ impl Default for RaiseError {
 impl RaiseError {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![DataType::Utf8], Volatility::Immutable),
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -48,16 +52,15 @@ impl ScalarUDFImpl for RaiseError {
                 args.len()
             )));
         }
-
-        let err_msg = match &args[0] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(msg))) => msg.clone(),
-            _ => {
-                return Err(DataFusionError::Internal(
-                    "raise_error expects a single UTF-8 string argument".to_string(),
-                ))
+        match &args[0] {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(msg)))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(msg)))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(msg))) => {
+                Err(DataFusionError::Execution(msg.to_string()))
             }
-        };
-
-        Err(DataFusionError::Execution(err_msg))
+            _ => Err(DataFusionError::Internal(
+                "raise_error expects a single UTF-8 string argument".to_string(),
+            )),
+        }
     }
 }

@@ -3,25 +3,100 @@
     {
       "input": "\nLOAD DATA LOCAL INPATH 'filepath' OVERWRITE INTO TABLE a.b.c\nPARTITION(ds='2017-06-10')\n         ",
       "output": {
-        "failure": "invalid argument: found LOAD at 1:5 expected statement"
+        "success": {
+          "command": {
+            "loadData": {
+              "local": true,
+              "location": "filepath",
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "overwrite": true,
+              "partition": [
+                [
+                  "ds",
+                  {
+                    "literal": {
+                      "utf8": {
+                        "value": "2017-06-10"
+                      }
+                    }
+                  }
+                ]
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "LOAD DATA INPATH 'filepath' INTO TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: found LOAD at 0:4 expected statement, or end of input"
+        "success": {
+          "command": {
+            "loadData": {
+              "local": false,
+              "location": "filepath",
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "overwrite": false,
+              "partition": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "LOAD DATA LOCAL INPATH 'filepath' INTO TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: found LOAD at 0:4 expected statement, or end of input"
+        "success": {
+          "command": {
+            "loadData": {
+              "local": true,
+              "location": "filepath",
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "overwrite": false,
+              "partition": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "LOAD DATA LOCAL INPATH 'filepath' OVERWRITE INTO TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: found LOAD at 0:4 expected statement, or end of input"
+        "success": {
+          "command": {
+            "loadData": {
+              "local": true,
+              "location": "filepath",
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "overwrite": true,
+              "partition": []
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]

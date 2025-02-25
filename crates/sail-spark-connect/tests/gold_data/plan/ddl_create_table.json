@@ -161,7 +161,7 @@
     {
       "input": "\nCREATE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nPARTITIONED BY (\n    a,\n    bucket(16, b),\n    years(ts),\n    months(ts),\n    days(ts),\n    hours(ts),\n    foo(a, \"bar\", 34))\n      ",
       "output": {
-        "failure": "invalid argument: found PARTITIONED at 67:78 expected statement, or end of input"
+        "failure": "invalid argument: found ( at 101:102 expected ':', data type, ',', or ')'"
       }
     },
     {
@@ -807,7 +807,7 @@
       "input": "CREATE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)",
       "exception": "\nOperation not allowed: CREATE TABLE ... SKEWED BY.(line 1, pos 32)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n--------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found SKEWED at 32:38 expected statement, or end of input"
+        "failure": "invalid argument: found SKEWED at 32:38 expected 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
@@ -860,7 +860,7 @@
       "input": "CREATE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'",
       "exception": "\nOperation not allowed: STORED BY.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'\n^^^\n",
       "output": {
-        "failure": "invalid argument: found STORED at 43:49 expected statement, or end of input"
+        "failure": "invalid argument: found BY at 50:52 expected 'AS'"
       }
     },
     {
@@ -921,7 +921,7 @@
       "input": "CREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))",
       "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: truncate(p1, 16)\nColumns: p2 string.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))\n^^^\n",
       "output": {
-        "failure": "invalid argument: found PARTITIONED at 43:54 expected statement, or end of input"
+        "failure": "invalid argument: found ( at 78:79 expected ':', data type, ',', or ')'"
       }
     },
     {
@@ -1150,7 +1150,7 @@
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 54)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET\n------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found a at 20:21 expected query"
+        "failure": "invalid argument: found ) at 54:55 expected expression"
       }
     },
     {
@@ -1164,7 +1164,7 @@
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'a': missing '('.(line 1, pos 53)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET\n-----------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found a at 20:21 expected query"
+        "failure": "invalid argument: found a at 53:54 expected '('"
       }
     },
     {
@@ -1564,7 +1564,7 @@
       "input": "CREATE TABLE my_tab(a: INT COMMENT 'test', b: STRING) USING parquet",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ':'.(line 1, pos 21)\n\n== SQL ==\nCREATE TABLE my_tab(a: INT COMMENT 'test', b: STRING) USING parquet\n---------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found a at 20:21 expected query"
+        "failure": "invalid argument: found : at 21:22 expected data type"
       }
     },
     {

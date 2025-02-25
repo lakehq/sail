@@ -9,9 +9,14 @@ use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
-use crate::extension::function::spark_weekofyear::SparkWeekOfYear;
-use crate::extension::function::timestamp_now::TimestampNow;
+use crate::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
+use crate::extension::function::datetime::spark_last_day::SparkLastDay;
+use crate::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
+use crate::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
+use crate::extension::function::datetime::spark_next_day::SparkNextDay;
+use crate::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
+use crate::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
+use crate::extension::function::datetime::timestamp_now::TimestampNow;
 use crate::function::common::{Function, FunctionInput};
 use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
 
@@ -324,9 +329,45 @@ fn current_localtimestamp_microseconds(input: FunctionInput) -> PlanResult<Expr>
     Ok(expr_fn::to_local_time(vec![expr]))
 }
 
-// FIXME: Spark displays dates and timestamps according to the session time zone.
-//  We should be setting the DataFusion config `datafusion.execution.time_zone`
-//  and casting any datetime functions that don't use the DataFusion config.
+fn from_utc_timestamp(timestamp: Expr, timezone: Expr) -> Expr {
+    Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(SparkFromUtcTimestamp::new(
+            TimeUnit::Microsecond,
+        ))),
+        args: vec![timestamp, timezone],
+    })
+}
+
+fn make_ym_interval(input: FunctionInput) -> PlanResult<Expr> {
+    let (years, months) = if input.arguments.len() == 2 {
+        input.arguments.two()?
+    } else {
+        (input.arguments.one()?, lit(ScalarValue::Int32(Some(0))))
+    };
+    Ok(Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())),
+        args: vec![years, months],
+    }))
+}
+
+fn make_timestamp(input: FunctionInput) -> PlanResult<Expr> {
+    if input.arguments.len() == 6 {
+        Ok(Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())),
+            args: input.arguments,
+        }))
+    } else if input.arguments.len() == 7 {
+        Err(PlanError::todo(
+            "make_timestamp with timezone is not yet implemented",
+        ))
+    } else {
+        Err(PlanError::invalid(format!(
+            "make_timestamp requires 6 or 7 arguments, got {:?}",
+            input.arguments
+        )))
+    }
+}
+
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -391,9 +432,9 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("dayofyear", F::unary(|arg| integer_part(arg, "DOY"))),
         ("extract", F::binary(expr_fn::date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
-        ("from_utc_timestamp", F::unknown("from_utc_timestamp")),
+        ("from_utc_timestamp", F::binary(from_utc_timestamp)),
         ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),
-        ("last_day", F::unknown("last_day")),
+        ("last_day", F::udf(SparkLastDay::new())),
         (
             "localtimestamp",
             F::custom(current_localtimestamp_microseconds),
@@ -401,14 +442,14 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("make_date", F::ternary(make_date)),
         ("make_dt_interval", F::unknown("make_dt_interval")),
         ("make_interval", F::unknown("make_interval")),
-        ("make_timestamp", F::unknown("make_timestamp")),
+        ("make_timestamp", F::custom(make_timestamp)),
         ("make_timestamp_ltz", F::unknown("make_timestamp_ltz")),
-        ("make_timestamp_ntz", F::unknown("make_timestamp_ntz")),
-        ("make_ym_interval", F::unknown("make_ym_interval")),
+        ("make_timestamp_ntz", F::udf(SparkMakeTimestampNtz::new())),
+        ("make_ym_interval", F::custom(make_ym_interval)),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
         ("months_between", F::unknown("months_between")),
-        ("next_day", F::unknown("next_day")),
+        ("next_day", F::udf(SparkNextDay::new())),
         ("now", F::custom(current_timestamp_microseconds)),
         ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
         ("second", F::unary(|arg| integer_part(arg, "SECOND"))),

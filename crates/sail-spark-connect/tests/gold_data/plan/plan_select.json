@@ -43,32 +43,32 @@
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\n  ROW FORMAT DELIMITED\n  FIELDS TERMINATED BY '\\t'\n  COLLECTION ITEMS TERMINATED BY '\u0002'\n  MAP KEYS TERMINATED BY '\u0003'\n  LINES TERMINATED BY '\\n'\n  NULL DEFINED AS 'null'\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT DELIMITED\n  FIELDS TERMINATED BY '\\t'\n  COLLECTION ITEMS TERMINATED BY '\u0004'\n  MAP KEYS TERMINATED BY '\u0005'\n  LINES TERMINATED BY '\\n'\n  NULL DEFINED AS 'NULL'\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: found FORMAT at 33:39 expected statement, or end of input"
+        "failure": "invalid argument: found FORMAT at 33:39 expected ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat'\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: found USING at 27:32 expected statement, or end of input"
+        "failure": "invalid argument: found USING at 27:32 expected 'RESPECT', 'IGNORE', 'WITHIN', 'FILTER', 'OVER', '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat' AS (a int, b string, c long)\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: found USING at 27:32 expected statement, or end of input"
+        "failure": "invalid argument: found USING at 27:32 expected 'RESPECT', 'IGNORE', 'WITHIN', 'FILTER', 'OVER', '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat' AS (a, b, c)\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: found USING at 27:32 expected statement, or end of input"
+        "failure": "invalid argument: found USING at 27:32 expected 'RESPECT', 'IGNORE', 'WITHIN', 'FILTER', 'OVER', '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM (INSERT INTO BAR VALUES (2))",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BAR': missing ')'.(line 1, pos 27)\n\n== SQL ==\nSELECT * FROM (INSERT INTO BAR VALUES (2))\n---------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found FROM at 9:13 expected statement, or end of input"
+        "failure": "invalid argument: found INSERT at 15:21 expected query"
       }
     },
     {
@@ -166,7 +166,7 @@
       "input": "SELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'IN'.(line 1, pos 25)\n\n== SQL ==\nSELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))\n-------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found IN at 25:27 expected statement, or end of input"
+        "failure": "invalid argument: found INTO at 36:40 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
@@ -224,142 +224,142 @@
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
+        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
+        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF current_date()",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
+        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
+        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
+        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
+        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
+        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF current_date()",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
+        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
+        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected statement, or end of input"
+        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: found AS at 32:34 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 32:34 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: found AS at 32:34 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 32:34 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF current_date()",
       "output": {
-        "failure": "invalid argument: found AS at 32:34 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 32:34 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: found AS at 35:37 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 35:37 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: found AS at 35:37 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 35:37 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: found AS at 30:32 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 30:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: found AS at 30:32 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 30:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF col",
       "exception": "\nInvalid time travel spec: timestamp expression cannot refer to any columns.(line 1, pos 36)\n\n== SQL ==\nSELECT * FROM a.b.c TIMESTAMP AS OF col\n------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found AS at 30:32 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 30:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF current_date()",
       "output": {
-        "failure": "invalid argument: found AS at 30:32 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 30:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: found AS at 28:30 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 28:30 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: found AS at 28:30 expected statement, or end of input"
+        "failure": "invalid argument: found AS at 28:30 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(300M) s",
       "exception": "\nTABLESAMPLE(byteLengthLiteral) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(300M) s\n-------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found TABLESAMPLE at 25:36 expected statement, or end of input"
+        "failure": "invalid argument: found TABLESAMPLE at 25:36 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s",
       "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON function) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s\n-------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found TABLESAMPLE at 25:36 expected statement, or end of input"
+        "failure": "invalid argument: found TABLESAMPLE at 25:36 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -873,7 +873,7 @@
       "input": "SELECT TRANSFORM(a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData",
       "exception": "\n[UNSUPPORTED_FEATURE.TRANSFORM_NON_HIVE] The feature is not supported: TRANSFORM with SERDE is only supported in hive mode.(line 1, pos 0)\n\n== SQL ==\nSELECT TRANSFORM(a, b, c)\n^^^\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData\n",
       "output": {
-        "failure": "invalid argument: found FORMAT at 32:38 expected statement, or end of input"
+        "failure": "invalid argument: found FORMAT at 32:38 expected ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -1534,28 +1534,28 @@
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\nlateral view outer json_tuple(x, y) jtup q, z",
       "output": {
-        "failure": "invalid argument: found view at 53:57 expected statement, or end of input"
+        "failure": "invalid argument: found view at 53:57 expected ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)",
       "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_PIVOT] Not allowed in the FROM clause: LATERAL together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\n",
       "output": {
-        "failure": "invalid argument: found sum at 55:58 expected query"
+        "failure": "invalid argument: found ( at 51:52 expected ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)",
       "exception": "\n[NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)\n",
       "output": {
-        "failure": "invalid argument: found sum at 55:58 expected query"
+        "failure": "invalid argument: found ( at 51:52 expected ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)",
       "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_UNPIVOT] Not allowed in the FROM clause: LATERAL together with UNPIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)\n",
       "output": {
-        "failure": "invalid argument: found val at 57:60 expected query"
+        "failure": "invalid argument: found ( at 53:54 expected ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -1601,7 +1601,7 @@
     {
       "input": "select * from (from a select * select *)",
       "output": {
-        "failure": "invalid argument: found from at 9:13 expected statement, or end of input"
+        "failure": "invalid argument: found from at 15:19 expected query"
       }
     },
     {
@@ -2209,33 +2209,33 @@
     {
       "input": "select * from t tablesample(100 rows)",
       "output": {
-        "failure": "invalid argument: found tablesample at 16:27 expected statement, or end of input"
+        "failure": "invalid argument: found tablesample at 16:27 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "select * from t tablesample(43 percent) as x",
       "output": {
-        "failure": "invalid argument: found tablesample at 16:27 expected statement, or end of input"
+        "failure": "invalid argument: found tablesample at 16:27 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "select * from t tablesample(bucket 11 out of 10) as x",
       "exception": "\nSampling fraction (1.1) must be on interval [0, 1].(line 1, pos 16)\n\n== SQL ==\nselect * from t tablesample(bucket 11 out of 10) as x\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: found tablesample at 16:27 expected statement, or end of input"
+        "failure": "invalid argument: found tablesample at 16:27 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10 on x) as x",
       "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON colname) is not supported.(line 1, pos 28)\n\n== SQL ==\nselect * from t tablesample(bucket 4 out of 10 on x) as x\n----------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found tablesample at 16:27 expected statement, or end of input"
+        "failure": "invalid argument: found tablesample at 16:27 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10) as x",
       "output": {
-        "failure": "invalid argument: found tablesample at 16:27 expected statement, or end of input"
+        "failure": "invalid argument: found tablesample at 16:27 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -2486,7 +2486,7 @@
     {
       "input": "select a from 1k.2m",
       "output": {
-        "failure": "invalid argument: found from at 9:13 expected statement, or end of input"
+        "failure": "invalid argument: found 1k at 14:16 expected 'LATERAL', 'VALUES', '(', or identifier"
       }
     },
     {
@@ -3148,27 +3148,27 @@
     {
       "input": "select id from ((((((t0))))))",
       "output": {
-        "failure": "invalid argument: found from at 10:14 expected statement, or end of input"
+        "failure": "invalid argument: found t0 at 21:23 expected query"
       }
     },
     {
       "input": "select id from (t0)",
       "output": {
-        "failure": "invalid argument: found from at 10:14 expected statement, or end of input"
+        "failure": "invalid argument: found t0 at 16:18 expected query"
       }
     },
     {
       "input": "select ltrim(both 'S' from 'SS abc S'",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 22)\n\n== SQL ==\nselect ltrim(both 'S' from 'SS abc S'\n----------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found both at 13:17 expected query"
+        "failure": "invalid argument: found 'S' at 18:21 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {
       "input": "select rtrim(trailing 'S' from 'SS abc S'",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 26)\n\n== SQL ==\nselect rtrim(trailing 'S' from 'SS abc S'\n--------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found trailing at 13:21 expected query"
+        "failure": "invalid argument: found 'S' at 22:25 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     }
   ]

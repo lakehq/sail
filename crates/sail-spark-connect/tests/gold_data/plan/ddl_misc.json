@@ -3,25 +3,64 @@
     {
       "input": "COMMENT ON DATABASE a.b.c IS 'NULL'",
       "output": {
-        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
+        "success": {
+          "command": {
+            "commentOnDatabase": {
+              "database": [
+                "a",
+                "b",
+                "c"
+              ],
+              "value": "NULL"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "COMMENT ON DATABASE a.b.c IS NULL",
       "output": {
-        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
+        "success": {
+          "command": {
+            "commentOnDatabase": {
+              "database": [
+                "a",
+                "b",
+                "c"
+              ],
+              "value": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "COMMENT ON NAMESPACE a.b.c IS ''",
       "output": {
-        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
+        "failure": "invalid argument: found NAMESPACE at 11:20 expected 'CATALOG', 'DATABASE', 'SCHEMA', 'TABLE', or 'COLUMN'"
       }
     },
     {
       "input": "COMMENT ON TABLE a.b.c IS 'xYz'",
       "output": {
-        "failure": "invalid argument: found COMMENT at 0:7 expected statement, or end of input"
+        "success": {
+          "command": {
+            "commentOnTable": {
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "value": "xYz"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

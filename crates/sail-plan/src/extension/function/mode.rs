@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-/// TODO: This file is no longer needed after datafusion-functions-extra upgrades to DataFusion 43.0.0
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/mode.rs>
 use datafusion::arrow;
 use datafusion::arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray};

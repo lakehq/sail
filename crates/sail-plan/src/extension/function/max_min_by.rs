@@ -2,7 +2,6 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Deref;
 
-/// TODO: This file is no longer needed after datafusion-functions-extra upgrades to DataFusion 43.0.0
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/max_min_by.rs>
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::exec_err;

@@ -4,32 +4,345 @@
       "input": "\n INSERT OVERWRITE LOCAL DIRECTORY\n USING parquet\n OPTIONS (\n  path 'xxx'\n )\n SELECT i from t1",
       "exception": "[INTERNAL_ERROR] INSERT OVERWRITE DIRECTORY is not supported.",
       "output": {
-        "failure": "invalid argument: found DIRECTORY at 25:34 expected '.', 'PARTITION', '(', or query"
+        "success": {
+          "command": {
+            "insertOverwriteDirectory": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t1"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "i"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "local": true,
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "options": [
+                [
+                  "path",
+                  "xxx"
+                ]
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3) IF NOT EXISTS\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "invalid argument: found IF at 63:65 expected '(', or query"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ]
+              ],
+              "replace": null,
+              "ifNotExists": true,
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2)\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "invalid argument: found ) at 65:66 expected '='"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ],
+                [
+                  "p2",
+                  null
+                ]
+              ],
+              "replace": null,
+              "ifNotExists": false,
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) (a, b)\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "invalid argument: found ) at 65:66 expected '='"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [
+                "a",
+                "b"
+              ],
+              "partitionSpec": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ],
+                [
+                  "p2",
+                  null
+                ]
+              ],
+              "replace": null,
+              "ifNotExists": false,
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source",
       "exception": "\nOperation not allowed: IF NOT EXISTS with dynamic partitions: p2.(line 1, pos 0)\n\n== SQL ==\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\n^^^\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source\n",
       "output": {
-        "failure": "invalid argument: found ) at 64:65 expected '='"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ],
+                [
+                  "p2",
+                  null
+                ]
+              ],
+              "replace": null,
+              "ifNotExists": true,
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -82,6 +395,8 @@
                 "b"
               ],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": true
             },
             "planId": null,
@@ -93,7 +408,58 @@
     {
       "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
       "output": {
-        "failure": "invalid argument: found BY at 43:45 expected '.', 'PARTITION', '(', or query"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -143,6 +509,8 @@
               ],
               "columns": [],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": true
             },
             "planId": null,
@@ -201,6 +569,8 @@
                 "b"
               ],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": true
             },
             "planId": null,
@@ -212,7 +582,58 @@
     {
       "input": "INSERT OVERWRITE testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected '.', 'PARTITION', '(', or query"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -262,6 +683,8 @@
               ],
               "columns": [],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": true
             },
             "planId": null,
