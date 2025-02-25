@@ -1,7 +1,7 @@
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, BinaryExpr, Operator};
+use datafusion_expr::{expr, BinaryExpr, ExprSchemable, Operator};
 
 use crate::error::PlanResult;
 use crate::extension::function::math::least_greatest;
@@ -42,16 +42,35 @@ fn minus(input: FunctionInput) -> PlanResult<expr::Expr> {
 }
 
 /// Spark always preforms floating-point division.
-fn spark_divide(left: expr::Expr, right: expr::Expr) -> expr::Expr {
+fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput {
+        arguments, schema, ..
+    } = input;
+
+    let (left, right) = arguments.two()?;
+    let should_cast = match (left.get_type(schema)?, right.get_type(schema)?) {
+        (DataType::Decimal128(_, _), DataType::Decimal128(_, _))
+        | (DataType::Decimal128(_, _), DataType::Decimal256(_, _))
+        | (DataType::Decimal256(_, _), DataType::Decimal128(_, _))
+        | (DataType::Decimal256(_, _), DataType::Decimal256(_, _))
+        | (DataType::Interval(IntervalUnit::YearMonth), _)
+        | (DataType::Interval(IntervalUnit::DayTime), _)
+        | (DataType::Duration(TimeUnit::Microsecond), _) => false,
+        _ => true,
+    };
     let expr = expr::Expr::BinaryExpr(BinaryExpr {
         left: Box::new(left),
         op: Operator::Divide,
         right: Box::new(right),
     });
-    expr::Expr::Cast(expr::Cast {
-        expr: Box::new(expr),
-        data_type: DataType::Float64,
-    })
+    if should_cast {
+        Ok(expr::Expr::Cast(expr::Cast {
+            expr: Box::new(expr),
+            data_type: DataType::Float64,
+        }))
+    } else {
+        Ok(expr)
+    }
 }
 
 fn ceil(num: expr::Expr) -> expr::Expr {
@@ -87,6 +106,7 @@ fn expm1(input: FunctionInput) -> PlanResult<expr::Expr> {
         argument_names: &[name, "1.0".to_string()],
         plan_config: input.plan_config,
         session_context: input.session_context,
+        schema: input.schema,
     })
 }
 
@@ -154,7 +174,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("*", F::binary_op(Operator::Multiply)),
         ("+", F::custom(plus)),
         ("-", F::custom(minus)),
-        ("/", F::binary(spark_divide)),
+        ("/", F::custom(spark_divide)),
         ("abs", F::udf(SparkAbs::new())),
         ("acos", F::unary(expr_fn::acos)),
         ("acosh", F::unary(expr_fn::acosh)),
@@ -174,7 +194,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("cot", F::unary(expr_fn::cot)),
         ("csc", F::unknown("csc")),
         ("degrees", F::unary(expr_fn::degrees)),
-        ("div", F::binary(spark_divide)),
+        ("div", F::custom(spark_divide)),
         ("e", F::unknown("e")),
         ("exp", F::unary(expr_fn::exp)),
         ("expm1", F::custom(expm1)),

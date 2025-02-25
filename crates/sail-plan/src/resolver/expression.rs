@@ -805,6 +805,7 @@ impl PlanResolver<'_> {
                 argument_names: &argument_names,
                 plan_config: &self.config,
                 session_context: self.ctx,
+                schema,
             };
             func(input)?
         } else if let Ok(func) = get_built_in_aggregate_function(&canonical_function_name) {

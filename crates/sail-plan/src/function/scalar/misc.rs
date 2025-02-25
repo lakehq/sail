@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, Operator, ScalarUDF};
+use datafusion_expr::{expr, lit, ExprSchemable, Operator, ScalarUDF};
 
 use crate::catalog::CatalogManager;
 use crate::error::{PlanError, PlanResult};
@@ -11,6 +11,7 @@ use crate::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
 use crate::function::common::{Function, FunctionInput};
+use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 fn assert_true(input: FunctionInput) -> PlanResult<expr::Expr> {
@@ -64,6 +65,21 @@ fn current_user(input: FunctionInput) -> PlanResult<expr::Expr> {
     Ok(lit(input.plan_config.session_user_id.clone()))
 }
 
+fn type_of(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput {
+        arguments,
+        plan_config,
+        schema,
+        ..
+    } = input;
+    let expr = arguments.one()?;
+    let data_type = expr.get_type(schema)?;
+    let type_of = plan_config
+        .plan_formatter
+        .data_type_to_simple_string(&PlanResolver::unresolve_data_type(&data_type)?)?;
+    Ok(lit(type_of))
+}
+
 pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -100,7 +116,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {
         ("spark_partition_id", F::unknown("spark_partition_id")),
         ("try_aes_encrypt", F::udf(SparkTryAESEncrypt::new())),
         ("try_aes_decrypt", F::udf(SparkTryAESDecrypt::new())),
-        ("typeof", F::unknown("typeof")),
+        ("typeof", F::custom(type_of)),
         ("user", F::unknown("user")),
         ("uuid", F::nullary(expr_fn::uuid)),
         ("version", F::unknown("version")),

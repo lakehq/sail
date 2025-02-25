@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::NullTreatment;
+use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::{expr, AggregateUDF, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};
 
@@ -18,6 +19,7 @@ pub struct FunctionInput<'a> {
     pub argument_names: &'a [String],
     pub plan_config: &'a Arc<PlanConfig>,
     pub session_context: &'a SessionContext,
+    pub schema: &'a DFSchemaRef,
 }
 
 pub(crate) type Function = Arc<dyn Fn(FunctionInput) -> PlanResult<expr::Expr> + Send + Sync>;
