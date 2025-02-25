@@ -170,23 +170,12 @@ where
             Some(Token::Punctuation(p @ (Punctuation::Dollar | Punctuation::Colon))),
             Some(Token::Word { keyword: _, raw }),
         ) => {
-            let node = Variable {
+            let variable = Variable {
                 span: input.span_since(marker.offset()).into(),
                 value: format!("{}{}", p.to_char(), raw),
             };
             skip_whitespace(input);
-            Some(node)
-        }
-        (
-            Some(Token::Punctuation(p @ (Punctuation::Dollar | Punctuation::Colon))),
-            Some(Token::Number { value, suffix }),
-        ) => {
-            let node = Variable {
-                span: input.span_since(marker.offset()).into(),
-                value: format!("{}{}{}", p.to_char(), value, suffix),
-            };
-            skip_whitespace(input);
-            Some(node)
+            Some(variable)
         }
         _ => {
             input.rewind(marker);
@@ -205,12 +194,12 @@ where
     let marker = input.save();
     match input.next() {
         Some(Token::Punctuation(p @ Punctuation::QuestionMark)) => {
-            let node = Variable {
+            let variable = Variable {
                 span: input.span_since(marker.offset()).into(),
                 value: format!("{}", p.to_char()),
             };
             skip_whitespace(input);
-            Some(node)
+            Some(variable)
         }
         _ => {
             input.rewind(marker);

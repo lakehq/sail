@@ -213,7 +213,7 @@ pub enum AtomExpr {
     Date(Date, LeftParenthesis, StringLiteral, RightParenthesis),
     Function(#[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<FunctionExpr>),
     Wildcard(operator::Asterisk),
-    StringLiteral(StringLiteral),
+    StringLiteral(StringLiteral, Vec<StringLiteral>),
     NumberLiteral(NumberLiteral),
     BooleanLiteral(BooleanLiteral),
     TimestampLiteral(Timestamp, StringLiteral),

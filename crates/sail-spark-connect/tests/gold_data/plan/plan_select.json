@@ -2203,7 +2203,7 @@
     {
       "input": "select * from t limit cast(9 / 4 as int)",
       "output": {
-        "failure": "invalid argument: literal expression: Atom(Cast(Cast { span: TokenSpan { start: 22, end: 26 } }, LeftParenthesis { span: TokenSpan { start: 26, end: 27 } }, BinaryOperator(Atom(NumberLiteral(NumberLiteral { span: TokenSpan { start: 27, end: 28 }, value: \"9\", suffix: \"\" })), Divide(Slash { span: TokenSpan { start: 29, end: 30 } }), Atom(NumberLiteral(NumberLiteral { span: TokenSpan { start: 31, end: 32 }, value: \"4\", suffix: \"\" }))), As { span: TokenSpan { start: 33, end: 35 } }, Int(None, Int { span: TokenSpan { start: 36, end: 39 } }), RightParenthesis { span: TokenSpan { start: 39, end: 40 } }))"
+        "failure": "invalid argument: literal expression: Atom(Cast(Cast { span: TokenSpan { start: 22, end: 26 } }, LeftParenthesis { span: TokenSpan { start: 26, end: 27 } }, BinaryOperator(Atom(NumberLiteral(NumberLiteral { span: TokenSpan { start: 27, end: 28 }, value: \"9\", suffix: None })), Divide(Slash { span: TokenSpan { start: 29, end: 30 } }), Atom(NumberLiteral(NumberLiteral { span: TokenSpan { start: 31, end: 32 }, value: \"4\", suffix: None }))), As { span: TokenSpan { start: 33, end: 35 } }, Int(None, Int { span: TokenSpan { start: 36, end: 39 } }), RightParenthesis { span: TokenSpan { start: 39, end: 40 } }))"
       }
     },
     {
@@ -2486,7 +2486,38 @@
     {
       "input": "select a from 1k.2m",
       "output": {
-        "failure": "invalid argument: found 1k at 14:16 expected 'LATERAL', 'VALUES', '(', or identifier"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "1k",
+                      "2m"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

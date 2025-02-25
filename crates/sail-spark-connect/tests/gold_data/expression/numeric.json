@@ -336,13 +336,27 @@
     {
       "input": "1SL",
       "output": {
-        "failure": "invalid argument: number postfix: 1SL"
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "1SL"
+            ],
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "1a",
       "output": {
-        "failure": "invalid argument: number postfix: 1a"
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "1a"
+            ],
+            "planId": null
+          }
+        }
       }
     },
     {
