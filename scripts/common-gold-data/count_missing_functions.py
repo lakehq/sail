@@ -25,7 +25,7 @@ def analyze_not_implemented_functions():
                     not_implemented_functions.append(function_name)
 
     function_counts = Counter(not_implemented_functions)
-    sorted(function_counts.items(), key=lambda x: x[1], reverse=True)
+    return sorted(function_counts.items(), key=lambda x: x[1], reverse=True)
 
 
 def main():
