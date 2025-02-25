@@ -48,16 +48,16 @@ fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
     } = input;
 
     let (left, right) = arguments.two()?;
-    let should_cast = match (left.get_type(schema)?, right.get_type(schema)?) {
+    let should_cast = !matches!(
+        (left.get_type(schema)?, right.get_type(schema)?),
         (DataType::Decimal128(_, _), DataType::Decimal128(_, _))
-        | (DataType::Decimal128(_, _), DataType::Decimal256(_, _))
-        | (DataType::Decimal256(_, _), DataType::Decimal128(_, _))
-        | (DataType::Decimal256(_, _), DataType::Decimal256(_, _))
-        | (DataType::Interval(IntervalUnit::YearMonth), _)
-        | (DataType::Interval(IntervalUnit::DayTime), _)
-        | (DataType::Duration(TimeUnit::Microsecond), _) => false,
-        _ => true,
-    };
+            | (DataType::Decimal128(_, _), DataType::Decimal256(_, _))
+            | (DataType::Decimal256(_, _), DataType::Decimal128(_, _))
+            | (DataType::Decimal256(_, _), DataType::Decimal256(_, _))
+            | (DataType::Interval(IntervalUnit::YearMonth), _)
+            | (DataType::Interval(IntervalUnit::DayTime), _)
+            | (DataType::Duration(TimeUnit::Microsecond), _)
+    );
     let expr = expr::Expr::BinaryExpr(BinaryExpr {
         left: Box::new(left),
         op: Operator::Divide,
