@@ -52,7 +52,7 @@ serde_arrow = { version = "0.12.3", features = ["arrow-54"] }
 mimalloc = { version = "0.1.43", default-features = false }
 rand = "0.9.0"
 rand_chacha = "0.9.0"
-rand_distr = "0.4.3"
+rand_distr = "0.5.1"
 url = "2.5.4"
 lexical-core = { version = "1.0.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 aws-config = "1.5.15"

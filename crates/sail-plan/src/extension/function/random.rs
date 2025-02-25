@@ -5,7 +5,7 @@ use datafusion::arrow::array::Float64Array;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility};
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 #[derive(Debug)]
@@ -95,7 +95,7 @@ impl ScalarUDFImpl for Random {
                     }
                 };
                 let mut rng = ChaCha8Rng::seed_from_u64(seed);
-                let value = rng.gen_range(0.0..1.0);
+                let value = rng.random_range(0.0..1.0);
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(value))))
             }
             _ => Err(DataFusionError::Execution(format!(
@@ -106,15 +106,15 @@ impl ScalarUDFImpl for Random {
     }
 
     fn invoke_no_args(&self, num_rows: usize) -> Result<ColumnarValue> {
-        let mut rng = thread_rng();
-        let values = std::iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(num_rows);
+        let mut rng = rng();
+        let values = std::iter::repeat_with(|| rng.random_range(0.0..1.0)).take(num_rows);
         let array = Float64Array::from_iter_values(values);
         Ok(ColumnarValue::Array(Arc::new(array)))
     }
 }
 
 fn invoke_no_seed() -> Result<ColumnarValue> {
-    let mut rng = thread_rng();
-    let value = rng.gen_range(0.0..1.0);
+    let mut rng = rng();
+    let value = rng.random_range(0.0..1.0);
     Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(value))))
 }
