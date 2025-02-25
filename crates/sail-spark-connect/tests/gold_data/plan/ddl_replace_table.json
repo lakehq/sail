@@ -3,7 +3,7 @@
     {
       "input": "\nREPLACE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nPARTITIONED BY (\n    a,\n    bucket(16, b),\n    years(ts),\n    months(ts),\n    days(ts),\n    hours(ts),\n    foo(a, \"bar\", 34))\n      ",
       "output": {
-        "failure": "invalid argument: found PARTITIONED at 68:79 expected statement, or end of input"
+        "failure": "invalid argument: found ( at 102:103 expected ':', data type, ',', or ')'"
       }
     },
     {
@@ -668,7 +668,7 @@
       "input": "REPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)",
       "exception": "\nOperation not allowed: CREATE TABLE ... SKEWED BY.(line 1, pos 33)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n---------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found SKEWED at 33:39 expected statement, or end of input"
+        "failure": "invalid argument: found SKEWED at 33:39 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
@@ -721,7 +721,7 @@
       "input": "REPLACE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'",
       "exception": "\nOperation not allowed: STORED BY.(line 2, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'\n^^^\n",
       "output": {
-        "failure": "invalid argument: found STORED at 44:50 expected statement, or end of input"
+        "failure": "invalid argument: found BY at 51:53 expected 'AS'"
       }
     },
     {
@@ -782,7 +782,7 @@
       "input": "REPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))",
       "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: truncate(p1, 16)\nColumns: p2 string.(line 1, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))\n^^^\n",
       "output": {
-        "failure": "invalid argument: found PARTITIONED at 44:55 expected statement, or end of input"
+        "failure": "invalid argument: found ( at 79:80 expected ':', data type, ',', or ')'"
       }
     },
     {

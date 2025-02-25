@@ -3,25 +3,73 @@
     {
       "input": "DESC FUNCTION a",
       "output": {
-        "failure": "invalid argument: found DESC at 0:4 expected statement, or end of input"
+        "success": {
+          "command": {
+            "describeFunction": {
+              "function": [
+                "a"
+              ],
+              "extended": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "DESCRIBE FUNCTION EXTENDED a.b.c",
       "output": {
-        "failure": "invalid argument: found DESCRIBE at 0:8 expected statement, or end of input"
+        "success": {
+          "command": {
+            "describeFunction": {
+              "function": [
+                "a",
+                "b",
+                "c"
+              ],
+              "extended": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "DESCRIBE FUNCTION a",
       "output": {
-        "failure": "invalid argument: found DESCRIBE at 0:8 expected statement, or end of input"
+        "success": {
+          "command": {
+            "describeFunction": {
+              "function": [
+                "a"
+              ],
+              "extended": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "DESCRIBE FUNCTION a.b.c",
       "output": {
-        "failure": "invalid argument: found DESCRIBE at 0:8 expected statement, or end of input"
+        "success": {
+          "command": {
+            "describeFunction": {
+              "function": [
+                "a",
+                "b",
+                "c"
+              ],
+              "extended": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     }
   ]
