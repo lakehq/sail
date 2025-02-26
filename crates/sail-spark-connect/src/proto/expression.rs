@@ -265,17 +265,24 @@ impl TryFrom<WindowFrame> for spec::WindowFrame {
     type Error = SparkError;
 
     fn try_from(window_frame: WindowFrame) -> SparkResult<spec::WindowFrame> {
+        fn boundary(boundary: Option<Box<FrameBoundary>>) -> Option<Boundary> {
+            boundary.and_then(|x| {
+                let FrameBoundary { boundary } = *x;
+                boundary
+            })
+        }
+
         let WindowFrame {
             frame_type,
             lower,
             upper,
         } = window_frame;
         let frame_type = FrameType::try_from(frame_type)?;
-        let lower = lower.required("lower window frame boundary")?;
-        let upper = upper.required("upper window frame boundary")?;
+        let lower = boundary(lower).required("lower window frame boundary")?;
+        let upper = boundary(upper).required("upper window frame boundary")?;
         let frame_type = frame_type.try_into()?;
-        let lower = (*lower).try_into()?;
-        let upper = (*upper).try_into()?;
+        let lower = WindowBoundaryKind::Lower(lower).try_into()?;
+        let upper = WindowBoundaryKind::Upper(upper).try_into()?;
         Ok(spec::WindowFrame {
             frame_type,
             lower,
@@ -296,19 +303,34 @@ impl TryFrom<FrameType> for spec::WindowFrameType {
     }
 }
 
-impl TryFrom<FrameBoundary> for spec::WindowFrameBoundary {
+enum WindowBoundaryKind {
+    Lower(Boundary),
+    Upper(Boundary),
+}
+
+impl TryFrom<WindowBoundaryKind> for spec::WindowFrameBoundary {
     type Error = SparkError;
 
-    fn try_from(frame_boundary: FrameBoundary) -> SparkResult<spec::WindowFrameBoundary> {
-        let FrameBoundary { boundary } = frame_boundary;
-        let boundary = boundary.required("window frame boundary")?;
-        match boundary {
-            Boundary::CurrentRow(true) => Ok(spec::WindowFrameBoundary::CurrentRow),
-            Boundary::Unbounded(true) => Ok(spec::WindowFrameBoundary::Unbounded),
-            Boundary::Value(expr) => Ok(spec::WindowFrameBoundary::Value(Box::new(
-                (*expr).try_into()?,
-            ))),
-            Boundary::CurrentRow(false) | Boundary::Unbounded(false) => {
+    fn try_from(kind: WindowBoundaryKind) -> SparkResult<spec::WindowFrameBoundary> {
+        match kind {
+            WindowBoundaryKind::Lower(Boundary::CurrentRow(true))
+            | WindowBoundaryKind::Upper(Boundary::CurrentRow(true)) => {
+                Ok(spec::WindowFrameBoundary::CurrentRow)
+            }
+            WindowBoundaryKind::Lower(Boundary::Unbounded(true)) => {
+                Ok(spec::WindowFrameBoundary::UnboundedPreceding)
+            }
+            WindowBoundaryKind::Upper(Boundary::Unbounded(true)) => {
+                Ok(spec::WindowFrameBoundary::UnboundedFollowing)
+            }
+            WindowBoundaryKind::Lower(Boundary::Value(expr))
+            | WindowBoundaryKind::Upper(Boundary::Value(expr)) => Ok(
+                spec::WindowFrameBoundary::Value(Box::new((*expr).try_into()?)),
+            ),
+            WindowBoundaryKind::Lower(Boundary::CurrentRow(false))
+            | WindowBoundaryKind::Lower(Boundary::Unbounded(false))
+            | WindowBoundaryKind::Upper(Boundary::CurrentRow(false))
+            | WindowBoundaryKind::Upper(Boundary::Unbounded(false)) => {
                 Err(SparkError::invalid("invalid window frame boundary"))
             }
         }

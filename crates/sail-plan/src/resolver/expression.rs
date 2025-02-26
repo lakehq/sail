@@ -29,7 +29,7 @@ use crate::extension::function::drop_struct_field::DropStructField;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::function::table_input::TableInput;
 use crate::extension::function::update_struct_field::UpdateStructField;
-use crate::function::common::{AggFunctionInput, FunctionInput};
+use crate::function::common::{get_null_treatment, AggFunctionInput, FunctionInput};
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
 };
@@ -188,71 +188,66 @@ impl PlanResolver<'_> {
         } = frame;
 
         let units = match frame_type {
-            WindowFrameType::Undefined => return Err(PlanError::invalid("undefined frame type")),
             WindowFrameType::Row => WindowFrameUnits::Rows,
             WindowFrameType::Range => WindowFrameUnits::Range,
         };
         let (start, end) = match units {
             WindowFrameUnits::Rows | WindowFrameUnits::Groups => (
-                self.resolve_window_boundary_offset(lower, WindowBoundaryKind::Lower, state)?,
-                self.resolve_window_boundary_offset(upper, WindowBoundaryKind::Upper, state)?,
+                self.resolve_window_boundary_offset(lower, state)?,
+                self.resolve_window_boundary_offset(upper, state)?,
             ),
             WindowFrameUnits::Range => (
-                self.resolve_window_boundary_value(
-                    lower,
-                    WindowBoundaryKind::Lower,
-                    order_by,
-                    schema,
-                    state,
-                )?,
-                self.resolve_window_boundary_value(
-                    upper,
-                    WindowBoundaryKind::Upper,
-                    order_by,
-                    schema,
-                    state,
-                )?,
+                self.resolve_window_boundary_value(lower, order_by, schema, state)?,
+                self.resolve_window_boundary_value(upper, order_by, schema, state)?,
             ),
         };
         Ok(window_frame::WindowFrame::new_bounds(units, start, end))
     }
 
+    fn resolve_window_boundary(
+        &self,
+        expr: spec::Expr,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<ScalarValue> {
+        let value = match expr {
+            spec::Expr::Literal(literal) => literal,
+            _ => {
+                return Err(PlanError::invalid(
+                    "window boundary offset must be a literal",
+                ))
+            }
+        };
+        self.resolve_literal(value, state)
+    }
+
     fn resolve_window_boundary_offset(
         &self,
         value: spec::WindowFrameBoundary,
-        kind: WindowBoundaryKind,
         state: &mut PlanResolverState,
     ) -> PlanResult<window_frame::WindowFrameBound> {
-        let unbounded = || match kind {
-            WindowBoundaryKind::Lower => {
-                window_frame::WindowFrameBound::Preceding(ScalarValue::UInt64(None))
-            }
-            WindowBoundaryKind::Upper => {
-                window_frame::WindowFrameBound::Following(ScalarValue::UInt64(None))
-            }
-        };
-
         match value {
             spec::WindowFrameBoundary::CurrentRow => Ok(window_frame::WindowFrameBound::CurrentRow),
-            spec::WindowFrameBoundary::Unbounded => Ok(unbounded()),
-            spec::WindowFrameBoundary::Value(value) => {
-                let value = match *value {
-                    spec::Expr::Literal(literal) => literal,
-                    _ => {
-                        return Err(PlanError::invalid(
-                            "window boundary offset must be a literal",
-                        ))
-                    }
-                };
-                let value = self.resolve_literal(value, state)?;
+            spec::WindowFrameBoundary::UnboundedPreceding => Ok(
+                window_frame::WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            ),
+            spec::WindowFrameBoundary::UnboundedFollowing => Ok(
+                window_frame::WindowFrameBound::Following(ScalarValue::UInt64(None)),
+            ),
+            spec::WindowFrameBoundary::Preceding(expr) => {
+                let value = self.resolve_window_boundary(*expr, state)?;
+                Ok(window_frame::WindowFrameBound::Preceding(
+                    value.cast_to(&DataType::UInt64)?,
+                ))
+            }
+            spec::WindowFrameBoundary::Following(expr) => {
+                let value = self.resolve_window_boundary(*expr, state)?;
+                Ok(window_frame::WindowFrameBound::Following(
+                    value.cast_to(&DataType::UInt64)?,
+                ))
+            }
+            spec::WindowFrameBoundary::Value(expr) => {
+                let value = self.resolve_window_boundary(*expr, state)?;
                 match value {
-                    ScalarValue::UInt32(None)
-                    | ScalarValue::Int32(None)
-                    | ScalarValue::UInt64(None)
-                    | ScalarValue::Int64(None)
-                    | ScalarValue::Float16(None)
-                    | ScalarValue::Float32(None)
-                    | ScalarValue::Float64(None) => Ok(unbounded()),
                     ScalarValue::UInt32(Some(v)) => Ok(WindowBoundaryOffset::from(v).into()),
                     ScalarValue::Int32(Some(v)) => Ok(WindowBoundaryOffset::from(v).into()),
                     ScalarValue::UInt64(Some(v)) => Ok(WindowBoundaryOffset::from(v).into()),
@@ -278,23 +273,26 @@ impl PlanResolver<'_> {
     fn resolve_window_boundary_value(
         &self,
         value: spec::WindowFrameBoundary,
-        kind: WindowBoundaryKind,
         order_by: &[expr::Sort],
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<window_frame::WindowFrameBound> {
-        let unbounded = || match kind {
-            WindowBoundaryKind::Lower => {
-                window_frame::WindowFrameBound::Preceding(ScalarValue::Null)
-            }
-            WindowBoundaryKind::Upper => {
-                window_frame::WindowFrameBound::Following(ScalarValue::Null)
-            }
-        };
-
         match value {
             spec::WindowFrameBoundary::CurrentRow => Ok(window_frame::WindowFrameBound::CurrentRow),
-            spec::WindowFrameBoundary::Unbounded => Ok(unbounded()),
+            spec::WindowFrameBoundary::UnboundedPreceding => {
+                Ok(window_frame::WindowFrameBound::Preceding(ScalarValue::Null))
+            }
+            spec::WindowFrameBoundary::UnboundedFollowing => {
+                Ok(window_frame::WindowFrameBound::Following(ScalarValue::Null))
+            }
+            spec::WindowFrameBoundary::Preceding(expr) => {
+                let value = self.resolve_window_boundary(*expr, state)?;
+                Ok(window_frame::WindowFrameBound::Preceding(value))
+            }
+            spec::WindowFrameBoundary::Following(expr) => {
+                let value = self.resolve_window_boundary(*expr, state)?;
+                Ok(window_frame::WindowFrameBound::Following(value))
+            }
             spec::WindowFrameBoundary::Value(value) => {
                 let value = match *value {
                     spec::Expr::Literal(literal) => literal,
@@ -306,14 +304,14 @@ impl PlanResolver<'_> {
                 };
                 let value = self.resolve_literal(value, state)?;
                 if value.is_null() {
-                    Ok(unbounded())
+                    Err(PlanError::invalid("window boundary value cannot be null"))
                 } else {
-                    if order_by.len() != 1 {
+                    let [order_by] = order_by else {
                         return Err(PlanError::invalid(
                             "range window frame requires exactly one order by expression",
                         ));
-                    }
-                    let (data_type, _) = order_by[0].expr.data_type_and_nullable(schema)?;
+                    };
+                    let (data_type, _) = order_by.expr.data_type_and_nullable(schema)?;
                     let value = value.cast_to(&data_type)?;
                     // We always return the "following" bound since the value can be signed.
                     Ok(window_frame::WindowFrameBound::Following(value))
@@ -928,14 +926,14 @@ impl PlanResolver<'_> {
                 "CLUSTER BY clause in window expression",
             ));
         }
-        let (function, function_name, argument_names, arguments, is_distinct) =
+        let (function, function_name, argument_names, arguments, is_distinct, ignore_nulls) =
             match window_function {
                 spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                     function_name,
                     arguments,
                     is_user_defined_function: false,
                     is_distinct,
-                    ignore_nulls: None,
+                    ignore_nulls,
                     filter: None,
                     order_by: None,
                 }) => {
@@ -950,6 +948,7 @@ impl PlanResolver<'_> {
                         argument_names,
                         arguments,
                         is_distinct,
+                        ignore_nulls,
                     )
                 }
                 spec::Expr::CommonInlineUserDefinedFunction(function) => {
@@ -997,7 +996,14 @@ impl PlanResolver<'_> {
                             ))
                         }
                     };
-                    (function, function_name, argument_names, arguments, false)
+                    (
+                        function,
+                        function_name,
+                        argument_names,
+                        arguments,
+                        false,
+                        None,
+                    )
                 }
                 _ => {
                     return Err(PlanError::invalid(format!(
@@ -1029,7 +1035,7 @@ impl PlanResolver<'_> {
             partition_by,
             order_by,
             window_frame,
-            null_treatment: None,
+            null_treatment: get_null_treatment(ignore_nulls),
         });
         let name = self.config.plan_formatter.function_to_string(
             function_name.as_str(),
@@ -1869,11 +1875,6 @@ fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableRe
         }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
         None => true,
     }
-}
-
-enum WindowBoundaryKind {
-    Lower,
-    Upper,
 }
 
 enum WindowBoundaryOffset {
