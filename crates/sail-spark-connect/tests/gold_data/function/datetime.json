@@ -2746,7 +2746,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: This feature is not implemented: Function to_timestamp_seconds does not implement invoke but called"
       }
     },
     {
@@ -2812,7 +2812,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: This feature is not implemented: Function to_timestamp_nanos does not implement invoke but called"
       }
     },
     {
