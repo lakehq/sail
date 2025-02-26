@@ -1278,6 +1278,10 @@ fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<St
                     Some(Either::Right(Minus { .. })) => "-",
                     None => "",
                 };
+                let suffix = match suffix {
+                    None => "",
+                    Some(x) => x.as_str(),
+                };
                 format!("{sign}{value}{suffix}")
             }
             PropertyValue::Boolean(BooleanLiteral::True(_)) => "true".to_string(),

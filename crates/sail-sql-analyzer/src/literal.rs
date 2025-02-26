@@ -490,13 +490,16 @@ where
             Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral {
                 span: _,
                 value,
-                suffix,
-            })) if suffix.is_empty() => match value.parse::<T>() {
+                suffix: None,
+            })) => match value.parse::<T>() {
                 Ok(x) => Ok(LiteralValue(x)),
                 Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
             },
-            Expr::Atom(AtomExpr::StringLiteral(value)) => {
-                let value = from_ast_string(value)?;
+            Expr::Atom(AtomExpr::StringLiteral(head, tail)) => {
+                if !tail.is_empty() {
+                    return Err(SqlError::invalid("literal: cannot convert multiple adjacent string literals to a single value"));
+                }
+                let value = from_ast_string(head)?;
                 match value.parse::<T>() {
                     Ok(x) => Ok(LiteralValue(x)),
                     Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),

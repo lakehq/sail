@@ -155,7 +155,7 @@ pub enum AtomExpr {
         LeftParenthesis,
         #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
         As,
-        #[parser(function = |(_, _, t), _| t)] DataType,
+        #[parser(function = |(_, _, d), _| d)] DataType,
         RightParenthesis,
     ),
     Extract(
@@ -213,7 +213,7 @@ pub enum AtomExpr {
     Date(Date, LeftParenthesis, StringLiteral, RightParenthesis),
     Function(#[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<FunctionExpr>),
     Wildcard(operator::Asterisk),
-    StringLiteral(StringLiteral),
+    StringLiteral(StringLiteral, Vec<StringLiteral>),
     NumberLiteral(NumberLiteral),
     BooleanLiteral(BooleanLiteral),
     TimestampLiteral(Timestamp, StringLiteral),
@@ -626,7 +626,7 @@ enum ExprModifier {
         #[parser(function = |(e, _), _| e)] Expr,
         RightBracket,
     ),
-    Cast(DoubleColon, #[parser(function = |(_, t), _| t)] DataType),
+    Cast(DoubleColon, #[parser(function = |(_, d), _| d)] DataType),
 }
 
 #[derive(Debug, Clone, TreeParser)]
