@@ -706,18 +706,11 @@
       "input": "123_",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "int32": {
-                  "value": 123
-                }
-              }
-            },
+          "unresolvedAttribute": {
             "name": [
-              "_"
+              "123_"
             ],
-            "metadata": null
+            "planId": null
           }
         }
       }
@@ -725,7 +718,15 @@
     {
       "input": "1a.123_",
       "output": {
-        "failure": "invalid argument: found .123 at 2:6 expected end of input"
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "1a",
+              "123_"
+            ],
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -2777,25 +2778,57 @@
     {
       "input": "a.123A",
       "output": {
-        "failure": "invalid argument: found .123A at 1:6 expected end of input"
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "a",
+              "123A"
+            ],
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "a.123BD_column",
       "output": {
-        "failure": "invalid argument: found .123BD at 1:7 expected end of input"
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "a",
+              "123BD_column"
+            ],
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "a.123D_column",
       "output": {
-        "failure": "invalid argument: found .123D at 1:6 expected end of input"
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "a",
+              "123D_column"
+            ],
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "a.123E3_column",
       "output": {
-        "failure": "invalid argument: found .123E3 at 1:7 expected end of input"
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "a",
+              "123E3_column"
+            ],
+            "planId": null
+          }
+        }
       }
     },
     {

@@ -856,7 +856,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             target: None,
             wildcard_options: Default::default(),
         }),
-        AtomExpr::StringLiteral(value) => from_ast_string_literal(value),
+        AtomExpr::StringLiteral(head, tail) => from_ast_string_literal(head, tail),
         AtomExpr::NumberLiteral(value) => from_ast_number_literal(value),
         AtomExpr::BooleanLiteral(value) => from_ast_boolean_literal(value),
         AtomExpr::Null(_) => Ok(spec::Expr::Literal(spec::Literal::Null)),
