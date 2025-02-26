@@ -8,7 +8,6 @@ use chumsky::prelude::choice;
 use chumsky::{IterParser, Parser};
 use sail_sql_macro::TreeParser;
 
-use crate::ast::data_type::DataType;
 use crate::ast::expression::{
     DuplicateTreatment, Expr, FunctionArgument, GroupingExpr, OrderByExpr, WindowSpec,
 };
@@ -28,11 +27,11 @@ use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
 
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Query, Expr, DataType)", label = TokenLabel::Query)]
+#[parser(dependency = "(Query, Expr, TableWithJoins)", label = TokenLabel::Query)]
 pub struct Query {
     #[parser(function = |(q, _, _), o| compose(q, o))]
     pub with: Option<WithClause>,
-    #[parser(function = |(q, e, _), o| boxed(compose((q, e), o)))]
+    #[parser(function = |(q, e, t), o| boxed(compose((q, e, t), o)))]
     pub body: Box<QueryBody>,
     #[parser(function = |(_, e, _), o| compose(e, o))]
     pub modifiers: Vec<QueryModifier>,
@@ -89,7 +88,7 @@ pub enum QueryBody {
     },
 }
 
-impl<'a, I, E, P1, P2> TreeParser<'a, I, E, (P1, P2)> for QueryBody
+impl<'a, I, E, P1, P2, P3> TreeParser<'a, I, E, (P1, P2, P3)> for QueryBody
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
@@ -97,13 +96,14 @@ where
     E::Error: LabelError<'a, I, TokenLabel>,
     P1: Parser<'a, I, Query, E> + Clone + 'a,
     P2: Parser<'a, I, Expr, E> + Clone + 'a,
+    P3: Parser<'a, I, TableWithJoins, E> + Clone + 'a,
 {
     fn parser(
-        (query, expr): (P1, P2),
+        (query, expr, table_with_joins): (P1, P2, P3),
         options: &'a ParserOptions,
     ) -> impl Parser<'a, I, Self, E> + Clone {
         let quantifier = SetQuantifier::parser((), options).or_not();
-        let term = QueryTerm::parser((query, expr), options).map(QueryBody::Term);
+        let term = QueryTerm::parser((query, expr, table_with_joins), options).map(QueryBody::Term);
         term.pratt((
             infix(
                 left(2),
@@ -154,31 +154,31 @@ pub enum SetQuantifier {
 }
 
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Query, Expr)")]
+#[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub enum QueryTerm {
-    Select(#[parser(function = |(q, e), o| compose((q, e), o))] QuerySelect),
-    Values(#[parser(function = |(_, e), o| compose(e, o))] ValuesClause),
+    Select(#[parser(function = |(q, e, t), o| compose((q, e, t), o))] QuerySelect),
+    Values(#[parser(function = |(_, e, _), o| compose(e, o))] ValuesClause),
     Nested(
         LeftParenthesis,
-        #[parser(function = |(q, _), _| q)] Query,
+        #[parser(function = |(q, _, _), _| q)] Query,
         RightParenthesis,
     ),
 }
 
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Query, Expr)")]
+#[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub struct QuerySelect {
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e, _), o| compose(e, o))]
     pub select: SelectClause,
-    #[parser(function = |(q, e), o| compose((q, e), o))]
+    #[parser(function = |(_, _, t), o| compose(t, o))]
     pub from: Option<FromClause>,
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e, _), o| compose(e, o))]
     pub lateral_views: Vec<LateralViewClause>,
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e, _), o| compose(e, o))]
     pub r#where: Option<WhereClause>,
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e, _), o| compose(e, o))]
     pub group_by: Option<GroupByClause>,
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e, _), o| compose(e, o))]
     pub having: Option<HavingClause>,
 }
 
@@ -233,49 +233,58 @@ pub struct NamedExprList {
 }
 
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Query, Expr)")]
+#[parser(dependency = "TableWithJoins")]
 pub struct FromClause {
     pub from: From,
-    #[parser(function = |(q, e), o| sequence(compose((q, e), o), unit(o)))]
+    #[parser(function = |t, o| sequence(t, unit(o)))]
     pub tables: Sequence<TableWithJoins, Comma>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Query, Expr)")]
+#[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub struct TableWithJoins {
     pub lateral: Option<Lateral>,
-    #[parser(function = |(q, e), o| compose((q, e), o))]
+    #[parser(function = |(q, e, t), o| compose((q, e, t), o))]
     pub table: TableFactor,
-    #[parser(function = |(q, e), o| compose((q, e), o))]
+    #[parser(function = |(q, e, t), o| compose((q, e, t), o))]
     pub joins: Vec<TableJoin>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Query, Expr)")]
+#[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub enum TableFactor {
     Values {
-        #[parser(function = |(_, e), o| compose(e, o))]
+        #[parser(function = |(_, e, _), o| compose(e, o))]
         values: ValuesClause,
         alias: Option<AliasClause>,
     },
     Query {
         left: LeftParenthesis,
-        #[parser(function = |(q, _), _| q)]
+        #[parser(function = |(q, _, _), _| q)]
         query: Query,
         right: RightParenthesis,
-        #[parser(function = |(_, e), o| compose(e, o))]
-        modifier: Option<TableModifier>,
+        #[parser(function = |(_, e, _), o| compose(e, o))]
+        modifiers: Vec<TableModifier>,
+        alias: Option<AliasClause>,
+    },
+    Nested {
+        left: LeftParenthesis,
+        #[parser(function = |(_, _, t), _| boxed(t))]
+        table: Box<TableWithJoins>,
+        right: RightParenthesis,
+        #[parser(function = |(_, e, _), o| compose(e, o))]
+        modifiers: Vec<TableModifier>,
         alias: Option<AliasClause>,
     },
     TableFunction {
-        #[parser(function = |(_, e), o| compose(e, o))]
+        #[parser(function = |(_, e, _), o| compose(e, o))]
         function: TableFunction,
         alias: Option<AliasClause>,
     },
     Name {
         name: ObjectName,
-        #[parser(function = |(_, e), o| compose(e, o))]
-        modifier: Option<TableModifier>,
+        #[parser(function = |(_, e, _), o| compose(e, o))]
+        modifiers: Vec<TableModifier>,
         alias: Option<AliasClause>,
     },
 }
@@ -393,7 +402,7 @@ pub struct TableFunction {
 }
 
 #[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "(Query, Expr)")]
+#[parser(dependency = "(Query, Expr, TableWithJoins)")]
 pub struct TableJoin {
     // The join criteria must be absent for natural joins.
     // But we defer the enforcement of this to later stages of SQL analysis.
@@ -401,9 +410,9 @@ pub struct TableJoin {
     pub operator: Option<JoinOperator>,
     pub join: Join,
     pub lateral: Option<Lateral>,
-    #[parser(function = |(q, e), o| compose((q, e), o))]
+    #[parser(function = |(q, e, t), o| compose((q, e, t), o))]
     pub other: TableFactor,
-    #[parser(function = |(_, e), o| compose(e, o))]
+    #[parser(function = |(_, e, _), o| compose(e, o))]
     pub criteria: Option<JoinCriteria>,
 }
 

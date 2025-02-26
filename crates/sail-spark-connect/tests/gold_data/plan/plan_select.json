@@ -68,7 +68,7 @@
       "input": "SELECT * FROM (INSERT INTO BAR VALUES (2))",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BAR': missing ')'.(line 1, pos 27)\n\n== SQL ==\nSELECT * FROM (INSERT INTO BAR VALUES (2))\n---------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found INSERT at 15:21 expected query"
+        "failure": "invalid argument: found INTO at 22:26 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', or ')'"
       }
     },
     {
@@ -1601,7 +1601,7 @@
     {
       "input": "select * from (from a select * select *)",
       "output": {
-        "failure": "invalid argument: found from at 15:19 expected query"
+        "failure": "invalid argument: found select at 22:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', or ')'"
       }
     },
     {
@@ -3179,13 +3179,73 @@
     {
       "input": "select id from ((((((t0))))))",
       "output": {
-        "failure": "invalid argument: found t0 at 21:23 expected query"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t0"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "id"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select id from (t0)",
       "output": {
-        "failure": "invalid argument: found t0 at 16:18 expected query"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t0"
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "id"
+                    ],
+                    "planId": null
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
