@@ -19,6 +19,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -117,6 +119,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -213,6 +217,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -309,6 +315,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -405,6 +413,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -501,6 +511,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -610,6 +622,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -706,6 +720,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -802,6 +818,8 @@
                     "name": [
                       "t"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -851,6 +869,8 @@
                                   "name": [
                                     "s"
                                   ],
+                                  "temporal": null,
+                                  "sample": null,
                                   "options": []
                                 },
                                 "isStreaming": false

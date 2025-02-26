@@ -148,6 +148,8 @@ impl TryFrom<RelType> for RelationNode {
                             name: from_ast_object_name(parse_object_name(
                                 unparsed_identifier.as_str(),
                             )?)?,
+                            temporal: None,
+                            sample: None,
                             options: options.into_iter().collect(),
                         })
                     }
@@ -302,11 +304,12 @@ impl TryFrom<RelType> for RelationNode {
             RelType::Limit(limit) => {
                 let sc::Limit { input, limit } = *limit;
                 let input = input.required("limit input")?;
-                let limit = usize::try_from(limit).required("limit value")?;
                 Ok(RelationNode::Query(spec::QueryNode::Limit {
                     input: Box::new((*input).try_into()?),
-                    skip: 0,
-                    limit,
+                    skip: None,
+                    limit: Some(spec::Expr::Literal(spec::Literal::Int32 {
+                        value: Some(limit),
+                    })),
                 }))
             }
             RelType::Aggregate(aggregate) => {
@@ -457,10 +460,12 @@ impl TryFrom<RelType> for RelationNode {
             RelType::Offset(offset) => {
                 let sc::Offset { input, offset } = *offset;
                 let input = input.required("offset input")?;
-                let offset = usize::try_from(offset).required("offset value")?;
-                Ok(RelationNode::Query(spec::QueryNode::Offset {
+                Ok(RelationNode::Query(spec::QueryNode::Limit {
                     input: Box::new((*input).try_into()?),
-                    offset,
+                    skip: Some(spec::Expr::Literal(spec::Literal::Int32 {
+                        value: Some(offset),
+                    })),
+                    limit: None,
                 }))
             }
             RelType::Deduplicate(deduplicate) => {
@@ -595,10 +600,9 @@ impl TryFrom<RelType> for RelationNode {
             RelType::Tail(tail) => {
                 let sc::Tail { input, limit } = *tail;
                 let input = input.required("tail input")?;
-                let limit = usize::try_from(limit).required("tail limit")?;
                 Ok(RelationNode::Query(spec::QueryNode::Tail {
                     input: Box::new((*input).try_into()?),
-                    limit,
+                    limit: spec::Expr::Literal(spec::Literal::Int32 { value: Some(limit) }),
                 }))
             }
             RelType::WithColumns(with_columns) => {

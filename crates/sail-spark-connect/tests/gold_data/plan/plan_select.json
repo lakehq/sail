@@ -12,6 +12,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -49,26 +51,26 @@
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat'\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: found USING at 27:32 expected 'RESPECT', 'IGNORE', 'WITHIN', 'FILTER', 'OVER', '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found USING at 27:32 expected 'RESPECT', 'IGNORE', 'WITHIN', 'FILTER', 'OVER', '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, '(', ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat' AS (a int, b string, c long)\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: found USING at 27:32 expected 'RESPECT', 'IGNORE', 'WITHIN', 'FILTER', 'OVER', '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found USING at 27:32 expected 'RESPECT', 'IGNORE', 'WITHIN', 'FILTER', 'OVER', '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, '(', ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "\nSELECT TRANSFORM(a, b, c)\nUSING 'cat' AS (a, b, c)\nFROM testData\n      ",
       "output": {
-        "failure": "invalid argument: found USING at 27:32 expected 'RESPECT', 'IGNORE', 'WITHIN', 'FILTER', 'OVER', '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found USING at 27:32 expected 'RESPECT', 'IGNORE', 'WITHIN', 'FILTER', 'OVER', '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, '(', ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM (INSERT INTO BAR VALUES (2))",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BAR': missing ')'.(line 1, pos 27)\n\n== SQL ==\nSELECT * FROM (INSERT INTO BAR VALUES (2))\n---------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found INTO at 22:26 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', or ')'"
+        "failure": "invalid argument: found INTO at 22:26 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', or ')'"
       }
     },
     {
@@ -87,6 +89,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -181,6 +185,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -212,154 +218,1363 @@
     {
       "input": "SELECT * FROM a LIMIT :limitA",
       "output": {
-        "failure": "invalid argument: literal expression: Atom(Placeholder(Variable { span: TokenSpan { start: 22, end: 29 }, value: \":limitA\" }))"
+        "success": {
+          "query": {
+            "limit": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "a"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "skip": null,
+              "limit": {
+                "placeholder": ":limitA"
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a LIMIT ?",
       "output": {
-        "failure": "invalid argument: literal expression: Atom(Placeholder(Variable { span: TokenSpan { start: 22, end: 23 }, value: \"?\" }))"
+        "success": {
+          "query": {
+            "limit": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "a"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "skip": null,
+              "limit": {
+                "placeholder": "?"
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "literal": {
+                            "utf8": {
+                              "value": "2019-01-29 00:37:58"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "scalarSubquery": {
+                            "subquery": {
+                              "project": {
+                                "input": {
+                                  "empty": {
+                                    "produceOneRow": true
+                                  },
+                                  "planId": null,
+                                  "sourceInfo": null
+                                },
+                                "expressions": [
+                                  {
+                                    "unresolvedFunction": {
+                                      "functionName": "current_date",
+                                      "arguments": [],
+                                      "isDistinct": false,
+                                      "isUserDefinedFunction": false,
+                                      "ignoreNulls": null,
+                                      "filter": null,
+                                      "orderBy": null
+                                    }
+                                  }
+                                ]
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_TIME AS OF current_date()",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "unresolvedFunction": {
+                            "functionName": "current_date",
+                            "arguments": [],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "version": {
+                        "value": {
+                          "literal": {
+                            "utf8": {
+                              "value": "Snapshot123456789"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR SYSTEM_VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "version": {
+                        "value": {
+                          "literal": {
+                            "int32": {
+                              "value": 123456789
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "literal": {
+                            "utf8": {
+                              "value": "2019-01-29 00:37:58"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "scalarSubquery": {
+                            "subquery": {
+                              "project": {
+                                "input": {
+                                  "empty": {
+                                    "produceOneRow": true
+                                  },
+                                  "planId": null,
+                                  "sourceInfo": null
+                                },
+                                "expressions": [
+                                  {
+                                    "unresolvedFunction": {
+                                      "functionName": "current_date",
+                                      "arguments": [],
+                                      "isDistinct": false,
+                                      "isUserDefinedFunction": false,
+                                      "ignoreNulls": null,
+                                      "filter": null,
+                                      "orderBy": null
+                                    }
+                                  }
+                                ]
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR TIMESTAMP AS OF current_date()",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "unresolvedFunction": {
+                            "functionName": "current_date",
+                            "arguments": [],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "version": {
+                        "value": {
+                          "literal": {
+                            "utf8": {
+                              "value": "Snapshot123456789"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c FOR VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: found FOR at 20:23 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "version": {
+                        "value": {
+                          "literal": {
+                            "int32": {
+                              "value": 123456789
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: found AS at 32:34 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "literal": {
+                            "utf8": {
+                              "value": "2019-01-29 00:37:58"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: found AS at 32:34 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "scalarSubquery": {
+                            "subquery": {
+                              "project": {
+                                "input": {
+                                  "empty": {
+                                    "produceOneRow": true
+                                  },
+                                  "planId": null,
+                                  "sourceInfo": null
+                                },
+                                "expressions": [
+                                  {
+                                    "unresolvedFunction": {
+                                      "functionName": "current_date",
+                                      "arguments": [],
+                                      "isDistinct": false,
+                                      "isUserDefinedFunction": false,
+                                      "ignoreNulls": null,
+                                      "filter": null,
+                                      "orderBy": null
+                                    }
+                                  }
+                                ]
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_TIME AS OF current_date()",
       "output": {
-        "failure": "invalid argument: found AS at 32:34 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "unresolvedFunction": {
+                            "functionName": "current_date",
+                            "arguments": [],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: found AS at 35:37 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "version": {
+                        "value": {
+                          "literal": {
+                            "utf8": {
+                              "value": "Snapshot123456789"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c SYSTEM_VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: found AS at 35:37 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "version": {
+                        "value": {
+                          "literal": {
+                            "int32": {
+                              "value": 123456789
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF '2019-01-29 00:37:58'",
       "output": {
-        "failure": "invalid argument: found AS at 30:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "literal": {
+                            "utf8": {
+                              "value": "2019-01-29 00:37:58"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF (SELECT current_date())",
       "output": {
-        "failure": "invalid argument: found AS at 30:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "scalarSubquery": {
+                            "subquery": {
+                              "project": {
+                                "input": {
+                                  "empty": {
+                                    "produceOneRow": true
+                                  },
+                                  "planId": null,
+                                  "sourceInfo": null
+                                },
+                                "expressions": [
+                                  {
+                                    "unresolvedFunction": {
+                                      "functionName": "current_date",
+                                      "arguments": [],
+                                      "isDistinct": false,
+                                      "isUserDefinedFunction": false,
+                                      "ignoreNulls": null,
+                                      "filter": null,
+                                      "orderBy": null
+                                    }
+                                  }
+                                ]
+                              },
+                              "planId": null,
+                              "sourceInfo": null
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF col",
       "exception": "\nInvalid time travel spec: timestamp expression cannot refer to any columns.(line 1, pos 36)\n\n== SQL ==\nSELECT * FROM a.b.c TIMESTAMP AS OF col\n------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found AS at 30:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "col"
+                            ],
+                            "planId": null
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF current_date()",
       "output": {
-        "failure": "invalid argument: found AS at 30:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "timestamp": {
+                        "value": {
+                          "unresolvedFunction": {
+                            "functionName": "current_date",
+                            "arguments": [],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c VERSION AS OF 'Snapshot123456789'",
       "output": {
-        "failure": "invalid argument: found AS at 28:30 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "version": {
+                        "value": {
+                          "literal": {
+                            "utf8": {
+                              "value": "Snapshot123456789"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM a.b.c VERSION AS OF 123456789",
       "output": {
-        "failure": "invalid argument: found AS at 28:30 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a",
+                      "b",
+                      "c"
+                    ],
+                    "temporal": {
+                      "version": {
+                        "value": {
+                          "literal": {
+                            "int32": {
+                              "value": 123456789
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(300M) s",
       "exception": "\nTABLESAMPLE(byteLengthLiteral) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(300M) s\n-------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found TABLESAMPLE at 25:36 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found ) at 41:42 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'PERCENT', or 'ROWS'"
       }
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s",
       "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON function) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s\n-------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found TABLESAMPLE at 25:36 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found ON at 56:58 expected ')'"
       }
     },
     {
@@ -492,6 +1707,8 @@
                         "name": [
                           "testData"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -543,6 +1760,8 @@
                       "db",
                       "tab"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -1329,6 +2548,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1422,6 +2643,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -1462,6 +2685,8 @@
                     "name": [
                       "t"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -1482,6 +2707,8 @@
                                   "name": [
                                     "s"
                                   ],
+                                  "temporal": null,
+                                  "sample": null,
                                   "options": []
                                 },
                                 "isStreaming": false
@@ -1570,6 +2797,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -1907,6 +3136,8 @@
                     "name": [
                       "t"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -1957,6 +3188,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1976,6 +3209,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2033,6 +3268,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2099,6 +3336,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2166,6 +3405,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2191,8 +3432,14 @@
                 "planId": null,
                 "sourceInfo": null
               },
-              "skip": 0,
-              "limit": 10
+              "skip": null,
+              "limit": {
+                "literal": {
+                  "int32": {
+                    "value": 10
+                  }
+                }
+              }
             },
             "planId": null,
             "sourceInfo": null
@@ -2203,39 +3450,323 @@
     {
       "input": "select * from t limit cast(9 / 4 as int)",
       "output": {
-        "failure": "invalid argument: literal expression: Atom(Cast(Cast { span: TokenSpan { start: 22, end: 26 } }, LeftParenthesis { span: TokenSpan { start: 26, end: 27 } }, BinaryOperator(Atom(NumberLiteral(NumberLiteral { span: TokenSpan { start: 27, end: 28 }, value: \"9\", suffix: None })), Divide(Slash { span: TokenSpan { start: 29, end: 30 } }), Atom(NumberLiteral(NumberLiteral { span: TokenSpan { start: 31, end: 32 }, value: \"4\", suffix: None }))), As { span: TokenSpan { start: 33, end: 35 } }, Int(None, Int { span: TokenSpan { start: 36, end: 39 } }), RightParenthesis { span: TokenSpan { start: 39, end: 40 } }))"
+        "success": {
+          "query": {
+            "limit": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "skip": null,
+              "limit": {
+                "cast": {
+                  "expr": {
+                    "unresolvedFunction": {
+                      "functionName": "/",
+                      "arguments": [
+                        {
+                          "literal": {
+                            "int32": {
+                              "value": 9
+                            }
+                          }
+                        },
+                        {
+                          "literal": {
+                            "int32": {
+                              "value": 4
+                            }
+                          }
+                        }
+                      ],
+                      "isDistinct": false,
+                      "isUserDefinedFunction": false,
+                      "ignoreNulls": null,
+                      "filter": null,
+                      "orderBy": null
+                    }
+                  },
+                  "castToType": "int32"
+                }
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tablesample(100 rows)",
       "output": {
-        "failure": "invalid argument: found tablesample at 16:27 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "t"
+                    ],
+                    "temporal": null,
+                    "sample": {
+                      "method": {
+                        "rows": {
+                          "value": {
+                            "literal": {
+                              "int32": {
+                                "value": 100
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "seed": null
+                    },
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tablesample(43 percent) as x",
       "output": {
-        "failure": "invalid argument: found tablesample at 16:27 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": {
+                          "method": {
+                            "percent": {
+                              "value": {
+                                "literal": {
+                                  "int32": {
+                                    "value": 43
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "seed": null
+                        },
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "x",
+                  "columns": []
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tablesample(bucket 11 out of 10) as x",
       "exception": "\nSampling fraction (1.1) must be on interval [0, 1].(line 1, pos 16)\n\n== SQL ==\nselect * from t tablesample(bucket 11 out of 10) as x\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: found tablesample at 16:27 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": {
+                          "method": {
+                            "bucket": {
+                              "numerator": 11,
+                              "denominator": 10
+                            }
+                          },
+                          "seed": null
+                        },
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "x",
+                  "columns": []
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10 on x) as x",
       "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON colname) is not supported.(line 1, pos 28)\n\n== SQL ==\nselect * from t tablesample(bucket 4 out of 10 on x) as x\n----------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found tablesample at 16:27 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found on at 47:49 expected ')'"
       }
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10) as x",
       "output": {
-        "failure": "invalid argument: found tablesample at 16:27 expected '.', '(', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": {
+                          "method": {
+                            "bucket": {
+                              "numerator": 4,
+                              "denominator": 10
+                            }
+                          },
+                          "seed": null
+                        },
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "x",
+                  "columns": []
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -2252,6 +3783,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2281,6 +3814,8 @@
                                       "name": [
                                         "s"
                                       ],
+                                      "temporal": null,
+                                      "sample": null,
                                       "options": []
                                     },
                                     "isStreaming": false
@@ -2349,6 +3884,8 @@
                     "name": [
                       "t"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -2391,6 +3928,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2416,8 +3955,14 @@
                 "planId": null,
                 "sourceInfo": null
               },
-              "skip": 0,
-              "limit": 10
+              "skip": null,
+              "limit": {
+                "literal": {
+                  "int32": {
+                    "value": 10
+                  }
+                }
+              }
             },
             "planId": null,
             "sourceInfo": null
@@ -2496,6 +4041,8 @@
                       "1k",
                       "2m"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -2571,6 +4118,8 @@
                       "db",
                       "c"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -2616,6 +4165,8 @@
                       "db",
                       "c"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -2692,6 +4243,8 @@
                           "db",
                           "c"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2770,6 +4323,8 @@
                           "db",
                           "c"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2848,6 +4403,8 @@
                           "db",
                           "c"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2924,6 +4481,8 @@
                       "db",
                       "c"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -2969,6 +4528,8 @@
                       "db",
                       "c"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -3052,6 +4613,8 @@
                       "db",
                       "c"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -3099,6 +4662,8 @@
                           "db",
                           "c"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -3188,6 +4753,8 @@
                     "name": [
                       "t0"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -3224,6 +4791,8 @@
                     "name": [
                       "t0"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false

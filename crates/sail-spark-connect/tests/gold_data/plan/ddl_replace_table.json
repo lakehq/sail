@@ -52,6 +52,8 @@
                         "name": [
                           "src"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false

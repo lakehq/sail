@@ -99,8 +99,8 @@ pub enum QueryNode {
     },
     Limit {
         input: Box<QueryPlan>,
-        skip: usize,
-        limit: usize,
+        skip: Option<Expr>,
+        limit: Option<Expr>,
     },
     Aggregate(Aggregate),
     LocalRelation {
@@ -108,10 +108,6 @@ pub enum QueryNode {
         schema: Option<Schema>,
     },
     Sample(Sample),
-    Offset {
-        input: Box<QueryPlan>,
-        offset: usize,
-    },
     Deduplicate(Deduplicate),
     Range(Range),
     SubqueryAlias {
@@ -139,7 +135,7 @@ pub enum QueryNode {
     },
     Tail {
         input: Box<QueryPlan>,
-        limit: usize,
+        limit: Expr,
     },
     WithColumns {
         input: Box<QueryPlan>,
@@ -416,6 +412,11 @@ pub enum CommandNode {
         row_format: Option<TableRowFormat>,
         options: Vec<(String, String)>,
     },
+    MergeInto {
+        target: ObjectName,
+        with_schema_evolution: bool,
+        // TODO: add other fields
+    },
     SetVariable {
         variable: String,
         value: String,
@@ -509,7 +510,38 @@ pub enum ReadType {
 #[serde(rename_all = "camelCase")]
 pub struct ReadNamedTable {
     pub name: ObjectName,
+    pub temporal: Option<TableTemporal>,
+    pub sample: Option<TableSample>,
     pub options: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum TableTemporal {
+    Version { value: Expr },
+    Timestamp { value: Expr },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableSample {
+    pub method: TableSampleMethod,
+    pub seed: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum TableSampleMethod {
+    Percent {
+        value: Expr,
+    },
+    Rows {
+        value: Expr,
+    },
+    Bucket {
+        numerator: usize,
+        denominator: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

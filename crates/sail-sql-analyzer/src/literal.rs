@@ -243,11 +243,7 @@ impl TryFrom<LiteralValue<Signed<IntervalExpr>>> for spec::Literal {
                 let kind = from_ast_interval_qualifier(qualifier)?;
                 parse_standard_interval(value, kind, negated)
             }
-            IntervalExpr::MultiUnit {
-                head,
-                barrier: _,
-                tail,
-            } => {
+            IntervalExpr::MultiUnit { head, tail } => {
                 if tail.is_empty() {
                     match head.unit {
                         IntervalUnit::Year(_) | IntervalUnit::Years(_) => {

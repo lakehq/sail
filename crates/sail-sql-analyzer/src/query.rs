@@ -1,14 +1,18 @@
+use either::Either;
 use sail_common::spec;
 use sail_sql_parser::ast::expression::{AtomExpr, DuplicateTreatment, Expr, OrderByExpr};
+use sail_sql_parser::ast::identifier::{Ident, ObjectName};
+use sail_sql_parser::ast::literal::IntegerLiteral;
 use sail_sql_parser::ast::operator::Comma;
 use sail_sql_parser::ast::query::{
     AliasClause, ClusterByClause, DistributeByClause, FromClause, GroupByClause, GroupByModifier,
     HavingClause, IdentList, JoinCriteria, JoinOperator, LateralViewClause, LimitClause,
     LimitValue, NamedExpr, NamedExprList, NamedQuery, NamedWindow, OffsetClause, OrderByClause,
-    PivotClause, Query, QueryBody, QueryModifier, QuerySelect, QueryTerm, SelectClause, SelectExpr,
+    PivotClause, Query, QueryBody, QueryModifier, QuerySelect, QueryTerm, SelectClause,
     SetOperator, SetQuantifier, SortByClause, TableFactor, TableFunction, TableJoin, TableModifier,
-    TableWithJoins, UnpivotClause, UnpivotColumns, UnpivotNulls, ValuesClause, WhereClause,
-    WindowClause, WithClause,
+    TableSampleClause, TableSampleMethod, TableSampleRepeatable, TableWithJoins, TemporalClause,
+    UnpivotClause, UnpivotColumns, UnpivotNulls, ValuesClause, WhereClause, WindowClause,
+    WithClause,
 };
 use sail_sql_parser::common::Sequence;
 
@@ -17,7 +21,6 @@ use crate::expression::{
     from_ast_expression, from_ast_function_argument, from_ast_grouping_expression,
     from_ast_identifier_list, from_ast_object_name, from_ast_order_by,
 };
-use crate::literal::LiteralValue;
 
 #[derive(Default)]
 struct QueryModifiers {
@@ -102,9 +105,13 @@ pub fn from_ast_named_expression(expr: NamedExpr) -> SqlResult<spec::Expr> {
     let NamedExpr { expr, alias } = expr;
     let expr = from_ast_expression(expr)?;
     if let Some((_, name)) = alias {
+        let name = match name {
+            Either::Left(Ident { value, .. }) => vec![value.into()],
+            Either::Right(x @ IdentList { .. }) => from_ast_identifier_list(x)?,
+        };
         Ok(spec::Expr::Alias {
             expr: Box::new(expr),
-            name: vec![name.value.into()],
+            name,
             metadata: None,
         })
     } else {
@@ -167,28 +174,23 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
-    let plan = if let Some(value) = offset {
-        let offset = LiteralValue::<i128>::try_from(value)?.0;
-        let offset = usize::try_from(offset).map_err(|e| SqlError::invalid(e.to_string()))?;
-        spec::QueryPlan::new(spec::QueryNode::Offset {
-            input: Box::new(plan),
-            offset,
-        })
-    } else {
-        plan
+    let limit = match limit {
+        None => None,
+        Some(LimitValue::All(_)) => None,
+        Some(LimitValue::Value(value)) => Some(value),
     };
 
-    let plan = match limit {
-        Some(LimitValue::Value(value)) => {
-            let limit = LiteralValue::<i128>::try_from(value)?.0;
-            let limit = usize::try_from(limit).map_err(|e| SqlError::invalid(e.to_string()))?;
+    let plan = match (offset, limit) {
+        (None, None) => plan,
+        (offset, limit) => {
+            let offset = offset.map(from_ast_expression).transpose()?;
+            let limit = limit.map(from_ast_expression).transpose()?;
             spec::QueryPlan::new(spec::QueryNode::Limit {
                 input: Box::new(plan),
-                skip: 0,
+                skip: offset,
                 limit,
             })
         }
-        Some(LimitValue::All(_)) | None => plan,
     };
 
     if let Some(WithClause {
@@ -211,6 +213,7 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
 fn from_ast_query_term(term: QueryTerm) -> SqlResult<spec::QueryPlan> {
     match term {
         QueryTerm::Select(select) => from_ast_query_select(select),
+        QueryTerm::Table(_, name) => from_ast_table_name(name),
         QueryTerm::Values(values) => from_ast_values(values),
         QueryTerm::Nested(_, query, _) => from_ast_query(query),
     }
@@ -252,13 +255,7 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
 
     let projection = projection
         .into_items()
-        .map(|x| {
-            let SelectExpr { expr, alias } = x;
-            from_ast_named_expression(NamedExpr {
-                expr,
-                alias: alias.map(|(r#as, ident)| (r#as, ident.into())),
-            })
-        })
+        .map(from_ast_named_expression)
         .collect::<SqlResult<_>>()?;
 
     let group_by = group_by
@@ -358,6 +355,18 @@ fn from_ast_query_body(body: QueryBody) -> SqlResult<spec::QueryPlan> {
     }
 }
 
+fn from_ast_table_name(name: ObjectName) -> SqlResult<spec::QueryPlan> {
+    Ok(spec::QueryPlan::new(spec::QueryNode::Read {
+        is_streaming: false,
+        read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
+            name: from_ast_object_name(name)?,
+            temporal: None,
+            sample: None,
+            options: Default::default(),
+        }),
+    }))
+}
+
 fn from_ast_values(values: ValuesClause) -> SqlResult<spec::QueryPlan> {
     let ValuesClause {
         values: _,
@@ -422,13 +431,19 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
     match table {
         TableFactor::Name {
             name,
+            temporal,
+            sample,
             modifiers,
             alias,
         } => {
+            let temporal = temporal.map(from_ast_temporal).transpose()?;
+            let sample = sample.map(from_ast_table_sample).transpose()?;
             let plan = spec::QueryPlan::new(spec::QueryNode::Read {
                 is_streaming: false,
                 read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
                     name: from_ast_object_name(name)?,
+                    temporal,
+                    sample,
                     options: Default::default(),
                 }),
             });
@@ -485,6 +500,73 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
     }
 }
 
+fn from_ast_temporal(temporal: TemporalClause) -> SqlResult<spec::TableTemporal> {
+    match temporal {
+        TemporalClause::Version {
+            r#for: _,
+            version: _,
+            as_of: _,
+            value,
+        } => Ok(spec::TableTemporal::Version {
+            value: from_ast_expression(value)?,
+        }),
+        TemporalClause::Timestamp {
+            r#for: _,
+            timestamp: _,
+            as_of: _,
+            value,
+        } => Ok(spec::TableTemporal::Timestamp {
+            value: from_ast_expression(value)?,
+        }),
+    }
+}
+
+fn from_ast_bucket_count(bucket: IntegerLiteral) -> SqlResult<usize> {
+    let IntegerLiteral { value, span: _ } = bucket;
+    usize::try_from(value).map_err(|_| SqlError::invalid(format!("bucket count: {value}")))
+}
+
+fn from_ast_table_sample(sample: TableSampleClause) -> SqlResult<spec::TableSample> {
+    let TableSampleClause {
+        sample: _,
+        left: _,
+        method,
+        right: _,
+        repeatable,
+    } = sample;
+    let method = match method {
+        TableSampleMethod::Percent { value, percent: _ } => spec::TableSampleMethod::Percent {
+            value: from_ast_expression(value)?,
+        },
+        TableSampleMethod::Rows { value, rows: _ } => spec::TableSampleMethod::Rows {
+            value: from_ast_expression(value)?,
+        },
+        TableSampleMethod::Buckets {
+            bucket: _,
+            numerator,
+            out_of: _,
+            denominator,
+        } => {
+            let numerator = from_ast_bucket_count(numerator)?;
+            let denominator = from_ast_bucket_count(denominator)?;
+            spec::TableSampleMethod::Bucket {
+                numerator,
+                denominator,
+            }
+        }
+    };
+    let seed = repeatable.map(|x| {
+        let TableSampleRepeatable {
+            repeatable: _,
+            left: _,
+            seed: IntegerLiteral { value, span: _ },
+            right: _,
+        } = x;
+        value
+    });
+    Ok(spec::TableSample { method, seed })
+}
+
 fn query_plan_with_table_modifiers(
     plan: spec::QueryPlan,
     modifier: Vec<TableModifier>,
@@ -512,28 +594,12 @@ fn query_plan_with_table_modifier(
             } = pivot;
             let aggregate = aggregates
                 .into_items()
-                .map(|expr| {
-                    let NamedExpr { expr, alias } = expr;
-                    let expr = from_ast_expression(expr)?;
-                    match alias {
-                        Some((_, value)) => Ok(spec::Expr::Alias {
-                            expr: Box::new(expr),
-                            name: vec![value.value.into()],
-                            metadata: None,
-                        }),
-                        None => Ok(expr),
-                    }
-                })
+                .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
-            let IdentList {
-                left: _,
-                columns,
-                right: _,
-            } = columns;
-            let columns = columns
-                .into_items()
+            let columns = from_ast_identifier_list(columns)?
+                .into_iter()
                 .map(|c| spec::Expr::UnresolvedAttribute {
-                    name: spec::ObjectName::new_unqualified(c.value.into()),
+                    name: spec::ObjectName::new_unqualified(c),
                     plan_id: None,
                 })
                 .collect();
@@ -560,7 +626,13 @@ fn query_plan_with_table_modifier(
                             _ => Err(SqlError::invalid("non-literal value in PIVOT")),
                         })
                         .collect::<SqlResult<Vec<_>>>()?;
-                    let alias = alias.map(|(_, alias)| alias.value.into());
+                    let alias = match alias {
+                        Some((_, Either::Left(x))) => Some(x.value.into()),
+                        Some((_, Either::Right(IdentList { .. }))) => {
+                            return Err(SqlError::invalid("multiple alias for pivot value"))
+                        }
+                        None => None,
+                    };
                     Ok(spec::PivotValue { values, alias })
                 })
                 .collect::<SqlResult<Vec<_>>>()?;
@@ -604,7 +676,7 @@ fn query_plan_with_table_modifier(
                     values:
                         IdentList {
                             left: _,
-                            columns: values,
+                            names: values,
                             right: _,
                         },
                     r#for: _,
@@ -620,7 +692,7 @@ fn query_plan_with_table_modifier(
                         .map(|(item, alias)| {
                             let IdentList {
                                 left: _,
-                                columns: items,
+                                names: items,
                                 right: _,
                             } = item;
                             (items.into_items().collect(), alias.map(|(_, alias)| alias))
@@ -674,19 +746,10 @@ pub fn from_ast_with(
             } = cte;
             let plan = from_ast_query(query)?;
             let name = spec::Identifier::from(name.value);
-            let columns = if let Some(columns) = columns {
-                let IdentList {
-                    left: _,
-                    columns,
-                    right: _,
-                } = columns;
-                columns
-                    .into_items()
-                    .map(|c| Ok(c.value.into()))
-                    .collect::<SqlResult<Vec<_>>>()?
-            } else {
-                vec![]
-            };
+            let columns = columns
+                .map(from_ast_identifier_list)
+                .transpose()?
+                .unwrap_or_default();
             let plan = spec::QueryPlan::new(spec::QueryNode::TableAlias {
                 input: Box::new(plan),
                 name: name.clone(),
@@ -719,17 +782,10 @@ fn query_plan_with_table_alias(
             table,
             columns,
         }) => {
-            let columns = match columns {
-                Some(IdentList {
-                    left: _,
-                    columns,
-                    right: _,
-                }) => columns
-                    .into_items()
-                    .map(|c| Ok(c.value.into()))
-                    .collect::<SqlResult<Vec<_>>>()?,
-                None => vec![],
-            };
+            let columns = columns
+                .map(from_ast_identifier_list)
+                .transpose()?
+                .unwrap_or_default();
             Ok(spec::QueryPlan::new(spec::QueryNode::TableAlias {
                 input: Box::new(plan),
                 name: spec::Identifier::from(table.value),
@@ -811,12 +867,7 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
             (Some(expr), vec![])
         }
         Some(JoinCriteria::Using(_, columns)) => {
-            let IdentList {
-                left: _,
-                columns,
-                right: _,
-            } = columns;
-            let columns = columns.into_items().map(|c| c.value).collect();
+            let columns = from_ast_identifier_list(columns)?;
             (None, columns)
         }
         None => (None, vec![]),
@@ -826,7 +877,7 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
         right: Box::new(right),
         join_condition,
         join_type,
-        using_columns: using_columns.into_iter().map(|c| c.into()).collect(),
+        using_columns,
         join_data_type: None,
     })))
 }
