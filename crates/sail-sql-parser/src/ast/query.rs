@@ -10,7 +10,7 @@ use sail_sql_macro::TreeParser;
 use crate::ast::expression::{
     DuplicateTreatment, Expr, FunctionArgument, GroupingExpr, OrderByExpr, WindowSpec,
 };
-use crate::ast::identifier::{column_ident, table_ident, Ident, ObjectName};
+use crate::ast::identifier::{column_ident, object_name, table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
     All, Anti, As, Bucket, By, Cluster, Cross, Cube, Distinct, Distribute, Except, Exclude, For,
     From, Full, Group, Having, In, Include, Inner, Intersect, Join, Lateral, Left, Limit, Minus,
@@ -473,11 +473,14 @@ pub struct LateralViewClause {
     pub outer: Option<Outer>,
     pub function: ObjectName,
     pub left: LeftParenthesis,
-    #[parser(function = |e, o| sequence(e, unit(o)))]
-    pub arguments: Sequence<Expr, Comma>,
+    #[parser(function = |e, o| sequence(e, unit(o)).or_not())]
+    pub arguments: Option<Sequence<Expr, Comma>>,
     pub right: RightParenthesis,
-    #[parser(function = |_, o| unit(o).and_is(As::parser((), o).not()).or_not())]
+    // FIXME: When both the table alias and the `AS` keyword are omitted,
+    //   the column aliases cannot be parsed correctly.
+    #[parser(function = |_, o| object_name(table_ident(o), o).or_not())]
     pub table: Option<ObjectName>,
+    #[parser(function = |_, o| unit(o).then(sequence(column_ident(o), unit(o))).or_not())]
     pub columns: Option<(Option<As>, Sequence<Ident, Comma>)>,
 }
 

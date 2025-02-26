@@ -213,7 +213,7 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
 fn from_ast_query_term(term: QueryTerm) -> SqlResult<spec::QueryPlan> {
     match term {
         QueryTerm::Select(select) => from_ast_query_select(select),
-        QueryTerm::Table(_, name) => from_ast_table_name(name),
+        QueryTerm::Table(_, name) => from_ast_query_table(name),
         QueryTerm::Values(values) => from_ast_values(values),
         QueryTerm::Nested(_, query, _) => from_ast_query(query),
     }
@@ -355,7 +355,7 @@ fn from_ast_query_body(body: QueryBody) -> SqlResult<spec::QueryPlan> {
     }
 }
 
-fn from_ast_table_name(name: ObjectName) -> SqlResult<spec::QueryPlan> {
+fn from_ast_query_table(name: ObjectName) -> SqlResult<spec::QueryPlan> {
     Ok(spec::QueryPlan::new(spec::QueryNode::Read {
         is_streaming: false,
         read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
@@ -948,9 +948,13 @@ fn query_plan_with_lateral_views(
             } = lateral_view;
             let function = from_ast_object_name(function)?;
             let arguments = arguments
-                .into_items()
-                .map(from_ast_expression)
-                .collect::<SqlResult<Vec<_>>>()?;
+                .map(|x| {
+                    x.into_items()
+                        .map(from_ast_expression)
+                        .collect::<SqlResult<Vec<_>>>()
+                })
+                .transpose()?
+                .unwrap_or_default();
             let table_alias = table.map(from_ast_object_name).transpose()?;
             let column_aliases = if let Some((_, columns)) = columns {
                 Some(columns.into_items().map(|x| x.value.into()).collect())

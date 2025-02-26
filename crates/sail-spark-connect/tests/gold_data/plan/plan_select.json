@@ -2761,7 +2761,102 @@
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\nlateral view outer json_tuple(x, y) jtup q, z",
       "output": {
-        "failure": "invalid argument: found view at 53:57 expected ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralView": {
+                  "input": {
+                    "lateralView": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "function": [
+                        "explode"
+                      ],
+                      "arguments": [
+                        {
+                          "unresolvedAttribute": {
+                            "name": [
+                              "x"
+                            ],
+                            "planId": null
+                          }
+                        }
+                      ],
+                      "tableAlias": [
+                        "expl"
+                      ],
+                      "columnAliases": null,
+                      "outer": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "function": [
+                    "json_tuple"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "x"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "y"
+                        ],
+                        "planId": null
+                      }
+                    }
+                  ],
+                  "tableAlias": [
+                    "jtup"
+                  ],
+                  "columnAliases": [
+                    "q",
+                    "z"
+                  ],
+                  "outer": true
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

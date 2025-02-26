@@ -6,6 +6,7 @@ use chumsky::Parser;
 use sail_sql_macro::TreeParser;
 
 use crate::ast::operator::{Asterisk, Period};
+use crate::combinator::sequence;
 use crate::common::Sequence;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
@@ -114,6 +115,21 @@ where
 
 #[derive(Debug, Clone, TreeParser)]
 pub struct ObjectName(pub Sequence<Ident, Period>);
+
+/// A restricted object name parser.
+pub(crate) fn object_name<'a, I, E, P>(
+    ident: P,
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, ObjectName, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+    P: Parser<'a, I, Ident, E> + Clone,
+{
+    sequence(ident, Period::parser((), options)).map(ObjectName)
+}
 
 #[derive(Debug, Clone, TreeParser)]
 pub struct QualifiedWildcard(pub Sequence<Ident, Period>, pub Period, pub Asterisk);
