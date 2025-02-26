@@ -162,7 +162,13 @@ impl TryFrom<RelType> for RelationNode {
                             predicates,
                         } = x;
                         let schema = schema
-                            .map(|s| parse_spark_data_type(s.as_str()))
+                            .and_then(|s| {
+                                if s.is_empty() {
+                                    None
+                                } else {
+                                    Some(parse_spark_data_type(s.as_str()))
+                                }
+                            })
                             .transpose()?
                             .map(|dt| dt.into_schema(DEFAULT_FIELD_NAME, true));
                         let predicates = predicates
@@ -430,7 +436,13 @@ impl TryFrom<RelType> for RelationNode {
             RelType::LocalRelation(local_relation) => {
                 let sc::LocalRelation { data, schema } = local_relation;
                 let schema = schema
-                    .map(|s| parse_spark_data_type(s.as_str()))
+                    .and_then(|s| {
+                        if s.is_empty() {
+                            None
+                        } else {
+                            Some(parse_spark_data_type(s.as_str()))
+                        }
+                    })
                     .transpose()?
                     .map(|dt| dt.into_schema(DEFAULT_FIELD_NAME, true));
                 Ok(RelationNode::Query(spec::QueryNode::LocalRelation {
