@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::NullTreatment;
-use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{expr, AggregateUDF, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};
 
 use crate::config::PlanConfig;
@@ -155,11 +155,13 @@ impl AggFunctionBuilder {
             let null_treatment = get_null_treatment(ignore_nulls);
             Ok(expr::Expr::AggregateFunction(AggregateFunction {
                 func: f(),
-                args: arguments,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
+                params: AggregateFunctionParams {
+                    args: arguments,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                },
             }))
         })
     }

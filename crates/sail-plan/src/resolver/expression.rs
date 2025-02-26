@@ -10,7 +10,7 @@ use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::core::get_field;
 use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{ScalarFunction, WindowFunctionParams};
 use datafusion_expr::{
     col, expr, expr_fn, lit, window_frame, AggregateUDF, BinaryExpr, ExprSchemable, Operator,
     ScalarUDF,
@@ -1025,11 +1025,13 @@ impl PlanResolver<'_> {
         };
         let window = expr::Expr::WindowFunction(expr::WindowFunction {
             fun: function,
-            args: arguments,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment: None,
+            params: WindowFunctionParams {
+                args: arguments,
+                partition_by,
+                order_by,
+                window_frame,
+                null_treatment: None,
+            },
         });
         let name = self.config.plan_formatter.function_to_string(
             function_name.as_str(),

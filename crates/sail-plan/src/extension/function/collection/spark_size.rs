@@ -2,6 +2,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::extension::function::functions_nested_utils::{
+    compute_array_dims, make_scalar_function,
+};
 use datafusion::arrow::array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt64Array};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
@@ -9,10 +12,7 @@ use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
-
-use crate::extension::function::functions_nested_utils::{
-    compute_array_dims, make_scalar_function,
-};
+use datafusion_expr_common::signature::ArrayFunctionArgument;
 
 // expr_fn::cardinality doesn't fully match expected behavior.
 // Spark's cardinality function seems to be the same as the size function.
@@ -34,7 +34,10 @@ impl SparkSize {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: None,
+                    }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray),
                 ],
                 Volatility::Immutable,

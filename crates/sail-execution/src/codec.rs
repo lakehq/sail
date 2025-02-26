@@ -4,8 +4,9 @@ use std::sync::Arc;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
-use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
+use datafusion::common::{internal_err, plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::memory::{DataSourceExec, MemorySourceConfig};
 #[allow(deprecated)]
 use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
 use datafusion::datasource::physical_plan::{ArrowSource, JsonSource};
@@ -16,7 +17,6 @@ use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 #[allow(deprecated)]
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
 #[allow(deprecated)]
@@ -243,12 +243,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
                 let sort_information =
                     self.try_decode_lex_orderings(&sort_information, registry, &schema)?;
-                Ok(Arc::new(
-                    #[allow(deprecated)]
-                    MemoryExec::try_new(&partitions, Arc::new(schema), projection)?
+                let source =
+                    MemorySourceConfig::try_new(&partitions, Arc::new(schema), projection)?
                         .with_show_sizes(show_sizes)
-                        .try_with_sort_information(sort_information)?,
-                ))
+                        .try_with_sort_information(sort_information)?;
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
                 let schema = self.try_decode_schema(&schema)?;
@@ -458,30 +457,35 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 consumption,
                 locations,
             })
-        } else if let Some(memory) = node.as_any().downcast_ref::<MemoryExec>() {
-            // `memory.schema()` is the schema after projection.
-            // We must use the original schema here.
-            let schema = memory.original_schema();
-            let partitions = memory
-                .partitions()
-                .iter()
-                .map(|x| write_record_batches(x, schema.as_ref()))
-                .collect::<Result<_>>()?;
-            let projection = memory
-                .projection()
-                .as_ref()
-                .map(|x| gen::PhysicalProjection {
-                    columns: x.iter().map(|c| *c as u64).collect(),
-                });
-            let schema = self.try_encode_schema(schema.as_ref())?;
-            let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
-            NodeKind::Memory(gen::MemoryExecNode {
-                partitions,
-                schema,
-                projection,
-                show_sizes: memory.show_sizes(),
-                sort_information,
-            })
+        } else if let Some(data_source_exec) = node.as_any().downcast_ref::<DataSourceExec>() {
+            let source = data_source_exec.source();
+            if let Some(memory) = source.as_any().downcast_ref::<MemorySourceConfig>() {
+                // `memory.schema()` is the schema after projection.
+                // We must use the original schema here.
+                let schema = memory.original_schema();
+                let partitions = memory
+                    .partitions()
+                    .iter()
+                    .map(|x| write_record_batches(x, schema.as_ref()))
+                    .collect::<Result<_>>()?;
+                let projection = memory
+                    .projection()
+                    .as_ref()
+                    .map(|x| gen::PhysicalProjection {
+                        columns: x.iter().map(|c| *c as u64).collect(),
+                    });
+                let schema = self.try_encode_schema(schema.as_ref())?;
+                let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
+                Ok(NodeKind::Memory(gen::MemoryExecNode {
+                    partitions,
+                    schema,
+                    projection,
+                    show_sizes: memory.show_sizes(),
+                    sort_information,
+                }))
+            } else {
+                internal_err!("Unable to encode DataSourceExec: {data_source_exec:?} for DataSource: {source:?}. This was likely caused by a bug in Sail's code and likely should not happen. We would welcome that you file an bug report in our issue tracker.")
+            }?
         } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
             let data = write_record_batches(&values.data(), &values.schema())?;
             let schema = self.try_encode_schema(values.schema().as_ref())?;

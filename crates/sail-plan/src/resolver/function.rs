@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{plan_err, DFSchemaRef, DataFusionError, Result, TableReference};
+use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
     expr, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, Projection, ScalarUDF,
 };
@@ -208,11 +209,13 @@ impl PlanResolver<'_> {
                 );
                 Ok(Expr::AggregateFunction(expr::AggregateFunction {
                     func: Arc::new(AggregateUDF::from(udaf)),
-                    args: arguments,
-                    distinct: false,
-                    filter: None,
-                    order_by: None,
-                    null_treatment: None,
+                    params: AggregateFunctionParams {
+                        args: arguments,
+                        distinct: false,
+                        filter: None,
+                        order_by: None,
+                        null_treatment: None,
+                    },
                 }))
             }
         }
