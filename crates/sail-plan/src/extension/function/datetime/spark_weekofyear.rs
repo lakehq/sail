@@ -6,7 +6,7 @@ use datafusion::arrow::array::{AsArray, PrimitiveBuilder};
 use datafusion::arrow::datatypes::{DataType, Int64Type, TimeUnit, UInt32Type};
 use datafusion::functions::datetime::to_timestamp::ToTimestampNanosFunc;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 /// Returns the week of the year of the given date expressed as the number of days from 1970-01-01.
 /// A week is considered to start on a Monday and week 1 is the first week with > 3 days.
@@ -52,22 +52,22 @@ impl ScalarUDFImpl for SparkWeekOfYear {
         Ok(DataType::UInt32)
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-        if args.len() != 1 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.len() != 1 {
             return exec_err!(
                 "Spark `weekofyear` function requires 1 argument, got {}",
-                args.len()
+                args.args.len()
             );
         }
 
-        let timestamp_nanos = match args[0].data_type() {
-            DataType::Int32 | DataType::Int64 => args[0]
+        let timestamp_nanos = match args.args[0].data_type() {
+            DataType::Int32 | DataType::Int64 => args.args[0]
                 .cast_to(
                     &DataType::Timestamp(TimeUnit::Nanosecond, Some(self.timezone.clone())),
                     None,
                 )?
                 .cast_to(&DataType::Int64, None),
-            DataType::Date64 | DataType::Date32 | DataType::Timestamp(_, None) => args[0]
+            DataType::Date64 | DataType::Date32 | DataType::Timestamp(_, None) => args.args[0]
                 .cast_to(
                     &DataType::Timestamp(TimeUnit::Nanosecond, Some(self.timezone.clone())),
                     None,
@@ -75,7 +75,7 @@ impl ScalarUDFImpl for SparkWeekOfYear {
                 .cast_to(&DataType::Int64, None),
             DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
                 ToTimestampNanosFunc::new()
-                    .invoke_batch(args, number_rows)?
+                    .invoke_with_args(args)?
                     .cast_to(
                         &DataType::Timestamp(TimeUnit::Nanosecond, Some(self.timezone.clone())),
                         None,
