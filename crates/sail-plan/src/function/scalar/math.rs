@@ -26,7 +26,7 @@ use crate::utils::ItemTaker;
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-fn plus(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn spark_plus(input: FunctionInput) -> PlanResult<expr::Expr> {
     let FunctionInput {
         arguments, schema, ..
     } = input;
@@ -104,7 +104,7 @@ fn plus(input: FunctionInput) -> PlanResult<expr::Expr> {
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-fn minus(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn spark_minus(input: FunctionInput) -> PlanResult<expr::Expr> {
     let FunctionInput {
         arguments, schema, ..
     } = input;
@@ -149,6 +149,78 @@ fn minus(input: FunctionInput) -> PlanResult<expr::Expr> {
 }
 
 /// Arguments:
+///   - left: A numeric or INTERVAL expression.
+///   - right: A numeric expression or INTERVAL expression.
+///
+/// You may not specify an INTERVAL for both arguments.
+///
+/// Returns:
+///   - If both left and right are DECIMAL, the result is DECIMAL.
+///   - If left or right is an INTERVAL, the result is of the same type.
+///   - If both left and right are integral numeric types, the result is the larger of the two types.
+///   - In all other cases the result is a DOUBLE.
+///
+/// All of the above conditions should be handled by the DataFusion.
+/// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
+///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
+fn spark_multiply(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput {
+        arguments, schema, ..
+    } = input;
+
+    let (left, right) = arguments.two()?;
+    let (left_type, right_type) = (left.get_type(schema), right.get_type(schema));
+    match (left_type, right_type) {
+        // TODO: In case getting the type fails, we don't want to fail the query.
+        //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
+        (Err(_), _) | (_, Err(_)) => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left),
+            op: Operator::Multiply,
+            right: Box::new(right),
+        })),
+        (Ok(left_type), Ok(right_type)) => {
+            // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
+            //  Seems to be a bug in DataFusion.
+            match (left_type, right_type) {
+                (DataType::Duration(TimeUnit::Microsecond), _) => {
+                    // Match duration because we cast Spark's DayTime interval to Duration.
+                    Ok(expr::Expr::Cast(expr::Cast {
+                        expr: Box::new(expr::Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(expr::Expr::Cast(expr::Cast {
+                                expr: Box::new(left),
+                                data_type: DataType::Int64,
+                            })),
+                            op: Operator::Multiply,
+                            right: Box::new(right),
+                        })),
+                        data_type: DataType::Duration(TimeUnit::Microsecond),
+                    }))
+                }
+                (_, DataType::Duration(TimeUnit::Microsecond)) => {
+                    // Match duration because we cast Spark's DayTime interval to Duration.
+                    Ok(expr::Expr::Cast(expr::Cast {
+                        expr: Box::new(expr::Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(left),
+                            op: Operator::Multiply,
+                            right: Box::new(expr::Expr::Cast(expr::Cast {
+                                expr: Box::new(right),
+                                data_type: DataType::Int64,
+                            })),
+                        })),
+                        data_type: DataType::Duration(TimeUnit::Microsecond),
+                    }))
+                }
+                _ => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(left),
+                    op: Operator::Multiply,
+                    right: Box::new(right),
+                })),
+            }
+        }
+    }
+}
+
+/// Arguments:
 ///   - dividend: A numeric or INTERVAL expression.
 ///   - divisor: A numeric expression.
 ///
@@ -177,34 +249,104 @@ fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
             right: Box::new(divisor),
         })),
         (Ok(dividend_type), Ok(divisor_type)) => {
+            // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
+            //  Seems to be a bug in DataFusion.
             match (dividend_type, divisor_type) {
-                (DataType::Decimal128(_, _), DataType::Decimal128(_, _))
-                            | (DataType::Decimal128(_, _), DataType::Decimal256(_, _))
-                            | (DataType::Decimal256(_, _), DataType::Decimal128(_, _))
-                            | (DataType::Decimal256(_, _), DataType::Decimal256(_, _))
-                            | (DataType::Interval(IntervalUnit::YearMonth), _)
-                            | (DataType::Interval(IntervalUnit::DayTime), _)
-                            // Match duration because we cast Spark's DayTime interval to Duration in `sail-spark-connect`.
-                            | (DataType::Duration(TimeUnit::Microsecond), _) => {
-                            Ok(expr::Expr::BinaryExpr(BinaryExpr {
-                                left: Box::new(dividend),
-                                op: Operator::Divide,
-                                right: Box::new(divisor),
-                            }))
-                        }
-                        _ => {
-                            Ok(expr::Expr::Cast(expr::Cast {
-                                expr: Box::new(expr::Expr::BinaryExpr(BinaryExpr {
-                                    left: Box::new(dividend),
-                                    op: Operator::Divide,
-                                    right: Box::new(divisor),
-                                })),
-                                data_type: DataType::Float64,
-                            }))
-                        }
+                (DataType::Decimal128(_, _), _)
+                | (_, DataType::Decimal128(_, _))
+                | (DataType::Decimal256(_, _), _)
+                | (_, DataType::Decimal256(_, _))
+                | (DataType::Interval(IntervalUnit::YearMonth), _)
+                | (DataType::Interval(IntervalUnit::DayTime), _) => {
+                    // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
+                    //  See `test_divide` in python/pysail/tests/spark/test_math.py
+                    Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(dividend),
+                        op: Operator::Divide,
+                        right: Box::new(divisor),
+                    }))
+                }
+                (DataType::Duration(TimeUnit::Microsecond), _) => {
+                    // Match duration because we cast Spark's DayTime interval to Duration.
+                    Ok(expr::Expr::Cast(expr::Cast {
+                        expr: Box::new(expr::Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(expr::Expr::Cast(expr::Cast {
+                                expr: Box::new(dividend),
+                                data_type: DataType::Int64,
+                            })),
+                            op: Operator::Divide,
+                            right: Box::new(divisor),
+                        })),
+                        data_type: DataType::Duration(TimeUnit::Microsecond),
+                    }))
+                }
+                _ => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(expr::Expr::Cast(expr::Cast {
+                        expr: Box::new(dividend),
+                        data_type: DataType::Float64,
+                    })),
+                    op: Operator::Divide,
+                    right: Box::new(expr::Expr::Cast(expr::Cast {
+                        expr: Box::new(divisor),
+                        data_type: DataType::Float64,
+                    })),
+                })),
             }
         }
     }
+}
+
+/// Returns the integral part of the division of dividend by divisor.
+///
+/// Arguments:
+///   - dividend: An expression that evaluates to a numeric or interval.
+///   - divisor: A matching interval type if dividend is an interval, a numeric otherwise.
+///
+/// Returns:
+///   A BIGINT
+///
+fn spark_div(input: FunctionInput) -> PlanResult<expr::Expr> {
+    let FunctionInput {
+        arguments, schema, ..
+    } = input;
+
+    let (dividend, divisor) = arguments.two()?;
+    let (dividend_type, divisor_type) = (dividend.get_type(schema), divisor.get_type(schema));
+    let expr = match (dividend_type, divisor_type) {
+        // TODO: In case getting the type fails, we don't want to fail the query.
+        //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
+        (Err(_), _) | (_, Err(_)) => expr::Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(dividend),
+            op: Operator::Divide,
+            right: Box::new(divisor),
+        }),
+        (Ok(dividend_type), Ok(divisor_type)) => match (&dividend_type, &divisor_type) {
+            // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
+            //  Seems to be a bug in DataFusion.
+            (DataType::Duration(_), DataType::Duration(_)) => expr::Expr::BinaryExpr(BinaryExpr {
+                // Match duration because we cast Spark's DayTime interval to Duration.
+                left: Box::new(expr::Expr::Cast(expr::Cast {
+                    expr: Box::new(dividend),
+                    data_type: DataType::Int64,
+                })),
+                op: Operator::Divide,
+                right: Box::new(expr::Expr::Cast(expr::Cast {
+                    expr: Box::new(divisor),
+                    data_type: DataType::Int64,
+                })),
+            }),
+            _ => expr::Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(dividend),
+                op: Operator::Divide,
+                right: Box::new(divisor),
+            }),
+        },
+    };
+    // We need this final cast because we are doing integer division.
+    Ok(expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr),
+        data_type: DataType::Int64,
+    }))
 }
 
 fn ceil(num: expr::Expr) -> expr::Expr {
@@ -232,7 +374,7 @@ fn power(base: expr::Expr, exponent: expr::Expr) -> expr::Expr {
 fn expm1(input: FunctionInput) -> PlanResult<expr::Expr> {
     let num = input.arguments.one()?;
     let name = input.argument_names.to_vec().one()?;
-    minus(FunctionInput {
+    spark_minus(FunctionInput {
         arguments: vec![
             expr_fn::exp(num),
             expr::Expr::Literal(ScalarValue::Float64(Some(1.0))),
@@ -305,9 +447,9 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
 
     vec![
         ("%", F::binary_op(Operator::Modulo)),
-        ("*", F::binary_op(Operator::Multiply)),
-        ("+", F::custom(plus)),
-        ("-", F::custom(minus)),
+        ("*", F::custom(spark_multiply)),
+        ("+", F::custom(spark_plus)),
+        ("-", F::custom(spark_minus)),
         ("/", F::custom(spark_divide)),
         ("abs", F::udf(SparkAbs::new())),
         ("acos", F::unary(expr_fn::acos)),
@@ -328,7 +470,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("cot", F::unary(expr_fn::cot)),
         ("csc", F::unknown("csc")),
         ("degrees", F::unary(expr_fn::degrees)),
-        ("div", F::custom(spark_divide)),
+        ("div", F::custom(spark_div)),
         ("e", F::unknown("e")),
         ("exp", F::unary(expr_fn::exp)),
         ("expm1", F::custom(expm1)),

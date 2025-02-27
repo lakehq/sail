@@ -765,7 +765,9 @@ fn parse_interval_day_time_string(
     } else {
         microseconds
     };
-    Ok(microseconds_to_interval(n))
+    Ok(spec::Literal::DurationMicrosecond {
+        microseconds: Some(n),
+    })
 }
 
 enum StandardIntervalKind {
@@ -1001,28 +1003,9 @@ fn parse_multi_unit_interval(
             } else {
                 microseconds
             };
-            Ok(microseconds_to_interval(n))
-        }
-    }
-}
-
-pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
-    let total_days = microseconds / (24 * 60 * 60 * 1_000_000);
-    let remaining_micros = microseconds % (24 * 60 * 60 * 1_000_000);
-    if remaining_micros % 1000 == 0 {
-        spec::Literal::IntervalDayTime {
-            value: Some(spec::IntervalDayTime {
-                days: total_days as i32,
-                milliseconds: (remaining_micros / 1000) as i32,
-            }),
-        }
-    } else {
-        spec::Literal::IntervalMonthDayNano {
-            value: Some(spec::IntervalMonthDayNano {
-                months: 0,
-                days: total_days as i32,
-                nanoseconds: remaining_micros * 1000,
-            }),
+            Ok(spec::Literal::DurationMicrosecond {
+                microseconds: Some(n),
+            })
         }
     }
 }
