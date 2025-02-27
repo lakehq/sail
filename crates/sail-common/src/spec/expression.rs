@@ -125,8 +125,8 @@ impl From<String> for Identifier {
     }
 }
 
-impl<'a> From<&'a str> for Identifier {
-    fn from(s: &'a str) -> Self {
+impl From<&str> for Identifier {
+    fn from(s: &str) -> Self {
         Self(s.to_string())
     }
 }
@@ -137,9 +137,9 @@ impl From<Identifier> for String {
     }
 }
 
-impl<'a> From<&'a Identifier> for &'a str {
-    fn from(id: &'a Identifier) -> Self {
-        &id.0
+impl AsRef<str> for Identifier {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 
@@ -148,48 +148,35 @@ impl<'a> From<&'a Identifier> for &'a str {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ObjectName(Vec<Identifier>);
 
-impl From<Vec<String>> for ObjectName {
-    fn from(name: Vec<String>) -> Self {
-        Self(name.into_iter().map(Identifier::from).collect())
+impl ObjectName {
+    pub fn bare(name: impl Into<Identifier>) -> Self {
+        Self(vec![name.into()])
+    }
+
+    pub fn child(self, name: impl Into<Identifier>) -> Self {
+        let mut names = self.0;
+        names.push(name.into());
+        Self(names)
+    }
+
+    pub fn parts(&self) -> &[Identifier] {
+        &self.0
+    }
+}
+
+impl<T, S> From<T> for ObjectName
+where
+    T: IntoIterator<Item = S>,
+    S: Into<Identifier>,
+{
+    fn from(value: T) -> Self {
+        Self(value.into_iter().map(|x| x.into()).collect())
     }
 }
 
 impl From<ObjectName> for Vec<String> {
     fn from(name: ObjectName) -> Self {
         name.0.into_iter().map(String::from).collect()
-    }
-}
-
-impl<'a> From<&'a ObjectName> for Vec<&'a str> {
-    fn from(name: &'a ObjectName) -> Self {
-        name.0
-            .iter()
-            .map(|part| {
-                let part: &str = part.into();
-                part
-            })
-            .collect()
-    }
-}
-
-impl ObjectName {
-    pub fn new_qualified(name: Identifier, mut qualifier: Vec<Identifier>) -> Self {
-        qualifier.push(name);
-        Self(qualifier)
-    }
-
-    pub fn new_unqualified(name: Identifier) -> Self {
-        Self(vec![name])
-    }
-
-    pub fn child(self, name: Identifier) -> Self {
-        let mut names = self.0;
-        names.push(name);
-        Self(names)
-    }
-
-    pub fn parts(&self) -> &[Identifier] {
-        &self.0
     }
 }
 
@@ -220,8 +207,11 @@ pub enum NullOrdering {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnresolvedFunction {
-    pub function_name: String,
+    pub function_name: ObjectName,
+    /// A list of positional arguments.
     pub arguments: Vec<Expr>,
+    /// A list of named arguments, which must come after positional arguments.
+    pub named_arguments: Vec<(Identifier, Expr)>,
     pub is_distinct: bool,
     pub is_user_defined_function: bool,
     pub ignore_nulls: Option<bool>,
@@ -268,7 +258,7 @@ pub enum WindowFrameBoundary {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommonInlineUserDefinedFunction {
-    pub function_name: String,
+    pub function_name: Identifier,
     pub deterministic: bool,
     pub arguments: Vec<Expr>,
     #[serde(flatten)]
@@ -301,7 +291,7 @@ pub enum FunctionDefinition {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommonInlineUserDefinedTableFunction {
-    pub function_name: String,
+    pub function_name: Identifier,
     pub deterministic: bool,
     pub arguments: Vec<Expr>,
     #[serde(flatten)]

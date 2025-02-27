@@ -5,8 +5,11 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "current_date",
+            "functionName": [
+              "current_date"
+            ],
             "arguments": [],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "ignoreNulls": null,
@@ -21,8 +24,11 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "current_timestamp",
+            "functionName": [
+              "current_timestamp"
+            ],
             "arguments": [],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "ignoreNulls": null,

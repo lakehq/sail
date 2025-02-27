@@ -41,11 +41,15 @@
                       },
                       "condition": {
                         "unresolvedFunction": {
-                          "functionName": ">",
+                          "functionName": [
+                            ">"
+                          ],
                           "arguments": [
                             {
                               "unresolvedFunction": {
-                                "functionName": "-",
+                                "functionName": [
+                                  "-"
+                                ],
                                 "arguments": [
                                   {
                                     "unresolvedAttribute": {
@@ -64,6 +68,7 @@
                                     }
                                   }
                                 ],
+                                "namedArguments": [],
                                 "isDistinct": false,
                                 "isUserDefinedFunction": false,
                                 "ignoreNulls": null,
@@ -79,6 +84,7 @@
                               }
                             }
                           ],
+                          "namedArguments": [],
                           "isDistinct": false,
                           "isUserDefinedFunction": false,
                           "ignoreNulls": null,
@@ -93,7 +99,9 @@
                   "grouping": [
                     {
                       "unresolvedFunction": {
-                        "functionName": "-",
+                        "functionName": [
+                          "-"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -112,6 +120,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,

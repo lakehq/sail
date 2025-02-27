@@ -403,8 +403,11 @@
                                 "expressions": [
                                   {
                                     "unresolvedFunction": {
-                                      "functionName": "current_date",
+                                      "functionName": [
+                                        "current_date"
+                                      ],
                                       "arguments": [],
+                                      "namedArguments": [],
                                       "isDistinct": false,
                                       "isUserDefinedFunction": false,
                                       "ignoreNulls": null,
@@ -468,8 +471,11 @@
                       "timestamp": {
                         "value": {
                           "unresolvedFunction": {
-                            "functionName": "current_date",
+                            "functionName": [
+                              "current_date"
+                            ],
                             "arguments": [],
+                            "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
                             "ignoreNulls": null,
@@ -700,8 +706,11 @@
                                 "expressions": [
                                   {
                                     "unresolvedFunction": {
-                                      "functionName": "current_date",
+                                      "functionName": [
+                                        "current_date"
+                                      ],
                                       "arguments": [],
+                                      "namedArguments": [],
                                       "isDistinct": false,
                                       "isUserDefinedFunction": false,
                                       "ignoreNulls": null,
@@ -765,8 +774,11 @@
                       "timestamp": {
                         "value": {
                           "unresolvedFunction": {
-                            "functionName": "current_date",
+                            "functionName": [
+                              "current_date"
+                            ],
                             "arguments": [],
+                            "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
                             "ignoreNulls": null,
@@ -997,8 +1009,11 @@
                                 "expressions": [
                                   {
                                     "unresolvedFunction": {
-                                      "functionName": "current_date",
+                                      "functionName": [
+                                        "current_date"
+                                      ],
                                       "arguments": [],
+                                      "namedArguments": [],
                                       "isDistinct": false,
                                       "isUserDefinedFunction": false,
                                       "ignoreNulls": null,
@@ -1062,8 +1077,11 @@
                       "timestamp": {
                         "value": {
                           "unresolvedFunction": {
-                            "functionName": "current_date",
+                            "functionName": [
+                              "current_date"
+                            ],
                             "arguments": [],
+                            "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
                             "ignoreNulls": null,
@@ -1294,8 +1312,11 @@
                                 "expressions": [
                                   {
                                     "unresolvedFunction": {
-                                      "functionName": "current_date",
+                                      "functionName": [
+                                        "current_date"
+                                      ],
                                       "arguments": [],
+                                      "namedArguments": [],
                                       "isDistinct": false,
                                       "isUserDefinedFunction": false,
                                       "ignoreNulls": null,
@@ -1415,8 +1436,11 @@
                       "timestamp": {
                         "value": {
                           "unresolvedFunction": {
-                            "functionName": "current_date",
+                            "functionName": [
+                              "current_date"
+                            ],
                             "arguments": [],
+                            "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
                             "ignoreNulls": null,
@@ -1600,6 +1624,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "options": []
                       },
                       "isStreaming": false
@@ -1657,6 +1682,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "options": []
                       },
                       "isStreaming": false
@@ -1870,7 +1896,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "overlay",
+                    "functionName": [
+                      "overlay"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -1901,6 +1929,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -1932,7 +1961,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "overlay",
+                    "functionName": [
+                      "overlay"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -1956,6 +1987,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -1987,7 +2019,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "overlay",
+                    "functionName": [
+                      "overlay"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -2011,6 +2045,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2042,7 +2077,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "overlay",
+                    "functionName": [
+                      "overlay"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -2073,6 +2110,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2111,7 +2149,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "trim",
+                    "functionName": [
+                      "trim"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -2128,6 +2168,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2159,7 +2200,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "trim",
+                    "functionName": [
+                      "trim"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -2176,6 +2219,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2207,7 +2251,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "trim",
+                    "functionName": [
+                      "trim"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -2217,6 +2263,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2248,7 +2295,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "ltrim",
+                    "functionName": [
+                      "ltrim"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -2265,6 +2314,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2296,7 +2346,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "ltrim",
+                    "functionName": [
+                      "ltrim"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -2306,6 +2358,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2337,7 +2390,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "rtrim",
+                    "functionName": [
+                      "rtrim"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -2354,6 +2409,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2385,7 +2441,9 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "rtrim",
+                    "functionName": [
+                      "rtrim"
+                    ],
                     "arguments": [
                       {
                         "literal": {
@@ -2395,6 +2453,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2426,12 +2485,15 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "abs",
+                    "functionName": [
+                      "abs"
+                    ],
                     "arguments": [
                       {
                         "placeholder": ":1Abc"
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2463,12 +2525,15 @@
               "expressions": [
                 {
                   "unresolvedFunction": {
-                    "functionName": "abs",
+                    "functionName": [
+                      "abs"
+                    ],
                     "arguments": [
                       {
                         "placeholder": "?"
                       }
                     ],
+                    "namedArguments": [],
                     "isDistinct": false,
                     "isUserDefinedFunction": false,
                     "ignoreNulls": null,
@@ -2719,7 +2784,9 @@
                             "expressions": [
                               {
                                 "unresolvedFunction": {
-                                  "functionName": "max",
+                                  "functionName": [
+                                    "max"
+                                  ],
                                   "arguments": [
                                     {
                                       "unresolvedAttribute": {
@@ -2730,6 +2797,7 @@
                                       }
                                     }
                                   ],
+                                  "namedArguments": [],
                                   "isDistinct": false,
                                   "isUserDefinedFunction": false,
                                   "ignoreNulls": null,
@@ -2796,6 +2864,7 @@
                           }
                         }
                       ],
+                      "namedArguments": [],
                       "tableAlias": [
                         "expl"
                       ],
@@ -2826,6 +2895,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "tableAlias": [
                     "jtup"
                   ],
@@ -2957,6 +3027,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "options": []
                   },
                   "isStreaming": false
@@ -2988,50 +3059,446 @@
     {
       "input": "select * from my_tvf(2, arg1 => 'value1', arg2 => true)",
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "my_tvf"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "int32": {
+                            "value": 2
+                          }
+                        }
+                      }
+                    ],
+                    "namedArguments": [
+                      [
+                        "arg1",
+                        {
+                          "literal": {
+                            "utf8": {
+                              "value": "value1"
+                            }
+                          }
+                        }
+                      ],
+                      [
+                        "arg2",
+                        {
+                          "literal": {
+                            "boolean": {
+                              "value": true
+                            }
+                          }
+                        }
+                      ]
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from my_tvf(2, table (v1), arg1 => table (select 1))",
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "my_tvf"
+                    ],
+                    "arguments": [
+                      {
+                        "literal": {
+                          "int32": {
+                            "value": 2
+                          }
+                        }
+                      },
+                      {
+                        "table": {
+                          "expr": {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "v1"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "namedArguments": [
+                      [
+                        "arg1",
+                        {
+                          "table": {
+                            "expr": {
+                              "scalarSubquery": {
+                                "subquery": {
+                                  "project": {
+                                    "input": {
+                                      "empty": {
+                                        "produceOneRow": true
+                                      },
+                                      "planId": null,
+                                      "sourceInfo": null
+                                    },
+                                    "expressions": [
+                                      {
+                                        "literal": {
+                                          "int32": {
+                                            "value": 1
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "planId": null,
+                                  "sourceInfo": null
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from my_tvf(arg1 => 'value1', 2, arg2 => true)",
       "output": {
-        "failure": "not implemented: named function arguments"
+        "failure": "invalid argument: positional argument after named argument"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => 'value1', arg2 => true)",
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "my_tvf"
+                    ],
+                    "arguments": [],
+                    "namedArguments": [
+                      [
+                        "arg1",
+                        {
+                          "literal": {
+                            "utf8": {
+                              "value": "value1"
+                            }
+                          }
+                        }
+                      ],
+                      [
+                        "arg2",
+                        {
+                          "literal": {
+                            "boolean": {
+                              "value": true
+                            }
+                          }
+                        }
+                      ]
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table (v1), 2, arg2 => true)",
       "output": {
-        "failure": "not implemented: named function arguments"
+        "failure": "invalid argument: positional argument after named argument"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table (v1), arg2 => table (select 1))",
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "my_tvf"
+                    ],
+                    "arguments": [],
+                    "namedArguments": [
+                      [
+                        "arg1",
+                        {
+                          "table": {
+                            "expr": {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "v1"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      [
+                        "arg2",
+                        {
+                          "table": {
+                            "expr": {
+                              "scalarSubquery": {
+                                "subquery": {
+                                  "project": {
+                                    "input": {
+                                      "empty": {
+                                        "produceOneRow": true
+                                      },
+                                      "planId": null,
+                                      "sourceInfo": null
+                                    },
+                                    "expressions": [
+                                      {
+                                        "literal": {
+                                          "int32": {
+                                            "value": 1
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  "planId": null,
+                                  "sourceInfo": null
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table v1)",
       "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_FUNCTION_IDENTIFIER_ARGUMENT_MISSING_PARENTHESES] Invalid SQL syntax: Syntax error: call to table-valued function is invalid because parentheses are missing around the provided TABLE argument `v1`; please surround this with parentheses and try again.(line 1, pos 29)\n\n== SQL ==\nselect * from my_tvf(arg1 => table v1)\n-----------------------------^^^\n",
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "my_tvf"
+                    ],
+                    "arguments": [],
+                    "namedArguments": [
+                      [
+                        "arg1",
+                        {
+                          "table": {
+                            "expr": {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "v1"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from my_tvf(group => 'abc')",
       "output": {
-        "failure": "not implemented: named function arguments"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "udtf": {
+                    "name": [
+                      "my_tvf"
+                    ],
+                    "arguments": [],
+                    "namedArguments": [
+                      [
+                        "group",
+                        {
+                          "literal": {
+                            "utf8": {
+                              "value": "abc"
+                            }
+                          }
+                        }
+                      ]
+                    ],
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -3090,6 +3557,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "options": []
                   },
                   "isStreaming": false
@@ -3139,6 +3607,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "options": []
                   },
                   "isStreaming": false
@@ -3191,6 +3660,7 @@
                         }
                       }
                     ],
+                    "namedArguments": [],
                     "options": []
                   },
                   "isStreaming": false
@@ -3313,9 +3783,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "cross",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -3385,6 +3854,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "tableAlias": [
                     "expl"
                   ],
@@ -3453,6 +3923,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "tableAlias": [
                     "posexpl"
                   ],
@@ -3588,7 +4059,9 @@
                 "cast": {
                   "expr": {
                     "unresolvedFunction": {
-                      "functionName": "/",
+                      "functionName": [
+                        "/"
+                      ],
                       "arguments": [
                         {
                           "literal": {
@@ -3605,6 +4078,7 @@
                           }
                         }
                       ],
+                      "namedArguments": [],
                       "isDistinct": false,
                       "isUserDefinedFunction": false,
                       "ignoreNulls": null,
@@ -3889,7 +4363,9 @@
                   },
                   "condition": {
                     "unresolvedFunction": {
-                      "functionName": "==",
+                      "functionName": [
+                        "=="
+                      ],
                       "arguments": [
                         {
                           "unresolvedAttribute": {
@@ -3935,6 +4411,7 @@
                           }
                         }
                       ],
+                      "namedArguments": [],
                       "isDistinct": false,
                       "isUserDefinedFunction": false,
                       "ignoreNulls": null,
@@ -4290,7 +4767,9 @@
               ],
               "having": {
                 "unresolvedFunction": {
-                  "functionName": "<",
+                  "functionName": [
+                    "<"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -4308,6 +4787,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
                   "ignoreNulls": null,
@@ -4349,7 +4829,9 @@
                   },
                   "condition": {
                     "unresolvedFunction": {
-                      "functionName": ">=",
+                      "functionName": [
+                        ">="
+                      ],
                       "arguments": [
                         {
                           "unresolvedAttribute": {
@@ -4367,6 +4849,7 @@
                           }
                         }
                       ],
+                      "namedArguments": [],
                       "isDistinct": false,
                       "isUserDefinedFunction": false,
                       "ignoreNulls": null,
@@ -4429,7 +4912,9 @@
                   },
                   "condition": {
                     "unresolvedFunction": {
-                      "functionName": "<=",
+                      "functionName": [
+                        "<="
+                      ],
                       "arguments": [
                         {
                           "unresolvedAttribute": {
@@ -4447,6 +4932,7 @@
                           }
                         }
                       ],
+                      "namedArguments": [],
                       "isDistinct": false,
                       "isUserDefinedFunction": false,
                       "ignoreNulls": null,
@@ -4509,7 +4995,9 @@
                   },
                   "condition": {
                     "unresolvedFunction": {
-                      "functionName": "<",
+                      "functionName": [
+                        "<"
+                      ],
                       "arguments": [
                         {
                           "unresolvedAttribute": {
@@ -4527,6 +5015,7 @@
                           }
                         }
                       ],
+                      "namedArguments": [],
                       "isDistinct": false,
                       "isUserDefinedFunction": false,
                       "ignoreNulls": null,

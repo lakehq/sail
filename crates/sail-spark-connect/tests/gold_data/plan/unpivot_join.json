@@ -78,9 +78,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "inner",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -185,9 +184,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "inner",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -292,9 +290,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "inner",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -416,17 +413,15 @@
                         "planId": null,
                         "sourceInfo": null
                       },
-                      "joinCondition": null,
                       "joinType": "inner",
-                      "usingColumns": [],
+                      "joinCriteria": null,
                       "joinDataType": null
                     },
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "cross",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,

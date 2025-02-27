@@ -248,13 +248,25 @@ impl TryFrom<RelType> for RelationNode {
                         is_right_struct,
                     }
                 });
-                let using_columns = using_columns.into_iter().map(|x| x.into()).collect();
+                let using_columns = using_columns
+                    .into_iter()
+                    .map(|x| x.into())
+                    .collect::<Vec<_>>();
+                let join_criteria = match (join_condition, using_columns.is_empty()) {
+                    (Some(join_condition), true) => Some(spec::JoinCriteria::On(join_condition)),
+                    (None, false) => Some(spec::JoinCriteria::Using(using_columns)),
+                    (None, true) => None,
+                    (Some(_), false) => {
+                        return Err(SparkError::invalid(
+                            "join with both condition and using columns",
+                        ))
+                    }
+                };
                 Ok(RelationNode::Query(spec::QueryNode::Join(spec::Join {
                     left: Box::new((*left).try_into()?),
                     right: Box::new((*right).try_into()?),
-                    join_condition,
                     join_type,
-                    using_columns,
+                    join_criteria,
                     join_data_type,
                 })))
             }
@@ -1168,8 +1180,9 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
-                        .child(table_name.into()),
+                    Some(x) => {
+                        from_ast_object_name(parse_object_name(x.as_str())?)?.child(table_name)
+                    }
                     None => from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::ListColumns { table })
@@ -1186,8 +1199,9 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
-                        .child(table_name.into()),
+                    Some(x) => {
+                        from_ast_object_name(parse_object_name(x.as_str())?)?.child(table_name)
+                    }
                     None => from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::GetTable { table })
@@ -1198,9 +1212,10 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let function = match db_name {
-                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
-                        .child(function_name.into()),
-                    None => spec::ObjectName::new_unqualified(function_name.into()),
+                    Some(x) => {
+                        from_ast_object_name(parse_object_name(x.as_str())?)?.child(function_name)
+                    }
+                    None => spec::ObjectName::bare(function_name),
                 };
                 Ok(spec::CommandNode::GetFunction { function })
             }
@@ -1216,8 +1231,9 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
-                        .child(table_name.into()),
+                    Some(x) => {
+                        from_ast_object_name(parse_object_name(x.as_str())?)?.child(table_name)
+                    }
                     None => from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::TableExists { table })
@@ -1228,9 +1244,10 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let function = match db_name {
-                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
-                        .child(function_name.into()),
-                    None => spec::ObjectName::new_unqualified(function_name.into()),
+                    Some(x) => {
+                        from_ast_object_name(parse_object_name(x.as_str())?)?.child(function_name)
+                    }
+                    None => spec::ObjectName::bare(function_name),
                 };
                 Ok(spec::CommandNode::FunctionExists { function })
             }

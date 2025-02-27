@@ -14,14 +14,14 @@ impl PlanResolver<'_> {
         &self,
         name: &spec::ObjectName,
     ) -> PlanResult<SchemaReference> {
-        let names: Vec<&str> = name.into();
-        match names[..] {
+        let names = name.parts();
+        match names {
             [a] => Ok(SchemaReference::Bare {
-                schema: Arc::from(a),
+                schema: Arc::from(a.as_ref()),
             }),
             [a, b] => Ok(SchemaReference::Full {
-                catalog: Arc::from(a),
-                schema: Arc::from(b),
+                catalog: Arc::from(a.as_ref()),
+                schema: Arc::from(b.as_ref()),
             }),
             _ => Err(PlanError::invalid(format!("schema reference: {:?}", names))),
         }
@@ -31,33 +31,33 @@ impl PlanResolver<'_> {
         &self,
         name: &spec::ObjectName,
     ) -> PlanResult<TableReference> {
-        let names: Vec<&str> = name.into();
-        match names[..] {
+        let names = name.parts();
+        match names {
             [a] => Ok(TableReference::Bare {
-                table: Arc::from(a),
+                table: Arc::from(a.as_ref()),
             }),
             [a, b] => Ok(TableReference::Partial {
-                schema: Arc::from(a),
-                table: Arc::from(b),
+                schema: Arc::from(a.as_ref()),
+                table: Arc::from(b.as_ref()),
             }),
             [a, b, c] => Ok(TableReference::Full {
-                catalog: Arc::from(a),
-                schema: Arc::from(b),
-                table: Arc::from(c),
+                catalog: Arc::from(a.as_ref()),
+                schema: Arc::from(b.as_ref()),
+                table: Arc::from(c.as_ref()),
             }),
             _ => Err(PlanError::invalid(format!("table reference: {:?}", names))),
         }
     }
 
-    pub(super) async fn resolve_schema_projection(
+    pub(super) async fn resolve_schema_projection<T: AsRef<str>>(
         &self,
         schema: SchemaRef,
-        columns: &[spec::Identifier],
+        columns: &[T],
     ) -> PlanResult<SchemaRef> {
         let fields = columns
             .iter()
             .map(|column| {
-                let column: &str = column.into();
+                let column = column.as_ref();
                 let matches = schema
                     .fields()
                     .iter()
@@ -130,15 +130,15 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(super) fn resolve_columns(
+    pub(super) fn resolve_columns<T: AsRef<str>>(
         &self,
         schema: &DFSchemaRef,
-        names: Vec<&str>,
+        names: &[T],
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<Column>> {
         names
             .iter()
-            .map(|name| self.resolve_one_column(schema, name, state))
+            .map(|name| self.resolve_one_column(schema, name.as_ref(), state))
             .collect::<PlanResult<Vec<Column>>>()
     }
 
