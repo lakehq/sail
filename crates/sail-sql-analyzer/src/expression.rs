@@ -911,10 +911,10 @@ fn from_ast_grouping_set(grouping: GroupingSet) -> SqlResult<Vec<spec::Expr>> {
 pub(crate) fn from_ast_identifier_list(identifiers: IdentList) -> SqlResult<Vec<spec::Identifier>> {
     let IdentList {
         left: _,
-        columns,
+        names,
         right: _,
     } = identifiers;
-    Ok(columns.into_items().map(|x| x.value.into()).collect())
+    Ok(names.into_items().map(|x| x.value.into()).collect())
 }
 
 fn from_ast_quantified_pattern(

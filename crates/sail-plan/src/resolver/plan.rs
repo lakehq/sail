@@ -153,9 +153,6 @@ impl PlanResolver<'_> {
                     .await?
             }
             QueryNode::Sample(sample) => self.resolve_query_sample(sample, state).await?,
-            QueryNode::Offset { input, offset } => {
-                self.resolve_query_offset(*input, offset, state).await?
-            }
             QueryNode::Deduplicate(deduplicate) => {
                 self.resolve_query_deduplicate(deduplicate, state).await?
             }
@@ -601,6 +598,7 @@ impl PlanResolver<'_> {
                 )
                 .await
             }
+            CommandNode::MergeInto { .. } => Err(PlanError::todo("CommandNode::MergeInto")),
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
@@ -642,7 +640,18 @@ impl PlanResolver<'_> {
         table: spec::ReadNamedTable,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let spec::ReadNamedTable { name, options } = table;
+        let spec::ReadNamedTable {
+            name,
+            temporal,
+            sample,
+            options,
+        } = table;
+        if temporal.is_some() {
+            return Err(PlanError::todo("read table AS OF clause"));
+        }
+        if sample.is_some() {
+            return Err(PlanError::todo("read table TABLESAMPLE clause"));
+        }
 
         let table_reference = self.resolve_table_reference(&name)?;
         if let Some(cte) = state.get_cte(&table_reference) {
@@ -1236,14 +1245,27 @@ impl PlanResolver<'_> {
     async fn resolve_query_limit(
         &self,
         input: spec::QueryPlan,
-        skip: usize,
-        limit: usize,
+        skip: Option<spec::Expr>,
+        limit: Option<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
+        let skip = if let Some(skip) = skip {
+            Some(self.resolve_expression(skip, input.schema(), state).await?)
+        } else {
+            None
+        };
+        let limit = if let Some(limit) = limit {
+            Some(
+                self.resolve_expression(limit, input.schema(), state)
+                    .await?,
+            )
+        } else {
+            None
+        };
         Ok(LogicalPlan::Limit(plan::Limit {
-            skip: Some(Box::new(lit(skip as i64))),
-            fetch: Some(Box::new(lit(limit as i64))),
+            skip: skip.map(Box::new),
+            fetch: limit.map(Box::new),
             input: Arc::new(input),
         }))
     }
@@ -1357,20 +1379,6 @@ impl PlanResolver<'_> {
         _state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         Err(PlanError::todo("sample"))
-    }
-
-    async fn resolve_query_offset(
-        &self,
-        input: spec::QueryPlan,
-        offset: usize,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
-        Ok(LogicalPlan::Limit(plan::Limit {
-            skip: Some(Box::new(lit(offset as i64))),
-            fetch: None,
-            input: Arc::new(input),
-        }))
     }
 
     async fn resolve_query_deduplicate(
@@ -1576,7 +1584,7 @@ impl PlanResolver<'_> {
     async fn resolve_query_tail(
         &self,
         _input: spec::QueryPlan,
-        _limit: usize,
+        _limit: spec::Expr,
         _state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         Err(PlanError::todo("tail"))

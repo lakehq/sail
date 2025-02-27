@@ -723,6 +723,8 @@ impl PlanResolver<'_> {
             } => spec::QueryPlan::new(spec::QueryNode::Read {
                 read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
                     name,
+                    temporal: None,
+                    sample: None,
                     options: vec![],
                 }),
                 is_streaming: false,

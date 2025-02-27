@@ -1,27 +1,28 @@
-use chumsky::prelude::choice;
 use either::Either;
 use sail_sql_macro::TreeParser;
 
 use crate::ast;
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
-use crate::ast::identifier::{Ident, ObjectName};
+use crate::ast::identifier::{table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
-    Add, After, All, Alter, Always, Analyze, As, Buckets, By, Cache, Cascade, Catalog, Change,
+    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog, Change,
     Clear, Clustered, Codegen, Collection, Column, Columns, Comment, Compute, Cost, Create, Data,
     Database, Databases, Dbproperties, Default, Defined, Delete, Delimited, Desc, Describe,
-    Directory, Drop, Escaped, Exists, Explain, Extended, External, Fields, Fileformat, First, For,
-    Format, Formatted, From, Function, Functions, Generated, Global, If, In, Inpath, Inputformat,
-    Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Name, Noscan,
-    Not, Null, On, Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions,
-    Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde,
-    Serdeproperties, Set, Show, Sorted, Statistics, Stored, Table, Tables, Tblproperties, Temp,
-    Temporary, Terminated, Time, To, Type, Uncache, Unset, Update, Use, Using, Verbose, View,
-    Views, Where, With, Zone,
+    Directory, Drop, Escaped, Evolution, Exists, Explain, Extended, External, Fields, Fileformat,
+    First, For, Format, Formatted, From, Function, Functions, Generated, Global, If, In, Inpath,
+    Inputformat, Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map,
+    Matched, Merge, Name, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite, Partition,
+    Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row,
+    Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Statistics, Stored, Table,
+    Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then, Time, To, Type, Uncache,
+    Unset, Update, Use, Using, Values, Verbose, View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
-use crate::ast::operator::{Colon, Comma, Equals, LeftParenthesis, Minus, Plus, RightParenthesis};
-use crate::ast::query::{IdentList, Query, WhereClause};
+use crate::ast::operator::{
+    Asterisk, Colon, Comma, Equals, ExclamationMark, LeftParenthesis, Minus, Plus, RightParenthesis,
+};
+use crate::ast::query::{AliasClause, IdentList, Query, WhereClause};
 use crate::combinator::{compose, sequence, unit};
 use crate::common::Sequence;
 use crate::token::TokenLabel;
@@ -222,6 +223,19 @@ pub enum Statement {
         columns: Option<Either<(By, Name), IdentList>>,
         #[parser(function = |(_, q, _, _), _| q)]
         query: Query,
+    },
+    MergeInto {
+        merge: Merge,
+        with_schema_evolution: Option<(With, Schema, Evolution)>,
+        into: Into,
+        target: ObjectName,
+        alias: Option<AliasClause>,
+        #[parser(function = |(_, q, _, _), o| unit(o).then(compose(q, o)))]
+        using: (Using, MergeSource),
+        #[parser(function = |(_, _, e, _), o| unit(o).then(e))]
+        on: (On, Expr),
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        r#match: Vec<MergeMatchClause>,
     },
     Update {
         update: Update,
@@ -656,19 +670,6 @@ pub enum AlterViewOperation {
         to: To,
         name: ObjectName,
     },
-    AddPartitions {
-        add: Add,
-        if_not_exists: Option<(If, Not, Exists)>,
-        #[parser(function = |(_, e), o| compose(e, o))]
-        partitions: Vec<PartitionClause>,
-    },
-    DropPartition {
-        drop: Drop,
-        if_exists: Option<(If, Exists)>,
-        #[parser(function = |(_, e), o| compose(e, o))]
-        partition: PartitionClause,
-        purge: Option<Purge>,
-    },
     SetViewProperties {
         set: Set,
         table_properties: Tblproperties,
@@ -763,9 +764,99 @@ pub enum InsertDirectoryDestination {
 }
 
 #[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Query")]
+pub enum MergeSource {
+    Table {
+        name: ObjectName,
+        alias: Option<AliasClause>,
+    },
+    Query {
+        left: LeftParenthesis,
+        #[parser(function = |q, _| q)]
+        query: Query,
+        right: RightParenthesis,
+        alias: Option<AliasClause>,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum MergeMatchClause {
+    Matched {
+        when: When,
+        matched: Matched,
+        #[parser(function = |e, o| unit(o).then(e).or_not())]
+        condition: Option<(And, Expr)>,
+        then: Then,
+        #[parser(function = |e, o| compose(e, o))]
+        action: MergeMatchedAction,
+    },
+    NotMatchedBySource {
+        when: When,
+        not: Either<Not, ExclamationMark>,
+        matched: Matched,
+        by_source: (By, Source),
+        #[parser(function = |e, o| unit(o).then(e).or_not())]
+        condition: Option<(And, Expr)>,
+        then: Then,
+        #[parser(function = |e, o| compose(e, o))]
+        action: MergeNotMatchedBySourceAction,
+    },
+    NotMatchedByTarget {
+        when: When,
+        not: Either<Not, ExclamationMark>,
+        matched: Matched,
+        by_target: Option<(By, Target)>,
+        #[parser(function = |e, o| unit(o).then(e).or_not())]
+        condition: Option<(And, Expr)>,
+        then: Then,
+        #[parser(function = |e, o| compose(e, o))]
+        action: MergeNotMatchedByTargetAction,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum MergeMatchedAction {
+    Delete(Delete),
+    UpdateAll(Update, Set, Asterisk),
+    Update(
+        Update,
+        Set,
+        #[parser(function = |e, o| compose(e, o))] AssignmentList,
+    ),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum MergeNotMatchedBySourceAction {
+    Delete(Delete),
+    Update(
+        Update,
+        Set,
+        #[parser(function = |e, o| compose(e, o))] AssignmentList,
+    ),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum MergeNotMatchedByTargetAction {
+    InsertAll(Insert, Asterisk),
+    Insert {
+        insert: Insert,
+        left: LeftParenthesis,
+        columns: Sequence<ObjectName, Comma>,
+        right: RightParenthesis,
+        values: Values,
+        #[parser(function = |e, o| sequence(e, unit(o)))]
+        expressions: Sequence<Expr, Comma>,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser)]
 pub struct UpdateTableAlias {
     pub r#as: Option<As>,
-    #[parser(function = |(), o| unit(o).and_is(choice((Where::parser((), o).ignored(), Set::parser((), o).ignored())).not()))]
+    #[parser(function = |(), o| table_ident(o))]
     pub table: Ident,
     pub columns: Option<IdentList>,
 }
@@ -805,7 +896,7 @@ pub struct Assignment {
 #[derive(Debug, Clone, TreeParser)]
 pub struct DeleteTableAlias {
     pub r#as: Option<As>,
-    #[parser(function = |(), o| unit(o).and_is(Where::parser((), o).not()))]
+    #[parser(function = |(), o| table_ident(o))]
     pub table: Ident,
     pub columns: Option<IdentList>,
 }

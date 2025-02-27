@@ -6,7 +6,7 @@ use chumsky::{IterParser, Parser};
 
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{Expr, IntervalLiteral};
-use crate::ast::identifier::{ObjectName, QualifiedWildcard};
+use crate::ast::identifier::{Ident, ObjectName, QualifiedWildcard};
 use crate::ast::operator::Semicolon;
 use crate::ast::query::{NamedExpr, Query, TableWithJoins};
 use crate::ast::statement::Statement;
@@ -127,7 +127,8 @@ where
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    NamedExpr::parser(expression(options), options)
+    let ident = Ident::parser((), options);
+    NamedExpr::parser((expression(options), ident), options)
 }
 
 fn interval_literal<'a, I, E>(
