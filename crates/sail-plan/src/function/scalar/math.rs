@@ -14,14 +14,14 @@ use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
 /// Arguments:
-/// - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
-/// - right: If left is a numeric right must be numeric expression, or an INTERVAL otherwise.
+///   - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
+///   - right: If left is a numeric right must be numeric expression, or an INTERVAL otherwise.
 ///
 /// Returns:
-/// - If left is a numeric, the common maximum type of the arguments.
-/// - If left is a DATE and right is a day-time interval the result is a TIMESTAMP.
-/// - If both expressions are interval they must be of the same class.
-/// - Otherwise, the result type matches left.
+///   - If left is a numeric, the common maximum type of the arguments.
+///   - If left is a DATE and right is a day-time interval the result is a TIMESTAMP.
+///   - If both expressions are interval they must be of the same class.
+///   - Otherwise, the result type matches left.
 ///
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
@@ -85,55 +85,125 @@ fn plus(input: FunctionInput) -> PlanResult<expr::Expr> {
     }
 }
 
+/// Arguments:
+///   - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
+///   - right: The accepted type depends on the type of expr:
+///            - If left is a numeric right must be numeric expression.
+///            - If left is a year-month or day-time interval, right must be the same class.
+///            - Otherwise right must be a DATE or TIMESTAMP.
+///
+/// Returns:
+///   - If left is a numeric, the result is common maximum type of the arguments.
+///   - If left is a DATE and right is a day-time interval the result is a TIMESTAMP.
+///   - If left is a TIMESTAMP and right is an interval the result is a TIMESTAMP.
+///   - If left and right are DATEs the result is an INTERVAL DAYS.
+///   - If left or right are TIMESTAMP the result is an INTERVAL DAY TO SECOND.
+///   - If both expressions are interval they must be of the same class.
+///   - Otherwise, the result type matches left.
+///
+/// All of the above conditions should be handled by the DataFusion.
+/// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
+///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
 fn minus(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+    let FunctionInput {
+        arguments, schema, ..
+    } = input;
     if arguments.len() < 2 {
         Ok(expr::Expr::Negative(Box::new(arguments.one()?)))
     } else {
         let (left, right) = arguments.two()?;
-        Ok(expr::Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left),
-            op: Operator::Minus,
-            right: Box::new(right),
-        }))
+        let (left_type, right_type) = (left.get_type(schema), right.get_type(schema));
+        match (left_type, right_type) {
+            // TODO: In case getting the type fails, we don't want to fail the query.
+            //  Future work is needed here, ideally we create something like `Operator::SparkMinus`.
+            (Err(_), _) | (_, Err(_)) => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(left),
+                op: Operator::Minus,
+                right: Box::new(right),
+            })),
+            (Ok(left_type), Ok(right_type)) => {
+                if matches!(left_type, DataType::Date32) && right_type.is_numeric() {
+                    let left = expr::Expr::Cast(expr::Cast {
+                        expr: Box::new(left),
+                        data_type: DataType::Int32,
+                    });
+                    let expr = expr::Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(left),
+                        op: Operator::Minus,
+                        right: Box::new(right),
+                    });
+                    Ok(expr::Expr::Cast(expr::Cast {
+                        expr: Box::new(expr),
+                        data_type: DataType::Date32,
+                    }))
+                } else {
+                    Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(left),
+                        op: Operator::Minus,
+                        right: Box::new(right),
+                    }))
+                }
+            }
+        }
     }
 }
 
-/// Spark always preforms floating-point division.
+/// Arguments:
+///   - dividend: A numeric or INTERVAL expression.
+///   - divisor: A numeric expression.
+///
+/// Returns:
+///   - If both dividend and divisor are DECIMAL, the result is DECIMAL.
+///   - If dividend is a year-month interval, the result is an INTERVAL YEAR TO MONTH.
+///   - If dividend is a day-time interval, the result is an INTERVAL DAY TO SECOND.
+///   - In all other cases, a DOUBLE.
+///
+/// All of the above conditions should be handled by the DataFusion.
+/// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
+///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
 fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
     let FunctionInput {
         arguments, schema, ..
     } = input;
 
-    let (left, right) = arguments.two()?;
-    let (left_type, right_type) = (left.get_type(schema), right.get_type(schema));
-    let should_cast = match (left_type, right_type) {
+    let (dividend, divisor) = arguments.two()?;
+    let (dividend_type, divisor_type) = (dividend.get_type(schema), divisor.get_type(schema));
+    match (dividend_type, divisor_type) {
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
-        (Err(_), _) | (_, Err(_)) => true,
-        (Ok(left_type), Ok(right_type)) => !matches!(
-            (left_type, right_type),
-            (DataType::Decimal128(_, _), DataType::Decimal128(_, _))
-                | (DataType::Decimal128(_, _), DataType::Decimal256(_, _))
-                | (DataType::Decimal256(_, _), DataType::Decimal128(_, _))
-                | (DataType::Decimal256(_, _), DataType::Decimal256(_, _))
-                | (DataType::Interval(IntervalUnit::YearMonth), _)
-                | (DataType::Interval(IntervalUnit::DayTime), _)
-                | (DataType::Duration(TimeUnit::Microsecond), _)
-        ),
-    };
-    let expr = expr::Expr::BinaryExpr(BinaryExpr {
-        left: Box::new(left),
-        op: Operator::Divide,
-        right: Box::new(right),
-    });
-    if should_cast {
-        Ok(expr::Expr::Cast(expr::Cast {
-            expr: Box::new(expr),
-            data_type: DataType::Float64,
-        }))
-    } else {
-        Ok(expr)
+        (Err(_), _) | (_, Err(_)) => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(dividend),
+            op: Operator::Divide,
+            right: Box::new(divisor),
+        })),
+        (Ok(dividend_type), Ok(divisor_type)) => {
+            match (dividend_type, divisor_type) {
+                (DataType::Decimal128(_, _), DataType::Decimal128(_, _))
+                            | (DataType::Decimal128(_, _), DataType::Decimal256(_, _))
+                            | (DataType::Decimal256(_, _), DataType::Decimal128(_, _))
+                            | (DataType::Decimal256(_, _), DataType::Decimal256(_, _))
+                            | (DataType::Interval(IntervalUnit::YearMonth), _)
+                            | (DataType::Interval(IntervalUnit::DayTime), _)
+                            // Match duration because we cast Spark's DayTime interval to Duration in `sail-spark-connect`.
+                            | (DataType::Duration(TimeUnit::Microsecond), _) => {
+                            Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                                left: Box::new(dividend),
+                                op: Operator::Divide,
+                                right: Box::new(divisor),
+                            }))
+                        }
+                        _ => {
+                            Ok(expr::Expr::Cast(expr::Cast {
+                                expr: Box::new(expr::Expr::BinaryExpr(BinaryExpr {
+                                    left: Box::new(dividend),
+                                    op: Operator::Divide,
+                                    right: Box::new(divisor),
+                                })),
+                                data_type: DataType::Float64,
+                            }))
+                        }
+            }
+        }
     }
 }
 

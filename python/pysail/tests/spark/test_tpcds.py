@@ -18,11 +18,11 @@ def data(sail, spark, duck):  # noqa: ARG001
     for table in tables:
         df = duck.sql(f"SELECT * FROM {table}").arrow().to_pandas()  # noqa: S608
         sail.createDataFrame(df).createOrReplaceTempView(table)
-        spark.createDataFrame(df).createOrReplaceTempView(table)
+        # spark.createDataFrame(df).createOrReplaceTempView(table)
     yield
     for table in tables:
         sail.catalog.dropTempView(table)
-        spark.catalog.dropTempView(table)
+        # spark.catalog.dropTempView(table)
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
