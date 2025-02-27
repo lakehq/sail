@@ -14,6 +14,8 @@
                         "name": [
                           "t1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -29,6 +31,8 @@
                             "name": [
                               "t2"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -117,6 +121,8 @@
                         "name": [
                           "t1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -132,6 +138,8 @@
                             "name": [
                               "t2"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -222,6 +230,8 @@
                             "name": [
                               "t1"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -273,6 +283,8 @@
                         "name": [
                           "t2"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -323,6 +335,8 @@
                         "name": [
                           "t1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -338,6 +352,8 @@
                             "name": [
                               "t2"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -353,6 +369,8 @@
                                 "name": [
                                   "t3"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false

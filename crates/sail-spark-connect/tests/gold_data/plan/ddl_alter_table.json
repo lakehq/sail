@@ -4,76 +4,28 @@
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"COMMENT\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"\n--------------------------------------------------------------^^^\n",
       "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "my_tab"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: duplicate COMMENT clause"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"DEFAULT\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"\n--------------------------------------------------------------^^^\n",
       "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "my_tab"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: duplicate DEFAULT clause"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"FIRST|AFTER\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y\n-----------------------------------------------------------^^^\n",
       "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "my_tab"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: duplicate POSITION clause"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"NOT NULL\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL\n--------------------------------------------------------------^^^\n",
       "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "my_tab"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: duplicate NOT NULL clause"
       }
     },
     {
@@ -1097,19 +1049,7 @@
       "input": "ALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')",
       "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE REPLACE column a specifies descriptor \"COMMENT\" more than once, which is invalid.(line 1, pos 61)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')\n-------------------------------------------------------------^^^\n",
       "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: duplicate COMMENT clause"
       }
     },
     {

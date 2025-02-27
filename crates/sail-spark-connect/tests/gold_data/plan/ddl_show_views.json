@@ -13,6 +13,8 @@
                       "information_schema",
                       "views"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -54,6 +56,8 @@
                       "information_schema",
                       "views"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -95,6 +99,8 @@
                       "information_schema",
                       "views"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -136,6 +142,8 @@
                       "information_schema",
                       "views"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -177,6 +185,8 @@
                       "information_schema",
                       "views"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -218,6 +228,8 @@
                       "information_schema",
                       "views"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -259,6 +271,8 @@
                       "information_schema",
                       "views"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false

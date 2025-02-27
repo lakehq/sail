@@ -42,6 +42,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -139,6 +141,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -236,6 +240,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -347,6 +353,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -427,6 +435,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -507,6 +517,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -587,6 +599,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -667,6 +681,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -749,6 +765,8 @@
                             "name": [
                               "t1"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -869,6 +887,8 @@
                             "name": [
                               "t1"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -920,6 +940,8 @@
                         "name": [
                           "t2"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -970,6 +992,8 @@
                         "name": [
                           "t1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -985,6 +1009,8 @@
                             "name": [
                               "t2"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1073,6 +1099,8 @@
                         "name": [
                           "t1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1088,6 +1116,8 @@
                             "name": [
                               "t2"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1178,6 +1208,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1268,6 +1300,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false

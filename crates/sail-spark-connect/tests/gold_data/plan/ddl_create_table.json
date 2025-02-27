@@ -46,6 +46,8 @@
                         "name": [
                           "src"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -125,6 +127,8 @@
                         "name": [
                           "src"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false

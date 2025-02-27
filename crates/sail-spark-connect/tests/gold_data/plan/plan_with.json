@@ -14,6 +14,8 @@
                         "name": [
                           "cte1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -55,6 +57,8 @@
                                   "db",
                                   "tab"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false
@@ -109,6 +113,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -148,6 +154,8 @@
                                 "name": [
                                   "a"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false
@@ -200,6 +208,8 @@
                         "name": [
                           "cte1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -283,6 +293,8 @@
                         "name": [
                           "cte1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -355,6 +367,8 @@
                                 "name": [
                                   "cte1"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false
@@ -404,6 +418,8 @@
                         "name": [
                           "cte2"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -476,6 +492,8 @@
                                 "name": [
                                   "cte1"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false
@@ -530,6 +548,8 @@
                         "name": [
                           "cte1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -569,6 +589,8 @@
                                 "name": [
                                   "a"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false

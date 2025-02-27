@@ -127,20 +127,20 @@ pub enum AtomExpr {
     ),
     Tuple(
         LeftParenthesis,
-        #[parser(function = |(e, _, _), o| sequence(compose(e, o), unit(o)))]
+        #[parser(function = |(e, _, _), o| sequence(compose((e, unit(o)), o), unit(o)))]
         Sequence<NamedExpr, Comma>,
         RightParenthesis,
     ),
     Struct(
         Struct,
         LeftParenthesis,
-        #[parser(function = |(e, _, _), o| sequence(compose(e, o), unit(o)))]
+        #[parser(function = |(e, _, _), o| sequence(compose((e, unit(o)), o), unit(o)))]
         Sequence<NamedExpr, Comma>,
         RightParenthesis,
     ),
     Case {
         case: Case,
-        #[parser(function = |(e, _, _), o| When::parser((), o).not().rewind().ignore_then(boxed(e)).or_not())]
+        #[parser(function = |(e, _, _), o| boxed(e).and_is(When::parser((), o).not()).or_not())]
         operand: Option<Box<Expr>>,
         #[parser(function = |(e, _, _), o| boxed(compose(e, o)))]
         first_condition: Box<CaseWhen>,
@@ -269,9 +269,7 @@ pub enum IntervalExpr {
         head: IntervalValueWithUnit,
         // If the unit is followed by `TO` (e.g. `'1 1' DAY TO HOUR`), it must be parsed
         // as a standard interval,
-        #[parser(function = |_, o| To::parser((), o).not().rewind())]
-        barrier: (),
-        #[parser(function = |e, o| compose(e, o))]
+        #[parser(function = |e, o| compose(e, o).and_is(To::parser((), o).not()))]
         tail: Vec<IntervalValueWithUnit>,
     },
     Standard {

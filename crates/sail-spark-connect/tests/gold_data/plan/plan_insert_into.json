@@ -14,6 +14,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -68,6 +70,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -122,6 +126,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
