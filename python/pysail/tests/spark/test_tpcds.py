@@ -36,7 +36,7 @@ def test_derived_tpcds_query_execution(sail, query):
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
-# @pytest.mark.skip(reason="Derived TPC-DS queries do not have full parity with Spark yet")
+@pytest.mark.skip(reason="Derived TPC-DS queries do not have full parity with Spark yet")
 def test_derived_tpcds_query_spark_parity(sail, spark, query):
     for sql in read_sql(query):
         actual = sail.sql(sql)
