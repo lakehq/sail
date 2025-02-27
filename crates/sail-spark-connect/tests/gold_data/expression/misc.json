@@ -153,6 +153,8 @@
                       "name": [
                         "c"
                       ],
+                      "temporal": null,
+                      "sample": null,
                       "options": []
                     },
                     "isStreaming": false
@@ -253,6 +255,8 @@
                       "name": [
                         "d"
                       ],
+                      "temporal": null,
+                      "sample": null,
                       "options": []
                     },
                     "isStreaming": false
@@ -369,6 +373,8 @@
                       "name": [
                         "g"
                       ],
+                      "temporal": null,
+                      "sample": null,
                       "options": []
                     },
                     "isStreaming": false
@@ -428,6 +434,8 @@
                             "name": [
                               "tbl"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1563,6 +1571,8 @@
                             "name": [
                               "s"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -2086,7 +2096,23 @@
     {
       "input": "a as (b, c)",
       "output": {
-        "failure": "invalid argument: found as at 2:4 expected end of input"
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedAttribute": {
+                "name": [
+                  "a"
+                ],
+                "planId": null
+              }
+            },
+            "name": [
+              "b",
+              "c"
+            ],
+            "metadata": null
+          }
+        }
       }
     },
     {
@@ -2230,6 +2256,8 @@
                       "name": [
                         "c"
                       ],
+                      "temporal": null,
+                      "sample": null,
                       "options": []
                     },
                     "isStreaming": false
@@ -2745,7 +2773,26 @@
     {
       "input": "a() (b, c)",
       "output": {
-        "failure": "invalid argument: found ( at 4:5 expected end of input"
+        "success": {
+          "alias": {
+            "expr": {
+              "unresolvedFunction": {
+                "functionName": "a",
+                "arguments": [],
+                "isDistinct": false,
+                "isUserDefinedFunction": false,
+                "ignoreNulls": null,
+                "filter": null,
+                "orderBy": null
+              }
+            },
+            "name": [
+              "b",
+              "c"
+            ],
+            "metadata": null
+          }
+        }
       }
     },
     {
@@ -3020,6 +3067,8 @@
                           "name": [
                             "b"
                           ],
+                          "temporal": null,
+                          "sample": null,
                           "options": []
                         },
                         "isStreaming": false

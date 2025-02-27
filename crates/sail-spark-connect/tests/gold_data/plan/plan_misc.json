@@ -12,6 +12,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -52,6 +54,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -92,6 +96,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -132,6 +138,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -172,6 +180,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -212,6 +222,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -252,6 +264,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -331,6 +345,8 @@
                         "name": [
                           "t1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -364,6 +380,8 @@
                         "name": [
                           "t2"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -423,7 +441,25 @@
     {
       "input": "TABLE testcat.db.tab",
       "output": {
-        "failure": "invalid argument: found TABLE at 0:5 expected statement, or end of input"
+        "success": {
+          "query": {
+            "read": {
+              "namedTable": {
+                "name": [
+                  "testcat",
+                  "db",
+                  "tab"
+                ],
+                "temporal": null,
+                "sample": null,
+                "options": []
+              },
+              "isStreaming": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -499,13 +535,46 @@
     {
       "input": "table d.t",
       "output": {
-        "failure": "invalid argument: found table at 0:5 expected statement, or end of input"
+        "success": {
+          "query": {
+            "read": {
+              "namedTable": {
+                "name": [
+                  "d",
+                  "t"
+                ],
+                "temporal": null,
+                "sample": null,
+                "options": []
+              },
+              "isStreaming": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "table t",
       "output": {
-        "failure": "invalid argument: found table at 0:5 expected statement, or end of input"
+        "success": {
+          "query": {
+            "read": {
+              "namedTable": {
+                "name": [
+                  "t"
+                ],
+                "temporal": null,
+                "sample": null,
+                "options": []
+              },
+              "isStreaming": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

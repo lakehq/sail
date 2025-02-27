@@ -14,6 +14,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -86,6 +88,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -169,6 +173,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -237,6 +243,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -297,6 +305,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -354,6 +364,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -413,6 +425,8 @@
                           "db",
                           "tbl"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -826,6 +840,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -886,6 +902,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -943,6 +961,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false

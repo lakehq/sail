@@ -4,21 +4,7 @@
       "input": "ALTER VIEW a.b.c ADD IF NOT EXISTS PARTITION\n(dt='2008-08-08', country='us') PARTITION\n(dt='2009-09-09', country='uk')",
       "exception": "\nOperation not allowed: ALTER VIEW ... ADD PARTITION.(line 1, pos 0)\n\n== SQL ==\nALTER VIEW a.b.c ADD IF NOT EXISTS PARTITION\n^^^\n(dt='2008-08-08', country='us') PARTITION\n(dt='2009-09-09', country='uk')\n",
       "output": {
-        "success": {
-          "command": {
-            "alterView": {
-              "view": [
-                "a",
-                "b",
-                "c"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null,
-            "sourceInfo": null
-          }
-        }
+        "failure": "invalid argument: found ADD at 17:20 expected '.', 'RENAME', 'SET', 'UNSET', 'AS', or query"
       }
     },
     {
