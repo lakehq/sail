@@ -13,17 +13,75 @@ use crate::extension::function::math::spark_signum::SparkSignum;
 use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
 
+/// Arguments:
+/// - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
+/// - right: If left is a numeric right must be numeric expression, or an INTERVAL otherwise.
+///
+/// Returns:
+/// - If left is a numeric, the common maximum type of the arguments.
+/// - If left is a DATE and right is a day-time interval the result is a TIMESTAMP.
+/// - If both expressions are interval they must be of the same class.
+/// - Otherwise, the result type matches left.
+///
+/// All of the above conditions should be handled by the DataFusion.
+/// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
+///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
 fn plus(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+    let FunctionInput {
+        arguments, schema, ..
+    } = input;
     if arguments.len() < 2 {
         Ok(arguments.one()?)
     } else {
         let (left, right) = arguments.two()?;
-        Ok(expr::Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left),
-            op: Operator::Plus,
-            right: Box::new(right),
-        }))
+        let (left_type, right_type) = (left.get_type(schema), right.get_type(schema));
+        match (left_type, right_type) {
+            // TODO: In case getting the type fails, we don't want to fail the query.
+            //  Future work is needed here, ideally we create something like `Operator::SparkPlus`.
+            (Err(_), _) | (_, Err(_)) => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(left),
+                op: Operator::Plus,
+                right: Box::new(right),
+            })),
+            (Ok(left_type), Ok(right_type)) => {
+                if (left_type.is_numeric() && matches!(right_type, DataType::Date32))
+                    || (right_type.is_numeric() && matches!(left_type, DataType::Date32))
+                {
+                    let (left, right) = if left_type.is_numeric() {
+                        (
+                            left,
+                            expr::Expr::Cast(expr::Cast {
+                                expr: Box::new(right),
+                                data_type: DataType::Int32,
+                            }),
+                        )
+                    } else {
+                        (
+                            expr::Expr::Cast(expr::Cast {
+                                expr: Box::new(left),
+                                data_type: DataType::Int32,
+                            }),
+                            right,
+                        )
+                    };
+                    let expr = expr::Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(left),
+                        op: Operator::Plus,
+                        right: Box::new(right),
+                    });
+                    Ok(expr::Expr::Cast(expr::Cast {
+                        expr: Box::new(expr),
+                        data_type: DataType::Date32,
+                    }))
+                } else {
+                    Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(left),
+                        op: Operator::Plus,
+                        right: Box::new(right),
+                    }))
+                }
+            }
+        }
     }
 }
 
@@ -48,16 +106,22 @@ fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
     } = input;
 
     let (left, right) = arguments.two()?;
-    let should_cast = !matches!(
-        (left.get_type(schema)?, right.get_type(schema)?),
-        (DataType::Decimal128(_, _), DataType::Decimal128(_, _))
-            | (DataType::Decimal128(_, _), DataType::Decimal256(_, _))
-            | (DataType::Decimal256(_, _), DataType::Decimal128(_, _))
-            | (DataType::Decimal256(_, _), DataType::Decimal256(_, _))
-            | (DataType::Interval(IntervalUnit::YearMonth), _)
-            | (DataType::Interval(IntervalUnit::DayTime), _)
-            | (DataType::Duration(TimeUnit::Microsecond), _)
-    );
+    let (left_type, right_type) = (left.get_type(schema), right.get_type(schema));
+    let should_cast = match (left_type, right_type) {
+        // TODO: In case getting the type fails, we don't want to fail the query.
+        //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
+        (Err(_), _) | (_, Err(_)) => true,
+        (Ok(left_type), Ok(right_type)) => !matches!(
+            (left_type, right_type),
+            (DataType::Decimal128(_, _), DataType::Decimal128(_, _))
+                | (DataType::Decimal128(_, _), DataType::Decimal256(_, _))
+                | (DataType::Decimal256(_, _), DataType::Decimal128(_, _))
+                | (DataType::Decimal256(_, _), DataType::Decimal256(_, _))
+                | (DataType::Interval(IntervalUnit::YearMonth), _)
+                | (DataType::Interval(IntervalUnit::DayTime), _)
+                | (DataType::Duration(TimeUnit::Microsecond), _)
+        ),
+    };
     let expr = expr::Expr::BinaryExpr(BinaryExpr {
         left: Box::new(left),
         op: Operator::Divide,

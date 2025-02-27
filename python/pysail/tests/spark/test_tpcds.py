@@ -18,20 +18,15 @@ def data(sail, spark, duck):  # noqa: ARG001
     for table in tables:
         df = duck.sql(f"SELECT * FROM {table}").arrow().to_pandas()  # noqa: S608
         sail.createDataFrame(df).createOrReplaceTempView(table)
-        # spark.createDataFrame(df).createOrReplaceTempView(table)
+        spark.createDataFrame(df).createOrReplaceTempView(table)
     yield
     for table in tables:
         sail.catalog.dropTempView(table)
-        # spark.catalog.dropTempView(table)
+        spark.catalog.dropTempView(table)
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
 def test_derived_tpcds_query_execution(sail, query):
-    # Skip unsupported queries to ensure continued support for the supported ones.
-    skip = {"q72"}
-    if query in skip:
-        pytest.skip(f"Derived TPC-DS queries are not yet fully supported Skipping unsupported query: {query}")
-
     for sql in read_sql(query):
         try:
             sail.sql(sql).toPandas()
@@ -41,7 +36,7 @@ def test_derived_tpcds_query_execution(sail, query):
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
-@pytest.mark.skip(reason="Derived TPC-DS queries do not have full parity with Spark yet")
+# @pytest.mark.skip(reason="Derived TPC-DS queries do not have full parity with Spark yet")
 def test_derived_tpcds_query_spark_parity(sail, spark, query):
     for sql in read_sql(query):
         actual = sail.sql(sql)
