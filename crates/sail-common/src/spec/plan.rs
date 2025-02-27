@@ -261,6 +261,7 @@ pub enum QueryNode {
         input: Option<Box<QueryPlan>>,
         function: ObjectName,
         arguments: Vec<Expr>,
+        named_arguments: Vec<(Identifier, Expr)>,
         table_alias: Option<ObjectName>,
         column_aliases: Option<Vec<Identifier>>,
         outer: bool,
@@ -399,7 +400,7 @@ pub enum CommandNode {
         input: Box<QueryPlan>,
         table: ObjectName,
         columns: Vec<Identifier>,
-        partition_spec: Vec<(String, Option<Expr>)>,
+        partition_spec: Vec<(Identifier, Option<Expr>)>,
         replace: Option<Expr>,
         if_not_exists: bool,
         overwrite: bool,
@@ -447,11 +448,11 @@ pub enum CommandNode {
         location: String,
         table: ObjectName,
         overwrite: bool,
-        partition: Vec<(String, Option<Expr>)>,
+        partition: Vec<(Identifier, Option<Expr>)>,
     },
     AnalyzeTable {
         table: ObjectName,
-        partition: Vec<(String, Option<Expr>)>,
+        partition: Vec<(Identifier, Option<Expr>)>,
         columns: Vec<ObjectName>,
         no_scan: bool,
     },
@@ -477,7 +478,7 @@ pub enum CommandNode {
     DescribeTable {
         table: ObjectName,
         extended: bool,
-        partition: Vec<(String, Option<Expr>)>,
+        partition: Vec<(Identifier, Option<Expr>)>,
         column: Option<ObjectName>,
     },
     CommentOnCatalog {
@@ -549,6 +550,7 @@ pub enum TableSampleMethod {
 pub struct ReadUdtf {
     pub name: ObjectName,
     pub arguments: Vec<Expr>,
+    pub named_arguments: Vec<(Identifier, Expr)>,
     pub options: Vec<(String, String)>,
 }
 
@@ -567,9 +569,8 @@ pub struct ReadDataSource {
 pub struct Join {
     pub left: Box<QueryPlan>,
     pub right: Box<QueryPlan>,
-    pub join_condition: Option<Expr>,
     pub join_type: JoinType,
-    pub using_columns: Vec<Identifier>,
+    pub join_criteria: Option<JoinCriteria>,
     pub join_data_type: Option<JoinDataType>,
 }
 
@@ -740,7 +741,7 @@ pub struct HtmlString {
 pub struct TableDefinition {
     pub schema: Schema,
     pub comment: Option<String>,
-    pub column_defaults: Vec<(String, Expr)>,
+    pub column_defaults: Vec<(Identifier, Expr)>,
     pub constraints: Vec<TableConstraint>,
     pub location: Option<String>,
     pub file_format: Option<TableFileFormat>,
@@ -859,6 +860,14 @@ pub enum JoinType {
     LeftAnti,
     RightAnti,
     Cross,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum JoinCriteria {
+    Natural,
+    On(Expr),
+    Using(Vec<Identifier>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

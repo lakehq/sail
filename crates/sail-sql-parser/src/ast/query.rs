@@ -420,8 +420,8 @@ pub enum UnpivotColumns {
 pub struct TableFunction {
     pub name: ObjectName,
     pub left: LeftParenthesis,
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
-    pub arguments: Sequence<FunctionArgument, Comma>,
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o)).or_not())]
+    pub arguments: Option<Sequence<FunctionArgument, Comma>>,
     pub right: RightParenthesis,
 }
 
@@ -473,8 +473,8 @@ pub struct LateralViewClause {
     pub outer: Option<Outer>,
     pub function: ObjectName,
     pub left: LeftParenthesis,
-    #[parser(function = |e, o| sequence(e, unit(o)).or_not())]
-    pub arguments: Option<Sequence<Expr, Comma>>,
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o)).or_not())]
+    pub arguments: Option<Sequence<FunctionArgument, Comma>>,
     pub right: RightParenthesis,
     // FIXME: When both the table alias and the `AS` keyword are omitted,
     //   the column aliases cannot be parsed correctly.
