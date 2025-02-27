@@ -2249,6 +2249,7 @@ impl PlanResolver<'_> {
         self.resolve_query_plan(input, state).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn resolve_query_lateral_view(
         &self,
         input: Option<spec::QueryPlan>,

@@ -94,6 +94,7 @@ fn negated(expr: spec::Expr) -> spec::Expr {
     })
 }
 
+#[allow(clippy::type_complexity)]
 pub(crate) fn from_ast_function_arguments(
     args: impl IntoIterator<Item = FunctionArgument>,
 ) -> SqlResult<(Vec<spec::Expr>, Vec<(spec::Identifier, spec::Expr)>)> {
