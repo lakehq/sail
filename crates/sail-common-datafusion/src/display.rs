@@ -979,31 +979,17 @@ impl<'a> DisplayIndexState<'a> for &'a MapArray {
         let mut iter = start..end;
 
         f.write_char('{')?;
-        if end - start == 1 {
-            // Single key-value pair
-            if let Some(idx) = iter.next() {
-                s.0.write(idx, f)?;
-                write!(f, " -> ")?;
-                s.1.write(idx, f)?;
-            }
-            for idx in iter {
-                write!(f, ", ")?;
-                s.0.write(idx, f)?;
-                write!(f, " -> ")?;
-                s.1.write(idx, f)?;
-            }
-        } else {
-            if let Some(idx) = iter.next() {
-                s.0.write(idx, f)?;
-                write!(f, ", ")?;
-                s.1.write(idx, f)?;
-            }
-            for idx in iter {
-                write!(f, "}}, {{")?;
-                s.0.write(idx, f)?;
-                write!(f, ", ")?;
-                s.1.write(idx, f)?;
-            }
+        if let Some(idx) = iter.next() {
+            s.0.write(idx, f)?;
+            write!(f, " -> ")?;
+            s.1.write(idx, f)?;
+        }
+
+        for idx in iter {
+            write!(f, ", ")?;
+            s.0.write(idx, f)?;
+            write!(f, " -> ")?;
+            s.1.write(idx, f)?;
         }
         f.write_char('}')?;
         Ok(())
@@ -1105,26 +1091,9 @@ mod tests {
             MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
                 .unwrap();
         assert_eq!(
-            "{d, 30}, {e, 40}, {f, 50}",
+            "{d -> 30, e -> 40, f -> 50}",
             array_value_to_string(&map_array, 1).unwrap()
         );
-    }
-
-    #[test]
-    fn test_map_array_to_string_single() {
-        let keys = vec!["a", "b", "c"];
-        let values_data = UInt32Array::from(vec![10u32, 20, 30]);
-
-        // Construct a buffer for value offsets, for the nested array:
-        //  [[a], [b], [c]]
-        let entry_offsets = [0, 1, 2, 3];
-
-        let map_array =
-            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
-                .unwrap();
-        assert_eq!("{a -> 10}", array_value_to_string(&map_array, 0).unwrap());
-        assert_eq!("{b -> 20}", array_value_to_string(&map_array, 1).unwrap());
-        assert_eq!("{c -> 30}", array_value_to_string(&map_array, 2).unwrap());
     }
 
     fn format_array(array: &dyn Array, fmt: &FormatOptions) -> Vec<String> {

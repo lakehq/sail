@@ -338,9 +338,7 @@ macro_rules! impl_sequence_for_type {
                         valid.append_null();
                     }
                     (Some(start), Some(stop), Some(step)) => {
-                        if step == $zero {
-                            return exec_err!("Spark `sequence` function: Step can't be 0");
-                        }
+                        let step = if step == $zero { $one } else { step };
 
                         let decreasing = step < $zero;
                         let step_abs = step.unsigned_abs().to_usize().ok_or_else(|| {

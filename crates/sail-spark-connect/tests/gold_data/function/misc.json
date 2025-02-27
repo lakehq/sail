@@ -964,7 +964,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: typeof"
+        "success": "ok"
       }
     },
     {
@@ -986,7 +986,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: typeof"
+        "success": "ok"
       }
     },
     {

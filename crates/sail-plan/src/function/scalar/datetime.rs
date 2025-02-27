@@ -14,6 +14,7 @@ use crate::extension::function::datetime::spark_last_day::SparkLastDay;
 use crate::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use crate::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use crate::extension::function::datetime::spark_next_day::SparkNextDay;
+use crate::extension::function::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use crate::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use crate::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
 use crate::extension::function::datetime::timestamp_now::TimestampNow;
@@ -249,6 +250,26 @@ fn to_timestamp(input: FunctionInput) -> PlanResult<Expr> {
         Ok(expr_fn::to_timestamp_micros(vec![expr, format]))
     } else {
         return Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"));
+    }
+}
+
+fn try_to_timestamp(input: FunctionInput) -> PlanResult<Expr> {
+    if input.arguments.len() == 1 {
+        Ok(Expr::TryCast(expr::TryCast::new(
+            Box::new(input.arguments.one()?),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        )))
+    } else if input.arguments.len() == 2 {
+        let (expr, format) = input.arguments.two()?;
+        let format = to_chrono_fmt(format)?;
+        Ok(Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())),
+            args: vec![expr, format],
+        }))
+    } else {
+        return Err(PlanError::invalid(
+            "try_to_timestamp requires 1 or 2 arguments",
+        ));
     }
 }
 
@@ -498,7 +519,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)
         ("to_unix_timestamp", F::unknown("to_unix_timestamp")),
         ("to_utc_timestamp", F::unknown("to_utc_timestamp")),
         ("trunc", F::custom(trunc)),
-        ("try_to_timestamp", F::unknown("try_to_timestamp")),
+        ("try_to_timestamp", F::custom(try_to_timestamp)),
         (
             "unix_date",
             F::unary(|arg| {
