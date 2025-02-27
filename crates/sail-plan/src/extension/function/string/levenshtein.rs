@@ -4,11 +4,14 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_int64_array};
-use datafusion_common::types::{logical_int64, logical_string};
+use datafusion_common::types::{
+    logical_int16, logical_int32, logical_int64, logical_int8, logical_string, logical_uint16,
+    logical_uint32, logical_uint64, logical_uint8, NativeType,
+};
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr_common::signature::{TypeSignature, TypeSignatureClass};
+use datafusion_expr_common::signature::{Coercion, TypeSignature, TypeSignatureClass};
 
 use crate::extension::function::functions_utils::{make_scalar_function, utf8_to_int_type};
 
@@ -30,9 +33,22 @@ impl Levenshtein {
                 vec![
                     TypeSignature::String(2),
                     TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Native(logical_int64()),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_int64()),
+                            vec![
+                                TypeSignatureClass::Native(logical_int8()),
+                                TypeSignatureClass::Native(logical_int16()),
+                                TypeSignatureClass::Native(logical_int32()),
+                                TypeSignatureClass::Native(logical_int64()),
+                                TypeSignatureClass::Native(logical_uint8()),
+                                TypeSignatureClass::Native(logical_uint16()),
+                                TypeSignatureClass::Native(logical_uint32()),
+                                TypeSignatureClass::Native(logical_uint64()),
+                            ],
+                            NativeType::Int64,
+                        ),
                     ]),
                 ],
                 Volatility::Immutable,

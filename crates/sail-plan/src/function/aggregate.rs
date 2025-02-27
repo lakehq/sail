@@ -9,7 +9,7 @@ use datafusion::functions_aggregate::{
 };
 use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{expr, AggregateUDF};
 use lazy_static::lazy_static;
 
@@ -67,11 +67,13 @@ fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: first_last::first_value_udaf(),
-        args,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment,
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment,
+        },
     }))
 }
 
@@ -80,11 +82,13 @@ fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: first_last::last_value_udaf(),
-        args,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment,
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment,
+        },
     }))
 }
 
@@ -101,44 +105,52 @@ fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(KurtosisFunction::new())),
-        args,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment: get_null_treatment(input.ignore_nulls),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
     }))
 }
 
 fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MaxByFunction::new())),
-        args: input.arguments,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment: get_null_treatment(input.ignore_nulls),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
     }))
 }
 
 fn min_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MinByFunction::new())),
-        args: input.arguments,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment: get_null_treatment(input.ignore_nulls),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
     }))
 }
 
 fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(ModeFunction::new())),
-        args: input.arguments,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment: get_null_treatment(input.ignore_nulls),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
     }))
 }
 
@@ -155,11 +167,13 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(SkewnessFunc::new())),
-        args,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment: get_null_treatment(input.ignore_nulls),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
     }))
 }
 
