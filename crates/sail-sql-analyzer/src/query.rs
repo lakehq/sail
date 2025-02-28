@@ -18,7 +18,7 @@ use sail_sql_parser::common::Sequence;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{
-    from_ast_expression, from_ast_function_argument, from_ast_grouping_expression,
+    from_ast_expression, from_ast_function_arguments, from_ast_grouping_expression,
     from_ast_identifier_list, from_ast_object_name, from_ast_order_by,
 };
 
@@ -479,15 +479,16 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
                 arguments,
                 right: _,
             } = function;
-            let arguments = arguments
-                .into_items()
-                .map(from_ast_function_argument)
-                .collect::<SqlResult<Vec<_>>>()?;
+            let (arguments, named_arguments) = arguments
+                .map(|x| from_ast_function_arguments(x.into_items()))
+                .transpose()?
+                .unwrap_or_default();
             let plan = spec::QueryPlan::new(spec::QueryNode::Read {
                 is_streaming: false,
                 read_type: spec::ReadType::Udtf(spec::ReadUdtf {
                     name: from_ast_object_name(name)?,
                     arguments,
+                    named_arguments,
                     options: Default::default(),
                 }),
             });
@@ -599,7 +600,7 @@ fn query_plan_with_table_modifier(
             let columns = from_ast_identifier_list(columns)?
                 .into_iter()
                 .map(|c| spec::Expr::UnresolvedAttribute {
-                    name: spec::ObjectName::new_unqualified(c),
+                    name: spec::ObjectName::bare(c),
                     plan_id: None,
                 })
                 .collect();
@@ -709,7 +710,7 @@ fn query_plan_with_table_modifier(
                     let columns = columns
                         .into_iter()
                         .map(|col| spec::Expr::UnresolvedAttribute {
-                            name: spec::ObjectName::new_unqualified(col.value.into()),
+                            name: spec::ObjectName::bare(col.value),
                             plan_id: None,
                         })
                         .collect();
@@ -805,9 +806,8 @@ fn query_plan_with_table_factor(
         Some(left) => Ok(spec::QueryPlan::new(spec::QueryNode::Join(spec::Join {
             left: Box::new(left),
             right: Box::new(right),
-            join_condition: None,
             join_type: spec::JoinType::Cross,
-            using_columns: vec![],
+            join_criteria: None,
             join_data_type: None,
         }))),
         None => Ok(right),
@@ -823,9 +823,6 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
         other: right,
         criteria,
     } = join;
-    if natural.is_some() {
-        return Err(SqlError::todo("NATURAL JOIN"));
-    }
     if lateral.is_some() {
         if criteria.is_some() {
             return Err(SqlError::unsupported("LATERAL JOIN with criteria"));
@@ -861,23 +858,24 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
         }
         Some(JoinOperator::RightAnti(_, _)) => spec::JoinType::RightAnti,
     };
-    let (join_condition, using_columns) = match criteria {
-        Some(JoinCriteria::On(_, expr)) => {
+    let join_criteria = match (natural, criteria) {
+        (Some(_), None) => Some(spec::JoinCriteria::Natural),
+        (Some(_), Some(_)) => return Err(SqlError::invalid("NATURAL JOIN with criteria")),
+        (None, Some(JoinCriteria::On(_, expr))) => {
             let expr = from_ast_expression(expr)?;
-            (Some(expr), vec![])
+            Some(spec::JoinCriteria::On(expr))
         }
-        Some(JoinCriteria::Using(_, columns)) => {
+        (None, Some(JoinCriteria::Using(_, columns))) => {
             let columns = from_ast_identifier_list(columns)?;
-            (None, columns)
+            Some(spec::JoinCriteria::Using(columns))
         }
-        None => (None, vec![]),
+        (None, None) => None,
     };
     Ok(spec::QueryPlan::new(spec::QueryNode::Join(spec::Join {
         left: Box::new(left),
         right: Box::new(right),
-        join_condition,
         join_type,
-        using_columns,
+        join_criteria,
         join_data_type: None,
     })))
 }
@@ -903,17 +901,17 @@ fn query_plan_with_lateral_table_factor(
         ));
     };
     let function = from_ast_object_name(name)?;
-    let arguments = arguments
-        .into_items()
-        .map(from_ast_function_argument)
-        .collect::<SqlResult<Vec<_>>>()?;
+    let (arguments, named_arguments) = arguments
+        .map(|x| from_ast_function_arguments(x.into_items()))
+        .transpose()?
+        .unwrap_or_default();
     let (table_alias, column_aliases) = if let Some(alias) = alias {
         let AliasClause {
             r#as: _,
             table,
             columns,
         } = alias;
-        let table_alias = Some(spec::ObjectName::new_unqualified(table.value.into()));
+        let table_alias = Some(vec![table.value].into());
         let column_aliases = columns.map(from_ast_identifier_list).transpose()?;
         (table_alias, column_aliases)
     } else {
@@ -923,6 +921,7 @@ fn query_plan_with_lateral_table_factor(
         input: input.map(Box::new),
         function,
         arguments,
+        named_arguments,
         table_alias,
         column_aliases,
         outer,
@@ -947,12 +946,8 @@ fn query_plan_with_lateral_views(
                 columns,
             } = lateral_view;
             let function = from_ast_object_name(function)?;
-            let arguments = arguments
-                .map(|x| {
-                    x.into_items()
-                        .map(from_ast_expression)
-                        .collect::<SqlResult<Vec<_>>>()
-                })
+            let (arguments, named_arguments) = arguments
+                .map(|x| from_ast_function_arguments(x.into_items()))
                 .transpose()?
                 .unwrap_or_default();
             let table_alias = table.map(from_ast_object_name).transpose()?;
@@ -965,6 +960,7 @@ fn query_plan_with_lateral_views(
                 input: Some(Box::new(plan)),
                 function,
                 arguments,
+                named_arguments,
                 table_alias,
                 column_aliases,
                 outer: outer.is_some(),
