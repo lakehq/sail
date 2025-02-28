@@ -503,7 +503,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bin"
+        "success": "ok"
       }
     },
     {
@@ -525,7 +525,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bin"
+        "success": "ok"
       }
     },
     {
@@ -547,7 +547,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bin"
+        "success": "ok"
       }
     },
     {

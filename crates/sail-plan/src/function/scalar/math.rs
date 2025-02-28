@@ -10,6 +10,7 @@ use crate::extension::function::math::least_greatest;
 use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::math::spark_abs::SparkAbs;
+use crate::extension::function::math::spark_bin::SparkBin;
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_signum::SparkSignum;
 use crate::function::common::{Function, FunctionInput};
@@ -491,7 +492,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("atan", F::unary(expr_fn::atan)),
         ("atan2", F::binary(expr_fn::atan2)),
         ("atanh", F::unary(expr_fn::atanh)),
-        ("bin", F::unknown("bin")),
+        ("bin", F::udf(SparkBin::new())),
         ("bround", F::unknown("bround")),
         ("cbrt", F::unary(expr_fn::cbrt)),
         ("ceil", F::unary(ceil)),
