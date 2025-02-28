@@ -5,15 +5,21 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "when",
+            "functionName": [
+              "when"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "==",
+                  "functionName": [
+                    "=="
+                  ],
                   "arguments": [
                     {
                       "unresolvedFunction": {
-                        "functionName": "==",
+                        "functionName": [
+                          "=="
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -30,6 +36,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -45,6 +52,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
                   "ignoreNulls": null,
@@ -60,6 +68,7 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "ignoreNulls": null,
@@ -74,15 +83,21 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "when",
+            "functionName": [
+              "when"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "==",
+                  "functionName": [
+                    "=="
+                  ],
                   "arguments": [
                     {
                       "unresolvedFunction": {
-                        "functionName": "or",
+                        "functionName": [
+                          "or"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -101,6 +116,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -116,6 +132,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
                   "ignoreNulls": null,
@@ -133,11 +150,15 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "==",
+                  "functionName": [
+                    "=="
+                  ],
                   "arguments": [
                     {
                       "unresolvedFunction": {
-                        "functionName": "or",
+                        "functionName": [
+                          "or"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -156,6 +177,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -171,6 +193,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
                   "ignoreNulls": null,
@@ -195,6 +218,7 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "ignoreNulls": null,
@@ -209,11 +233,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "when",
+            "functionName": [
+              "when"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "==",
+                  "functionName": [
+                    "=="
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -231,6 +259,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
                   "ignoreNulls": null,
@@ -248,7 +277,9 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "==",
+                  "functionName": [
+                    "=="
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -266,6 +297,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
                   "ignoreNulls": null,
@@ -290,6 +322,7 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "ignoreNulls": null,
@@ -304,11 +337,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "when",
+            "functionName": [
+              "when"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "+",
+                  "functionName": [
+                    "+"
+                  ],
                   "arguments": [
                     {
                       "literal": {
@@ -319,11 +356,15 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "when",
+                        "functionName": [
+                          "when"
+                        ],
                         "arguments": [
                           {
                             "unresolvedFunction": {
-                              "functionName": ">",
+                              "functionName": [
+                                ">"
+                              ],
                               "arguments": [
                                 {
                                   "unresolvedAttribute": {
@@ -342,6 +383,7 @@
                                   }
                                 }
                               ],
+                              "namedArguments": [],
                               "isDistinct": false,
                               "isUserDefinedFunction": false,
                               "ignoreNulls": null,
@@ -366,6 +408,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -374,6 +417,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
                   "ignoreNulls": null,
@@ -398,6 +442,7 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "ignoreNulls": null,
@@ -412,11 +457,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "when",
+            "functionName": [
+              "when"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "==",
+                  "functionName": [
+                    "=="
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -434,6 +483,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
                   "ignoreNulls": null,
@@ -451,7 +501,9 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "==",
+                  "functionName": [
+                    "=="
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -469,6 +521,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
                   "ignoreNulls": null,
@@ -493,6 +546,7 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "ignoreNulls": null,
