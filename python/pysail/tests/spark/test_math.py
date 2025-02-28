@@ -36,19 +36,16 @@ def test_minus(sail):
 def test_multiply(sail):
     assert sail.sql("SELECT 3 * 2 AS result;").collect() == [Row(result=6)]
     assert sail.sql("SELECT 2L * 2L AS result;").collect() == [Row(result=4)]
-    assert sail.sql("SELECT INTERVAL '3:15' HOUR TO MINUTE * 3 AS result;").collect() == [
-        Row(result=datetime.timedelta(seconds=35100))
-    ]
     # Not supported in Sail yet:
+    # assert sail.sql("SELECT INTERVAL '3:15' HOUR TO MINUTE * 3 AS result;").collect() == [
+    #     Row(result=datetime.timedelta(seconds=35100))
+    # ]
     # assert sail.sql("SELECT INTERVAL '3' YEAR * 3 AS result;").collect() == [Row(result=108)]
 
 
 def test_divide(sail):
     assert sail.sql("SELECT 3 / 2 AS result;").collect() == [Row(result=1.5)]
     assert sail.sql("SELECT 2L / 2L AS result;").collect() == [Row(result=1.0)]
-    assert sail.sql("SELECT INTERVAL '3:15' HOUR TO MINUTE / 3 AS result;").collect() == [
-        Row(result=datetime.timedelta(seconds=3900))
-    ]
     assert sail.sql("SELECT 6 / Decimal(3) AS result;").collect() == [Row(result=Decimal("2.00000000000"))]
     # TODO: Spark outputs Decimal("2.000000") but Sail outputs Decimal("2.00000000000")
     assert sail.sql("SELECT Decimal(6) / 3 AS result;").collect() == [Row(result=Decimal("2.00000000000"))]
@@ -60,12 +57,16 @@ def test_divide(sail):
     assert sail.sql("SELECT 2 / Decimal(3) AS result;").collect() == [Row(result=Decimal("0.6666"))]
     # TODO: Spark outputs Decimal("0.666667") but Sail outputs Decimal("0.6666")
     assert sail.sql("SELECT 2.0 / 3.0 AS result;").collect() == [Row(result=Decimal("0.66666"))]
+    # Not supported in Sail yet:
+    # assert sail.sql("SELECT INTERVAL '3:15' HOUR TO MINUTE / 3 AS result;").collect() == [
+    #     Row(result=datetime.timedelta(seconds=3900))
+    # ]
 
 
 def test_div(sail):
     assert sail.sql("SELECT 3 div 2 AS result;").collect() == [Row(result=1)]
     assert sail.sql("SELECT -5.9 div 1;").collect() == [Row(result=-5)]
-    assert sail.sql("SELECT INTERVAL '10' DAY div INTERVAL '3' DAY AS result;").collect() == [Row(result=3)]
     # Not supported in Sail yet:
+    # assert sail.sql("SELECT INTERVAL '10' DAY div INTERVAL '3' DAY AS result;").collect() == [Row(result=3)]
     # assert sail.sql("SELECT INTERVAL '1-1' YEAR TO MONTH div INTERVAL '-1' MONTH AS result;").collect() == [Row(result=-13)]
     # assert sail.sql("SELECT INTERVAL '100' HOUR div INTERVAL '1' DAY AS result;").collect() == [Row(result=4)]

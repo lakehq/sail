@@ -659,8 +659,12 @@
                   "part",
                   {
                     "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 93784128462
+                      "intervalMonthDayNano": {
+                        "value": {
+                          "months": 0,
+                          "days": 1,
+                          "nanoseconds": 7384128462000
+                        }
                       }
                     }
                   }
