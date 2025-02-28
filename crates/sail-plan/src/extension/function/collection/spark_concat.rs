@@ -5,7 +5,9 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
 use datafusion_common::{plan_err, ExprSchema, Result};
-use datafusion_expr::{ColumnarValue, Expr, ExprSchemable, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Expr, ExprSchemable, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions_nested::concat::ArrayConcat;
 
 #[derive(Debug)]
@@ -101,14 +103,15 @@ impl ScalarUDFImpl for SparkConcat {
         }
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args
+            .args
             .iter()
             .any(|arg| matches!(arg.data_type(), DataType::List(_)))
         {
-            ArrayConcat::new().invoke_batch(args, number_rows)
+            ArrayConcat::new().invoke_with_args(args)
         } else {
-            ConcatFunc::new().invoke_batch(args, number_rows)
+            ConcatFunc::new().invoke_with_args(args)
         }
     }
 }

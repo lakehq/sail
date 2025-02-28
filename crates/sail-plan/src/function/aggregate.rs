@@ -8,8 +8,9 @@ use datafusion::functions_aggregate::{
     variance,
 };
 use datafusion::sql::sqlparser::ast::NullTreatment;
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{expr, AggregateUDF};
 use lazy_static::lazy_static;
 
@@ -67,11 +68,13 @@ fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: first_last::first_value_udaf(),
-        args,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment,
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment,
+        },
     }))
 }
 
@@ -80,11 +83,13 @@ fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: first_last::last_value_udaf(),
-        args,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment,
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment,
+        },
     }))
 }
 
@@ -101,44 +106,52 @@ fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(KurtosisFunction::new())),
-        args,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment: get_null_treatment(input.ignore_nulls),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
     }))
 }
 
 fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MaxByFunction::new())),
-        args: input.arguments,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment: get_null_treatment(input.ignore_nulls),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
     }))
 }
 
 fn min_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MinByFunction::new())),
-        args: input.arguments,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment: get_null_treatment(input.ignore_nulls),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
     }))
 }
 
 fn mode(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(ModeFunction::new())),
-        args: input.arguments,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment: get_null_treatment(input.ignore_nulls),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
     }))
 }
 
@@ -155,11 +168,43 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(SkewnessFunc::new())),
-        args,
-        distinct: input.distinct,
-        filter: input.filter,
-        order_by: input.order_by,
-        null_treatment: get_null_treatment(input.ignore_nulls),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let AggFunctionInput {
+        arguments,
+        distinct,
+        ignore_nulls,
+        filter,
+        order_by,
+    } = input;
+    let null_treatment = get_null_treatment(ignore_nulls);
+    let args = match arguments.as_slice() {
+        [expr::Expr::Wildcard {
+            qualifier: None,
+            options: _,
+        }] => {
+            vec![expr::Expr::Literal(COUNT_STAR_EXPANSION)]
+        }
+        _ => arguments,
+    };
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: count::count_udaf(),
+        params: AggregateFunctionParams {
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        },
     }))
 }
 
@@ -189,7 +234,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("collect_list", F::default(array_agg::array_agg_udaf)),
         ("collect_set", F::unknown("collect_set")),
         ("corr", F::default(correlation::corr_udaf)),
-        ("count", F::default(count::count_udaf)),
+        ("count", F::custom(count)),
         ("count_if", F::unknown("count_if")),
         ("count_min_sketch", F::unknown("count_min_sketch")),
         ("covar_pop", F::default(covariance::covar_pop_udaf)),
