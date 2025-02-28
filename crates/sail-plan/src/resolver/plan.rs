@@ -80,9 +80,6 @@ impl PlanResolver<'_> {
         match plan {
             spec::Plan::Query(query) => {
                 let plan = self.resolve_query_plan(query, &mut state).await?;
-                let plan = self
-                    .cast_interval_day_time_to_duration_after_final_plan(plan, &mut state)
-                    .await?;
                 let fields = Some(Self::get_field_names(plan.schema(), &state)?);
                 Ok(NamedPlan { plan, fields })
             }
@@ -91,30 +88,6 @@ impl PlanResolver<'_> {
                 Ok(NamedPlan { plan, fields: None })
             }
         }
-    }
-
-    pub(super) async fn cast_interval_day_time_to_duration_after_final_plan(
-        &self,
-        plan: LogicalPlan,
-        _state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let schema = plan.schema();
-        let mut projected_exprs = vec![];
-        for column in schema.columns().iter() {
-            let field = schema.field_from_column(column)?;
-            let qualifier: Option<&TableReference> = (&column.relation).into();
-            let expr = Expr::Column(Column::from((qualifier, field)));
-            let expr = match field.data_type() {
-                adt::DataType::Interval(adt::IntervalUnit::DayTime) => expr
-                    .cast_to(&adt::DataType::Duration(adt::TimeUnit::Microsecond), schema)?
-                    .alias_qualified(qualifier.cloned(), field.name()),
-                _ => expr,
-            };
-            projected_exprs.push(expr);
-        }
-        let projected_plan =
-            LogicalPlan::Projection(plan::Projection::try_new(projected_exprs, Arc::new(plan))?);
-        Ok(projected_plan)
     }
 
     #[async_recursion]

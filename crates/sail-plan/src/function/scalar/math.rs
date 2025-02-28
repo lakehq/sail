@@ -1,9 +1,11 @@
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, BinaryExpr, ExprSchemable, Operator};
+use half::f16;
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::extension::function::math::least_greatest;
 use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
@@ -235,10 +237,36 @@ fn spark_multiply(input: FunctionInput) -> PlanResult<expr::Expr> {
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
 fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
     let FunctionInput {
-        arguments, schema, ..
+        arguments,
+        schema,
+        plan_config,
+        ..
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
+    if matches!(
+        divisor,
+        expr::Expr::Literal(ScalarValue::Int8(Some(0)))
+            | expr::Expr::Literal(ScalarValue::Int16(Some(0)))
+            | expr::Expr::Literal(ScalarValue::Int32(Some(0)))
+            | expr::Expr::Literal(ScalarValue::Int64(Some(0)))
+            | expr::Expr::Literal(ScalarValue::UInt8(Some(0)))
+            | expr::Expr::Literal(ScalarValue::UInt16(Some(0)))
+            | expr::Expr::Literal(ScalarValue::UInt32(Some(0)))
+            | expr::Expr::Literal(ScalarValue::UInt64(Some(0)))
+            | expr::Expr::Literal(ScalarValue::Float32(Some(0.0)))
+            | expr::Expr::Literal(ScalarValue::Float64(Some(0.0)))
+    ) || divisor == expr::Expr::Literal(ScalarValue::Float16(Some(f16::from_f32(0.0))))
+    {
+        // FIXME: Account for array input.
+        let ansi_mode = plan_config.ansi_mode;
+        return if ansi_mode {
+            Err(PlanError::ArrowError(ArrowError::DivideByZero))
+        } else {
+            Ok(expr::Expr::Literal(ScalarValue::Null))
+        };
+    }
+
     let (dividend_type, divisor_type) = (dividend.get_type(schema), divisor.get_type(schema));
     match (dividend_type, divisor_type) {
         // TODO: In case getting the type fails, we don't want to fail the query.

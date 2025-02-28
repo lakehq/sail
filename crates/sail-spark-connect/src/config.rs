@@ -8,7 +8,7 @@ use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
-    SPARK_CONFIG, SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
+    SPARK_CONFIG, SPARK_SQL_ANSI_ENABLED, SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
     SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
     SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY, SPARK_SQL_GLOBAL_TEMP_DATABASE,
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
@@ -218,6 +218,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
                     "invalid timestamp type: {value}"
                 )));
             }
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_ANSI_ENABLED)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.ansi_mode = value;
         }
 
         output.plan_formatter = Arc::new(DefaultPlanFormatter);
