@@ -987,7 +987,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: e"
+        "success": "ok"
       }
     },
     {

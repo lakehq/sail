@@ -470,6 +470,10 @@ fn spark_ln(expr: expr::Expr) -> expr::Expr {
     })
 }
 
+fn eulers_constant() -> expr::Expr {
+    expr::Expr::Literal(ScalarValue::Float64(Some(std::f64::consts::E)))
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
     use crate::function::common::FunctionBuilder as F;
 
@@ -499,7 +503,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("csc", F::unknown("csc")),
         ("degrees", F::unary(expr_fn::degrees)),
         ("div", F::custom(spark_div)),
-        ("e", F::unknown("e")),
+        ("e", F::nullary(eulers_constant)),
         ("exp", F::unary(expr_fn::exp)),
         ("expm1", F::custom(expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
