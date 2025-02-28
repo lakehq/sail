@@ -30,11 +30,7 @@ impl PlanResolver<'_> {
         let columns: Vec<Column> = if columns.is_empty() {
             input.schema().columns()
         } else {
-            self.resolve_columns(
-                input.schema(),
-                columns.iter().map(|x| x.into()).collect(),
-                state,
-            )?
+            self.resolve_columns(input.schema(), &columns, state)?
         };
         let statistics: HashSet<String> = if statistics.is_empty() {
             HashSet::from([
@@ -286,11 +282,13 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-        let left_column: &str = (&left_column).into();
-        let right_column: &str = (&right_column).into();
-        let cross_tab_alias = state.register_field_name(format!("{left_column}_{right_column}"));
-        let left_column = self.resolve_one_column(input.schema(), left_column, state)?;
-        let right_column = self.resolve_one_column(input.schema(), right_column, state)?;
+        let cross_tab_alias = state.register_field_name(format!(
+            "{}_{}",
+            left_column.as_ref(),
+            right_column.as_ref()
+        ));
+        let left_column = self.resolve_one_column(input.schema(), left_column.as_ref(), state)?;
+        let right_column = self.resolve_one_column(input.schema(), right_column.as_ref(), state)?;
 
         let projected_plan = LogicalPlanBuilder::from(input.clone())
             .project(vec![Expr::Cast(expr::Cast {

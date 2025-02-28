@@ -363,6 +363,7 @@ impl PlanResolver<'_> {
                 input,
                 function,
                 arguments,
+                named_arguments,
                 table_alias,
                 column_aliases,
                 outer,
@@ -371,6 +372,7 @@ impl PlanResolver<'_> {
                     input.map(|x| *x),
                     function,
                     arguments,
+                    named_arguments,
                     table_alias,
                     column_aliases,
                     outer,
@@ -711,25 +713,21 @@ impl PlanResolver<'_> {
         let spec::ReadUdtf {
             name,
             arguments,
+            named_arguments,
             options,
         } = udtf;
         if !options.is_empty() {
             return Err(PlanError::todo("ReadType::UDTF options"));
         }
-        let table_reference = self.resolve_table_reference(&name)?;
-        let function_name = match &table_reference {
-            TableReference::Bare { table } => table.as_ref(),
-            _ => {
-                return Err(PlanError::unsupported(format!(
-                    "qualified table function name: {table_reference}"
-                )))
-            }
+        let Ok(function_name) = <Vec<String>>::from(name).one() else {
+            return Err(PlanError::unsupported("qualified table function name"));
         };
         let canonical_function_name = function_name.to_ascii_lowercase();
         if is_built_in_generator_function(&canonical_function_name) {
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: function_name.to_string(),
+                function_name: spec::ObjectName::bare(function_name),
                 arguments,
+                named_arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -756,7 +754,7 @@ impl PlanResolver<'_> {
                         .await?;
                     self.resolve_python_udtf_plan(
                         udtf,
-                        function_name,
+                        &function_name,
                         input,
                         arguments,
                         None,
@@ -903,105 +901,96 @@ impl PlanResolver<'_> {
         let spec::Join {
             left,
             right,
-            join_condition,
             join_type,
-            using_columns,
+            join_criteria,
             join_data_type,
         } = join;
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
-        let (join_type, is_cross_join) = match join_type {
-            JoinType::Inner => (plan::JoinType::Inner, false),
-            JoinType::LeftOuter => (plan::JoinType::Left, false),
-            JoinType::RightOuter => (plan::JoinType::Right, false),
-            JoinType::FullOuter => (plan::JoinType::Full, false),
-            JoinType::LeftSemi => (plan::JoinType::LeftSemi, false),
-            JoinType::RightSemi => (plan::JoinType::RightSemi, false),
-            JoinType::LeftAnti => (plan::JoinType::LeftAnti, false),
-            JoinType::RightAnti => (plan::JoinType::RightAnti, false),
-            // use inner join type to build the schema for cross join
-            JoinType::Cross => (plan::JoinType::Inner, true),
+        let join_type = match join_type {
+            JoinType::Inner => Some(plan::JoinType::Inner),
+            JoinType::LeftOuter => Some(plan::JoinType::Left),
+            JoinType::RightOuter => Some(plan::JoinType::Right),
+            JoinType::FullOuter => Some(plan::JoinType::Full),
+            JoinType::LeftSemi => Some(plan::JoinType::LeftSemi),
+            JoinType::RightSemi => Some(plan::JoinType::RightSemi),
+            JoinType::LeftAnti => Some(plan::JoinType::LeftAnti),
+            JoinType::RightAnti => Some(plan::JoinType::RightAnti),
+            JoinType::Cross => None,
         };
 
-        if is_cross_join || (join_condition.is_none() && using_columns.is_empty()) {
-            if join_condition.is_some() {
-                return Err(PlanError::invalid("cross join with join condition"));
+        match (join_type, join_criteria) {
+            (None, Some(_)) => Err(PlanError::invalid("cross join with join criteria")),
+            // When the join criteria are not specified, any join type has the semantics of a cross join.
+            (Some(_), None) | (None, None) => {
+                if join_data_type.is_some() {
+                    return Err(PlanError::invalid("cross join with join data type"));
+                }
+                Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?)
             }
-            if !using_columns.is_empty() {
-                return Err(PlanError::invalid("cross join with using columns"));
+            (Some(_), Some(spec::JoinCriteria::Natural)) => Err(PlanError::todo("natural join")),
+            (Some(join_type), Some(spec::JoinCriteria::On(condition))) => {
+                let join_schema = Arc::new(build_join_schema(
+                    left.schema(),
+                    right.schema(),
+                    &join_type,
+                )?);
+                let condition = self
+                    .resolve_expression(condition, &join_schema, state)
+                    .await?
+                    .unalias_nested()
+                    .data;
+                let plan = LogicalPlanBuilder::from(left)
+                    .join_on(right, join_type, Some(condition))?
+                    .build()?;
+                Ok(plan)
             }
-            if join_data_type.is_some() {
-                return Err(PlanError::invalid("cross join with join data type"));
-            }
-            return Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?);
-        }
-        if join_condition.is_some() && using_columns.is_empty() {
-            let join_schema = Arc::new(build_join_schema(
-                left.schema(),
-                right.schema(),
-                &join_type,
-            )?);
-            let condition = match join_condition {
-                Some(condition) => Some(
-                    self.resolve_expression(condition, &join_schema, state)
-                        .await?
-                        .unalias_nested()
-                        .data,
-                ),
-                None => None,
-            };
-            let plan = LogicalPlanBuilder::from(left)
-                .join_on(right, join_type, condition)?
-                .build()?;
-            Ok(plan)
-        } else if join_condition.is_none() && !using_columns.is_empty() {
-            let join_columns = using_columns
-                .iter()
-                .map(|name| {
-                    let name: &str = name.into();
-                    let left_column = self.resolve_one_column(left.schema(), name, state)?;
-                    let right_column = self.resolve_one_column(right.schema(), name, state)?;
-                    Ok((left_column, right_column))
-                })
-                .collect::<PlanResult<Vec<(_, _)>>>()?;
-            let coalesced = join_columns
-                .iter()
-                .zip(using_columns)
-                .map(|((left, right), name)| {
-                    coalesce(vec![
-                        Expr::Column(left.clone()),
-                        Expr::Column(right.clone()),
-                    ])
-                    .alias(state.register_field_name(name))
-                })
-                .collect::<Vec<_>>();
-            let (left_columns, right_columns) =
-                join_columns.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
+            (Some(join_type), Some(spec::JoinCriteria::Using(using))) => {
+                let join_columns = using
+                    .iter()
+                    .map(|name| {
+                        let left_column =
+                            self.resolve_one_column(left.schema(), name.as_ref(), state)?;
+                        let right_column =
+                            self.resolve_one_column(right.schema(), name.as_ref(), state)?;
+                        Ok((left_column, right_column))
+                    })
+                    .collect::<PlanResult<Vec<(_, _)>>>()?;
+                let coalesced = join_columns
+                    .iter()
+                    .zip(using)
+                    .map(|((left, right), name)| {
+                        coalesce(vec![
+                            Expr::Column(left.clone()),
+                            Expr::Column(right.clone()),
+                        ])
+                        .alias(state.register_field_name(name))
+                    })
+                    .collect::<Vec<_>>();
+                let (left_columns, right_columns) =
+                    join_columns.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
 
-            let plan = LogicalPlanBuilder::from(left)
-                .join_detailed(
-                    right,
-                    join_type,
-                    (left_columns.clone(), right_columns.clone()),
-                    None,
-                    false,
-                )?
-                .build()?;
-            let projections = coalesced.into_iter().chain(
-                plan.schema()
-                    .columns()
-                    .into_iter()
-                    .filter(|col| !left_columns.contains(col) && !right_columns.contains(col))
-                    .map(Expr::Column),
-            );
-            let plan = LogicalPlanBuilder::from(plan)
-                .project(projections)?
-                .build()?;
-            Ok(plan)
-        } else {
-            return Err(PlanError::invalid(
-                "expecting either join condition or using columns",
-            ));
+                let plan = LogicalPlanBuilder::from(left)
+                    .join_detailed(
+                        right,
+                        join_type,
+                        (left_columns.clone(), right_columns.clone()),
+                        None,
+                        false,
+                    )?
+                    .build()?;
+                let projections = coalesced.into_iter().chain(
+                    plan.schema()
+                        .columns()
+                        .into_iter()
+                        .filter(|col| !left_columns.contains(col) && !right_columns.contains(col))
+                        .map(Expr::Column),
+                );
+                let plan = LogicalPlanBuilder::from(plan)
+                    .project(projections)?
+                    .build()?;
+                Ok(plan)
+            }
         }
     }
 
@@ -1457,7 +1446,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
             Arc::new(self.resolve_query_plan(input, state).await?),
-            self.resolve_table_reference(&spec::ObjectName::new_qualified(alias, qualifier))?,
+            self.resolve_table_reference(&spec::ObjectName::from(qualifier).child(alias))?,
         )?))
     }
 
@@ -1756,6 +1745,7 @@ impl PlanResolver<'_> {
             arguments,
             function,
         } = function;
+        let function_name: String = function_name.into();
         let input = self
             .resolve_query_project(Some(input), arguments, state)
             .await?;
@@ -1880,6 +1870,7 @@ impl PlanResolver<'_> {
             arguments,
             function,
         } = function;
+        let function_name: String = function_name.into();
         let function = self.resolve_python_udf(function, state)?;
         let output_fields = match function.output_type {
             adt::DataType::Struct(fields) => fields,
@@ -2016,6 +2007,7 @@ impl PlanResolver<'_> {
             arguments: _, // no arguments are passed for co-group map
             function,
         } = function;
+        let function_name: String = function_name.into();
         let function = self.resolve_python_udf(function, state)?;
         let output_fields = match function.output_type {
             adt::DataType::Struct(fields) => fields,
@@ -2246,8 +2238,7 @@ impl PlanResolver<'_> {
         let mut scope = state.enter_cte_scope();
         let state = scope.state();
         for (name, query) in ctes.into_iter() {
-            let reference =
-                self.resolve_table_reference(&spec::ObjectName::new_unqualified(name.clone()))?;
+            let reference = self.resolve_table_reference(&spec::ObjectName::bare(name.clone()))?;
             let plan = if recursive {
                 self.resolve_recursive_query_plan(query, state).await?
             } else {
@@ -2262,11 +2253,13 @@ impl PlanResolver<'_> {
         self.resolve_query_plan(input, state).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn resolve_query_lateral_view(
         &self,
         input: Option<spec::QueryPlan>,
         function: spec::ObjectName,
         arguments: Vec<spec::Expr>,
+        named_arguments: Vec<(spec::Identifier, spec::Expr)>,
         table_alias: Option<spec::ObjectName>,
         column_aliases: Option<Vec<spec::Identifier>>,
         outer: bool,
@@ -2331,8 +2324,9 @@ impl PlanResolver<'_> {
             function_name
         };
         let expression = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-            function_name,
+            function_name: spec::ObjectName::bare(function_name),
             arguments,
+            named_arguments,
             is_distinct: false,
             is_user_defined_function: false,
             ignore_nulls: None,
@@ -2392,6 +2386,7 @@ impl PlanResolver<'_> {
             arguments,
             function,
         } = udtf;
+        let function_name: String = function_name.into();
         let function = self.resolve_python_udtf(function, state)?;
         let input = self.resolve_empty_query_plan()?;
         let arguments = self
@@ -2662,10 +2657,9 @@ impl PlanResolver<'_> {
 
         let column_defaults: Vec<(String, Expr)> = async {
             let mut results: Vec<(String, Expr)> = Vec::with_capacity(column_defaults.len());
-            for column_default in column_defaults {
-                let (name, expr) = column_default;
+            for (name, expr) in column_defaults {
                 let expr = self.resolve_expression(expr, &schema, state).await?;
-                results.push((name, expr));
+                results.push((name.into(), expr));
             }
             Ok(results) as PlanResult<_>
         }
@@ -2935,6 +2929,7 @@ impl PlanResolver<'_> {
             function,
         } = function;
 
+        let function_name: String = function_name.into();
         let function_name = function_name.to_ascii_lowercase();
         let function = self.resolve_python_udf(function, state)?;
         let udf = PySparkUnresolvedUDF::new(
@@ -2966,6 +2961,7 @@ impl PlanResolver<'_> {
             arguments: _,
             function,
         } = function;
+        let function_name: String = function_name.into();
         let function_name = function_name.to_ascii_lowercase();
         let function = self.resolve_python_udtf(function, state)?;
         let udtf = PySparkUnresolvedUDF::new(
@@ -2989,7 +2985,7 @@ impl PlanResolver<'_> {
         input: spec::QueryPlan,
         table: spec::ObjectName,
         columns: Vec<spec::Identifier>,
-        partition_spec: Vec<(String, Option<spec::Expr>)>,
+        partition_spec: Vec<(spec::Identifier, Option<spec::Expr>)>,
         overwrite: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
@@ -3356,12 +3352,12 @@ impl PlanResolver<'_> {
                 args: vec![
                     Expr::Column(self.resolve_one_column(
                         input.schema(),
-                        (&left_column).into(),
+                        left_column.as_ref(),
                         state,
                     )?),
                     Expr::Column(self.resolve_one_column(
                         input.schema(),
-                        (&right_column).into(),
+                        right_column.as_ref(),
                         state,
                     )?),
                 ],
@@ -3397,12 +3393,12 @@ impl PlanResolver<'_> {
                 args: vec![
                     Expr::Column(self.resolve_one_column(
                         input.schema(),
-                        (&left_column).into(),
+                        left_column.as_ref(),
                         state,
                     )?),
                     Expr::Column(self.resolve_one_column(
                         input.schema(),
-                        (&right_column).into(),
+                        right_column.as_ref(),
                         state,
                     )?),
                 ],

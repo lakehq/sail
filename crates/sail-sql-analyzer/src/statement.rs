@@ -729,7 +729,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     let function = match item {
                         Either::Left(x @ ObjectName { .. }) => from_ast_object_name(x)?,
                         Either::Right(x @ StringLiteral { .. }) => {
-                            spec::ObjectName::new_unqualified(from_ast_string(x)?.into())
+                            spec::ObjectName::bare(from_ast_string(x)?)
                         }
                     };
                     spec::CommandNode::DescribeFunction {
@@ -907,7 +907,7 @@ fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::Tab
 
 fn from_ast_table_columns(
     columns: Option<ColumnDefinitionList>,
-) -> SqlResult<(spec::Schema, Vec<(String, spec::Expr)>)> {
+) -> SqlResult<(spec::Schema, Vec<(spec::Identifier, spec::Expr)>)> {
     let columns = columns.map(
         |ColumnDefinitionList {
              left: _,
@@ -938,7 +938,7 @@ fn from_ast_table_columns(
             return Err(SqlError::todo("GENERATED ALWAYS AS in CREATE TABLE column"));
         }
         if let Some(default) = default {
-            defaults.push((name.value.clone(), from_ast_expression(default)?));
+            defaults.push((name.value.as_str().into(), from_ast_expression(default)?));
         }
         let field = spec::Field {
             name: name.value,
@@ -1349,7 +1349,9 @@ fn from_ast_property_list(properties: PropertyList) -> SqlResult<Vec<(String, St
         .collect::<SqlResult<Vec<_>>>()
 }
 
-fn from_ast_partition(partition: PartitionClause) -> SqlResult<Vec<(String, Option<spec::Expr>)>> {
+fn from_ast_partition(
+    partition: PartitionClause,
+) -> SqlResult<Vec<(spec::Identifier, Option<spec::Expr>)>> {
     let PartitionClause {
         partition: _,
         values:
@@ -1364,7 +1366,7 @@ fn from_ast_partition(partition: PartitionClause) -> SqlResult<Vec<(String, Opti
         .map(|x| {
             let PartitionValue { column, value } = x;
             let expr = value.map(|(_, e)| from_ast_expression(e)).transpose()?;
-            Ok((column.value, expr))
+            Ok((column.value.into(), expr))
         })
         .collect::<SqlResult<Vec<_>>>()
 }
