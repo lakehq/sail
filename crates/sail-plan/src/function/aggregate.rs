@@ -8,6 +8,7 @@ use datafusion::functions_aggregate::{
     variance,
 };
 use datafusion::sql::sqlparser::ast::NullTreatment;
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{expr, AggregateUDF};
@@ -177,6 +178,36 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let AggFunctionInput {
+        arguments,
+        distinct,
+        ignore_nulls,
+        filter,
+        order_by,
+    } = input;
+    let null_treatment = get_null_treatment(ignore_nulls);
+    let args = match arguments.as_slice() {
+        [expr::Expr::Wildcard {
+            qualifier: None,
+            options: _,
+        }] => {
+            vec![expr::Expr::Literal(COUNT_STAR_EXPANSION)]
+        }
+        _ => arguments,
+    };
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: count::count_udaf(),
+        params: AggregateFunctionParams {
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        },
+    }))
+}
+
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
     use crate::function::common::AggFunctionBuilder as F;
 
@@ -203,7 +234,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("collect_list", F::default(array_agg::array_agg_udaf)),
         ("collect_set", F::unknown("collect_set")),
         ("corr", F::default(correlation::corr_udaf)),
-        ("count", F::default(count::count_udaf)),
+        ("count", F::custom(count)),
         ("count_if", F::unknown("count_if")),
         ("count_min_sketch", F::unknown("count_min_sketch")),
         ("covar_pop", F::default(covariance::covar_pop_udaf)),

@@ -611,7 +611,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Physical plan does not support logical expression Wildcard { qualifier: None, options: WildcardOptions { ilike: None, exclude: None, except: None, replace: None, rename: None } }"
+        "success": "ok"
       }
     },
     {
