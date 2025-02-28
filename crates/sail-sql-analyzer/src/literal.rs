@@ -1007,6 +1007,11 @@ fn parse_multi_unit_interval(
 }
 
 pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
+    // FIXME: There are temporal coercion issues in [`datafusion_expr::binary::BinaryTypeCoercer`].
+    //  After we fix the coercion issues, this function should simply return:
+    //      spec::Literal::DurationMicrosecond {
+    //          microseconds: Some(microseconds),
+    //      }
     let total_days = microseconds / (24 * 60 * 60 * 1_000_000);
     let remaining_micros = microseconds % (24 * 60 * 60 * 1_000_000);
     if remaining_micros % 1000 == 0 {

@@ -39,6 +39,7 @@ pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     /// The database name for the global temporary views.
     pub global_temp_database: String,
     pub session_user_id: String,
+    pub ansi_mode: bool,
 }
 
 impl PlanConfig {
@@ -65,6 +66,7 @@ impl Default for PlanConfig {
             default_warehouse_directory: "spark-warehouse".to_string(),
             global_temp_database: "global_temp".to_string(),
             session_user_id: "sail".to_string(),
+            ansi_mode: false,
         }
     }
 }
