@@ -11,6 +11,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
 };
+use crate::extension::function::math::both_are_decimal;
 
 #[derive(Debug)]
 pub struct SparkPmod {
@@ -46,7 +47,7 @@ impl ScalarUDFImpl for SparkPmod {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() != 2 {
-            return Err(invalid_arg_count_exec_err("pmod", 2, arg_types.len()));
+            return Err(invalid_arg_count_exec_err("pmod", (2, 2), arg_types.len()));
         }
         let (dividend, divisor) = (&arg_types[0], &arg_types[1]);
         if both_are_decimal(dividend, divisor) {
@@ -58,7 +59,7 @@ impl ScalarUDFImpl for SparkPmod {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 2 {
-            return Err(invalid_arg_count_exec_err("pmod", 2, args.args.len()));
+            return Err(invalid_arg_count_exec_err("pmod", (2, 2), args.args.len()));
         }
         match (&args.args[0], &args.args[1]) {
             (
@@ -151,7 +152,7 @@ impl ScalarUDFImpl for SparkPmod {
                             as ArrayRef)),
                         other => Err(unsupported_data_type_exec_err(
                             "pmod",
-                            &DataType::Float64,
+                            format!("{}", DataType::Float64).as_str(),
                             other,
                         )),
                     }
@@ -182,7 +183,11 @@ impl ScalarUDFImpl for SparkPmod {
                             as ArrayRef)),
                         other => Err(unsupported_data_type_exec_err(
                             "pmod",
-                            &DataType::Decimal128(*divisor_precision, *divisor_scale),
+                            format!(
+                                "{}",
+                                DataType::Decimal128(*divisor_precision, *divisor_scale)
+                            )
+                            .as_str(),
                             other,
                         )),
                     }
@@ -217,7 +222,11 @@ impl ScalarUDFImpl for SparkPmod {
                             as ArrayRef)),
                         other => Err(unsupported_data_type_exec_err(
                             "pmod",
-                            &DataType::Decimal256(*divisor_precision, *divisor_scale),
+                            format!(
+                                "{}",
+                                DataType::Decimal256(*divisor_precision, *divisor_scale)
+                            )
+                            .as_str(),
                             other,
                         )),
                     }
@@ -298,14 +307,14 @@ impl ScalarUDFImpl for SparkPmod {
                     }
                     (_dividend, _divisor) => Err(unsupported_data_types_exec_err(
                         "pmod",
-                        "Float Type or Decimal Type",
+                        "Numeric Type",
                         &[args.args[0].data_type(), args.args[1].data_type()],
                     )),
                 }
             }
             (dividend, divisor) => Err(unsupported_data_types_exec_err(
                 "pmod",
-                "Float Type or Decimal Type",
+                "Numeric Type",
                 &[dividend.data_type(), divisor.data_type()],
             )),
         }
@@ -313,10 +322,9 @@ impl ScalarUDFImpl for SparkPmod {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 2 {
-            return Err(invalid_arg_count_exec_err("pmod", 2, arg_types.len()));
+            return Err(invalid_arg_count_exec_err("pmod", (2, 2), arg_types.len()));
         }
         let (dividend, divisor) = (&arg_types[0], &arg_types[1]);
-
         if both_are_decimal(dividend, divisor) {
             Ok(vec![divisor.clone(), divisor.clone()])
         } else if dividend.is_numeric() && divisor.is_numeric() {
@@ -324,21 +332,11 @@ impl ScalarUDFImpl for SparkPmod {
         } else {
             Err(unsupported_data_types_exec_err(
                 "pmod",
-                "Float Type or Decimal Type",
+                "Numeric Type",
                 arg_types,
             ))
         }
     }
-}
-
-fn both_are_decimal(dividend: &DataType, divisor: &DataType) -> bool {
-    matches!(
-        (dividend, divisor),
-        (DataType::Decimal128(_, _), DataType::Decimal128(_, _))
-            | (DataType::Decimal128(_, _), DataType::Decimal256(_, _))
-            | (DataType::Decimal256(_, _), DataType::Decimal128(_, _))
-            | (DataType::Decimal256(_, _), DataType::Decimal256(_, _))
-    )
 }
 
 fn pmod_f64(dividend: f64, divisor: f64) -> f64 {

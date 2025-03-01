@@ -48,7 +48,7 @@ impl ScalarUDFImpl for SparkBin {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 1 {
-            return Err(invalid_arg_count_exec_err("bin", 1, args.args.len()));
+            return Err(invalid_arg_count_exec_err("bin", (1, 1), args.args.len()));
         }
         match &args.args[0] {
             ColumnarValue::Scalar(ScalarValue::Int64(value)) => {
@@ -70,13 +70,13 @@ impl ScalarUDFImpl for SparkBin {
                 }
                 other => Err(unsupported_data_type_exec_err(
                     "bin",
-                    &DataType::Int64,
+                    format!("{}", DataType::Int64).as_str(),
                     other,
                 )),
             },
             other => Err(unsupported_data_type_exec_err(
                 "bin",
-                &DataType::Int64,
+                format!("{}", DataType::Int64).as_str(),
                 &other.data_type(),
             )),
         }
@@ -84,7 +84,7 @@ impl ScalarUDFImpl for SparkBin {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("bin", 1, arg_types.len()));
+            return Err(invalid_arg_count_exec_err("bin", (1, 1), arg_types.len()));
         }
         Ok(vec![DataType::Int64])
     }

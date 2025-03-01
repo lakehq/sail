@@ -4,16 +4,24 @@ use datafusion_common::{exec_datafusion_err, DataFusionError};
 
 pub fn invalid_arg_count_exec_err(
     function_name: &str,
-    required: i32,
+    required_range: (i32, i32),
     provided: usize,
 ) -> DataFusionError {
-    let plural_suffix = if required == 1 { "" } else { "s" };
-    exec_datafusion_err!("Spark `{function_name}` function requires {required} argument{plural_suffix}, got {provided}")
+    let (min_required, max_required) = required_range;
+    let required = if min_required == max_required {
+        format!(
+            "{min_required} argument{}",
+            if min_required == 1 { "" } else { "s" }
+        )
+    } else {
+        format!("{min_required} to {max_required} arguments")
+    };
+    exec_datafusion_err!("Spark `{function_name}` function requires {required}, got {provided}")
 }
 
 pub fn unsupported_data_type_exec_err(
     function_name: &str,
-    required: &DataType,
+    required: &str,
     provided: &DataType,
 ) -> DataFusionError {
     exec_datafusion_err!("Unsupported Data Type: Spark `{function_name}` function expects {required}, got {provided}")
@@ -28,7 +36,7 @@ pub fn unsupported_data_types_exec_err(
         "Unsupported Data Type: Spark `{function_name}` function expects {required}, got {}",
         provided
             .iter()
-            .map(|dt| format!("{}", dt))
+            .map(|dt| format!("{dt}"))
             .collect::<Vec<_>>()
             .join(", ")
     )

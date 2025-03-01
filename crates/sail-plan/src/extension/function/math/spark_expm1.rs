@@ -48,7 +48,7 @@ impl ScalarUDFImpl for SparkExpm1 {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 1 {
-            return Err(invalid_arg_count_exec_err("expm1", 1, args.args.len()));
+            return Err(invalid_arg_count_exec_err("expm1", (1, 1), args.args.len()));
         }
         match &args.args[0] {
             ColumnarValue::Scalar(ScalarValue::Float64(value)) => Ok(ColumnarValue::Scalar(
@@ -62,13 +62,13 @@ impl ScalarUDFImpl for SparkExpm1 {
                 ) as ArrayRef)),
                 other => Err(unsupported_data_type_exec_err(
                     "expm1",
-                    &DataType::Float64,
+                    format!("{}", DataType::Float64).as_str(),
                     other,
                 )),
             },
             other => Err(unsupported_data_type_exec_err(
                 "expm1",
-                &DataType::Float64,
+                format!("{}", DataType::Float64).as_str(),
                 &other.data_type(),
             )),
         }
@@ -76,14 +76,14 @@ impl ScalarUDFImpl for SparkExpm1 {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("expm1", 1, arg_types.len()));
+            return Err(invalid_arg_count_exec_err("expm1", (1, 1), arg_types.len()));
         }
         if arg_types[0].is_numeric() {
             Ok(vec![DataType::Float64])
         } else {
             Err(unsupported_data_type_exec_err(
                 "expm1",
-                &DataType::Float64,
+                "Numeric Type",
                 &arg_types[0],
             ))
         }
