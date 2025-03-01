@@ -83,8 +83,9 @@ impl TryFrom<Vec<WindowModifier>> for WindowModifiers {
 }
 fn negated(expr: spec::Expr) -> spec::Expr {
     spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-        function_name: "not".to_string(),
+        function_name: spec::ObjectName::bare("not"),
         arguments: vec![expr],
+        named_arguments: vec![],
         is_distinct: false,
         is_user_defined_function: false,
         ignore_nulls: None,
@@ -93,11 +94,30 @@ fn negated(expr: spec::Expr) -> spec::Expr {
     })
 }
 
-pub(crate) fn from_ast_function_argument(arg: FunctionArgument) -> SqlResult<spec::Expr> {
-    match arg {
-        FunctionArgument::Unnamed(arg) => from_ast_expression(arg),
-        FunctionArgument::Named(_, _, _) => Err(SqlError::todo("named function arguments")),
+#[allow(clippy::type_complexity)]
+pub(crate) fn from_ast_function_arguments(
+    args: impl IntoIterator<Item = FunctionArgument>,
+) -> SqlResult<(Vec<spec::Expr>, Vec<(spec::Identifier, spec::Expr)>)> {
+    let mut arguments = vec![];
+    let mut named_arguments = vec![];
+    for arg in args {
+        match arg {
+            FunctionArgument::Named(name, _, expr) => {
+                let expr = from_ast_expression(expr)?;
+                named_arguments.push((name.value.into(), expr));
+            }
+            FunctionArgument::Unnamed(expr) => {
+                if !named_arguments.is_empty() {
+                    return Err(SqlError::invalid(
+                        "positional argument after named argument",
+                    ));
+                }
+                let expr = from_ast_expression(expr)?;
+                arguments.push(expr);
+            }
+        }
     }
+    Ok((arguments, named_arguments))
 }
 
 pub fn from_ast_object_name(name: ObjectName) -> SqlResult<spec::ObjectName> {
@@ -228,8 +248,9 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         Expr::Atom(atom) => from_ast_atom_expression(atom),
         Expr::UnaryOperator(op, expr) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: from_ast_unary_operator(op)?,
+                function_name: spec::ObjectName::bare(from_ast_unary_operator(op)?),
                 arguments: vec![from_ast_expression(*expr)?],
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -240,8 +261,9 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         Expr::BinaryOperator(left, op, right) => {
             let op = from_ast_binary_operator(op)?;
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: op,
+                function_name: spec::ObjectName::bare(op),
                 arguments: vec![from_ast_expression(*left)?, from_ast_expression(*right)?],
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -267,14 +289,14 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             match expr {
                 spec::Expr::UnresolvedAttribute { name, plan_id } => {
                     Ok(spec::Expr::UnresolvedAttribute {
-                        name: name.child(field.value.into()),
+                        name: name.child(field.value),
                         plan_id,
                     })
                 }
                 _ => Ok(spec::Expr::UnresolvedExtractValue {
                     child: Box::new(expr),
                     extraction: Box::new(spec::Expr::UnresolvedAttribute {
-                        name: spec::ObjectName::new_unqualified(field.value.into()),
+                        name: spec::ObjectName::bare(field.value),
                         plan_id: None,
                     }),
                 }),
@@ -377,8 +399,9 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 arguments.push(LiteralValue(escape.to_string()).try_into()?);
             };
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "like".to_string(),
+                function_name: spec::ObjectName::bare("like"),
                 arguments,
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -399,8 +422,9 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 arguments.push(LiteralValue(escape.to_string()).try_into()?);
             };
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "ilike".to_string(),
+                function_name: spec::ObjectName::bare("ilike"),
                 arguments,
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -417,8 +441,9 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             let expr = from_ast_expression(*expr)?;
             let pattern = from_ast_expression(*pattern)?;
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "rlike".to_string(),
+                function_name: spec::ObjectName::bare("rlike"),
                 arguments: vec![expr, pattern],
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -435,8 +460,9 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             let expr = from_ast_expression(*expr)?;
             let pattern = from_ast_expression(*pattern)?;
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "regexp".to_string(),
+                function_name: spec::ObjectName::bare("regexp"),
                 arguments: vec![expr, pattern],
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -500,7 +526,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             let arguments = arguments
                 .into_iter()
                 .map(|arg| spec::UnresolvedNamedLambdaVariable {
-                    name: spec::ObjectName::new_unqualified(arg.value.into()),
+                    name: spec::ObjectName::bare(arg.value),
                 })
                 .collect();
             let function = from_ast_expression(*body)?;
@@ -516,8 +542,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "struct".to_string(),
+                function_name: spec::ObjectName::bare("struct"),
                 arguments,
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -531,8 +558,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 .map(from_ast_named_expression)
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "struct".to_string(),
+                function_name: spec::ObjectName::bare("struct"),
                 arguments,
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -562,8 +590,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                     let condition = from_ast_expression(condition)?;
                     let condition = if let Some(ref operand) = operand {
                         spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                            function_name: "==".to_string(),
+                            function_name: spec::ObjectName::bare("=="),
                             arguments: vec![operand.clone(), condition],
+                            named_arguments: vec![],
                             is_distinct: false,
                             is_user_defined_function: false,
                             ignore_nulls: None,
@@ -582,8 +611,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(result)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "when".to_string(),
+                function_name: spec::ObjectName::bare("when"),
                 arguments,
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -597,11 +627,12 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }),
         AtomExpr::Extract(_, _, ident, _, expr, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "extract".to_string(),
+                function_name: spec::ObjectName::bare("extract"),
                 arguments: vec![
                     LiteralValue(ident.value).try_into()?,
                     from_ast_expression(*expr)?,
                 ],
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -618,8 +649,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(*len)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "substring".to_string(),
+                function_name: spec::ObjectName::bare("substring"),
                 arguments,
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -646,8 +678,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 ),
             };
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: name.to_string(),
+                function_name: spec::ObjectName::bare(name),
                 arguments,
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -665,8 +698,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(*len)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "overlay".to_string(),
+                function_name: spec::ObjectName::bare("overlay"),
                 arguments,
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -676,8 +710,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::Position(_, _, what, _, e, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "strpos".to_string(),
+                function_name: spec::ObjectName::bare("strpos"),
                 arguments: vec![from_ast_expression(*e)?, from_ast_expression(*what)?],
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -687,8 +722,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::CurrentUser(_, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "current_user".to_string(),
+                function_name: spec::ObjectName::bare("current_user"),
                 arguments: vec![],
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -698,8 +734,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::CurrentTimestamp(_, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "current_timestamp".to_string(),
+                function_name: spec::ObjectName::bare("current_timestamp"),
                 arguments: vec![],
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -709,8 +746,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::CurrentDate(_, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: "current_date".to_string(),
+                function_name: spec::ObjectName::bare("current_date"),
                 arguments: vec![],
+                named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
                 ignore_nulls: None,
@@ -732,7 +770,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         ),
         AtomExpr::Function(function) => {
             let FunctionExpr {
-                name: ObjectName(name),
+                name,
                 arguments,
                 null_treatment,
                 within_group,
@@ -746,16 +784,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 null_treatment: inner_null_treatment,
                 right: _,
             } = arguments;
-            if !name.tail.is_empty() {
-                return Err(SqlError::unsupported("qualified function name"));
-            }
-            let function_name = name.head.value;
-            let arguments = arguments
-                .map(|x| {
-                    x.into_items()
-                        .map(from_ast_function_argument)
-                        .collect::<SqlResult<Vec<_>>>()
-                })
+            let function_name = from_ast_object_name(name)?;
+            let (arguments, named_arguments) = arguments
+                .map(|x| from_ast_function_arguments(x.into_items()))
                 .transpose()?
                 .unwrap_or_default();
             let is_distinct = match duplicate_treatment {
@@ -805,6 +836,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             let function = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name,
                 arguments,
+                named_arguments,
                 is_distinct,
                 is_user_defined_function: false,
                 ignore_nulls,
@@ -862,7 +894,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             target: None,
             wildcard_options: Default::default(),
         }),
-        AtomExpr::StringLiteral(value) => from_ast_string_literal(value),
+        AtomExpr::StringLiteral(head, tail) => from_ast_string_literal(head, tail),
         AtomExpr::NumberLiteral(value) => from_ast_number_literal(value),
         AtomExpr::BooleanLiteral(value) => from_ast_boolean_literal(value),
         AtomExpr::Null(_) => Ok(spec::Expr::Literal(spec::Literal::Null)),
@@ -871,7 +903,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         )?)),
         AtomExpr::Placeholder(variable) => Ok(spec::Expr::Placeholder(variable.value)),
         AtomExpr::Identifier(x) => Ok(spec::Expr::UnresolvedAttribute {
-            name: spec::ObjectName::new_unqualified(x.value.into()),
+            name: spec::ObjectName::bare(x.value),
             plan_id: None,
         }),
     }
@@ -917,10 +949,10 @@ fn from_ast_grouping_set(grouping: GroupingSet) -> SqlResult<Vec<spec::Expr>> {
 pub(crate) fn from_ast_identifier_list(identifiers: IdentList) -> SqlResult<Vec<spec::Identifier>> {
     let IdentList {
         left: _,
-        columns,
+        names,
         right: _,
     } = identifiers;
-    Ok(columns.into_items().map(|x| x.value.into()).collect())
+    Ok(names.into_items().map(|x| x.value.into()).collect())
 }
 
 fn from_ast_quantified_pattern(
@@ -948,8 +980,9 @@ fn from_ast_quantified_pattern(
         })
         .collect::<SqlResult<Vec<_>>>()?;
     Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-        function_name: quantifier.to_string(),
+        function_name: spec::ObjectName::bare(quantifier),
         arguments,
+        named_arguments: vec![],
         is_distinct: false,
         is_user_defined_function: false,
         ignore_nulls: None,

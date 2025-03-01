@@ -6,6 +6,7 @@ use chumsky::Parser;
 use sail_sql_macro::TreeParser;
 
 use crate::ast::operator::{Asterisk, Period};
+use crate::combinator::sequence;
 use crate::common::Sequence;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
@@ -18,7 +19,7 @@ fn parse_identifier<'a, F, I, E>(
     input: &mut InputRef<'a, '_, I, E>,
     matcher: F,
     options: &'a ParserOptions,
-) -> Result<(TokenSpan, String), E::Error>
+) -> Result<Ident, E::Error>
 where
     F: Fn(&Option<Keyword>) -> bool,
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
@@ -30,9 +31,12 @@ where
     let token = input.next();
     match &token {
         Some(Token::Word { keyword, raw }) if matcher(keyword) => {
-            let output = (input.span_since(before).into(), raw.to_string());
+            let ident = Ident {
+                span: input.span_since(before).into(),
+                value: raw.to_string(),
+            };
             skip_whitespace(input);
-            return Ok(output);
+            return Ok(ident);
         }
         Some(Token::String { raw, style }) if is_identifier_string(style, options) => {
             if let StringValue::Valid {
@@ -40,7 +44,10 @@ where
                 prefix: None,
             } = style.parse(raw, options)
             {
-                let output = (input.span_since(before).into(), value.clone());
+                let output = Ident {
+                    span: input.span_since(before).into(),
+                    value: value.clone(),
+                };
                 skip_whitespace(input);
                 return Ok(output);
             }
@@ -68,84 +75,61 @@ where
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
-        custom(move |input| {
-            parse_identifier(input, |_| true, options).map(|(span, value)| Ident { span, value })
-        })
+        custom(move |input| parse_identifier(input, |_| true, options))
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ColumnIdent {
-    pub span: TokenSpan,
-    pub value: String,
-}
-
-impl From<ColumnIdent> for Ident {
-    fn from(ident: ColumnIdent) -> Self {
-        Ident {
-            span: ident.span,
-            value: ident.value,
-        }
-    }
-}
-
-impl<'a, I, E> TreeParser<'a, I, E> for ColumnIdent
+/// A restricted identifier parser for column names.
+pub(crate) fn column_ident<'a, I, E>(
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, Ident, E> + Clone
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
-        fn matcher(keyword: &Option<Keyword>) -> bool {
-            !keyword
-                .is_some_and(|k| k.is_reserved_in_ansi_mode() || k.is_reserved_for_column_alias())
-        }
-
-        custom(move |input| {
-            parse_identifier(input, matcher, options)
-                .map(|(span, value)| ColumnIdent { span, value })
-        })
+    fn matcher(keyword: &Option<Keyword>) -> bool {
+        !keyword.is_some_and(|k| k.is_reserved_in_ansi_mode() || k.is_reserved_for_column_alias())
     }
+
+    custom(move |input| parse_identifier(input, matcher, options))
 }
 
-#[derive(Debug, Clone)]
-pub struct TableIdent {
-    pub span: TokenSpan,
-    pub value: String,
-}
-
-impl From<TableIdent> for Ident {
-    fn from(ident: TableIdent) -> Self {
-        Ident {
-            span: ident.span,
-            value: ident.value,
-        }
-    }
-}
-
-impl<'a, I, E> TreeParser<'a, I, E> for TableIdent
+/// A restricted identifier parser for table names.
+pub(crate) fn table_ident<'a, I, E>(
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, Ident, E> + Clone
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
     E: ParserExtra<'a, I>,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
-        fn matcher(keyword: &Option<Keyword>) -> bool {
-            !keyword
-                .is_some_and(|k| k.is_reserved_in_ansi_mode() || k.is_reserved_for_table_alias())
-        }
-
-        custom(move |input| {
-            parse_identifier(input, matcher, options)
-                .map(|(span, value)| TableIdent { span, value })
-        })
+    fn matcher(keyword: &Option<Keyword>) -> bool {
+        !keyword.is_some_and(|k| k.is_reserved_in_ansi_mode() || k.is_reserved_for_table_alias())
     }
+
+    custom(move |input| parse_identifier(input, matcher, options))
 }
 
 #[derive(Debug, Clone, TreeParser)]
 pub struct ObjectName(pub Sequence<Ident, Period>);
+
+/// A restricted object name parser.
+pub(crate) fn object_name<'a, I, E, P>(
+    ident: P,
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, ObjectName, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I>,
+    E::Error: LabelError<'a, I, TokenLabel>,
+    P: Parser<'a, I, Ident, E> + Clone,
+{
+    sequence(ident, Period::parser((), options)).map(ObjectName)
+}
 
 #[derive(Debug, Clone, TreeParser)]
 pub struct QualifiedWildcard(pub Sequence<Ident, Period>, pub Period, pub Asterisk);
@@ -170,23 +154,12 @@ where
             Some(Token::Punctuation(p @ (Punctuation::Dollar | Punctuation::Colon))),
             Some(Token::Word { keyword: _, raw }),
         ) => {
-            let node = Variable {
+            let variable = Variable {
                 span: input.span_since(marker.offset()).into(),
                 value: format!("{}{}", p.to_char(), raw),
             };
             skip_whitespace(input);
-            Some(node)
-        }
-        (
-            Some(Token::Punctuation(p @ (Punctuation::Dollar | Punctuation::Colon))),
-            Some(Token::Number { value, suffix }),
-        ) => {
-            let node = Variable {
-                span: input.span_since(marker.offset()).into(),
-                value: format!("{}{}{}", p.to_char(), value, suffix),
-            };
-            skip_whitespace(input);
-            Some(node)
+            Some(variable)
         }
         _ => {
             input.rewind(marker);
@@ -205,12 +178,12 @@ where
     let marker = input.save();
     match input.next() {
         Some(Token::Punctuation(p @ Punctuation::QuestionMark)) => {
-            let node = Variable {
+            let variable = Variable {
                 span: input.span_since(marker.offset()).into(),
                 value: format!("{}", p.to_char()),
             };
             skip_whitespace(input);
-            Some(node)
+            Some(variable)
         }
         _ => {
             input.rewind(marker);

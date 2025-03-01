@@ -15,7 +15,13 @@
     {
       "input": "\"hello\" 'world'",
       "output": {
-        "failure": "invalid argument: found 'world' at 8:15 expected end of input"
+        "success": {
+          "literal": {
+            "utf8": {
+              "value": "helloworld"
+            }
+          }
+        }
       }
     },
     {
@@ -160,7 +166,13 @@
     {
       "input": "'hello' \" \" 'world'",
       "output": {
-        "failure": "invalid argument: found \" \" at 8:11 expected end of input"
+        "success": {
+          "literal": {
+            "utf8": {
+              "value": "hello world"
+            }
+          }
+        }
       }
     },
     {

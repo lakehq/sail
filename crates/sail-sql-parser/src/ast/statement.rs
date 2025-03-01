@@ -1,27 +1,28 @@
-use chumsky::prelude::choice;
 use either::Either;
 use sail_sql_macro::TreeParser;
 
 use crate::ast;
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
-use crate::ast::identifier::{Ident, ObjectName};
+use crate::ast::identifier::{table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
-    Add, After, All, Alter, Always, Analyze, As, Buckets, By, Cache, Cascade, Catalog, Change,
+    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog, Change,
     Clear, Clustered, Codegen, Collection, Column, Columns, Comment, Compute, Cost, Create, Data,
     Database, Databases, Dbproperties, Default, Defined, Delete, Delimited, Desc, Describe,
-    Directory, Drop, Escaped, Exists, Explain, Extended, External, Fields, Fileformat, First, For,
-    Format, Formatted, From, Function, Functions, Generated, Global, If, In, Inpath, Inputformat,
-    Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Name, Noscan,
-    Not, Null, On, Options, Or, Outputformat, Overwrite, Partition, Partitioned, Partitions,
-    Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde,
-    Serdeproperties, Set, Show, Sorted, Statistics, Stored, Table, Tables, Tblproperties, Temp,
-    Temporary, Terminated, Time, To, Type, Uncache, Unset, Update, Use, Using, Verbose, View,
-    Views, Where, With, Zone,
+    Directory, Drop, Escaped, Evolution, Exists, Explain, Extended, External, Fields, Fileformat,
+    First, For, Format, Formatted, From, Function, Functions, Generated, Global, If, In, Inpath,
+    Inputformat, Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map,
+    Matched, Merge, Name, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite, Partition,
+    Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row,
+    Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Statistics, Stored, Table,
+    Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then, Time, To, Type, Uncache,
+    Unset, Update, Use, Using, Values, Verbose, View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
-use crate::ast::operator::{Colon, Comma, Equals, LeftParenthesis, Minus, Plus, RightParenthesis};
-use crate::ast::query::{IdentList, Query, WhereClause};
+use crate::ast::operator::{
+    Asterisk, Colon, Comma, Equals, ExclamationMark, LeftParenthesis, Minus, Plus, RightParenthesis,
+};
+use crate::ast::query::{AliasClause, IdentList, Query, WhereClause};
 use crate::combinator::{compose, sequence, unit};
 use crate::common::Sequence;
 use crate::token::TokenLabel;
@@ -74,11 +75,11 @@ pub enum Statement {
         table: Table,
         if_not_exists: Option<(If, Not, Exists)>,
         name: ObjectName,
-        #[parser(function = |(_, _, e, t), o| compose((e, t), o))]
+        #[parser(function = |(_, _, e, d), o| compose((e, d), o))]
         columns: Option<ColumnDefinitionList>,
         like: Option<(Like, ObjectName)>,
         using: Option<(Using, Ident)>,
-        #[parser(function = |(_, _, _, t), o| compose(t, o))]
+        #[parser(function = |(_, _, _, d), o| compose(d, o))]
         clauses: Vec<CreateTableClause>,
         #[parser(function = |(_, q, _, _), o| compose(q, o))]
         r#as: Option<AsQueryClause>,
@@ -87,10 +88,10 @@ pub enum Statement {
         replace: Replace,
         table: Table,
         name: ObjectName,
-        #[parser(function = |(_, _, e, t), o| compose((e, t), o))]
+        #[parser(function = |(_, _, e, d), o| compose((e, d), o))]
         columns: Option<ColumnDefinitionList>,
         using: Option<(Using, Ident)>,
-        #[parser(function = |(_, _, _, t), o| compose(t, o))]
+        #[parser(function = |(_, _, _, d), o| compose(d, o))]
         clauses: Vec<CreateTableClause>,
         #[parser(function = |(_, q, _, _), o| compose(q, o))]
         r#as: Option<AsQueryClause>,
@@ -104,7 +105,7 @@ pub enum Statement {
         alter: Alter,
         table: Table,
         name: ObjectName,
-        #[parser(function = |(_, _, e, t), o| compose((e, t), o))]
+        #[parser(function = |(_, _, e, d), o| compose((e, d), o))]
         operation: AlterTableOperation,
     },
     DropTable {
@@ -222,6 +223,19 @@ pub enum Statement {
         columns: Option<Either<(By, Name), IdentList>>,
         #[parser(function = |(_, q, _, _), _| q)]
         query: Query,
+    },
+    MergeInto {
+        merge: Merge,
+        with_schema_evolution: Option<(With, Schema, Evolution)>,
+        into: Into,
+        target: ObjectName,
+        alias: Option<AliasClause>,
+        #[parser(function = |(_, q, _, _), o| unit(o).then(compose(q, o)))]
+        using: (Using, MergeSource),
+        #[parser(function = |(_, _, e, _), o| unit(o).then(e))]
+        on: (On, Expr),
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        r#match: Vec<MergeMatchClause>,
     },
     Update {
         update: Update,
@@ -383,7 +397,7 @@ pub struct AsQueryClause {
 #[parser(dependency = "(Expr, DataType)")]
 pub struct ColumnDefinitionList {
     pub left: LeftParenthesis,
-    #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
+    #[parser(function = |(e, d), o| sequence(compose((e, d), o), unit(o)))]
     pub columns: Sequence<ColumnDefinition, Comma>,
     pub right: RightParenthesis,
 }
@@ -392,7 +406,7 @@ pub struct ColumnDefinitionList {
 #[parser(dependency = "(Expr, DataType)")]
 pub struct ColumnDefinition {
     pub name: Ident,
-    #[parser(function = |(_, t), _| t)]
+    #[parser(function = |(_, d), _| d)]
     pub data_type: DataType,
     #[parser(function = |(e, _), o| compose(e, o))]
     pub options: Vec<ColumnDefinitionOption>,
@@ -419,7 +433,7 @@ pub enum ColumnDefinitionOption {
 pub struct ColumnTypeDefinition {
     pub name: Ident,
     pub colon: Option<Colon>,
-    #[parser(function = |x, _| x)]
+    #[parser(function = |d, _| d)]
     pub data_type: DataType,
     pub not_null: Option<(Not, Null)>,
     pub comment: Option<(Comment, StringLiteral)>,
@@ -428,7 +442,7 @@ pub struct ColumnTypeDefinition {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "DataType")]
 pub enum PartitionColumn {
-    Typed(#[parser(function = |t, o| compose(t, o))] ColumnTypeDefinition),
+    Typed(#[parser(function = |d, o| compose(d, o))] ColumnTypeDefinition),
     Name(Ident),
 }
 
@@ -436,7 +450,7 @@ pub enum PartitionColumn {
 #[parser(dependency = "DataType")]
 pub struct PartitionColumnList {
     pub left: LeftParenthesis,
-    #[parser(function = |t, o| sequence(compose(t, o), unit(o)))]
+    #[parser(function = |d, o| sequence(compose(d, o), unit(o)))]
     pub columns: Sequence<PartitionColumn, Comma>,
     pub right: RightParenthesis,
 }
@@ -479,7 +493,7 @@ pub enum CreateTableClause {
     PartitionedBy(
         Partitioned,
         By,
-        #[parser(function = |t, o| compose(t, o))] PartitionColumnList,
+        #[parser(function = |d, o| compose(d, o))] PartitionColumnList,
     ),
     ClusteredBy(
         Clustered,
@@ -576,7 +590,7 @@ pub enum AlterTableOperation {
     AddColumns {
         add: Add,
         columns: Either<Column, Columns>,
-        #[parser(function = |(e, t), o| compose((e, t), o))]
+        #[parser(function = |(e, d), o| compose((e, d), o))]
         items: ColumnAlterationList,
     },
     DropColumns {
@@ -595,13 +609,13 @@ pub enum AlterTableOperation {
         alter: Either<Alter, Change>,
         column: Column,
         name: ObjectName,
-        #[parser(function = |(e, t), o| compose((e, t), o))]
+        #[parser(function = |(e, d), o| compose((e, d), o))]
         operation: AlterColumnOperation,
     },
     ReplaceColumns {
         replace: Replace,
         columns: Either<Column, Columns>,
-        #[parser(function = |(e, t), o| compose((e, t), o))]
+        #[parser(function = |(e, d), o| compose((e, d), o))]
         items: ColumnAlterationList,
     },
     AddPartitions {
@@ -656,19 +670,6 @@ pub enum AlterViewOperation {
         to: To,
         name: ObjectName,
     },
-    AddPartitions {
-        add: Add,
-        if_not_exists: Option<(If, Not, Exists)>,
-        #[parser(function = |(_, e), o| compose(e, o))]
-        partitions: Vec<PartitionClause>,
-    },
-    DropPartition {
-        drop: Drop,
-        if_exists: Option<(If, Exists)>,
-        #[parser(function = |(_, e), o| compose(e, o))]
-        partition: PartitionClause,
-        purge: Option<Purge>,
-    },
     SetViewProperties {
         set: Set,
         table_properties: Tblproperties,
@@ -686,7 +687,7 @@ pub enum AlterViewOperation {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Expr, DataType)")]
 pub enum AlterColumnOperation {
-    Type(Type, #[parser(function = |(_, t), _| t)] DataType),
+    Type(Type, #[parser(function = |(_, d), _| d)] DataType),
     Comment(Comment, StringLiteral),
     SetNotNull(Set, Not, Null),
     DropNotNull(Drop, Not, Null),
@@ -700,12 +701,12 @@ pub enum AlterColumnOperation {
 pub enum ColumnAlterationList {
     Delimited {
         left: LeftParenthesis,
-        #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
+        #[parser(function = |(e, d), o| sequence(compose((e, d), o), unit(o)))]
         columns: Sequence<ColumnAlteration, Comma>,
         right: RightParenthesis,
     },
     NotDelimited {
-        #[parser(function = |(e, t), o| sequence(compose((e, t), o), unit(o)))]
+        #[parser(function = |(e, d), o| sequence(compose((e, d), o), unit(o)))]
         columns: Sequence<ColumnAlteration, Comma>,
     },
 }
@@ -714,7 +715,7 @@ pub enum ColumnAlterationList {
 #[parser(dependency = "(Expr, DataType)")]
 pub struct ColumnAlteration {
     pub name: ObjectName,
-    #[parser(function = |(_, t), _| t)]
+    #[parser(function = |(_, d), _| d)]
     pub data_type: DataType,
     #[parser(function = |(e, _), o| compose(e, o))]
     pub options: Vec<ColumnAlterationOption>,
@@ -763,9 +764,99 @@ pub enum InsertDirectoryDestination {
 }
 
 #[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Query")]
+pub enum MergeSource {
+    Table {
+        name: ObjectName,
+        alias: Option<AliasClause>,
+    },
+    Query {
+        left: LeftParenthesis,
+        #[parser(function = |q, _| q)]
+        query: Query,
+        right: RightParenthesis,
+        alias: Option<AliasClause>,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum MergeMatchClause {
+    Matched {
+        when: When,
+        matched: Matched,
+        #[parser(function = |e, o| unit(o).then(e).or_not())]
+        condition: Option<(And, Expr)>,
+        then: Then,
+        #[parser(function = |e, o| compose(e, o))]
+        action: MergeMatchedAction,
+    },
+    NotMatchedBySource {
+        when: When,
+        not: Either<Not, ExclamationMark>,
+        matched: Matched,
+        by_source: (By, Source),
+        #[parser(function = |e, o| unit(o).then(e).or_not())]
+        condition: Option<(And, Expr)>,
+        then: Then,
+        #[parser(function = |e, o| compose(e, o))]
+        action: MergeNotMatchedBySourceAction,
+    },
+    NotMatchedByTarget {
+        when: When,
+        not: Either<Not, ExclamationMark>,
+        matched: Matched,
+        by_target: Option<(By, Target)>,
+        #[parser(function = |e, o| unit(o).then(e).or_not())]
+        condition: Option<(And, Expr)>,
+        then: Then,
+        #[parser(function = |e, o| compose(e, o))]
+        action: MergeNotMatchedByTargetAction,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum MergeMatchedAction {
+    Delete(Delete),
+    UpdateAll(Update, Set, Asterisk),
+    Update(
+        Update,
+        Set,
+        #[parser(function = |e, o| compose(e, o))] AssignmentList,
+    ),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum MergeNotMatchedBySourceAction {
+    Delete(Delete),
+    Update(
+        Update,
+        Set,
+        #[parser(function = |e, o| compose(e, o))] AssignmentList,
+    ),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub enum MergeNotMatchedByTargetAction {
+    InsertAll(Insert, Asterisk),
+    Insert {
+        insert: Insert,
+        left: LeftParenthesis,
+        columns: Sequence<ObjectName, Comma>,
+        right: RightParenthesis,
+        values: Values,
+        #[parser(function = |e, o| sequence(e, unit(o)))]
+        expressions: Sequence<Expr, Comma>,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser)]
 pub struct UpdateTableAlias {
     pub r#as: Option<As>,
-    #[parser(function = |(), o| unit(o).and_is(choice((Where::parser((), o).ignored(), Set::parser((), o).ignored())).not()))]
+    #[parser(function = |(), o| table_ident(o))]
     pub table: Ident,
     pub columns: Option<IdentList>,
 }
@@ -805,7 +896,7 @@ pub struct Assignment {
 #[derive(Debug, Clone, TreeParser)]
 pub struct DeleteTableAlias {
     pub r#as: Option<As>,
-    #[parser(function = |(), o| unit(o).and_is(Where::parser((), o).not()))]
+    #[parser(function = |(), o| table_ident(o))]
     pub table: Ident,
     pub columns: Option<IdentList>,
 }

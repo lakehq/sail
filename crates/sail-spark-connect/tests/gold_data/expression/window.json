@@ -7,7 +7,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -22,6 +24,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -48,7 +51,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -63,6 +68,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -106,7 +112,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -121,6 +129,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -177,7 +186,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -192,6 +203,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -235,7 +247,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -250,6 +264,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -301,7 +316,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -316,6 +333,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -376,7 +394,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -391,6 +411,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -451,7 +472,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -466,6 +489,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -526,7 +550,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -541,6 +567,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -601,7 +628,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -616,6 +645,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -676,7 +706,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -691,6 +723,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -751,7 +784,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -766,6 +801,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -805,7 +841,9 @@
                   "lower": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -822,6 +860,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -845,7 +884,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -860,6 +901,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -899,7 +941,9 @@
                   "lower": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -916,6 +960,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -939,7 +984,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -954,6 +1001,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1014,7 +1062,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1029,6 +1079,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1089,7 +1140,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1104,6 +1157,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1172,7 +1226,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1187,6 +1243,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1247,7 +1304,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1262,6 +1321,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1322,7 +1382,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1337,6 +1399,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1397,7 +1460,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1412,6 +1477,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1472,7 +1538,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1487,6 +1555,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1526,7 +1595,9 @@
                   "lower": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -1543,6 +1614,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -1566,7 +1638,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1581,6 +1655,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1620,7 +1695,9 @@
                   "lower": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -1637,6 +1714,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -1660,7 +1738,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1675,6 +1755,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1735,7 +1816,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1750,6 +1833,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1810,7 +1894,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1825,6 +1911,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1865,7 +1952,9 @@
                   "upper": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -1882,6 +1971,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -1904,7 +1994,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1919,6 +2011,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -1979,7 +2072,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -1994,6 +2089,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2046,7 +2142,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2061,6 +2159,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2113,7 +2212,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2128,6 +2229,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2188,7 +2290,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2203,6 +2307,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2243,7 +2348,9 @@
                   "upper": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -2260,6 +2367,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -2282,7 +2390,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2297,6 +2407,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2357,7 +2468,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2372,6 +2485,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2424,7 +2538,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2439,6 +2555,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2491,7 +2608,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2506,6 +2625,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2558,7 +2678,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2573,6 +2695,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2625,7 +2748,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2640,6 +2765,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2692,7 +2818,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2707,6 +2835,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2767,7 +2896,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2782,6 +2913,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2842,7 +2974,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2857,6 +2991,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2917,7 +3052,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -2932,6 +3069,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -2992,7 +3130,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3007,6 +3147,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3067,7 +3208,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3082,6 +3225,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3142,7 +3286,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3157,6 +3303,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3196,7 +3343,9 @@
                   "lower": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -3213,6 +3362,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -3236,7 +3386,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3251,6 +3403,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3290,7 +3443,9 @@
                   "lower": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -3307,6 +3462,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -3330,7 +3486,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3345,6 +3503,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3405,7 +3564,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3420,6 +3581,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3480,7 +3642,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3495,6 +3659,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3563,7 +3728,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3578,6 +3745,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3638,7 +3806,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3653,6 +3823,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3713,7 +3884,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3728,6 +3901,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3788,7 +3962,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3803,6 +3979,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3863,7 +4040,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3878,6 +4057,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -3917,7 +4097,9 @@
                   "lower": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -3934,6 +4116,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -3957,7 +4140,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -3972,6 +4157,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4011,7 +4197,9 @@
                   "lower": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -4028,6 +4216,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -4051,7 +4240,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4066,6 +4257,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4126,7 +4318,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4141,6 +4335,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4201,7 +4396,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4216,6 +4413,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4256,7 +4454,9 @@
                   "upper": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -4273,6 +4473,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -4295,7 +4496,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4310,6 +4513,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4370,7 +4574,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4385,6 +4591,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4437,7 +4644,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4452,6 +4661,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4504,7 +4714,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4519,6 +4731,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4579,7 +4792,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4594,6 +4809,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4634,7 +4850,9 @@
                   "upper": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "+",
+                        "functionName": [
+                          "+"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -4651,6 +4869,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -4673,7 +4892,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4688,6 +4909,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4748,7 +4970,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4763,6 +4987,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4815,7 +5040,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4830,6 +5057,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4882,7 +5110,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4897,6 +5127,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -4950,7 +5181,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -4965,6 +5198,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -5004,7 +5238,9 @@
                   "lower": {
                     "value": {
                       "unresolvedFunction": {
-                        "functionName": "exp",
+                        "functionName": [
+                          "exp"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -5015,6 +5251,7 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
                         "ignoreNulls": null,
@@ -5038,7 +5275,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -5053,6 +5292,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -5105,7 +5345,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -5120,6 +5362,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -5172,7 +5415,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -5187,6 +5432,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -5243,7 +5489,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -5258,6 +5506,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -5301,7 +5550,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -5316,6 +5567,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -5367,7 +5619,9 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "foo",
+                "functionName": [
+                  "foo"
+                ],
                 "arguments": [
                   {
                     "unresolvedStar": {
@@ -5382,6 +5636,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -5403,11 +5658,15 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "sum",
+                "functionName": [
+                  "sum"
+                ],
                 "arguments": [
                   {
                     "unresolvedFunction": {
-                      "functionName": "+",
+                      "functionName": [
+                        "+"
+                      ],
                       "arguments": [
                         {
                           "unresolvedAttribute": {
@@ -5425,6 +5684,7 @@
                           }
                         }
                       ],
+                      "namedArguments": [],
                       "isDistinct": false,
                       "isUserDefinedFunction": false,
                       "ignoreNulls": null,
@@ -5433,6 +5693,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -5446,11 +5707,15 @@
                 "partitionBy": [
                   {
                     "unresolvedFunction": {
-                      "functionName": "+",
+                      "functionName": [
+                        "+"
+                      ],
                       "arguments": [
                         {
                           "unresolvedFunction": {
-                            "functionName": "/",
+                            "functionName": [
+                              "/"
+                            ],
                             "arguments": [
                               {
                                 "unresolvedAttribute": {
@@ -5468,6 +5733,7 @@
                                 }
                               }
                             ],
+                            "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
                             "ignoreNulls": null,
@@ -5483,6 +5749,7 @@
                           }
                         }
                       ],
+                      "namedArguments": [],
                       "isDistinct": false,
                       "isUserDefinedFunction": false,
                       "ignoreNulls": null,
@@ -5518,11 +5785,15 @@
           "window": {
             "windowFunction": {
               "unresolvedFunction": {
-                "functionName": "sum",
+                "functionName": [
+                  "sum"
+                ],
                 "arguments": [
                   {
                     "unresolvedFunction": {
-                      "functionName": "+",
+                      "functionName": [
+                        "+"
+                      ],
                       "arguments": [
                         {
                           "unresolvedAttribute": {
@@ -5540,6 +5811,7 @@
                           }
                         }
                       ],
+                      "namedArguments": [],
                       "isDistinct": false,
                       "isUserDefinedFunction": false,
                       "ignoreNulls": null,
@@ -5548,6 +5820,7 @@
                     }
                   }
                 ],
+                "namedArguments": [],
                 "isDistinct": false,
                 "isUserDefinedFunction": false,
                 "ignoreNulls": null,
@@ -5561,7 +5834,9 @@
                 "partitionBy": [
                   {
                     "unresolvedFunction": {
-                      "functionName": "+",
+                      "functionName": [
+                        "+"
+                      ],
                       "arguments": [
                         {
                           "unresolvedAttribute": {
@@ -5579,6 +5854,7 @@
                           }
                         }
                       ],
+                      "namedArguments": [],
                       "isDistinct": false,
                       "isUserDefinedFunction": false,
                       "ignoreNulls": null,

@@ -5,13 +5,12 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token<'a> {
     /// A word that is not quoted nor escaped.
+    /// The word may start with a digit, which means it may be part of a numeric literal.
     /// The word may match a SQL keyword.
     Word {
         raw: &'a str,
         keyword: Option<Keyword>,
     },
-    /// A numeric literal with a suffix. The suffix can be empty.
-    Number { value: &'a str, suffix: &'a str },
     /// A string of a specific style.
     /// The raw text includes the delimiters and the prefix (if any).
     /// No escape sequences are processed in the raw text.
@@ -57,9 +56,6 @@ impl Display for Token<'_> {
         match self {
             Token::Word { raw, .. } => {
                 write!(f, "{raw}")
-            }
-            Token::Number { value, suffix } => {
-                write!(f, "{value}{suffix}")
             }
             Token::String { raw, .. } => {
                 write!(f, "{raw}")

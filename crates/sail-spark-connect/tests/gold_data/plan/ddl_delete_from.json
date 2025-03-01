@@ -36,7 +36,9 @@
               "tableAlias": "t",
               "condition": {
                 "unresolvedFunction": {
-                  "functionName": "==",
+                  "functionName": [
+                    "=="
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -55,6 +57,7 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
                   "ignoreNulls": null,

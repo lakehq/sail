@@ -4,9 +4,7 @@
       "input": "",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 0)\n\n== SQL ==\n\n^^^\n",
       "output": {
-        "success": {
-          "fields": []
-        }
+        "failure": "invalid argument: empty data type"
       }
     },
     {

@@ -613,8 +613,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
-        let name: Vec<&str> = name.into();
-        let candidates = Self::generate_qualified_nested_field_candidates(&name);
+        let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
         let mut candidates = schema
             .iter()
             .flat_map(|(qualifier, field)| {
@@ -624,13 +623,15 @@ impl PlanResolver<'_> {
                 candidates
                     .iter()
                     .filter_map(|(q, name, inner)| {
-                        if qualifier_matches(q.as_ref(), qualifier) && info.matches(name, plan_id) {
+                        if qualifier_matches(q.as_ref(), qualifier)
+                            && info.matches(name.as_ref(), plan_id)
+                        {
                             let expr = Self::resolve_nested_field(
                                 col((qualifier, field)),
                                 field.data_type(),
                                 inner,
                             )?;
-                            let name = inner.last().unwrap_or(name).to_string();
+                            let name = inner.last().unwrap_or(name).as_ref().to_string();
                             Some((name, expr))
                         } else {
                             None
@@ -653,8 +654,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
-        let name: Vec<&str> = name.into();
-        let candidates = Self::generate_qualified_field_candidates(&name);
+        let candidates = Self::generate_qualified_field_candidates(name.parts());
         let mut candidates = schema
             .iter()
             .flat_map(|(qualifier, field)| {
@@ -664,11 +664,12 @@ impl PlanResolver<'_> {
                 candidates
                     .iter()
                     .filter(|(q, name)| {
-                        qualifier_matches(q.as_ref(), qualifier) && info.matches(name, None)
+                        qualifier_matches(q.as_ref(), qualifier)
+                            && info.matches(name.as_ref(), None)
                     })
                     .map(|(_, name)| {
                         (
-                            name.to_string(),
+                            name.as_ref().to_string(),
                             expr::Expr::OuterReferenceColumn(
                                 field.data_type().clone(),
                                 Column::new(qualifier.cloned(), field.name()),
@@ -686,17 +687,17 @@ impl PlanResolver<'_> {
         Ok(candidates.pop())
     }
 
-    fn resolve_nested_field(
+    fn resolve_nested_field<T: AsRef<str>>(
         expr: expr::Expr,
         data_type: &DataType,
-        inner: &[&str],
+        inner: &[T],
     ) -> Option<expr::Expr> {
         match inner {
             [] => Some(expr),
             [name, remaining @ ..] => match data_type {
                 DataType::Struct(fields) => fields
                     .iter()
-                    .find(|x| x.name().eq_ignore_ascii_case(name))
+                    .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
                     .and_then(|field| {
                         let args = vec![expr, lit(field.name().to_string())];
                         let expr =
@@ -721,6 +722,8 @@ impl PlanResolver<'_> {
             } => spec::QueryPlan::new(spec::QueryNode::Read {
                 read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
                     name,
+                    temporal: None,
+                    sample: None,
                     options: vec![],
                 }),
                 is_streaming: false,
@@ -749,12 +752,20 @@ impl PlanResolver<'_> {
         let spec::UnresolvedFunction {
             function_name,
             arguments,
+            named_arguments,
             is_distinct,
             is_user_defined_function: _,
             ignore_nulls,
             filter,
             order_by,
         } = function;
+
+        let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
+            return Err(PlanError::unsupported("qualified function name"));
+        };
+        if !named_arguments.is_empty() {
+            return Err(PlanError::todo("named function arguments"));
+        }
         let canonical_function_name = function_name.to_ascii_lowercase();
         if let Ok(udf) = self.ctx.udf(&canonical_function_name) {
             if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
@@ -803,6 +814,7 @@ impl PlanResolver<'_> {
                 argument_names: &argument_names,
                 plan_config: &self.config,
                 session_context: self.ctx,
+                schema,
             };
             func(input)?
         } else if let Ok(func) = get_built_in_aggregate_function(&canonical_function_name) {
@@ -931,12 +943,19 @@ impl PlanResolver<'_> {
                 spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                     function_name,
                     arguments,
+                    named_arguments,
                     is_user_defined_function: false,
                     is_distinct,
                     ignore_nulls,
                     filter: None,
                     order_by: None,
                 }) => {
+                    let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
+                        return Err(PlanError::unsupported("qualified window function name"));
+                    };
+                    if !named_arguments.is_empty() {
+                        return Err(PlanError::todo("named window function arguments"));
+                    }
                     let canonical_function_name = function_name.to_ascii_lowercase();
                     let (argument_names, arguments) = self
                         .resolve_expressions_and_names(arguments, schema, state)
@@ -961,6 +980,7 @@ impl PlanResolver<'_> {
                         arguments,
                         function,
                     } = function;
+                    let function_name: String = function_name.into();
                     let (argument_names, arguments) = self
                         .resolve_expressions_and_names(arguments, schema, state)
                         .await?;
@@ -1080,8 +1100,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let name: Vec<&str> = name.into();
-        let candidates = Self::generate_qualified_wildcard_candidates(&name)
+        let candidates = Self::generate_qualified_wildcard_candidates(name.parts())
             .into_iter()
             .flat_map(|(q, name)| match name {
                 [] => {
@@ -1106,7 +1125,9 @@ impl PlanResolver<'_> {
                         let Ok(info) = state.get_field_info(field.name()) else {
                             return None;
                         };
-                        if qualifier_matches(q.as_ref(), qualifier) && info.matches(column, None) {
+                        if qualifier_matches(q.as_ref(), qualifier)
+                            && info.matches(column.as_ref(), None)
+                        {
                             Self::resolve_nested_field_wildcard(
                                 col((q.as_ref(), field)),
                                 field.data_type(),
@@ -1129,10 +1150,10 @@ impl PlanResolver<'_> {
             .map_err(|_| PlanError::AnalysisError(format!("cannot resolve wildcard: {name:?}")))
     }
 
-    fn resolve_nested_field_wildcard(
+    fn resolve_nested_field_wildcard<T: AsRef<str>>(
         expr: expr::Expr,
         data_type: &DataType,
-        inner: &[&str],
+        inner: &[T],
     ) -> Option<NamedExpr> {
         let DataType::Struct(fields) = data_type else {
             return None;
@@ -1157,7 +1178,7 @@ impl PlanResolver<'_> {
             }
             [name, remaining @ ..] => fields
                 .iter()
-                .find(|x| x.name().eq_ignore_ascii_case(name))
+                .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
                 .and_then(|field| {
                     let args = vec![expr, lit(field.name().to_string())];
                     let expr =
@@ -1361,6 +1382,7 @@ impl PlanResolver<'_> {
             arguments,
             function,
         } = function;
+        let function_name: String = function_name.into();
         let (argument_names, arguments) = self
             .resolve_expressions_and_names(arguments, schema, state)
             .await?;
@@ -1430,13 +1452,10 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let function_name: Vec<String> = function_name.into();
-        let Ok(function_name) = function_name.one() else {
-            return Err(PlanError::todo("qualified function name"));
-        };
         let function = spec::UnresolvedFunction {
             function_name,
             arguments,
+            named_arguments: vec![],
             is_distinct: false,
             is_user_defined_function: false,
             ignore_nulls: None,
@@ -1796,49 +1815,63 @@ impl PlanResolver<'_> {
         ))
     }
 
-    fn generate_qualified_field_candidates<'a>(
-        name: &'a [&'a str],
-    ) -> Vec<(Option<TableReference>, &'a str)> {
+    fn generate_qualified_field_candidates<T: AsRef<str>>(
+        name: &[T],
+    ) -> Vec<(Option<TableReference>, &T)> {
         match name {
-            [n1] => vec![(None, *n1)],
-            [n1, n2] => vec![(Some(TableReference::bare(*n1)), *n2)],
-            [n1, n2, n3] => vec![(Some(TableReference::partial(*n1, *n2)), *n3)],
-            [n1, n2, n3, n4] => vec![(Some(TableReference::full(*n1, *n2, *n3)), *n4)],
+            [n1] => vec![(None, n1)],
+            [n1, n2] => vec![(Some(TableReference::bare(n1.as_ref())), n2)],
+            [n1, n2, n3] => vec![(Some(TableReference::partial(n1.as_ref(), n2.as_ref())), n3)],
+            [n1, n2, n3, n4] => vec![(
+                Some(TableReference::full(n1.as_ref(), n2.as_ref(), n3.as_ref())),
+                n4,
+            )],
             _ => vec![],
         }
     }
 
-    fn generate_qualified_nested_field_candidates<'a>(
-        name: &'a [&'a str],
-    ) -> Vec<(Option<TableReference>, &'a str, &'a [&'a str])> {
+    fn generate_qualified_nested_field_candidates<T: AsRef<str>>(
+        name: &[T],
+    ) -> Vec<(Option<TableReference>, &T, &[T])> {
         let mut out = vec![];
         if let [n1, x @ ..] = name {
-            out.push((None, *n1, x));
+            out.push((None, n1, x));
         }
         if let [n1, n2, x @ ..] = name {
-            out.push((Some(TableReference::bare(*n1)), *n2, x));
+            out.push((Some(TableReference::bare(n1.as_ref())), n2, x));
         }
         if let [n1, n2, n3, x @ ..] = name {
-            out.push((Some(TableReference::partial(*n1, *n2)), *n3, x));
+            out.push((
+                Some(TableReference::partial(n1.as_ref(), n2.as_ref())),
+                n3,
+                x,
+            ));
         }
         if let [n1, n2, n3, n4, x @ ..] = name {
-            out.push((Some(TableReference::full(*n1, *n2, *n3)), *n4, x));
+            out.push((
+                Some(TableReference::full(n1.as_ref(), n2.as_ref(), n3.as_ref())),
+                n4,
+                x,
+            ));
         }
         out
     }
 
-    fn generate_qualified_wildcard_candidates<'a>(
-        name: &'a [&'a str],
-    ) -> Vec<(Option<TableReference>, &'a [&'a str])> {
+    fn generate_qualified_wildcard_candidates<T: AsRef<str>>(
+        name: &[T],
+    ) -> Vec<(Option<TableReference>, &[T])> {
         let mut out = vec![(None, name)];
         if let [n1, x @ ..] = name {
-            out.push((Some(TableReference::bare(*n1)), x));
+            out.push((Some(TableReference::bare(n1.as_ref())), x));
         }
         if let [n1, n2, x @ ..] = name {
-            out.push((Some(TableReference::partial(*n1, *n2)), x));
+            out.push((Some(TableReference::partial(n1.as_ref(), n2.as_ref())), x));
         }
         if let [n1, n2, n3, x @ ..] = name {
-            out.push((Some(TableReference::full(*n1, *n2, *n3)), x));
+            out.push((
+                Some(TableReference::full(n1.as_ref(), n2.as_ref(), n3.as_ref())),
+                x,
+            ));
         }
         out
     }
@@ -2000,10 +2033,11 @@ mod tests {
             resolve(
                 &resolver,
                 spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                    function_name: "not".to_string(),
+                    function_name: spec::ObjectName::bare("not"),
                     arguments: vec![spec::Expr::Literal(spec::Literal::Boolean {
                         value: Some(true)
                     })],
+                    named_arguments: vec![],
                     is_distinct: false,
                     is_user_defined_function: false,
                     ignore_nulls: None,
@@ -2028,7 +2062,7 @@ mod tests {
                         // The resolver assigns a name (a human-readable string) for the function,
                         // and is then overridden by the explicitly specified outer name.
                         expr: Box::new(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                            function_name: "+".to_string(),
+                            function_name: spec::ObjectName::bare("+"),
                             arguments: vec![
                                 spec::Expr::Alias {
                                     // The resolver assigns a name "1" for the literal,
@@ -2042,6 +2076,7 @@ mod tests {
                                 // The resolver assigns a name "2" for the literal.
                                 spec::Expr::Literal(spec::Literal::Int32 { value: Some(2) }),
                             ],
+                            named_arguments: vec![],
                             is_distinct: false,
                             is_user_defined_function: false,
                             ignore_nulls: None,

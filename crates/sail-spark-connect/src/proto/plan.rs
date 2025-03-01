@@ -148,6 +148,8 @@ impl TryFrom<RelType> for RelationNode {
                             name: from_ast_object_name(parse_object_name(
                                 unparsed_identifier.as_str(),
                             )?)?,
+                            temporal: None,
+                            sample: None,
                             options: options.into_iter().collect(),
                         })
                     }
@@ -160,7 +162,13 @@ impl TryFrom<RelType> for RelationNode {
                             predicates,
                         } = x;
                         let schema = schema
-                            .map(|s| parse_spark_data_type(s.as_str()))
+                            .and_then(|s| {
+                                if s.is_empty() {
+                                    None
+                                } else {
+                                    Some(parse_spark_data_type(s.as_str()))
+                                }
+                            })
                             .transpose()?
                             .map(|dt| dt.into_schema(DEFAULT_FIELD_NAME, true));
                         let predicates = predicates
@@ -240,13 +248,25 @@ impl TryFrom<RelType> for RelationNode {
                         is_right_struct,
                     }
                 });
-                let using_columns = using_columns.into_iter().map(|x| x.into()).collect();
+                let using_columns = using_columns
+                    .into_iter()
+                    .map(|x| x.into())
+                    .collect::<Vec<_>>();
+                let join_criteria = match (join_condition, using_columns.is_empty()) {
+                    (Some(join_condition), true) => Some(spec::JoinCriteria::On(join_condition)),
+                    (None, false) => Some(spec::JoinCriteria::Using(using_columns)),
+                    (None, true) => None,
+                    (Some(_), false) => {
+                        return Err(SparkError::invalid(
+                            "join with both condition and using columns",
+                        ))
+                    }
+                };
                 Ok(RelationNode::Query(spec::QueryNode::Join(spec::Join {
                     left: Box::new((*left).try_into()?),
                     right: Box::new((*right).try_into()?),
-                    join_condition,
                     join_type,
-                    using_columns,
+                    join_criteria,
                     join_data_type,
                 })))
             }
@@ -302,11 +322,12 @@ impl TryFrom<RelType> for RelationNode {
             RelType::Limit(limit) => {
                 let sc::Limit { input, limit } = *limit;
                 let input = input.required("limit input")?;
-                let limit = usize::try_from(limit).required("limit value")?;
                 Ok(RelationNode::Query(spec::QueryNode::Limit {
                     input: Box::new((*input).try_into()?),
-                    skip: 0,
-                    limit,
+                    skip: None,
+                    limit: Some(spec::Expr::Literal(spec::Literal::Int32 {
+                        value: Some(limit),
+                    })),
                 }))
             }
             RelType::Aggregate(aggregate) => {
@@ -427,7 +448,13 @@ impl TryFrom<RelType> for RelationNode {
             RelType::LocalRelation(local_relation) => {
                 let sc::LocalRelation { data, schema } = local_relation;
                 let schema = schema
-                    .map(|s| parse_spark_data_type(s.as_str()))
+                    .and_then(|s| {
+                        if s.is_empty() {
+                            None
+                        } else {
+                            Some(parse_spark_data_type(s.as_str()))
+                        }
+                    })
                     .transpose()?
                     .map(|dt| dt.into_schema(DEFAULT_FIELD_NAME, true));
                 Ok(RelationNode::Query(spec::QueryNode::LocalRelation {
@@ -457,10 +484,12 @@ impl TryFrom<RelType> for RelationNode {
             RelType::Offset(offset) => {
                 let sc::Offset { input, offset } = *offset;
                 let input = input.required("offset input")?;
-                let offset = usize::try_from(offset).required("offset value")?;
-                Ok(RelationNode::Query(spec::QueryNode::Offset {
+                Ok(RelationNode::Query(spec::QueryNode::Limit {
                     input: Box::new((*input).try_into()?),
-                    offset,
+                    skip: Some(spec::Expr::Literal(spec::Literal::Int32 {
+                        value: Some(offset),
+                    })),
+                    limit: None,
                 }))
             }
             RelType::Deduplicate(deduplicate) => {
@@ -595,10 +624,9 @@ impl TryFrom<RelType> for RelationNode {
             RelType::Tail(tail) => {
                 let sc::Tail { input, limit } = *tail;
                 let input = input.required("tail input")?;
-                let limit = usize::try_from(limit).required("tail limit")?;
                 Ok(RelationNode::Query(spec::QueryNode::Tail {
                     input: Box::new((*input).try_into()?),
-                    limit,
+                    limit: spec::Expr::Literal(spec::Literal::Int32 { value: Some(limit) }),
                 }))
             }
             RelType::WithColumns(with_columns) => {
@@ -1152,8 +1180,9 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
-                        .child(table_name.into()),
+                    Some(x) => {
+                        from_ast_object_name(parse_object_name(x.as_str())?)?.child(table_name)
+                    }
                     None => from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::ListColumns { table })
@@ -1170,8 +1199,9 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
-                        .child(table_name.into()),
+                    Some(x) => {
+                        from_ast_object_name(parse_object_name(x.as_str())?)?.child(table_name)
+                    }
                     None => from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::GetTable { table })
@@ -1182,9 +1212,10 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let function = match db_name {
-                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
-                        .child(function_name.into()),
-                    None => spec::ObjectName::new_unqualified(function_name.into()),
+                    Some(x) => {
+                        from_ast_object_name(parse_object_name(x.as_str())?)?.child(function_name)
+                    }
+                    None => spec::ObjectName::bare(function_name),
                 };
                 Ok(spec::CommandNode::GetFunction { function })
             }
@@ -1200,8 +1231,9 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let table = match db_name {
-                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
-                        .child(table_name.into()),
+                    Some(x) => {
+                        from_ast_object_name(parse_object_name(x.as_str())?)?.child(table_name)
+                    }
                     None => from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::TableExists { table })
@@ -1212,9 +1244,10 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     db_name,
                 } = x;
                 let function = match db_name {
-                    Some(x) => from_ast_object_name(parse_object_name(x.as_str())?)?
-                        .child(function_name.into()),
-                    None => spec::ObjectName::new_unqualified(function_name.into()),
+                    Some(x) => {
+                        from_ast_object_name(parse_object_name(x.as_str())?)?.child(function_name)
+                    }
+                    None => spec::ObjectName::bare(function_name),
                 };
                 Ok(spec::CommandNode::FunctionExists { function })
             }

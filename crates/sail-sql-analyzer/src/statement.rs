@@ -8,13 +8,15 @@ use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral
 use sail_sql_parser::ast::operator::{Minus, Plus};
 use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
-    AnalyzeTableModifier, AsQueryClause, Assignment, AssignmentList, ColumnDefinition,
-    ColumnDefinitionList, ColumnDefinitionOption, ColumnTypeDefinition, CommentValue,
-    CreateDatabaseClause, CreateTableClause, CreateViewClause, DeleteTableAlias, DescribeItem,
-    ExplainFormat, FileFormat, InsertDirectoryDestination, PartitionClause, PartitionColumn,
-    PartitionColumnList, PartitionValue, PartitionValueList, PropertyKey, PropertyKeyValue,
-    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause, SortColumn,
-    SortColumnList, Statement, UpdateTableAlias, ViewColumn,
+    AlterTableOperation, AlterViewOperation, AnalyzeTableModifier, AsQueryClause, Assignment,
+    AssignmentList, ColumnAlteration, ColumnAlterationList, ColumnAlterationOption,
+    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition,
+    ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
+    DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
+    MergeSource, PartitionClause, PartitionColumn, PartitionColumnList, PartitionValue,
+    PartitionValueList, PropertyKey, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
+    RowFormatDelimitedClause, SetClause, SortColumn, SortColumnList, Statement, UpdateTableAlias,
+    ViewColumn,
 };
 
 use crate::data_type::from_ast_data_type;
@@ -179,12 +181,12 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             alter: _,
             table: _,
             name,
-            operation: _,
+            operation,
         } => {
             let node = spec::CommandNode::AlterTable {
                 table: from_ast_object_name(name)?,
                 if_exists: false,
-                operation: spec::AlterTableOperation::Unknown,
+                operation: from_ast_alter_table_operation(operation)?,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -269,12 +271,12 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             alter: _,
             view: _,
             name,
-            operation: _,
+            operation,
         } => {
             let node = spec::CommandNode::AlterView {
                 view: from_ast_object_name(name)?,
                 if_exists: false,
-                operation: spec::AlterViewOperation::Unknown,
+                operation: from_ast_alter_view_operation(operation)?,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -437,6 +439,41 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 replace: None,
                 if_not_exists: if_not_exists.is_some(),
                 overwrite,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::MergeInto {
+            merge: _,
+            with_schema_evolution,
+            into: _,
+            target,
+            alias: target_alias,
+            using: (_, source),
+            on: _,
+            r#match,
+        } => {
+            if target_alias.is_some_and(|alias| alias.columns.is_some()) {
+                return Err(SqlError::invalid(
+                    "column aliases are not allowed for target table in MERGE",
+                ));
+            }
+            let source_alias = match source {
+                MergeSource::Table { alias, .. } => alias,
+                MergeSource::Query { alias, .. } => alias,
+            };
+            if source_alias.is_some_and(|alias| alias.columns.is_some()) {
+                return Err(SqlError::invalid(
+                    "column aliases are not allowed for source table in MERGE",
+                ));
+            }
+            if r#match.is_empty() {
+                return Err(SqlError::invalid(
+                    "expected at least one WHEN ... MATCHED ... clause for MERGE",
+                ));
+            }
+            let node = spec::CommandNode::MergeInto {
+                target: from_ast_object_name(target)?,
+                with_schema_evolution: with_schema_evolution.is_some(),
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -692,7 +729,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     let function = match item {
                         Either::Left(x @ ObjectName { .. }) => from_ast_object_name(x)?,
                         Either::Right(x @ StringLiteral { .. }) => {
-                            spec::ObjectName::new_unqualified(from_ast_string(x)?.into())
+                            spec::ObjectName::bare(from_ast_string(x)?)
                         }
                     };
                     spec::CommandNode::DescribeFunction {
@@ -870,7 +907,7 @@ fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::Tab
 
 fn from_ast_table_columns(
     columns: Option<ColumnDefinitionList>,
-) -> SqlResult<(spec::Schema, Vec<(String, spec::Expr)>)> {
+) -> SqlResult<(spec::Schema, Vec<(spec::Identifier, spec::Expr)>)> {
     let columns = columns.map(
         |ColumnDefinitionList {
              left: _,
@@ -901,7 +938,7 @@ fn from_ast_table_columns(
             return Err(SqlError::todo("GENERATED ALWAYS AS in CREATE TABLE column"));
         }
         if let Some(default) = default {
-            defaults.push((name.value.clone(), from_ast_expression(default)?));
+            defaults.push((name.value.as_str().into(), from_ast_expression(default)?));
         }
         let field = spec::Field {
             name: name.value,
@@ -1160,7 +1197,7 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                     _,
                     IdentList {
                         left: _,
-                        columns,
+                        names,
                         right: _,
                     },
                     sort,
@@ -1169,7 +1206,7 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                     _,
                 ) => {
                     let cluster_by = CreateTableClusterBy {
-                        columns: columns.into_items().collect(),
+                        columns: names.into_items().collect(),
                         sort_columns: sort.map(
                             |(
                                 _,
@@ -1278,6 +1315,10 @@ fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<St
                     Some(Either::Right(Minus { .. })) => "-",
                     None => "",
                 };
+                let suffix = match suffix {
+                    None => "",
+                    Some(x) => x.as_str(),
+                };
                 format!("{sign}{value}{suffix}")
             }
             PropertyValue::Boolean(BooleanLiteral::True(_)) => "true".to_string(),
@@ -1308,7 +1349,9 @@ fn from_ast_property_list(properties: PropertyList) -> SqlResult<Vec<(String, St
         .collect::<SqlResult<Vec<_>>>()
 }
 
-fn from_ast_partition(partition: PartitionClause) -> SqlResult<Vec<(String, Option<spec::Expr>)>> {
+fn from_ast_partition(
+    partition: PartitionClause,
+) -> SqlResult<Vec<(spec::Identifier, Option<spec::Expr>)>> {
     let PartitionClause {
         partition: _,
         values:
@@ -1323,7 +1366,7 @@ fn from_ast_partition(partition: PartitionClause) -> SqlResult<Vec<(String, Opti
         .map(|x| {
             let PartitionValue { column, value } = x;
             let expr = value.map(|(_, e)| from_ast_expression(e)).transpose()?;
-            Ok((column.value, expr))
+            Ok((column.value.into(), expr))
         })
         .collect::<SqlResult<Vec<_>>>()
 }
@@ -1355,7 +1398,106 @@ fn from_ast_comment_value(value: CommentValue) -> SqlResult<Option<String>> {
     }
 }
 
-// TODO: support table name starting with a number
+#[derive(Default)]
+struct ColumnAlterationOptions {
+    not_null: bool,
+    default: Option<Expr>,
+    comment: Option<StringLiteral>,
+    position: Option<ColumnPosition>,
+}
+
+impl TryFrom<Vec<ColumnAlterationOption>> for ColumnAlterationOptions {
+    type Error = SqlError;
+
+    fn try_from(value: Vec<ColumnAlterationOption>) -> Result<Self, Self::Error> {
+        let mut output = Self::default();
+        for option in value {
+            match option {
+                ColumnAlterationOption::NotNull(_, _) => {
+                    if output.not_null {
+                        return Err(SqlError::invalid("duplicate NOT NULL clause"));
+                    }
+                    output.not_null = true;
+                }
+                ColumnAlterationOption::Default(_, x) => {
+                    if output.default.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate DEFAULT clause"));
+                    }
+                }
+                ColumnAlterationOption::Comment(_, x) => {
+                    if output.comment.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate COMMENT clause"));
+                    }
+                }
+                ColumnAlterationOption::Position(x) => {
+                    if output.position.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate POSITION clause"));
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+}
+
+fn from_ast_column_alteration_list(items: ColumnAlterationList) -> SqlResult<()> {
+    // TODO: implement the conversion properly
+    let columns = match items {
+        ColumnAlterationList::Delimited {
+            left: _,
+            columns,
+            right: _,
+        } => columns,
+        ColumnAlterationList::NotDelimited { columns } => columns,
+    };
+    let _ = columns
+        .into_items()
+        .map(|x| {
+            let ColumnAlteration {
+                name: _,
+                data_type: _,
+                options,
+            } = x;
+            let _: ColumnAlterationOptions = options.try_into()?;
+            Ok(())
+        })
+        .collect::<SqlResult<Vec<_>>>()?;
+    Ok(())
+}
+
+fn from_ast_alter_table_operation(
+    operation: AlterTableOperation,
+) -> SqlResult<spec::AlterTableOperation> {
+    // TODO: implement the conversion properly
+    match operation {
+        AlterTableOperation::RenameTable { .. } => {}
+        AlterTableOperation::RenamePartition { .. } => {}
+        AlterTableOperation::AddColumns { items, .. } => {
+            from_ast_column_alteration_list(items)?;
+        }
+        AlterTableOperation::DropColumns { .. } => {}
+        AlterTableOperation::RenameColumn { .. } => {}
+        AlterTableOperation::AlterColumn { .. } => {}
+        AlterTableOperation::ReplaceColumns { items, .. } => {
+            from_ast_column_alteration_list(items)?;
+        }
+        AlterTableOperation::AddPartitions { .. } => {}
+        AlterTableOperation::DropPartition { .. } => {}
+        AlterTableOperation::SetTableProperties { .. } => {}
+        AlterTableOperation::UnsetTableProperties { .. } => {}
+        AlterTableOperation::SetFileFormat { .. } => {}
+        AlterTableOperation::SetLocation { .. } => {}
+        AlterTableOperation::RecoverPartitions { .. } => {}
+    }
+    Ok(spec::AlterTableOperation::Unknown)
+}
+
+fn from_ast_alter_view_operation(
+    _operation: AlterViewOperation,
+) -> SqlResult<spec::AlterViewOperation> {
+    Ok(spec::AlterViewOperation::Unknown)
+}
+
 // TODO: add the following test cases as gold tests:
 //   `CREATE TABLE foo.1m(a INT)`
 //   `CREATE TABLE foo.1m(a INT) USING parquet`

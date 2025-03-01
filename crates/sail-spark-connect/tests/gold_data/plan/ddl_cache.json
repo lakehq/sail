@@ -91,6 +91,8 @@
                         "name": [
                           "testData"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -142,6 +144,8 @@
                         "name": [
                           "testData"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false

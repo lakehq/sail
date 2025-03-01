@@ -55,11 +55,12 @@ impl TryFrom<Expression> for spec::Expr {
                 is_distinct,
                 is_user_defined_function,
             }) => Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name,
+                function_name: spec::ObjectName::bare(function_name),
                 arguments: arguments
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<_>>()?,
+                named_arguments: vec![],
                 is_distinct,
                 is_user_defined_function,
                 ignore_nulls: None,
@@ -351,7 +352,7 @@ impl TryFrom<CommonInlineUserDefinedFunction> for spec::CommonInlineUserDefinedF
         } = function;
         let function = function.required("common inline UDF function")?;
         Ok(spec::CommonInlineUserDefinedFunction {
-            function_name,
+            function_name: function_name.into(),
             deterministic,
             arguments: arguments
                 .into_iter()
@@ -427,7 +428,7 @@ impl TryFrom<CommonInlineUserDefinedTableFunction> for spec::CommonInlineUserDef
         } = function;
         let function = function.required("common inline UDTF function")?;
         Ok(spec::CommonInlineUserDefinedTableFunction {
-            function_name,
+            function_name: function_name.into(),
             deterministic,
             arguments: arguments
                 .into_iter()

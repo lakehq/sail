@@ -130,7 +130,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found end at 47:50 expected identifier"
+        "failure": "invalid argument: found end at 47:50 expected identifier, or '('"
       }
     },
     {
@@ -2592,7 +2592,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -2614,7 +2614,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -2636,7 +2636,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_timestamp"
+        "success": "ok"
       }
     },
     {

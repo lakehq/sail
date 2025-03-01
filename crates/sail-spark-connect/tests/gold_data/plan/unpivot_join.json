@@ -3,12 +3,6 @@
     {
       "input": "SELECT * FROM t1 JOIN (t2 UNPIVOT (val FOR col in (a, b)))",
       "output": {
-        "failure": "invalid argument: found t2 at 23:25 expected query"
-      }
-    },
-    {
-      "input": "SELECT * FROM t1 JOIN t2 UNPIVOT (val FOR col in (a, b))",
-      "output": {
         "success": {
           "query": {
             "project": {
@@ -20,6 +14,8 @@
                         "name": [
                           "t1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -35,6 +31,8 @@
                             "name": [
                               "t2"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -80,9 +78,114 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "inner",
-                  "usingColumns": [],
+                  "joinCriteria": null,
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "SELECT * FROM t1 JOIN t2 UNPIVOT (val FOR col in (a, b))",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t1"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "unpivot": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t2"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "ids": null,
+                      "values": [
+                        {
+                          "columns": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "a"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "alias": null
+                        },
+                        {
+                          "columns": [
+                            {
+                              "unresolvedAttribute": {
+                                "name": [
+                                  "b"
+                                ],
+                                "planId": null
+                              }
+                            }
+                          ],
+                          "alias": null
+                        }
+                      ],
+                      "variableColumnName": "col",
+                      "valueColumnNames": [
+                        "val"
+                      ],
+                      "includeNulls": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "inner",
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -125,6 +228,8 @@
                             "name": [
                               "t1"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -176,6 +281,8 @@
                         "name": [
                           "t2"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -183,9 +290,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "inner",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -226,6 +332,8 @@
                         "name": [
                           "t1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -241,6 +349,8 @@
                             "name": [
                               "t2"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -256,6 +366,8 @@
                                 "name": [
                                   "t3"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false
@@ -301,17 +413,15 @@
                         "planId": null,
                         "sourceInfo": null
                       },
-                      "joinCondition": null,
                       "joinType": "inner",
-                      "usingColumns": [],
+                      "joinCriteria": null,
                       "joinDataType": null
                     },
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "cross",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
