@@ -956,40 +956,49 @@ impl PlanResolver<'_> {
                         Ok((left_column, right_column))
                     })
                     .collect::<PlanResult<Vec<(_, _)>>>()?;
-                let coalesced = join_columns
-                    .iter()
-                    .zip(using)
-                    .map(|((left, right), name)| {
-                        coalesce(vec![
-                            Expr::Column(left.clone()),
-                            Expr::Column(right.clone()),
-                        ])
-                        .alias(state.register_field_name(name))
-                    })
-                    .collect::<Vec<_>>();
-                let (left_columns, right_columns) =
-                    join_columns.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
+                let (left_columns, right_columns) = join_columns
+                    .clone()
+                    .into_iter()
+                    .unzip::<_, _, Vec<_>, Vec<_>>();
 
-                let plan = LogicalPlanBuilder::from(left)
-                    .join_detailed(
-                        right,
-                        join_type,
-                        (left_columns.clone(), right_columns.clone()),
-                        None,
-                        false,
-                    )?
-                    .build()?;
-                let projections = coalesced.into_iter().chain(
-                    plan.schema()
-                        .columns()
-                        .into_iter()
-                        .filter(|col| !left_columns.contains(col) && !right_columns.contains(col))
-                        .map(Expr::Column),
-                );
-                let plan = LogicalPlanBuilder::from(plan)
-                    .project(projections)?
-                    .build()?;
-                Ok(plan)
+                let builder = LogicalPlanBuilder::from(left).join_detailed(
+                    right,
+                    join_type,
+                    (left_columns.clone(), right_columns.clone()),
+                    None,
+                    false,
+                )?;
+                let builder = match join_type {
+                    plan::JoinType::Inner
+                    | plan::JoinType::Left
+                    | plan::JoinType::Right
+                    | plan::JoinType::Full => {
+                        let projections = join_columns
+                            .into_iter()
+                            .zip(using)
+                            .map(|((left, right), name)| {
+                                coalesce(vec![Expr::Column(left), Expr::Column(right)])
+                                    .alias(state.register_field_name(name))
+                            })
+                            .chain(
+                                builder
+                                    .schema()
+                                    .columns()
+                                    .into_iter()
+                                    .filter(|col| {
+                                        !left_columns.contains(col) && !right_columns.contains(col)
+                                    })
+                                    .map(Expr::Column),
+                            );
+                        builder.project(projections)?
+                    }
+                    plan::JoinType::LeftSemi
+                    | plan::JoinType::RightSemi
+                    | plan::JoinType::LeftAnti
+                    | plan::JoinType::RightAnti
+                    | plan::JoinType::LeftMark => builder,
+                };
+                Ok(builder.build()?)
             }
         }
     }
