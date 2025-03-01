@@ -1427,7 +1427,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: pmod"
+        "success": "ok"
       }
     },
     {
@@ -1449,7 +1449,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: pmod"
+        "success": "ok"
       }
     },
     {

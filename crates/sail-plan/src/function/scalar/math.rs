@@ -11,7 +11,9 @@ use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::math::spark_abs::SparkAbs;
 use crate::extension::function::math::spark_bin::SparkBin;
+use crate::extension::function::math::spark_expm1::SparkExpm1;
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
+use crate::extension::function::math::spark_pmod::SparkPmod;
 use crate::extension::function::math::spark_signum::SparkSignum;
 use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
@@ -399,22 +401,6 @@ fn power(base: expr::Expr, exponent: expr::Expr) -> expr::Expr {
     })
 }
 
-// FIXME: Implement the UDF for better numerical precision.
-fn expm1(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let num = input.arguments.one()?;
-    let name = input.argument_names.to_vec().one()?;
-    spark_minus(FunctionInput {
-        arguments: vec![
-            expr_fn::exp(num),
-            expr::Expr::Literal(ScalarValue::Float64(Some(1.0))),
-        ],
-        argument_names: &[name, "1.0".to_string()],
-        plan_config: input.plan_config,
-        session_context: input.session_context,
-        schema: input.schema,
-    })
-}
-
 fn hypot(expr1: expr::Expr, expr2: expr::Expr) -> expr::Expr {
     let expr1 = expr::Expr::BinaryExpr(BinaryExpr {
         left: Box::new(expr1.clone()),
@@ -506,7 +492,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("div", F::custom(spark_div)),
         ("e", F::nullary(eulers_constant)),
         ("exp", F::unary(expr_fn::exp)),
-        ("expm1", F::custom(expm1)),
+        ("expm1", F::udf(SparkExpm1::new())),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::unary(floor)),
         ("greatest", F::udf(least_greatest::Greatest::new())),
@@ -521,7 +507,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("mod", F::binary_op(Operator::Modulo)),
         ("negative", F::unary(|x| expr::Expr::Negative(Box::new(x)))),
         ("pi", F::nullary(expr_fn::pi)),
-        ("pmod", F::unknown("pmod")),
+        ("pmod", F::udf(SparkPmod::new())),
         ("positive", F::unary(positive)),
         ("pow", F::binary(power)),
         ("power", F::binary(power)),
