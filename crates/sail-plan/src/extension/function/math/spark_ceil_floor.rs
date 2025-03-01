@@ -153,10 +153,12 @@ fn ceil_floor_return_type_from_args(name: &str, args: ReturnTypeArgs) -> Result<
                 ));
             }
             let (precision, scale, decimal_128) = match expr {
-                DataType::UInt8 | DataType::Int8 => Ok((max(3, -target_scale + 1), 0, true)),
-                DataType::UInt16 | DataType::Int16 => Ok((max(5, -target_scale + 1), 0, true)),
-                DataType::UInt32 | DataType::Int32 => Ok((max(10, -target_scale + 1), 0, true)),
-                DataType::UInt64 | DataType::Int64 => Ok((max(20, -target_scale + 1), 0, true)),
+                DataType::Int8 => Ok((max(3, -target_scale + 1), 0, true)),
+                DataType::UInt8 | DataType::Int16 => Ok((max(5, -target_scale + 1), 0, true)),
+                DataType::UInt16 | DataType::Int32 => Ok((max(10, -target_scale + 1), 0, true)),
+                DataType::UInt32 | DataType::UInt64 | DataType::Int64 => {
+                    Ok((max(20, -target_scale + 1), 0, true))
+                }
                 DataType::Float32 => Ok((
                     max(14, -target_scale + 1),
                     min(7, max(0, target_scale)),
