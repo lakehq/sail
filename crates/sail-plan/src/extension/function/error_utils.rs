@@ -21,16 +21,11 @@ pub fn unsupported_data_type_exec_err(
 
 pub fn unsupported_data_types_exec_err(
     function_name: &str,
-    required: &[DataType],
+    required: &str,
     provided: &[DataType],
 ) -> DataFusionError {
     exec_datafusion_err!(
-        "Unsupported Data Type: Spark `{function_name}` function expects {}, got {}",
-        required
-            .iter()
-            .map(|dt| format!("{}", dt))
-            .collect::<Vec<_>>()
-            .join(", "),
+        "Unsupported Data Type: Spark `{function_name}` function expects {required}, got {}",
         provided
             .iter()
             .map(|dt| format!("{}", dt))
