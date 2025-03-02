@@ -472,7 +472,9 @@ fn ceil(input: FunctionInput) -> PlanResult<Expr> {
                         ScalarValue::Int16(v) => {
                             Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -v as i32))))
                         }
-                        ScalarValue::Int32(v) => Ok(Expr::Literal(ScalarValue::Int32(*v))),
+                        ScalarValue::Int32(v) => {
+                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -v))))
+                        }
                         ScalarValue::Int64(v) => {
                             Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
                         }

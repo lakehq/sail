@@ -231,10 +231,7 @@ impl ScalarUDFImpl for SparkCeil {
         } else if arg_len == 2 {
             let target_scale = &args.args[1];
             match target_scale {
-                ColumnarValue::Scalar(ScalarValue::Int32(value)) => {
-                    // test
-                    Ok(value)
-                }
+                ColumnarValue::Scalar(ScalarValue::Int32(value)) => Ok(value),
                 _ => Err(unsupported_data_type_exec_err(
                     "ceil",
                     "Target scale must be Integer literal",
@@ -254,41 +251,15 @@ impl ScalarUDFImpl for SparkCeil {
     }
 }
 
-#[inline]
-fn ceil_with_target_scale(decimal: i128, scale: i8, target_scale: i32) -> i128 {
-    // Round to powers of 10 to the left of decimal point when target_scale < 0
-    if target_scale < 0 {
-        // Convert to integer with scale 0
-        let integer_value = match scale.cmp(&0) {
-            std::cmp::Ordering::Greater => {
-                let factor = 10_i128.pow_wrapping(scale as u32);
-                div_ceil(decimal, factor)
-            }
-            std::cmp::Ordering::Less => decimal * 10_i128.pow_wrapping((-scale) as u32),
-            std::cmp::Ordering::Equal => decimal,
-        };
-        let pow_factor = 10_i128.pow_wrapping((-target_scale) as u32);
-        div_ceil(integer_value, pow_factor) * pow_factor
-    } else {
-        let scale_diff = target_scale - (scale as i32);
-        if scale_diff >= 0 {
-            decimal * 10_i128.pow_wrapping(scale_diff as u32)
-        } else {
-            let abs_diff = (-scale_diff) as u32;
-            div_ceil(decimal, 10_i128.pow_wrapping(abs_diff))
-        }
-    }
-}
-
 fn spark_ceil(
     arg: &ColumnarValue,
     target_scale: &Option<i32>,
     return_type: &DataType,
 ) -> Result<ColumnarValue> {
-    if matches!(arg.data_type(), |DataType::Int8| DataType::Int16
-        | DataType::Int32
-        | DataType::Int64)
-    {
+    if matches!(
+        arg.data_type(),
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+    ) {
         if let Some(target_scale) = *target_scale {
             if target_scale >= 0 {
                 Ok(arg.cast_to(return_type, None)?)
@@ -554,6 +525,32 @@ fn decimal128_ceil(
             "Decimal128 Type for Decimal128 ceil",
             &other,
         )),
+    }
+}
+
+#[inline]
+fn ceil_with_target_scale(decimal: i128, scale: i8, target_scale: i32) -> i128 {
+    // Round to powers of 10 to the left of decimal point when target_scale < 0
+    if target_scale < 0 {
+        // Convert to integer with scale 0
+        let integer_value = match scale.cmp(&0) {
+            std::cmp::Ordering::Greater => {
+                let factor = 10_i128.pow_wrapping(scale as u32);
+                div_ceil(decimal, factor)
+            }
+            std::cmp::Ordering::Less => decimal * 10_i128.pow_wrapping((-scale) as u32),
+            std::cmp::Ordering::Equal => decimal,
+        };
+        let pow_factor = 10_i128.pow_wrapping((-target_scale) as u32);
+        div_ceil(integer_value, pow_factor) * pow_factor
+    } else {
+        let scale_diff = target_scale - (scale as i32);
+        if scale_diff >= 0 {
+            decimal * 10_i128.pow_wrapping(scale_diff as u32)
+        } else {
+            let abs_diff = (-scale_diff) as u32;
+            div_ceil(decimal, 10_i128.pow_wrapping(abs_diff))
+        }
     }
 }
 
