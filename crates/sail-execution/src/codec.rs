@@ -69,6 +69,7 @@ use sail_plan::extension::function::math::randn::Randn;
 use sail_plan::extension::function::math::random::Random;
 use sail_plan::extension::function::math::spark_abs::SparkAbs;
 use sail_plan::extension::function::math::spark_bin::SparkBin;
+use sail_plan::extension::function::math::spark_ceil_floor::SparkCeil;
 use sail_plan::extension::function::math::spark_expm1::SparkExpm1;
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::math::spark_pmod::SparkPmod;
@@ -793,6 +794,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
+            "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }

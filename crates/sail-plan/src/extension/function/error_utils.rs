@@ -1,6 +1,6 @@
 use datafusion::arrow::datatypes::DataType;
 // TODO: https://github.com/apache/spark/tree/master/common/utils/src/main/resources/error
-use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_common::{exec_datafusion_err, internal_datafusion_err, DataFusionError};
 
 pub fn invalid_arg_count_exec_err(
     function_name: &str,
@@ -44,4 +44,8 @@ pub fn unsupported_data_types_exec_err(
 
 pub fn generic_exec_err(function_name: &str, message: &str) -> DataFusionError {
     exec_datafusion_err!("Spark `{function_name}` function: {message}")
+}
+
+pub fn generic_internal_err(function_name: &str, message: &str) -> DataFusionError {
+    internal_datafusion_err!("Spark `{function_name}` function: {message}")
 }
