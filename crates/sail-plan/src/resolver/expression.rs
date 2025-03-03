@@ -595,6 +595,9 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
+        if let Some((name, expr)) = self.resolve_hidden_field(&name, plan_id, schema, state)? {
+            return Ok(NamedExpr::new(vec![name], expr));
+        }
         let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
             return Err(PlanError::AnalysisError(format!(
                 "cannot resolve attribute: {name:?}"
@@ -622,6 +625,9 @@ impl PlanResolver<'_> {
                 let Ok(info) = state.get_field_info(field.name()) else {
                     return vec![];
                 };
+                if info.is_hidden() {
+                    return vec![];
+                }
                 candidates
                     .iter()
                     .filter_map(|(q, name, inner)| {
@@ -644,7 +650,47 @@ impl PlanResolver<'_> {
             .collect::<Vec<_>>();
         if candidates.len() > 1 {
             return Err(PlanError::AnalysisError(format!(
-                "ambiguous outer attribute: {name:?}"
+                "ambiguous attribute: {name:?}"
+            )));
+        }
+        Ok(candidates.pop())
+    }
+
+    fn resolve_hidden_field(
+        &self,
+        name: &spec::ObjectName,
+        plan_id: Option<i64>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Option<(String, expr::Expr)>> {
+        let [name] = name.parts() else {
+            return Ok(None);
+        };
+        let mut candidates = schema
+            .iter()
+            .filter_map(|(qualifier, field)| {
+                if qualifier.is_some() {
+                    return None;
+                }
+                let Ok(info) = state.get_field_info(field.name()) else {
+                    return None;
+                };
+                if !info.is_hidden() {
+                    return None;
+                }
+                if info.matches(name.as_ref(), plan_id) {
+                    Some((
+                        name.as_ref().to_string(),
+                        expr::Expr::Column(Column::new_unqualified(field.name())),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() > 1 {
+            return Err(PlanError::AnalysisError(format!(
+                "ambiguous attribute: {name:?}"
             )));
         }
         Ok(candidates.pop())
@@ -663,6 +709,9 @@ impl PlanResolver<'_> {
                 let Ok(info) = state.get_field_info(field.name()) else {
                     return vec![];
                 };
+                if info.is_hidden() {
+                    return vec![];
+                }
                 candidates
                     .iter()
                     .filter(|(q, name)| {

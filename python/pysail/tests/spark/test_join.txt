@@ -1,9 +1,6 @@
 >>> # The tests are adapted from the doctests of the `pyspark.sql.dataframe.DataFrame.join()` method.
->>> # There are recent changes [1] to the doctests in Spark,
+>>> # There are [recent changes](https://github.com/apache/spark/pull/43039) to the doctests in Spark,
 >>> # and both the tests before and after the changes are included.
->>> # Some tests are skipped due to known issues [2].
->>> # * [1] <https://github.com/apache/spark/pull/43039>
->>> # * [2] <https://github.com/lakehq/sail/issues/251>
 >>>
 >>> import pyspark.sql.functions as F
 >>> from pyspark.sql import Row
@@ -23,13 +20,31 @@
 | Bob|  5|    85|
 +----+---+------+
 
->>> df1.join(df2, "name").select(df1.name, df2.height).show()  # doctest: +SKIP
+>>> df1.join(df2, "name").select(df1.name, df2.height).show()
 +----+------+
 |name|height|
 +----+------+
 | Bob|    85|
 +----+------+
 
+>>> df1.join(df2, "name").select("name", "height").show()
++----+------+
+|name|height|
++----+------+
+| Bob|    85|
++----+------+
+
+>>> df1.join(df2, df1.name == df2.name).show()
++----+---+----+------+
+|name|age|name|height|
++----+---+----+------+
+| Bob|  5| Bob|    85|
++----+---+----+------+
+
+>>> df1.join(df2, df1.name == df2.name).select("name", "height").show()
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: ...
 >>> df1.join(df3, ["name", "age"]).show()
 +----+---+------+
 |name|age|height|
@@ -37,7 +52,7 @@
 | Bob|  5|  NULL|
 +----+---+------+
 
->>> df1.join(df3, ["name", "age"]).select(df1.name, df1.age).show()  # doctest: +SKIP
+>>> df1.join(df3, ["name", "age"]).select(df1.name, df1.age).show()
 +----+---+
 |name|age|
 +----+---+
@@ -111,6 +126,33 @@ pyspark.errors.exceptions.connect.AnalysisException: ...
 |Alice|   2|  NULL|
 +-----+----+------+
 
+>>> df1.join(df2, "name", "outer").sort(F.desc("name")).show()
++-----+----+------+
+| name| age|height|
++-----+----+------+
+|  Tom|NULL|    80|
+|  Bob|   5|    85|
+|Alice|   2|  NULL|
++-----+----+------+
+
+>>> df1.join(df2, "name", "outer").sort(F.desc(df1.name)).show()
++-----+----+------+
+| name| age|height|
++-----+----+------+
+|  Bob|   5|    85|
+|Alice|   2|  NULL|
+|  Tom|NULL|    80|
++-----+----+------+
+
+>>> df1.join(df2, "name", "outer").sort(F.desc(df2.name)).show()
++-----+----+------+
+| name| age|height|
++-----+----+------+
+|  Tom|NULL|    80|
+|  Bob|   5|    85|
+|Alice|   2|  NULL|
++-----+----+------+
+
 >>> df1.join(df2, "name", "outer").select("name", "height").sort(F.desc("name")).show()
 +-----+------+
 | name|height|
@@ -119,6 +161,24 @@ pyspark.errors.exceptions.connect.AnalysisException: ...
 |  Bob|    85|
 |Alice|  NULL|
 +-----+------+
+
+>>> df1.join(df2, "name", "outer").select(df1.name, "height").sort(F.desc("name")).show()
++-----+------+
+| name|height|
++-----+------+
+|  Bob|    85|
+|Alice|  NULL|
+| NULL|    80|
++-----+------+
+
+>>> df1.join(df2, "name", "outer").select(df2.name, "height").sort(F.desc("name")).show()
++----+------+
+|name|height|
++----+------+
+| Tom|    80|
+| Bob|    85|
+|NULL|  NULL|
++----+------+
 
 >>> df1.join(df3, ["name", "age"], "outer").sort("name", "age").show()
 +-----+----+------+
