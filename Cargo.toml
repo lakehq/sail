@@ -9,7 +9,7 @@ version = "0.2.1"
 edition = "2021"
 
 [workspace.dependencies]
-thiserror = { version = "2.0.9" }
+thiserror = { version = "2.0.12" }
 tokio = { version = "1.42.0", features = ["full"] }
 tokio-stream = "0.1.17"
 tonic = { version = "0.12.3", features = ["tls", "tls-roots", "gzip", "zstd"] }
@@ -24,7 +24,7 @@ pbjson-types = "0.7.0"
 pbjson-build = "0.7.0"
 tower = { version = "0.5", features = ["full"] }
 uuid = { version = "1.12.1", features = ["v4"] }
-async-trait = "0.1.86"
+async-trait = "0.1.87"
 async-recursion = "1.1.0"
 async-stream = "0.3"
 lazy_static = "1.5.0"
@@ -38,10 +38,10 @@ chrono-tz = "0.10.1"
 futures = "0.3"
 comfy-table = "7.1"
 html-escape = "0.2"
-syn = "2.0.98"
-quote = "1.0.37"
+syn = "2.0.99"
+quote = "1.0.39"
 paste = "1.0.15"
-proc-macro2 = "1.0.92"
+proc-macro2 = "1.0.94"
 prettyplease = "0.2.29"
 phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
