@@ -90,8 +90,12 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// Resolve query plan.
+    /// The resolved plan may contain hidden fields.
+    /// If the hidden fields cannot be handled,
+    /// [`Self::resolve_query_plan`] should be used instead,
     #[async_recursion]
-    pub(super) async fn resolve_query_plan(
+    pub(super) async fn resolve_query_plan_with_hidden_fields(
         &self,
         plan: spec::QueryPlan,
         state: &mut PlanResolverState,
@@ -384,6 +388,20 @@ impl PlanResolver<'_> {
         self.verify_query_plan(&plan, state)?;
         self.register_schema_with_plan_id(&plan, plan_id, state)?;
         Ok(plan)
+    }
+
+    /// Resolve query plan.
+    /// No hidden fields are kept in the resolved plan.
+    #[async_recursion]
+    pub(super) async fn resolve_query_plan(
+        &self,
+        plan: spec::QueryPlan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let plan = self
+            .resolve_query_plan_with_hidden_fields(plan, state)
+            .await?;
+        self.remove_hidden_fields(plan, state)
     }
 
     pub(super) fn resolve_empty_query_plan(&self) -> PlanResult<LogicalPlan> {
@@ -850,7 +868,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = match input {
-            Some(x) => self.resolve_query_plan(x, state).await?,
+            Some(x) => self.resolve_query_plan_with_hidden_fields(x, state).await?,
             None => self.resolve_empty_query_plan()?,
         };
         let schema = input.schema();
@@ -884,7 +902,9 @@ impl PlanResolver<'_> {
         condition: spec::Expr,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let schema = input.schema();
         let predicate = self.resolve_expression(condition, schema, state).await?;
         let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
@@ -905,8 +925,12 @@ impl PlanResolver<'_> {
             join_criteria,
             join_data_type,
         } = join;
-        let left = self.resolve_query_plan(*left, state).await?;
-        let right = self.resolve_query_plan(*right, state).await?;
+        let left = self
+            .resolve_query_plan_with_hidden_fields(*left, state)
+            .await?;
+        let right = self
+            .resolve_query_plan_with_hidden_fields(*right, state)
+            .await?;
         let join_type = match join_type {
             JoinType::Inner => Some(plan::JoinType::Inner),
             JoinType::LeftOuter => Some(plan::JoinType::Left),
@@ -956,40 +980,57 @@ impl PlanResolver<'_> {
                         Ok((left_column, right_column))
                     })
                     .collect::<PlanResult<Vec<(_, _)>>>()?;
-                let coalesced = join_columns
-                    .iter()
-                    .zip(using)
-                    .map(|((left, right), name)| {
-                        coalesce(vec![
-                            Expr::Column(left.clone()),
-                            Expr::Column(right.clone()),
-                        ])
-                        .alias(state.register_field_name(name))
-                    })
-                    .collect::<Vec<_>>();
-                let (left_columns, right_columns) =
-                    join_columns.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
+                let (left_columns, right_columns) = join_columns
+                    .clone()
+                    .into_iter()
+                    .unzip::<_, _, Vec<_>, Vec<_>>();
 
-                let plan = LogicalPlanBuilder::from(left)
-                    .join_detailed(
-                        right,
-                        join_type,
-                        (left_columns.clone(), right_columns.clone()),
-                        None,
-                        false,
-                    )?
-                    .build()?;
-                let projections = coalesced.into_iter().chain(
-                    plan.schema()
-                        .columns()
-                        .into_iter()
-                        .filter(|col| !left_columns.contains(col) && !right_columns.contains(col))
-                        .map(Expr::Column),
-                );
-                let plan = LogicalPlanBuilder::from(plan)
-                    .project(projections)?
-                    .build()?;
-                Ok(plan)
+                let builder = LogicalPlanBuilder::from(left).join_detailed(
+                    right,
+                    join_type,
+                    (left_columns.clone(), right_columns.clone()),
+                    None,
+                    false,
+                )?;
+                let builder = match join_type {
+                    plan::JoinType::Inner
+                    | plan::JoinType::Left
+                    | plan::JoinType::Right
+                    | plan::JoinType::Full => {
+                        let columns = builder
+                            .schema()
+                            .columns()
+                            .into_iter()
+                            .map(|col| {
+                                if left_columns.contains(&col) || right_columns.contains(&col) {
+                                    let info = state.get_field_info(col.name())?.clone();
+                                    let field_id = state.register_hidden_field_name(info.name());
+                                    for plan_id in info.plan_ids() {
+                                        state.register_plan_id_for_field(&field_id, plan_id)?;
+                                    }
+                                    Ok(Expr::Column(col).alias(field_id))
+                                } else {
+                                    Ok(Expr::Column(col))
+                                }
+                            })
+                            .collect::<PlanResult<Vec<_>>>()?;
+                        let projections = join_columns
+                            .into_iter()
+                            .zip(using)
+                            .map(|((left, right), name)| {
+                                coalesce(vec![Expr::Column(left), Expr::Column(right)])
+                                    .alias(state.register_field_name(name))
+                            })
+                            .chain(columns);
+                        builder.project(projections)?
+                    }
+                    plan::JoinType::LeftSemi
+                    | plan::JoinType::RightSemi
+                    | plan::JoinType::LeftAnti
+                    | plan::JoinType::RightAnti
+                    | plan::JoinType::LeftMark => builder,
+                };
+                Ok(builder.build()?)
             }
         }
     }
@@ -1112,7 +1153,9 @@ impl PlanResolver<'_> {
         is_global: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let sorts = self
             .resolve_query_sort_orders_by_plan(&input, &order, state)
             .await?;
@@ -1238,7 +1281,9 @@ impl PlanResolver<'_> {
         limit: Option<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let skip = if let Some(skip) = skip {
             Some(self.resolve_expression(skip, input.schema(), state).await?)
         } else {
@@ -1272,7 +1317,9 @@ impl PlanResolver<'_> {
             with_grouping_expressions,
         } = aggregate;
 
-        let input = self.resolve_query_plan(*input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(*input, state)
+            .await?;
         let schema = input.schema();
         let projections = self
             .resolve_named_expressions(projections, schema, state)
@@ -1302,7 +1349,9 @@ impl PlanResolver<'_> {
         named: Vec<(String, spec::Literal)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let input = if !positional.is_empty() {
             let params = positional
                 .into_iter()
@@ -1381,20 +1430,22 @@ impl PlanResolver<'_> {
             all_columns_as_keys,
             within_watermark,
         } = deduplicate;
-        let input = self.resolve_query_plan(*input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(*input, state)
+            .await?;
         let schema = input.schema();
         if within_watermark {
             return Err(PlanError::todo("deduplicate within watermark"));
         }
         if !column_names.is_empty() && !all_columns_as_keys {
-            let column_names: Vec<String> = column_names.into_iter().map(|x| x.into()).collect();
             let on_expr: Vec<Expr> = schema
                 .columns()
                 .into_iter()
                 .filter(|column| {
-                    state
-                        .get_field_info(column.name())
-                        .is_ok_and(|info| column_names.iter().any(|c| info.matches(c, None)))
+                    state.get_field_info(column.name()).is_ok_and(|info| {
+                        !info.is_hidden()
+                            && column_names.iter().any(|c| info.matches(c.as_ref(), None))
+                    })
                 })
                 .map(Expr::Column)
                 .collect();
@@ -1444,8 +1495,11 @@ impl PlanResolver<'_> {
         qualifier: Vec<spec::Identifier>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
-            Arc::new(self.resolve_query_plan(input, state).await?),
+            Arc::new(input),
             self.resolve_table_reference(&spec::ObjectName::from(qualifier).child(alias))?,
         )?))
     }
@@ -1456,7 +1510,9 @@ impl PlanResolver<'_> {
         num_partitions: usize,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         // TODO: handle shuffle partition
         Ok(LogicalPlan::Repartition(plan::Repartition {
             input: Arc::new(input),
@@ -1716,7 +1772,9 @@ impl PlanResolver<'_> {
         num_partitions: Option<usize>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let schema = input.schema();
         let expr = self
             .resolve_expressions(partition_expressions, schema, state)
@@ -2643,8 +2701,8 @@ impl PlanResolver<'_> {
 
         let (schema, query_logical_plan) = if let Some(query) = query {
             // FIXME: Query plan has cols renamed to #1, #2, etc. So I think there's more work here.
-            let logical_plan = self.resolve_query_plan(*query, state).await?;
-            (logical_plan.schema().clone(), Some(logical_plan))
+            let plan = self.resolve_query_plan(*query, state).await?;
+            (plan.schema().clone(), Some(plan))
         } else {
             let fields = self.resolve_fields(&schema.fields, state)?;
             let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
@@ -3261,6 +3319,31 @@ impl PlanResolver<'_> {
         let statement = plan::Statement::SetVariable(plan::SetVariable { variable, value });
 
         Ok(LogicalPlan::Statement(statement))
+    }
+
+    fn remove_hidden_fields(
+        &self,
+        plan: LogicalPlan,
+        state: &PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let mut columns = vec![];
+        let mut has_hidden_columns = false;
+        for column in plan.schema().columns() {
+            let info = state.get_field_info(column.name())?;
+            if info.is_hidden() {
+                has_hidden_columns = true;
+            } else {
+                columns.push(column);
+            }
+        }
+        if has_hidden_columns {
+            let plan = LogicalPlanBuilder::new(plan)
+                .project(columns.into_iter().map(Expr::Column))?
+                .build()?;
+            Ok(plan)
+        } else {
+            Ok(plan)
+        }
     }
 
     /// All resolved plans must have "resolved columns".
