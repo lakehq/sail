@@ -1,0 +1,11 @@
+name: Mount Cargo target directory
+description: Mount Cargo target directory to a volume with larger disk space
+runs:
+  using: composite
+  steps:
+    - run: |
+        sudo df -h
+        sudo mkdir /mnt/build/target
+        ln -s /mnt/build/target
+        ls -la
+      shell: bash
