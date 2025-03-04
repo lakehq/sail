@@ -14,6 +14,11 @@ pub(super) struct FieldInfo {
     plan_ids: HashSet<i64>,
     /// The user-facing name of the field.
     name: String,
+    /// Whether this is a hidden field that should be excluded from the
+    /// final logical plan.
+    /// A hidden field is helpful for filtering or sorting plans using columns
+    /// of its child plans (e.g. a key column of the left/right plans in an outer join).
+    hidden: bool,
 }
 
 impl FieldInfo {
@@ -23,6 +28,10 @@ impl FieldInfo {
 
     pub fn plan_ids(&self) -> Vec<i64> {
         self.plan_ids.iter().copied().collect()
+    }
+
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
     }
 
     pub fn matches(&self, name: &str, plan_id: Option<i64>) -> bool {
@@ -74,23 +83,34 @@ impl PlanResolverState {
         format!("#{id}")
     }
 
-    /// Registers a field and returns a generated opaque string ID for the field.
-    /// The field ID is unique within the plan resolver state.
-    /// No assumption should be made about the format of the field ID.
-    pub fn register_field_name(&mut self, name: impl Into<String>) -> String {
+    fn register_field_info(&mut self, name: impl Into<String>, hidden: bool) -> String {
         let field_id = self.next_field_id();
         self.fields.insert(
             field_id.clone(),
             FieldInfo {
                 plan_ids: HashSet::new(),
                 name: name.into(),
+                hidden,
             },
         );
         field_id
     }
 
+    /// Registers a field and returns a generated opaque string ID for the field.
+    /// The field ID is unique within the plan resolver state.
+    /// No assumption should be made about the format of the field ID.
+    pub fn register_field_name(&mut self, name: impl Into<String>) -> String {
+        self.register_field_info(name, false)
+    }
+
+    /// Registers a hidden field and returns a generated opaque string ID for the field.
+    /// This is similar to [`Self::register_field_name`] but the field is marked as hidden.
+    pub fn register_hidden_field_name(&mut self, name: impl Into<String>) -> String {
+        self.register_field_info(name, true)
+    }
+
     pub fn register_field(&mut self, field: impl AsRef<Field>) -> String {
-        self.register_field_name(field.as_ref().name())
+        self.register_field_info(field.as_ref().name(), false)
     }
 
     pub fn register_fields(
