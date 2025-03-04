@@ -355,8 +355,12 @@ impl PlanResolver<'_> {
                 self.resolve_expression_alias(*expr, name, metadata, schema, state)
                     .await
             }
-            Expr::Cast { expr, cast_to_type } => {
-                self.resolve_expression_cast(*expr, cast_to_type, schema, state)
+            Expr::Cast {
+                expr,
+                cast_to_type,
+                rename,
+            } => {
+                self.resolve_expression_cast(*expr, cast_to_type, rename, schema, state)
                     .await
             }
             Expr::UnresolvedRegex { col_name, plan_id } => {
@@ -925,12 +929,26 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         cast_to_type: spec::DataType,
+        rename: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let data_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
+        let name = if rename {
+            let data_type_string = self
+                .config
+                .plan_formatter
+                .data_type_to_simple_string(&cast_to_type)?;
+            vec![format!(
+                "CAST({} AS {})",
+                name.one()?,
+                data_type_string.to_ascii_uppercase()
+            )]
+        } else {
+            name
+        };
         let expr = expr::Expr::Cast(expr::Cast {
             expr: Box::new(expr),
             data_type,

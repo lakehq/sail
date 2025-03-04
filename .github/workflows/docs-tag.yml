@@ -48,6 +48,8 @@ jobs:
 
       - uses: ./.github/actions/adjust-swap-space
 
+      - uses: ./.github/actions/mount-target-directory
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
