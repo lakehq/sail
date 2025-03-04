@@ -860,6 +860,10 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))
             }
+            // FIXME: This is incorrect if the column name is named `*`:
+            //   ```
+            //   SELECT count(`*`) FROM VALUES 1 AS t(`*`)
+            //   ```
             "count" if matches!(arguments.as_slice(), ["*"]) => Ok("count(1)".to_string()),
             _ => {
                 let arguments = arguments.join(", ");

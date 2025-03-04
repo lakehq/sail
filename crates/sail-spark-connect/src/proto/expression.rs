@@ -125,6 +125,7 @@ impl TryFrom<Expression> for spec::Expr {
                 Ok(spec::Expr::Cast {
                     expr: Box::new((*expr).try_into()?),
                     cast_to_type,
+                    rename: false,
                 })
             }
             ExprType::UnresolvedRegex(UnresolvedRegex { col_name, plan_id }) => {
