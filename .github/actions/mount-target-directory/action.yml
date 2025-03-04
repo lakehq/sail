@@ -3,12 +3,15 @@ description: Mount Cargo target directory to a volume with larger disk space
 runs:
   using: composite
   steps:
-    # We intentionally do not use `mkdir -p` so that the command would fail
+    # We intentionally do not use `mkdir -p` so that the command can fail
     # when the directory exists, indicating conflicts in its usage.
     - run: |
         sudo df -h
         sudo mkdir /mnt/cargo
         sudo mkdir /mnt/cargo/target
+        sudo chown "$(id -un):$(id -gn)" /mnt/cargo/target
+        sudo ls -la /mnt
+        sudo ls -la /mnt/cargo
         ln -s /mnt/build/target
         ls -la
       shell: bash
