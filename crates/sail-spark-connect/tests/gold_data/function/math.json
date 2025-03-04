@@ -1097,7 +1097,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: one value expected: [Literal(Decimal128(Some(31411),5,4)), Negative(Literal(Int32(3)))]"
+        "success": "ok"
       }
     },
     {
@@ -1119,7 +1119,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: one value expected: [Literal(Decimal128(Some(31411),5,4)), Literal(Int32(3))]"
+        "success": "ok"
       }
     },
     {

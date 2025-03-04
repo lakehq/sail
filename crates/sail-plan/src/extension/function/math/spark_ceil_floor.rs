@@ -1,5 +1,4 @@
 use std::any::Any;
-use std::cmp::max;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray};
@@ -12,7 +11,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
-use num::integer::div_ceil;
+use num::integer::{div_ceil, div_floor};
 
 use crate::extension::function::error_utils::{
     generic_exec_err, generic_internal_err, invalid_arg_count_exec_err,
@@ -99,14 +98,12 @@ fn ceil_floor_return_type_from_args(name: &str, args: ReturnTypeArgs) -> Result<
                 ));
             }
             let (precision, scale) = match expr {
-                DataType::Int8 => Ok((max(3, -target_scale + 1), 0)),
-                DataType::UInt8 | DataType::Int16 => Ok((max(5, -target_scale + 1), 0)),
-                DataType::UInt16 | DataType::Int32 => Ok((max(10, -target_scale + 1), 0)),
-                DataType::UInt32 | DataType::UInt64 | DataType::Int64 => {
-                    Ok((max(20, -target_scale + 1), 0))
-                }
-                DataType::Float32 => Ok((max(14, -target_scale + 1), target_scale.clamp(0, 7))),
-                DataType::Float64 => Ok((max(30, -target_scale + 1), target_scale.clamp(0, 15))),
+                DataType::Int8 => Ok((3, 0)),
+                DataType::UInt8 | DataType::Int16 => Ok((5, 0)),
+                DataType::UInt16 | DataType::Int32 => Ok((10, 0)),
+                DataType::UInt32 | DataType::UInt64 | DataType::Int64 => Ok((20, 0)),
+                DataType::Float32 => Ok((14, 7)),
+                DataType::Float64 => Ok((30, 15)),
                 DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
                     if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
                         Ok((*precision as i32, *scale as i32))
@@ -238,7 +235,7 @@ impl ScalarUDFImpl for SparkCeil {
         }?;
         let arg = &args.args[0];
         let return_type = args.return_type;
-        spark_ceil(arg, target_scale, return_type)
+        spark_ceil_floor("ceil", arg, target_scale, return_type)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -246,7 +243,77 @@ impl ScalarUDFImpl for SparkCeil {
     }
 }
 
-fn spark_ceil(
+#[derive(Debug)]
+pub struct SparkFloor {
+    signature: Signature,
+}
+
+impl Default for SparkFloor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkFloor {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::user_defined(Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkFloor {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "spark_floor"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Err(generic_internal_err(
+            "floor",
+            "`return_type` should not be called, call `return_type_from_args` instead",
+        ))
+    }
+
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        ceil_floor_return_type_from_args("floor", args)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let arg_len = args.args.len();
+        let target_scale = if arg_len == 1 {
+            Ok(&None)
+        } else if arg_len == 2 {
+            let target_scale = &args.args[1];
+            match target_scale {
+                ColumnarValue::Scalar(ScalarValue::Int32(value)) => Ok(value),
+                _ => Err(unsupported_data_type_exec_err(
+                    "floor",
+                    "Target scale must be Integer literal",
+                    &target_scale.data_type(),
+                )),
+            }
+        } else {
+            Err(invalid_arg_count_exec_err("floor", (1, 2), arg_len))
+        }?;
+        let arg = &args.args[0];
+        let return_type = args.return_type;
+        spark_ceil_floor("floor", arg, target_scale, return_type)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        ceil_floor_coerce_types("floor", arg_types)
+    }
+}
+
+fn spark_ceil_floor(
+    name: &str,
     arg: &ColumnarValue,
     target_scale: &Option<i32>,
     return_type: &DataType,
@@ -259,15 +326,13 @@ fn spark_ceil(
             if target_scale >= 0 {
                 Ok(arg.cast_to(return_type, None)?)
             } else {
-                // TODO: CHECK HERE: DO NOT MERGE YET:
-                //  SEE IF 0 OR RETURN_TYPE SCALE WORKS FOR ceil_with_target_scale
                 let (return_type_precision, return_type_scale) =
                     get_return_type_precision_scale(return_type)?;
                 match arg.data_type() {
                     DataType::Int8 => match arg {
                         ColumnarValue::Scalar(ScalarValue::Int8(value)) => {
                             let result = value.map(|decimal| {
-                                ceil_with_target_scale(decimal as i128, 0, target_scale)
+                                ceil_floor_with_target_scale(name, decimal as i128, 0, target_scale)
                             });
                             Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
                                 result,
@@ -279,7 +344,12 @@ fn spark_ceil(
                             array
                                 .as_primitive::<Int8Type>()
                                 .unary::<_, Decimal128Type>(|decimal| {
-                                    ceil_with_target_scale(decimal as i128, 0, target_scale)
+                                    ceil_floor_with_target_scale(
+                                        name,
+                                        decimal as i128,
+                                        0,
+                                        target_scale,
+                                    )
                                 })
                                 .with_data_type(DataType::Decimal128(
                                     return_type_precision,
@@ -288,7 +358,7 @@ fn spark_ceil(
                         )
                             as ArrayRef)),
                         _ => Err(unsupported_data_type_exec_err(
-                            "ceil",
+                            name,
                             format!("{}", DataType::Int8).as_str(),
                             &arg.data_type(),
                         )),
@@ -296,7 +366,7 @@ fn spark_ceil(
                     DataType::Int16 => match arg {
                         ColumnarValue::Scalar(ScalarValue::Int16(value)) => {
                             let result = value.map(|decimal| {
-                                ceil_with_target_scale(decimal as i128, 0, target_scale)
+                                ceil_floor_with_target_scale(name, decimal as i128, 0, target_scale)
                             });
                             Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
                                 result,
@@ -308,7 +378,12 @@ fn spark_ceil(
                             array
                                 .as_primitive::<Int16Type>()
                                 .unary::<_, Decimal128Type>(|decimal| {
-                                    ceil_with_target_scale(decimal as i128, 0, target_scale)
+                                    ceil_floor_with_target_scale(
+                                        name,
+                                        decimal as i128,
+                                        0,
+                                        target_scale,
+                                    )
                                 })
                                 .with_data_type(DataType::Decimal128(
                                     return_type_precision,
@@ -317,7 +392,7 @@ fn spark_ceil(
                         )
                             as ArrayRef)),
                         _ => Err(unsupported_data_type_exec_err(
-                            "ceil",
+                            name,
                             format!("{}", DataType::Int16).as_str(),
                             &arg.data_type(),
                         )),
@@ -325,7 +400,7 @@ fn spark_ceil(
                     DataType::Int32 => match arg {
                         ColumnarValue::Scalar(ScalarValue::Int32(value)) => {
                             let result = value.map(|decimal| {
-                                ceil_with_target_scale(decimal as i128, 0, target_scale)
+                                ceil_floor_with_target_scale(name, decimal as i128, 0, target_scale)
                             });
                             Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
                                 result,
@@ -337,7 +412,12 @@ fn spark_ceil(
                             array
                                 .as_primitive::<Int32Type>()
                                 .unary::<_, Decimal128Type>(|decimal| {
-                                    ceil_with_target_scale(decimal as i128, 0, target_scale)
+                                    ceil_floor_with_target_scale(
+                                        name,
+                                        decimal as i128,
+                                        0,
+                                        target_scale,
+                                    )
                                 })
                                 .with_data_type(DataType::Decimal128(
                                     return_type_precision,
@@ -346,7 +426,7 @@ fn spark_ceil(
                         )
                             as ArrayRef)),
                         _ => Err(unsupported_data_type_exec_err(
-                            "ceil",
+                            name,
                             format!("{}", DataType::Int32).as_str(),
                             &arg.data_type(),
                         )),
@@ -354,7 +434,7 @@ fn spark_ceil(
                     DataType::Int64 => match arg {
                         ColumnarValue::Scalar(ScalarValue::Int64(value)) => {
                             let result = value.map(|decimal| {
-                                ceil_with_target_scale(decimal as i128, 0, target_scale)
+                                ceil_floor_with_target_scale(name, decimal as i128, 0, target_scale)
                             });
                             Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
                                 result,
@@ -366,7 +446,12 @@ fn spark_ceil(
                             array
                                 .as_primitive::<Int64Type>()
                                 .unary::<_, Decimal128Type>(|decimal| {
-                                    ceil_with_target_scale(decimal as i128, 0, target_scale)
+                                    ceil_floor_with_target_scale(
+                                        name,
+                                        decimal as i128,
+                                        0,
+                                        target_scale,
+                                    )
                                 })
                                 .with_data_type(DataType::Decimal128(
                                     return_type_precision,
@@ -375,13 +460,13 @@ fn spark_ceil(
                         )
                             as ArrayRef)),
                         _ => Err(unsupported_data_type_exec_err(
-                            "ceil",
+                            name,
                             format!("{}", DataType::Int64).as_str(),
                             &arg.data_type(),
                         )),
                     },
                     other => Err(unsupported_data_type_exec_err(
-                        "ceil",
+                        name,
                         "Numeric Type for expr",
                         &other,
                     )),
@@ -394,31 +479,33 @@ fn spark_ceil(
         match arg.data_type() {
             DataType::Float32 => {
                 if let Some(target_scale) = *target_scale {
-                    // TODO: CHECK HERE: DO NOT MERGE YET:
-                    //  SEE IF RETURN_TYPE SCALE WORKS FOR ceil_with_target_scale
-                    //  AND ADD TESTS
                     let (return_type_precision, return_type_scale) =
                         get_return_type_precision_scale(return_type)?;
                     let arg = arg.cast_to(
                         &DataType::Decimal128(return_type_precision, return_type_scale),
                         None,
                     )?;
-                    decimal128_ceil(&arg, &Some(target_scale), return_type)
+                    decimal128_ceil_floor(name, &arg, &Some(target_scale), return_type)
                 } else {
+                    let func = if matches!(name, "ceil") {
+                        f32::ceil
+                    } else {
+                        f32::floor
+                    };
                     match arg {
                         ColumnarValue::Scalar(ScalarValue::Float32(value)) => {
                             Ok(ColumnarValue::Scalar(ScalarValue::Int64(
-                                value.map(|x| f32::ceil(x) as i64),
+                                value.map(|x| func(x) as i64),
                             )))
                         }
                         ColumnarValue::Array(array) => Ok(ColumnarValue::Array(Arc::new(
                             array
                                 .as_primitive::<Float32Type>()
-                                .unary::<_, Int64Type>(|x| f32::ceil(x) as i64),
+                                .unary::<_, Int64Type>(|x| func(x) as i64),
                         )
                             as ArrayRef)),
                         _ => Err(unsupported_data_type_exec_err(
-                            "ceil",
+                            name,
                             format!("{}", DataType::Float32).as_str(),
                             &arg.data_type(),
                         )),
@@ -427,31 +514,33 @@ fn spark_ceil(
             }
             DataType::Float64 => {
                 if let Some(target_scale) = *target_scale {
-                    // TODO: CHECK HERE: DO NOT MERGE YET:
-                    //  SEE IF RETURN_TYPE SCALE WORKS FOR ceil_with_target_scale
-                    //  AND ADD TESTS
                     let (return_type_precision, return_type_scale) =
                         get_return_type_precision_scale(return_type)?;
                     let arg = arg.cast_to(
                         &DataType::Decimal128(return_type_precision, return_type_scale),
                         None,
                     )?;
-                    decimal128_ceil(&arg, &Some(target_scale), return_type)
+                    decimal128_ceil_floor(name, &arg, &Some(target_scale), return_type)
                 } else {
+                    let func = if matches!(name, "ceil") {
+                        f64::ceil
+                    } else {
+                        f64::floor
+                    };
                     match arg {
                         ColumnarValue::Scalar(ScalarValue::Float64(value)) => {
                             Ok(ColumnarValue::Scalar(ScalarValue::Int64(
-                                value.map(|x| f64::ceil(x) as i64),
+                                value.map(|x| func(x) as i64),
                             )))
                         }
                         ColumnarValue::Array(array) => Ok(ColumnarValue::Array(Arc::new(
                             array
                                 .as_primitive::<Float64Type>()
-                                .unary::<_, Int64Type>(|x| f64::ceil(x) as i64),
+                                .unary::<_, Int64Type>(|x| func(x) as i64),
                         )
                             as ArrayRef)),
                         _ => Err(unsupported_data_type_exec_err(
-                            "ceil",
+                            name,
                             format!("{}", DataType::Float32).as_str(),
                             &arg.data_type(),
                         )),
@@ -459,10 +548,10 @@ fn spark_ceil(
                 }
             }
             DataType::Decimal128(_precision, _scale) => {
-                decimal128_ceil(arg, target_scale, return_type)
+                decimal128_ceil_floor(name, arg, target_scale, return_type)
             }
             other => Err(unsupported_data_type_exec_err(
-                "ceil",
+                name,
                 "Numeric Type for expr",
                 &other,
             )),
@@ -470,7 +559,8 @@ fn spark_ceil(
     }
 }
 
-fn decimal128_ceil(
+fn decimal128_ceil_floor(
+    name: &str,
     arg: &ColumnarValue,
     target_scale: &Option<i32>,
     return_type: &DataType,
@@ -484,7 +574,12 @@ fn decimal128_ceil(
                 ColumnarValue::Scalar(ScalarValue::Decimal128(value, _precision, _scale)) => {
                     if let Some(value) = value {
                         Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
-                            Some(ceil_with_target_scale(*value, scale, target_scale)),
+                            Some(ceil_floor_with_target_scale(
+                                name,
+                                *value,
+                                scale,
+                                target_scale,
+                            )),
                             return_type_precision,
                             return_type_scale,
                         )))
@@ -500,7 +595,7 @@ fn decimal128_ceil(
                     array
                         .as_primitive::<Decimal128Type>()
                         .unary::<_, Decimal128Type>(|value| {
-                            ceil_with_target_scale(value, scale, target_scale)
+                            ceil_floor_with_target_scale(name, value, scale, target_scale)
                         })
                         .with_data_type(DataType::Decimal128(
                             return_type_precision,
@@ -509,14 +604,14 @@ fn decimal128_ceil(
                 )
                     as ArrayRef)),
                 _ => Err(unsupported_data_type_exec_err(
-                    "ceil",
+                    name,
                     "Decimal128 Type",
                     &arg.data_type(),
                 )),
             }
         }
         other => Err(unsupported_data_type_exec_err(
-            "ceil",
+            name,
             "Decimal128 Type for Decimal128 ceil",
             &other,
         )),
@@ -524,96 +619,39 @@ fn decimal128_ceil(
 }
 
 #[inline]
-fn ceil_with_target_scale(decimal: i128, scale: i8, target_scale: i32) -> i128 {
+fn ceil_floor_with_target_scale(name: &str, decimal: i128, scale: i8, target_scale: i32) -> i128 {
     // Round to powers of 10 to the left of decimal point when target_scale < 0
     if target_scale < 0 {
         // Convert to integer with scale 0
         let integer_value = match scale.cmp(&0) {
             std::cmp::Ordering::Greater => {
                 let factor = 10_i128.pow_wrapping(scale as u32);
-                div_ceil(decimal, factor)
+                if matches!(name, "ceil") {
+                    div_ceil(decimal, factor)
+                } else {
+                    div_floor(decimal, factor)
+                }
             }
             std::cmp::Ordering::Less => decimal * 10_i128.pow_wrapping((-scale) as u32),
             std::cmp::Ordering::Equal => decimal,
         };
         let pow_factor = 10_i128.pow_wrapping((-target_scale) as u32);
-        div_ceil(integer_value, pow_factor) * pow_factor
+        if matches!(name, "ceil") {
+            div_ceil(integer_value, pow_factor) * pow_factor
+        } else {
+            div_floor(integer_value, pow_factor) * pow_factor
+        }
     } else {
         let scale_diff = target_scale - (scale as i32);
         if scale_diff >= 0 {
             decimal * 10_i128.pow_wrapping(scale_diff as u32)
         } else {
             let abs_diff = (-scale_diff) as u32;
-            div_ceil(decimal, 10_i128.pow_wrapping(abs_diff))
+            if matches!(name, "ceil") {
+                div_ceil(decimal, 10_i128.pow_wrapping(abs_diff))
+            } else {
+                div_floor(decimal, 10_i128.pow_wrapping(abs_diff))
+            }
         }
     }
 }
-
-// TODO: CHECK HERE: DO NOT MERGE YET:
-//  ADD THESE TESTS BELOW
-//
-// ADJUSTMENT (target_scale):
-// spark-sql (default)> SELECT typeof(ceil(CAST(5 as TINYINT), 1));
-// decimal(4,0)
-//
-// spark-sql (default)> SELECT typeof(ceil(CAST(5 as SMALLINT), 1));
-// decimal(6,0)
-//
-// spark-sql (default)> SELECT typeof(ceil(CAST(5 as INT), 1));
-// decimal(11,0)
-//
-// spark-sql (default)> SELECT typeof(ceil(CAST(5 as BIGINT), 1));
-// decimal(21,0)
-//
-// spark-sql (default)> SELECT typeof(ceil(CAST(5 as FLOAT), 1));
-// decimal(9,1)
-//
-// spark-sql (default)> SELECT typeof(ceil(CAST(5 as DOUBLE), 1));
-// decimal(17,1)
-//
-// spark-sql (default)> SELECT typeof(ceil(CAST(5 AS DECIMAL(5, 2)), 1));
-// decimal(5,1)
-//
-// NO ADJUSTMENT (no target_scale):
-//
-// spark-sql (default)> SELECT typeof(ceil(CAST(5 AS DECIMAL(5, 2)))); // DECIMAL(p - s + 1, 0)
-// decimal(4,0)
-
-// ADJUSTMENT (target_scale):
-// spark-sql (default)> SELECT typeof(floor(CAST(5 as TINYINT), 1));
-// decimal(4,0)
-//
-// spark-sql (default)> SELECT typeof(floor(CAST(5 as SMALLINT), 1));
-// decimal(6,0)
-//
-// spark-sql (default)> SELECT typeof(floor(CAST(5 as INT), 1));
-// decimal(11,0)
-//
-// spark-sql (default)> SELECT typeof(floor(CAST(5 as BIGINT), 1));
-// decimal(21,0)
-//
-// spark-sql (default)> SELECT typeof(floor(CAST(5 as FLOAT), 1));
-// decimal(9,1)
-//
-// spark-sql (default)> SELECT typeof(floor(CAST(5 as DOUBLE), 1));
-// decimal(17,1)
-//
-// spark-sql (default)> SELECT typeof(floor(CAST(5 AS DECIMAL(5, 2)), 1));
-// decimal(5,1)
-//
-// spark-sql (default)> SELECT ceil(5.4, -1), typeof(ceil(5.4, -1)), typeof(5.4);
-// 10	decimal(2,0)	decimal(2,1)
-//
-// spark-sql (default)> SELECT ceil(5, -1), typeof(ceil(5, 0)), typeof(5);
-// 10	decimal(11,0)	int
-//
-// spark-sql (default)> SELECT ceil(5, 0), typeof(ceil(5, 0)), typeof(5);
-// 5	decimal(11,0)	int
-//
-// spark-sql (default)> SELECT ceil(5), typeof(ceil(5)), typeof(5);
-// 5	bigint	int
-//
-// NO ADJUSTMENT (no target_scale):
-//
-// spark-sql (default)> SELECT typeof(floor(CAST(5 AS DECIMAL(5, 2))));
-// decimal(4,0)

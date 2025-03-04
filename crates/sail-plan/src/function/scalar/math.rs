@@ -14,7 +14,7 @@ use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::math::spark_abs::SparkAbs;
 use crate::extension::function::math::spark_bin::SparkBin;
-use crate::extension::function::math::spark_ceil_floor::SparkCeil;
+use crate::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use crate::extension::function::math::spark_expm1::SparkExpm1;
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_pmod::SparkPmod;
@@ -384,13 +384,6 @@ fn spark_div(input: FunctionInput) -> PlanResult<Expr> {
     }))
 }
 
-fn floor(num: Expr) -> Expr {
-    Expr::Cast(expr::Cast {
-        expr: Box::new(expr_fn::floor(num)),
-        data_type: DataType::Int64,
-    })
-}
-
 fn power(base: Expr, exponent: Expr) -> Expr {
     Expr::Cast(expr::Cast {
         expr: Box::new(expr_fn::power(base, exponent)),
@@ -456,7 +449,7 @@ fn eulers_constant() -> Expr {
     Expr::Literal(ScalarValue::Float64(Some(std::f64::consts::E)))
 }
 
-fn ceil(input: FunctionInput) -> PlanResult<Expr> {
+fn ceil_floor(input: FunctionInput, name: &str) -> PlanResult<Expr> {
     let FunctionInput { arguments, .. } = input;
     // DataFusion bug: `ReturnTypeArgs.scalar_arguments` is None if scalar argument is nested
     let arguments = if arguments.len() == 2 {
@@ -511,8 +504,13 @@ fn ceil(input: FunctionInput) -> PlanResult<Expr> {
     } else {
         arguments
     };
+    let func = if matches!(name.to_lowercase().trim(), "ceil") {
+        Arc::new(ScalarUDF::from(SparkCeil::new()))
+    } else {
+        Arc::new(ScalarUDF::from(SparkFloor::new()))
+    };
     Ok(Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(SparkCeil::new())),
+        func,
         args: arguments,
     }))
 }
@@ -537,8 +535,8 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("bin", F::udf(SparkBin::new())),
         ("bround", F::unknown("bround")),
         ("cbrt", F::unary(expr_fn::cbrt)),
-        ("ceil", F::custom(ceil)),
-        ("ceiling", F::custom(ceil)),
+        ("ceil", F::custom(|arg| ceil_floor(arg, "ceil"))),
+        ("ceiling", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("conv", F::unknown("conv")),
         ("cos", F::unary(expr_fn::cos)),
         ("cosh", F::unary(expr_fn::cosh)),
@@ -550,7 +548,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("exp", F::unary(expr_fn::exp)),
         ("expm1", F::udf(SparkExpm1::new())),
         ("factorial", F::unary(expr_fn::factorial)),
-        ("floor", F::unary(floor)),
+        ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
         ("greatest", F::udf(least_greatest::Greatest::new())),
         ("hex", F::udf(SparkHex::new())),
         ("hypot", F::binary(hypot)),
