@@ -1126,20 +1126,12 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
-                let (left, right) = (Arc::new(left), Arc::new(right));
-                let union_schema = left.schema().clone();
                 if is_all {
-                    Ok(LogicalPlan::Union(plan::Union {
-                        inputs: vec![left, right],
-                        schema: union_schema,
-                    }))
+                    Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
                 } else {
-                    Ok(LogicalPlan::Distinct(plan::Distinct::All(Arc::new(
-                        LogicalPlan::Union(plan::Union {
-                            inputs: vec![left, right],
-                            schema: union_schema,
-                        }),
-                    ))))
+                    Ok(LogicalPlanBuilder::new(left)
+                        .union_distinct(right)?
+                        .build()?)
                 }
             }
             SetOpType::Except => Ok(LogicalPlanBuilder::except(left, right, is_all)?),

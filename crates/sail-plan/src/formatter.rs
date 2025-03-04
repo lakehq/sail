@@ -80,7 +80,7 @@ impl PlanFormatter for DefaultPlanFormatter {
             DataType::UInt16 => Ok("unsigned smallint".to_string()),
             DataType::UInt32 => Ok("unsigned int".to_string()),
             DataType::UInt64 => Ok("unsigned bigint".to_string()),
-            DataType::Float16 => Ok("half_float".to_string()),
+            DataType::Float16 => Ok("half float".to_string()),
             DataType::Float32 => Ok("float".to_string()),
             DataType::Float64 => Ok("double".to_string()),
             DataType::Decimal128 { precision, scale }
@@ -860,6 +860,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))
             }
+            // FIXME: This is incorrect if the column name is `*`:
+            //   ```
+            //   SELECT count(`*`) FROM VALUES 1 AS t(`*`)
+            //   ```
+            "count" if matches!(arguments.as_slice(), ["*"]) => Ok("count(1)".to_string()),
             _ => {
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))
