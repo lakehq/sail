@@ -846,16 +846,49 @@ impl PlanFormatter for DefaultPlanFormatter {
                 };
                 Ok(format!("{name}({args})"))
             }
+            "ceil" | "floor" => {
+                let name = if arguments.len() == 1 {
+                    name.to_uppercase()
+                } else {
+                    name.to_string()
+                };
+                let args = arguments
+                    .iter()
+                    .map(|arg| {
+                        if arg.starts_with("(- ") && arg.ends_with(")") {
+                            format!("-{}", &arg[3..arg.len() - 1])
+                        } else {
+                            arg.to_string()
+                        }
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                Ok(format!("{name}({args})"))
+            }
+            "ceiling" | "typeof" => {
+                let args = arguments
+                    .iter()
+                    .map(|arg| {
+                        if arg.starts_with("(- ") && arg.ends_with(")") {
+                            format!("-{}", &arg[3..arg.len() - 1])
+                        } else {
+                            arg.to_string()
+                        }
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                Ok(format!("{name}({args})"))
+            }
             // This case is only reached when both conditions are true:
             //   1. The `explode` operation is `ExplodeKind::ExplodeOuter`
             //   2. The data type being exploded is `ExplodeDataType::List`
             // In this specific scenario, we always use "col" as the column name.
             "explode_outer" => Ok("col".to_string()),
             "current_schema" => Ok("current_database()".to_string()),
-            "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "ceil"
-            | "exp" | "floor" | "log10" | "regexp" | "regexp_like" | "signum" | "sqrt" | "cos"
-            | "cosh" | "cot" | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan"
-            | "tanh" | "pi" | "expm1" | "hypot" | "log1p" | "e" => {
+            "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "exp"
+            | "log10" | "regexp" | "regexp_like" | "signum" | "sqrt" | "cos" | "cosh" | "cot"
+            | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan" | "tanh" | "pi"
+            | "expm1" | "hypot" | "log1p" | "e" => {
                 let name = name.to_uppercase();
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))

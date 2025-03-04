@@ -1,16 +1,23 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, BinaryExpr, ExprSchemable, Operator};
+use datafusion_expr::{expr, BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF};
 use half::f16;
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::error_utils::generic_exec_err;
 use crate::extension::function::math::least_greatest;
 use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::math::spark_abs::SparkAbs;
+use crate::extension::function::math::spark_bin::SparkBin;
+use crate::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
+use crate::extension::function::math::spark_expm1::SparkExpm1;
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
+use crate::extension::function::math::spark_pmod::SparkPmod;
 use crate::extension::function::math::spark_signum::SparkSignum;
 use crate::function::common::{Function, FunctionInput};
 use crate::utils::ItemTaker;
@@ -28,7 +35,7 @@ use crate::utils::ItemTaker;
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-fn spark_plus(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn spark_plus(input: FunctionInput) -> PlanResult<Expr> {
     let FunctionInput {
         arguments, schema, ..
     } = input;
@@ -40,7 +47,7 @@ fn spark_plus(input: FunctionInput) -> PlanResult<expr::Expr> {
         match (left_type, right_type) {
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkPlus`.
-            (Err(_), _) | (_, Err(_)) => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+            (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::Plus,
                 right: Box::new(right),
@@ -52,31 +59,31 @@ fn spark_plus(input: FunctionInput) -> PlanResult<expr::Expr> {
                     let (left, right) = if left_type.is_numeric() {
                         (
                             left,
-                            expr::Expr::Cast(expr::Cast {
+                            Expr::Cast(expr::Cast {
                                 expr: Box::new(right),
                                 data_type: DataType::Int32,
                             }),
                         )
                     } else {
                         (
-                            expr::Expr::Cast(expr::Cast {
+                            Expr::Cast(expr::Cast {
                                 expr: Box::new(left),
                                 data_type: DataType::Int32,
                             }),
                             right,
                         )
                     };
-                    let expr = expr::Expr::BinaryExpr(BinaryExpr {
+                    let expr = Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(left),
                         op: Operator::Plus,
                         right: Box::new(right),
                     });
-                    Ok(expr::Expr::Cast(expr::Cast {
+                    Ok(Expr::Cast(expr::Cast {
                         expr: Box::new(expr),
                         data_type: DataType::Date32,
                     }))
                 } else {
-                    Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                    Ok(Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(left),
                         op: Operator::Plus,
                         right: Box::new(right),
@@ -106,40 +113,40 @@ fn spark_plus(input: FunctionInput) -> PlanResult<expr::Expr> {
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-fn spark_minus(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn spark_minus(input: FunctionInput) -> PlanResult<Expr> {
     let FunctionInput {
         arguments, schema, ..
     } = input;
     if arguments.len() < 2 {
-        Ok(expr::Expr::Negative(Box::new(arguments.one()?)))
+        Ok(Expr::Negative(Box::new(arguments.one()?)))
     } else {
         let (left, right) = arguments.two()?;
         let (left_type, right_type) = (left.get_type(schema), right.get_type(schema));
         match (left_type, right_type) {
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkMinus`.
-            (Err(_), _) | (_, Err(_)) => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+            (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::Minus,
                 right: Box::new(right),
             })),
             (Ok(left_type), Ok(right_type)) => {
                 if matches!(left_type, DataType::Date32) && right_type.is_numeric() {
-                    let left = expr::Expr::Cast(expr::Cast {
+                    let left = Expr::Cast(expr::Cast {
                         expr: Box::new(left),
                         data_type: DataType::Int32,
                     });
-                    let expr = expr::Expr::BinaryExpr(BinaryExpr {
+                    let expr = Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(left),
                         op: Operator::Minus,
                         right: Box::new(right),
                     });
-                    Ok(expr::Expr::Cast(expr::Cast {
+                    Ok(Expr::Cast(expr::Cast {
                         expr: Box::new(expr),
                         data_type: DataType::Date32,
                     }))
                 } else {
-                    Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                    Ok(Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(left),
                         op: Operator::Minus,
                         right: Box::new(right),
@@ -165,7 +172,7 @@ fn spark_minus(input: FunctionInput) -> PlanResult<expr::Expr> {
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-fn spark_multiply(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn spark_multiply(input: FunctionInput) -> PlanResult<Expr> {
     let FunctionInput {
         arguments, schema, ..
     } = input;
@@ -175,7 +182,7 @@ fn spark_multiply(input: FunctionInput) -> PlanResult<expr::Expr> {
     match (left_type, right_type) {
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
-        (Err(_), _) | (_, Err(_)) => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+        (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
             left: Box::new(left),
             op: Operator::Multiply,
             right: Box::new(right),
@@ -186,9 +193,9 @@ fn spark_multiply(input: FunctionInput) -> PlanResult<expr::Expr> {
             match (left_type, right_type) {
                 (DataType::Duration(TimeUnit::Microsecond), _) => {
                     // Match duration because we cast Spark's DayTime interval to Duration.
-                    Ok(expr::Expr::Cast(expr::Cast {
-                        expr: Box::new(expr::Expr::BinaryExpr(BinaryExpr {
-                            left: Box::new(expr::Expr::Cast(expr::Cast {
+                    Ok(Expr::Cast(expr::Cast {
+                        expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(Expr::Cast(expr::Cast {
                                 expr: Box::new(left),
                                 data_type: DataType::Int64,
                             })),
@@ -200,11 +207,11 @@ fn spark_multiply(input: FunctionInput) -> PlanResult<expr::Expr> {
                 }
                 (_, DataType::Duration(TimeUnit::Microsecond)) => {
                     // Match duration because we cast Spark's DayTime interval to Duration.
-                    Ok(expr::Expr::Cast(expr::Cast {
-                        expr: Box::new(expr::Expr::BinaryExpr(BinaryExpr {
+                    Ok(Expr::Cast(expr::Cast {
+                        expr: Box::new(Expr::BinaryExpr(BinaryExpr {
                             left: Box::new(left),
                             op: Operator::Multiply,
-                            right: Box::new(expr::Expr::Cast(expr::Cast {
+                            right: Box::new(Expr::Cast(expr::Cast {
                                 expr: Box::new(right),
                                 data_type: DataType::Int64,
                             })),
@@ -212,7 +219,7 @@ fn spark_multiply(input: FunctionInput) -> PlanResult<expr::Expr> {
                         data_type: DataType::Duration(TimeUnit::Microsecond),
                     }))
                 }
-                _ => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                _ => Ok(Expr::BinaryExpr(BinaryExpr {
                     left: Box::new(left),
                     op: Operator::Multiply,
                     right: Box::new(right),
@@ -235,7 +242,7 @@ fn spark_multiply(input: FunctionInput) -> PlanResult<expr::Expr> {
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn spark_divide(input: FunctionInput) -> PlanResult<Expr> {
     let FunctionInput {
         arguments,
         schema,
@@ -246,24 +253,24 @@ fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
     let (dividend, divisor) = arguments.two()?;
     if matches!(
         divisor,
-        expr::Expr::Literal(ScalarValue::Int8(Some(0)))
-            | expr::Expr::Literal(ScalarValue::Int16(Some(0)))
-            | expr::Expr::Literal(ScalarValue::Int32(Some(0)))
-            | expr::Expr::Literal(ScalarValue::Int64(Some(0)))
-            | expr::Expr::Literal(ScalarValue::UInt8(Some(0)))
-            | expr::Expr::Literal(ScalarValue::UInt16(Some(0)))
-            | expr::Expr::Literal(ScalarValue::UInt32(Some(0)))
-            | expr::Expr::Literal(ScalarValue::UInt64(Some(0)))
-            | expr::Expr::Literal(ScalarValue::Float32(Some(0.0)))
-            | expr::Expr::Literal(ScalarValue::Float64(Some(0.0)))
-    ) || divisor == expr::Expr::Literal(ScalarValue::Float16(Some(f16::from_f32(0.0))))
+        Expr::Literal(ScalarValue::Int8(Some(0)))
+            | Expr::Literal(ScalarValue::Int16(Some(0)))
+            | Expr::Literal(ScalarValue::Int32(Some(0)))
+            | Expr::Literal(ScalarValue::Int64(Some(0)))
+            | Expr::Literal(ScalarValue::UInt8(Some(0)))
+            | Expr::Literal(ScalarValue::UInt16(Some(0)))
+            | Expr::Literal(ScalarValue::UInt32(Some(0)))
+            | Expr::Literal(ScalarValue::UInt64(Some(0)))
+            | Expr::Literal(ScalarValue::Float32(Some(0.0)))
+            | Expr::Literal(ScalarValue::Float64(Some(0.0)))
+    ) || divisor == Expr::Literal(ScalarValue::Float16(Some(f16::from_f32(0.0))))
     {
         // FIXME: Account for array input.
         let ansi_mode = plan_config.ansi_mode;
         return if ansi_mode {
             Err(PlanError::ArrowError(ArrowError::DivideByZero))
         } else {
-            Ok(expr::Expr::Literal(ScalarValue::Null))
+            Ok(Expr::Literal(ScalarValue::Null))
         };
     }
 
@@ -271,7 +278,7 @@ fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
     match (dividend_type, divisor_type) {
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
-        (Err(_), _) | (_, Err(_)) => Ok(expr::Expr::BinaryExpr(BinaryExpr {
+        (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
             left: Box::new(dividend),
             op: Operator::Divide,
             right: Box::new(divisor),
@@ -288,7 +295,7 @@ fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
                 | (DataType::Interval(IntervalUnit::DayTime), _) => {
                     // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
                     //  See `test_divide` in python/pysail/tests/spark/test_math.py
-                    Ok(expr::Expr::BinaryExpr(BinaryExpr {
+                    Ok(Expr::BinaryExpr(BinaryExpr {
                         left: Box::new(dividend),
                         op: Operator::Divide,
                         right: Box::new(divisor),
@@ -296,9 +303,9 @@ fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
                 }
                 (DataType::Duration(TimeUnit::Microsecond), _) => {
                     // Match duration because we cast Spark's DayTime interval to Duration.
-                    Ok(expr::Expr::Cast(expr::Cast {
-                        expr: Box::new(expr::Expr::BinaryExpr(BinaryExpr {
-                            left: Box::new(expr::Expr::Cast(expr::Cast {
+                    Ok(Expr::Cast(expr::Cast {
+                        expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(Expr::Cast(expr::Cast {
                                 expr: Box::new(dividend),
                                 data_type: DataType::Int64,
                             })),
@@ -308,13 +315,13 @@ fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
                         data_type: DataType::Duration(TimeUnit::Microsecond),
                     }))
                 }
-                _ => Ok(expr::Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(expr::Expr::Cast(expr::Cast {
+                _ => Ok(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(Expr::Cast(expr::Cast {
                         expr: Box::new(dividend),
                         data_type: DataType::Float64,
                     })),
                     op: Operator::Divide,
-                    right: Box::new(expr::Expr::Cast(expr::Cast {
+                    right: Box::new(Expr::Cast(expr::Cast {
                         expr: Box::new(divisor),
                         data_type: DataType::Float64,
                     })),
@@ -333,7 +340,7 @@ fn spark_divide(input: FunctionInput) -> PlanResult<expr::Expr> {
 /// Returns:
 ///   A BIGINT
 ///
-fn spark_div(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn spark_div(input: FunctionInput) -> PlanResult<Expr> {
     let FunctionInput {
         arguments, schema, ..
     } = input;
@@ -343,7 +350,7 @@ fn spark_div(input: FunctionInput) -> PlanResult<expr::Expr> {
     let expr = match (dividend_type, divisor_type) {
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
-        (Err(_), _) | (_, Err(_)) => expr::Expr::BinaryExpr(BinaryExpr {
+        (Err(_), _) | (_, Err(_)) => Expr::BinaryExpr(BinaryExpr {
             left: Box::new(dividend),
             op: Operator::Divide,
             right: Box::new(divisor),
@@ -351,19 +358,19 @@ fn spark_div(input: FunctionInput) -> PlanResult<expr::Expr> {
         (Ok(dividend_type), Ok(divisor_type)) => match (&dividend_type, &divisor_type) {
             // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
             //  Seems to be a bug in DataFusion.
-            (DataType::Duration(_), DataType::Duration(_)) => expr::Expr::BinaryExpr(BinaryExpr {
+            (DataType::Duration(_), DataType::Duration(_)) => Expr::BinaryExpr(BinaryExpr {
                 // Match duration because we cast Spark's DayTime interval to Duration.
-                left: Box::new(expr::Expr::Cast(expr::Cast {
+                left: Box::new(Expr::Cast(expr::Cast {
                     expr: Box::new(dividend),
                     data_type: DataType::Int64,
                 })),
                 op: Operator::Divide,
-                right: Box::new(expr::Expr::Cast(expr::Cast {
+                right: Box::new(Expr::Cast(expr::Cast {
                     expr: Box::new(divisor),
                     data_type: DataType::Int64,
                 })),
             }),
-            _ => expr::Expr::BinaryExpr(BinaryExpr {
+            _ => Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(dividend),
                 op: Operator::Divide,
                 right: Box::new(divisor),
@@ -371,107 +378,141 @@ fn spark_div(input: FunctionInput) -> PlanResult<expr::Expr> {
         },
     };
     // We need this final cast because we are doing integer division.
-    Ok(expr::Expr::Cast(expr::Cast {
+    Ok(Expr::Cast(expr::Cast {
         expr: Box::new(expr),
         data_type: DataType::Int64,
     }))
 }
 
-fn ceil(num: expr::Expr) -> expr::Expr {
-    expr::Expr::Cast(expr::Cast {
-        expr: Box::new(expr_fn::ceil(num)),
-        data_type: DataType::Int64,
-    })
-}
-
-fn floor(num: expr::Expr) -> expr::Expr {
-    expr::Expr::Cast(expr::Cast {
-        expr: Box::new(expr_fn::floor(num)),
-        data_type: DataType::Int64,
-    })
-}
-
-fn power(base: expr::Expr, exponent: expr::Expr) -> expr::Expr {
-    expr::Expr::Cast(expr::Cast {
+fn power(base: Expr, exponent: Expr) -> Expr {
+    Expr::Cast(expr::Cast {
         expr: Box::new(expr_fn::power(base, exponent)),
         data_type: DataType::Float64,
     })
 }
 
-// FIXME: Implement the UDF for better numerical precision.
-fn expm1(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let num = input.arguments.one()?;
-    let name = input.argument_names.to_vec().one()?;
-    spark_minus(FunctionInput {
-        arguments: vec![
-            expr_fn::exp(num),
-            expr::Expr::Literal(ScalarValue::Float64(Some(1.0))),
-        ],
-        argument_names: &[name, "1.0".to_string()],
-        plan_config: input.plan_config,
-        session_context: input.session_context,
-        schema: input.schema,
-    })
-}
-
-fn hypot(expr1: expr::Expr, expr2: expr::Expr) -> expr::Expr {
-    let expr1 = expr::Expr::BinaryExpr(BinaryExpr {
+fn hypot(expr1: Expr, expr2: Expr) -> Expr {
+    let expr1 = Expr::BinaryExpr(BinaryExpr {
         left: Box::new(expr1.clone()),
         op: Operator::Multiply,
         right: Box::new(expr1),
     });
-    let expr2 = expr::Expr::BinaryExpr(BinaryExpr {
+    let expr2 = Expr::BinaryExpr(BinaryExpr {
         left: Box::new(expr2.clone()),
         op: Operator::Multiply,
         right: Box::new(expr2),
     });
-    let sum = expr::Expr::BinaryExpr(BinaryExpr {
+    let sum = Expr::BinaryExpr(BinaryExpr {
         left: Box::new(expr1),
         op: Operator::Plus,
         right: Box::new(expr2),
     });
-    expr::Expr::Cast(expr::Cast {
+    Expr::Cast(expr::Cast {
         expr: Box::new(expr_fn::sqrt(sum)),
         data_type: DataType::Float64,
     })
 }
 
-fn log1p(expr: expr::Expr) -> expr::Expr {
-    let expr = expr::Expr::BinaryExpr(BinaryExpr {
+fn log1p(expr: Expr) -> Expr {
+    let expr = Expr::BinaryExpr(BinaryExpr {
         left: Box::new(expr),
         op: Operator::Plus,
-        right: Box::new(expr::Expr::Literal(ScalarValue::Float64(Some(1.0)))),
+        right: Box::new(Expr::Literal(ScalarValue::Float64(Some(1.0)))),
     });
     expr_fn::ln(expr)
 }
 
-fn positive(expr: expr::Expr) -> expr::Expr {
+fn positive(expr: Expr) -> Expr {
     expr
 }
 
-fn rint(expr: expr::Expr) -> expr::Expr {
-    expr::Expr::Cast(expr::Cast {
+fn rint(expr: Expr) -> Expr {
+    Expr::Cast(expr::Cast {
         expr: Box::new(expr_fn::round(vec![expr])),
         data_type: DataType::Float64,
     })
 }
 
-fn spark_ln(expr: expr::Expr) -> expr::Expr {
-    expr::Expr::Case(expr::Case {
+fn spark_ln(expr: Expr) -> Expr {
+    Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(
-            Box::new(
-                expr.clone()
-                    .eq(expr::Expr::Literal(ScalarValue::Int64(Some(0)))),
-            ),
-            Box::new(expr::Expr::Literal(ScalarValue::Null)),
+            Box::new(expr.clone().eq(Expr::Literal(ScalarValue::Int64(Some(0))))),
+            Box::new(Expr::Literal(ScalarValue::Null)),
         )],
         else_expr: Some(Box::new(expr_fn::ln(expr))),
     })
 }
 
-fn eulers_constant() -> expr::Expr {
-    expr::Expr::Literal(ScalarValue::Float64(Some(std::f64::consts::E)))
+#[inline]
+fn eulers_constant() -> Expr {
+    Expr::Literal(ScalarValue::Float64(Some(std::f64::consts::E)))
+}
+
+fn ceil_floor(input: FunctionInput, name: &str) -> PlanResult<Expr> {
+    let FunctionInput { arguments, .. } = input;
+    // DataFusion bug: `ReturnTypeArgs.scalar_arguments` is None if scalar argument is nested
+    let arguments = if arguments.len() == 2 {
+        let (arg, target_scale) = arguments.two()?;
+        let target_scale = match target_scale {
+            Expr::Literal(_) => Ok(target_scale),
+            Expr::Negative(negative) => {
+                if let Expr::Literal(scalar) = negative.as_ref() {
+                    match scalar {
+                        ScalarValue::Int8(v) => {
+                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -v as i32))))
+                        }
+                        ScalarValue::Int16(v) => {
+                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -v as i32))))
+                        }
+                        ScalarValue::Int32(v) => {
+                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -v))))
+                        }
+                        ScalarValue::Int64(v) => {
+                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
+                        }
+                        ScalarValue::UInt8(v) => {
+                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
+                        }
+                        ScalarValue::UInt16(v) => {
+                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
+                        }
+                        ScalarValue::UInt32(v) => {
+                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
+                        }
+                        ScalarValue::UInt64(v) => {
+                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
+                        }
+                        other => Err(generic_exec_err(
+                            "ceil",
+                            format!("Target scale must be Integer literal, got {other}").as_str(),
+                        )),
+                    }
+                } else {
+                    Err(generic_exec_err(
+                        "ceil",
+                        format!("Target scale must be Integer literal, got {negative}").as_str(),
+                    ))
+                }
+            }
+            _ => Err(generic_exec_err(
+                "ceil",
+                format!("Target scale must be Integer literal, got {target_scale}").as_str(),
+            )),
+        }?;
+        vec![arg, target_scale]
+    } else {
+        arguments
+    };
+    let func = if matches!(name.to_lowercase().trim(), "ceil") {
+        Arc::new(ScalarUDF::from(SparkCeil::new()))
+    } else {
+        Arc::new(ScalarUDF::from(SparkFloor::new()))
+    };
+    Ok(Expr::ScalarFunction(expr::ScalarFunction {
+        func,
+        args: arguments,
+    }))
 }
 
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
@@ -491,11 +532,11 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("atan", F::unary(expr_fn::atan)),
         ("atan2", F::binary(expr_fn::atan2)),
         ("atanh", F::unary(expr_fn::atanh)),
-        ("bin", F::unknown("bin")),
+        ("bin", F::udf(SparkBin::new())),
         ("bround", F::unknown("bround")),
         ("cbrt", F::unary(expr_fn::cbrt)),
-        ("ceil", F::unary(ceil)),
-        ("ceiling", F::unary(ceil)),
+        ("ceil", F::custom(|arg| ceil_floor(arg, "ceil"))),
+        ("ceiling", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("conv", F::unknown("conv")),
         ("cos", F::unary(expr_fn::cos)),
         ("cosh", F::unary(expr_fn::cosh)),
@@ -505,9 +546,9 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("div", F::custom(spark_div)),
         ("e", F::nullary(eulers_constant)),
         ("exp", F::unary(expr_fn::exp)),
-        ("expm1", F::custom(expm1)),
+        ("expm1", F::udf(SparkExpm1::new())),
         ("factorial", F::unary(expr_fn::factorial)),
-        ("floor", F::unary(floor)),
+        ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
         ("greatest", F::udf(least_greatest::Greatest::new())),
         ("hex", F::udf(SparkHex::new())),
         ("hypot", F::binary(hypot)),
@@ -518,9 +559,9 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
         ("log1p", F::unary(log1p)),
         ("log2", F::unary(expr_fn::log2)),
         ("mod", F::binary_op(Operator::Modulo)),
-        ("negative", F::unary(|x| expr::Expr::Negative(Box::new(x)))),
+        ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
         ("pi", F::nullary(expr_fn::pi)),
-        ("pmod", F::unknown("pmod")),
+        ("pmod", F::udf(SparkPmod::new())),
         ("positive", F::unary(positive)),
         ("pow", F::binary(power)),
         ("power", F::binary(power)),
