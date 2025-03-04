@@ -35,7 +35,11 @@ pub fn round_decimal_base(
     let integral_least_num_digits = precision - scale + 1;
     if target_scale < 0 {
         let new_precision = max(integral_least_num_digits, -target_scale + 1) as u8;
-        (min(new_precision, DECIMAL128_MAX_PRECISION), 0)
+        if decimal_128 {
+            (min(new_precision, DECIMAL128_MAX_PRECISION), 0)
+        } else {
+            (min(new_precision, DECIMAL256_MAX_PRECISION), 0)
+        }
     } else {
         let new_scale = min(scale, target_scale);
         let max_precision = if decimal_128 {
