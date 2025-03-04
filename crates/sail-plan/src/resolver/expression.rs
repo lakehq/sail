@@ -1,5 +1,6 @@
+use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
@@ -16,7 +17,6 @@ use datafusion_expr::{
     ScalarUDF,
 };
 use datafusion_functions_nested::expr_fn::array_element;
-use num_traits::Float;
 use sail_common::spec;
 use sail_common::spec::PySparkUdfType;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
@@ -209,13 +209,8 @@ impl PlanResolver<'_> {
         expr: spec::Expr,
         state: &mut PlanResolverState,
     ) -> PlanResult<ScalarValue> {
-        let value = match expr {
-            spec::Expr::Literal(literal) => literal,
-            _ => {
-                return Err(PlanError::invalid(
-                    "window boundary offset must be a literal",
-                ))
-            }
+        let spec::Expr::Literal(value) = expr else {
+            return Err(PlanError::invalid("window boundary must be a literal"));
         };
         self.resolve_literal(value, state)
     }
@@ -247,24 +242,23 @@ impl PlanResolver<'_> {
             }
             spec::WindowFrameBoundary::Value(expr) => {
                 let value = self.resolve_window_boundary(*expr, state)?;
+                let ScalarValue::Int64(Some(value)) = value.cast_to(&DataType::Int64)? else {
+                    return Err(PlanError::invalid("invalid window boundary offset"));
+                };
                 match value {
-                    ScalarValue::UInt32(Some(v)) => Ok(WindowBoundaryOffset::from(v).into()),
-                    ScalarValue::Int32(Some(v)) => Ok(WindowBoundaryOffset::from(v).into()),
-                    ScalarValue::UInt64(Some(v)) => Ok(WindowBoundaryOffset::from(v).into()),
-                    ScalarValue::Int64(Some(v)) => Ok(WindowBoundaryOffset::from(v).into()),
-                    ScalarValue::Float16(Some(v)) => {
-                        Ok(WindowBoundaryOffset::try_from(WindowBoundaryFloatOffset(v))?.into())
-                    }
-                    ScalarValue::Float32(Some(v)) => {
-                        Ok(WindowBoundaryOffset::try_from(WindowBoundaryFloatOffset(v))?.into())
-                    }
-                    ScalarValue::Float64(Some(v)) => {
-                        Ok(WindowBoundaryOffset::try_from(WindowBoundaryFloatOffset(v))?.into())
-                    }
-                    _ => Err(PlanError::invalid(format!(
-                        "invalid window boundary offset: {:?}",
-                        value
-                    ))),
+                    i64::MIN => Ok(window_frame::WindowFrameBound::Preceding(
+                        ScalarValue::UInt64(None),
+                    )),
+                    i64::MAX => Ok(window_frame::WindowFrameBound::Following(
+                        ScalarValue::UInt64(None),
+                    )),
+                    0 => Ok(window_frame::WindowFrameBound::CurrentRow),
+                    x if x < 0 => Ok(window_frame::WindowFrameBound::Preceding(
+                        ScalarValue::UInt64(Some(-x as u64)),
+                    )),
+                    x => Ok(window_frame::WindowFrameBound::Following(
+                        ScalarValue::UInt64(Some(x as u64)),
+                    )),
                 }
             }
         }
@@ -293,16 +287,8 @@ impl PlanResolver<'_> {
                 let value = self.resolve_window_boundary(*expr, state)?;
                 Ok(window_frame::WindowFrameBound::Following(value))
             }
-            spec::WindowFrameBoundary::Value(value) => {
-                let value = match *value {
-                    spec::Expr::Literal(literal) => literal,
-                    _ => {
-                        return Err(PlanError::invalid(
-                            "window boundary value must be a literal",
-                        ))
-                    }
-                };
-                let value = self.resolve_literal(value, state)?;
+            spec::WindowFrameBoundary::Value(expr) => {
+                let value = self.resolve_window_boundary(*expr, state)?;
                 if value.is_null() {
                     Err(PlanError::invalid("window boundary value cannot be null"))
                 } else {
@@ -313,8 +299,20 @@ impl PlanResolver<'_> {
                     };
                     let (data_type, _) = order_by.expr.data_type_and_nullable(schema)?;
                     let value = value.cast_to(&data_type)?;
-                    // We always return the "following" bound since the value can be signed.
-                    Ok(window_frame::WindowFrameBound::Following(value))
+                    let zero = ScalarValue::new_zero(&data_type)?;
+                    match value.partial_cmp(&zero) {
+                        None => Err(PlanError::invalid(
+                            "cannot compare window boundary value with zero",
+                        )),
+                        Some(Ordering::Less) => {
+                            let value = value.arithmetic_negate()?;
+                            Ok(window_frame::WindowFrameBound::Preceding(value))
+                        }
+                        Some(Ordering::Greater) => {
+                            Ok(window_frame::WindowFrameBound::Following(value))
+                        }
+                        Some(Ordering::Equal) => Ok(window_frame::WindowFrameBound::CurrentRow),
+                    }
                 }
             }
         }
@@ -1974,94 +1972,6 @@ fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableRe
             table,
         }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
         None => true,
-    }
-}
-
-enum WindowBoundaryOffset {
-    PositiveInfinite,
-    NegativeInfinite,
-    PositiveFinite(u64),
-    NegativeFinite(u64),
-}
-
-impl From<WindowBoundaryOffset> for window_frame::WindowFrameBound {
-    fn from(offset: WindowBoundaryOffset) -> Self {
-        match offset {
-            WindowBoundaryOffset::PositiveInfinite => {
-                window_frame::WindowFrameBound::Following(ScalarValue::UInt64(None))
-            }
-            WindowBoundaryOffset::NegativeInfinite => {
-                window_frame::WindowFrameBound::Preceding(ScalarValue::UInt64(None))
-            }
-            WindowBoundaryOffset::PositiveFinite(value) => {
-                window_frame::WindowFrameBound::Following(ScalarValue::UInt64(Some(value)))
-            }
-            WindowBoundaryOffset::NegativeFinite(value) => {
-                window_frame::WindowFrameBound::Preceding(ScalarValue::UInt64(Some(value)))
-            }
-        }
-    }
-}
-
-impl From<u32> for WindowBoundaryOffset {
-    fn from(value: u32) -> Self {
-        Self::PositiveFinite(value as u64)
-    }
-}
-
-impl From<i32> for WindowBoundaryOffset {
-    fn from(value: i32) -> Self {
-        if value < 0 {
-            // We cast the value to `i64` before negation to avoid overflow.
-            Self::NegativeFinite((-(value as i64)) as u64)
-        } else {
-            Self::PositiveFinite(value as u64)
-        }
-    }
-}
-
-impl From<u64> for WindowBoundaryOffset {
-    fn from(value: u64) -> Self {
-        Self::PositiveFinite(value)
-    }
-}
-
-impl From<i64> for WindowBoundaryOffset {
-    fn from(value: i64) -> Self {
-        if value == i64::MIN {
-            Self::NegativeInfinite
-        } else if value < 0 {
-            Self::NegativeFinite(-value as u64)
-        } else {
-            Self::PositiveFinite(value as u64)
-        }
-    }
-}
-
-struct WindowBoundaryFloatOffset<T>(T);
-
-impl<T: Float + Display> TryFrom<WindowBoundaryFloatOffset<T>> for WindowBoundaryOffset {
-    type Error = PlanError;
-
-    fn try_from(value: WindowBoundaryFloatOffset<T>) -> PlanResult<Self> {
-        let value = value.0;
-        if value.is_infinite() {
-            if value.is_sign_positive() {
-                Ok(Self::PositiveInfinite)
-            } else {
-                Ok(Self::NegativeInfinite)
-            }
-        } else if value.is_sign_positive() {
-            let v = num_traits::cast(value).ok_or_else(|| {
-                PlanError::invalid(format!("invalid window boundary offset: {value}"))
-            })?;
-            Ok(Self::PositiveFinite(v))
-        } else {
-            let v = num_traits::cast(-value).ok_or_else(|| {
-                PlanError::invalid(format!("invalid window boundary offset: {value}"))
-            })?;
-            Ok(Self::NegativeFinite(v))
-        }
     }
 }
 

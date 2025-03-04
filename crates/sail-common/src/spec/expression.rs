@@ -256,6 +256,8 @@ pub enum WindowFrameBoundary {
     UnboundedFollowing,
     Preceding(Box<Expr>),
     Following(Box<Expr>),
+    /// An alternative way to specify a window frame boundary, where
+    /// a negative value is a preceding boundary and a positive value is a following boundary.
     Value(Box<Expr>),
 }
 

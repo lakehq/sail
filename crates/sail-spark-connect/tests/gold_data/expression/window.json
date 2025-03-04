@@ -371,7 +371,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 0
@@ -449,7 +449,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 0
@@ -527,7 +527,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 10
@@ -605,7 +605,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 10
@@ -683,7 +683,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int64": {
                           "value": 2147483648
@@ -761,7 +761,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int64": {
                           "value": 2147483649
@@ -839,7 +839,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "following": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -939,7 +939,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -1039,7 +1039,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 0
@@ -1117,7 +1117,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 0
@@ -1125,7 +1125,7 @@
                       }
                     }
                   },
-                  "upper": "unbounded"
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -1195,7 +1195,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 10
@@ -1204,7 +1204,7 @@
                     }
                   },
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 5
@@ -1281,7 +1281,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 10
@@ -1359,7 +1359,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 10
@@ -1367,7 +1367,7 @@
                       }
                     }
                   },
-                  "upper": "unbounded"
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -1437,7 +1437,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int64": {
                           "value": 2147483648
@@ -1515,7 +1515,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int64": {
                           "value": 2147483648
@@ -1523,7 +1523,7 @@
                       }
                     }
                   },
-                  "upper": "unbounded"
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -1593,7 +1593,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -1693,7 +1693,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -1723,7 +1723,7 @@
                       }
                     }
                   },
-                  "upper": "unbounded"
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -1794,7 +1794,7 @@
                   "frameType": "range",
                   "lower": "currentRow",
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 0
@@ -1872,7 +1872,7 @@
                   "frameType": "range",
                   "lower": "currentRow",
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int64": {
                           "value": 2147483649
@@ -1950,7 +1950,7 @@
                   "frameType": "range",
                   "lower": "currentRow",
                   "upper": {
-                    "value": {
+                    "following": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -2050,7 +2050,7 @@
                   "frameType": "range",
                   "lower": "currentRow",
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 5
@@ -2197,7 +2197,7 @@
                 "frame": {
                   "frameType": "range",
                   "lower": "currentRow",
-                  "upper": "unbounded"
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -2266,9 +2266,9 @@
                 ],
                 "frame": {
                   "frameType": "range",
-                  "lower": "unbounded",
+                  "lower": "unboundedPreceding",
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int64": {
                           "value": 2147483649
@@ -2344,9 +2344,9 @@
                 ],
                 "frame": {
                   "frameType": "range",
-                  "lower": "unbounded",
+                  "lower": "unboundedPreceding",
                   "upper": {
-                    "value": {
+                    "following": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -2444,9 +2444,9 @@
                 ],
                 "frame": {
                   "frameType": "range",
-                  "lower": "unbounded",
+                  "lower": "unboundedPreceding",
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 5
@@ -2522,7 +2522,7 @@
                 ],
                 "frame": {
                   "frameType": "range",
-                  "lower": "unbounded",
+                  "lower": "unboundedPreceding",
                   "upper": "currentRow"
                 }
               }
@@ -2592,8 +2592,8 @@
                 ],
                 "frame": {
                   "frameType": "range",
-                  "lower": "unbounded",
-                  "upper": "unbounded"
+                  "lower": "unboundedPreceding",
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -2732,7 +2732,7 @@
                 ],
                 "frame": {
                   "frameType": "range",
-                  "lower": "unbounded",
+                  "lower": "unboundedFollowing",
                   "upper": "currentRow"
                 }
               }
@@ -2802,7 +2802,7 @@
                 ],
                 "frame": {
                   "frameType": "range",
-                  "lower": "unbounded",
+                  "lower": "unboundedPreceding",
                   "upper": "currentRow"
                 }
               }
@@ -2873,7 +2873,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 0
@@ -2951,7 +2951,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 0
@@ -3029,7 +3029,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 10
@@ -3107,7 +3107,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 10
@@ -3185,7 +3185,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int64": {
                           "value": 2147483648
@@ -3263,7 +3263,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int64": {
                           "value": 2147483649
@@ -3341,7 +3341,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "following": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -3441,7 +3441,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -3541,7 +3541,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 0
@@ -3619,7 +3619,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 0
@@ -3627,7 +3627,7 @@
                       }
                     }
                   },
-                  "upper": "unbounded"
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -3697,7 +3697,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 10
@@ -3706,7 +3706,7 @@
                     }
                   },
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 5
@@ -3783,7 +3783,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 10
@@ -3861,7 +3861,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int32": {
                           "value": 10
@@ -3869,7 +3869,7 @@
                       }
                     }
                   },
-                  "upper": "unbounded"
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -3939,7 +3939,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int64": {
                           "value": 2147483648
@@ -4017,7 +4017,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "literal": {
                         "int64": {
                           "value": 2147483648
@@ -4025,7 +4025,7 @@
                       }
                     }
                   },
-                  "upper": "unbounded"
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -4095,7 +4095,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -4195,7 +4195,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -4225,7 +4225,7 @@
                       }
                     }
                   },
-                  "upper": "unbounded"
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -4296,7 +4296,7 @@
                   "frameType": "row",
                   "lower": "currentRow",
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 0
@@ -4374,7 +4374,7 @@
                   "frameType": "row",
                   "lower": "currentRow",
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int64": {
                           "value": 2147483649
@@ -4452,7 +4452,7 @@
                   "frameType": "row",
                   "lower": "currentRow",
                   "upper": {
-                    "value": {
+                    "following": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -4552,7 +4552,7 @@
                   "frameType": "row",
                   "lower": "currentRow",
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 5
@@ -4699,7 +4699,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": "currentRow",
-                  "upper": "unbounded"
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -4768,9 +4768,9 @@
                 ],
                 "frame": {
                   "frameType": "row",
-                  "lower": "unbounded",
+                  "lower": "unboundedPreceding",
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int64": {
                           "value": 2147483649
@@ -4846,9 +4846,9 @@
                 ],
                 "frame": {
                   "frameType": "row",
-                  "lower": "unbounded",
+                  "lower": "unboundedPreceding",
                   "upper": {
-                    "value": {
+                    "following": {
                       "unresolvedFunction": {
                         "functionName": [
                           "+"
@@ -4946,9 +4946,9 @@
                 ],
                 "frame": {
                   "frameType": "row",
-                  "lower": "unbounded",
+                  "lower": "unboundedPreceding",
                   "upper": {
-                    "value": {
+                    "following": {
                       "literal": {
                         "int32": {
                           "value": 5
@@ -5024,7 +5024,7 @@
                 ],
                 "frame": {
                   "frameType": "row",
-                  "lower": "unbounded",
+                  "lower": "unboundedPreceding",
                   "upper": "currentRow"
                 }
               }
@@ -5094,8 +5094,8 @@
                 ],
                 "frame": {
                   "frameType": "row",
-                  "lower": "unbounded",
-                  "upper": "unbounded"
+                  "lower": "unboundedPreceding",
+                  "upper": "unboundedFollowing"
                 }
               }
             }
@@ -5236,7 +5236,7 @@
                 "frame": {
                   "frameType": "row",
                   "lower": {
-                    "value": {
+                    "preceding": {
                       "unresolvedFunction": {
                         "functionName": [
                           "exp"
@@ -5329,7 +5329,7 @@
                 ],
                 "frame": {
                   "frameType": "row",
-                  "lower": "unbounded",
+                  "lower": "unboundedFollowing",
                   "upper": "currentRow"
                 }
               }
@@ -5399,7 +5399,7 @@
                 ],
                 "frame": {
                   "frameType": "row",
-                  "lower": "unbounded",
+                  "lower": "unboundedPreceding",
                   "upper": "currentRow"
                 }
               }
