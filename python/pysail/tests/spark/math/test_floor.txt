@@ -47,117 +47,103 @@
 |            -12.4|             decimal(4,1)|  decimal(5,1)|
 +-----------------+-------------------------+--------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS TINYINT), 1)|typeof(floor(CAST(5 AS TINYINT), 1))|"
 >>> spark.sql("SELECT floor(CAST(5 as TINYINT), 1), typeof(floor(CAST(5 as TINYINT), 1));").show()
-+-----------+-------------------+
-|floor(5, 1)|typeof(floor(5, 1))|
-+-----------+-------------------+
-|          5|       decimal(4,0)|
-+-----------+-------------------+
++----------------------------+------------------------------------+
+|floor(CAST(5 AS TINYINT), 1)|typeof(floor(CAST(5 AS TINYINT), 1))|
++----------------------------+------------------------------------+
+|                           5|                        decimal(4,0)|
++----------------------------+------------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS TINYINT), -4)|typeof(floor(CAST(5 AS TINYINT), -4))|"
 >>> spark.sql("SELECT floor(CAST(5 as TINYINT), -4), typeof(floor(CAST(5 as TINYINT), -4));").show()
-+------------+--------------------+
-|floor(5, -4)|typeof(floor(5, -4))|
-+------------+--------------------+
-|           0|        decimal(5,0)|
-+------------+--------------------+
++-----------------------------+-------------------------------------+
+|floor(CAST(5 AS TINYINT), -4)|typeof(floor(CAST(5 AS TINYINT), -4))|
++-----------------------------+-------------------------------------+
+|                            0|                         decimal(5,0)|
++-----------------------------+-------------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS SMALLINT), 1)|typeof(floor(CAST(5 AS SMALLINT), 1))|"
 >>> spark.sql("SELECT floor(CAST(5 as SMALLINT), 1), typeof(floor(CAST(5 as SMALLINT), 1));").show()
-+-----------+-------------------+
-|floor(5, 1)|typeof(floor(5, 1))|
-+-----------+-------------------+
-|          5|       decimal(6,0)|
-+-----------+-------------------+
++-----------------------------+-------------------------------------+
+|floor(CAST(5 AS SMALLINT), 1)|typeof(floor(CAST(5 AS SMALLINT), 1))|
++-----------------------------+-------------------------------------+
+|                            5|                         decimal(6,0)|
++-----------------------------+-------------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS SMALLINT), -6)|typeof(floor(CAST(5 AS SMALLINT), -6))|"
 >>> spark.sql("SELECT floor(CAST(5 as SMALLINT), -6), typeof(floor(CAST(5 as SMALLINT), -6));").show()
-+------------+--------------------+
-|floor(5, -6)|typeof(floor(5, -6))|
-+------------+--------------------+
-|           0|        decimal(7,0)|
-+------------+--------------------+
++------------------------------+--------------------------------------+
+|floor(CAST(5 AS SMALLINT), -6)|typeof(floor(CAST(5 AS SMALLINT), -6))|
++------------------------------+--------------------------------------+
+|                             0|                          decimal(7,0)|
++------------------------------+--------------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS INT), 1)|typeof(floor(CAST(5 AS INT), 1))|"
 >>> spark.sql("SELECT floor(CAST(5 as INT), 1), typeof(floor(CAST(5 as INT), 1));").show()
-+-----------+-------------------+
-|floor(5, 1)|typeof(floor(5, 1))|
-+-----------+-------------------+
-|          5|      decimal(11,0)|
-+-----------+-------------------+
++------------------------+--------------------------------+
+|floor(CAST(5 AS INT), 1)|typeof(floor(CAST(5 AS INT), 1))|
++------------------------+--------------------------------+
+|                       5|                   decimal(11,0)|
++------------------------+--------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS INT), -11)|typeof(floor(CAST(5 AS INT), -11))|"
 >>> spark.sql("SELECT floor(CAST(5 as INT), -11), typeof(floor(CAST(5 as INT), -11));").show()
-+-------------+---------------------+
-|floor(5, -11)|typeof(floor(5, -11))|
-+-------------+---------------------+
-|            0|        decimal(12,0)|
-+-------------+---------------------+
++--------------------------+----------------------------------+
+|floor(CAST(5 AS INT), -11)|typeof(floor(CAST(5 AS INT), -11))|
++--------------------------+----------------------------------+
+|                         0|                     decimal(12,0)|
++--------------------------+----------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS BIGINT), 1)|typeof(floor(CAST(5 AS BIGINT), 1))|"
 >>> spark.sql("SELECT floor(CAST(5 as BIGINT), 1), typeof(floor(CAST(5 as BIGINT), 1));").show()
-+-----------+-------------------+
-|floor(5, 1)|typeof(floor(5, 1))|
-+-----------+-------------------+
-|          5|      decimal(21,0)|
-+-----------+-------------------+
++---------------------------+-----------------------------------+
+|floor(CAST(5 AS BIGINT), 1)|typeof(floor(CAST(5 AS BIGINT), 1))|
++---------------------------+-----------------------------------+
+|                          5|                      decimal(21,0)|
++---------------------------+-----------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS BIGINT), -21)|typeof(floor(CAST(5 AS BIGINT), -21))|"
 >>> spark.sql("SELECT floor(CAST(5 as BIGINT), -21), typeof(floor(CAST(5 as BIGINT), -21));").show()
-+-------------+---------------------+
-|floor(5, -21)|typeof(floor(5, -21))|
-+-------------+---------------------+
-|            0|        decimal(22,0)|
-+-------------+---------------------+
++-----------------------------+-------------------------------------+
+|floor(CAST(5 AS BIGINT), -21)|typeof(floor(CAST(5 AS BIGINT), -21))|
++-----------------------------+-------------------------------------+
+|                            0|                        decimal(22,0)|
++-----------------------------+-------------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS FLOAT), 1)|typeof(floor(CAST(5 AS FLOAT), 1))|"
 >>> spark.sql("SELECT floor(CAST(5 as FLOAT), 1), typeof(floor(CAST(5 as FLOAT), 1));").show()
-+-----------+-------------------+
-|floor(5, 1)|typeof(floor(5, 1))|
-+-----------+-------------------+
-|        5.0|       decimal(9,1)|
-+-----------+-------------------+
++--------------------------+----------------------------------+
+|floor(CAST(5 AS FLOAT), 1)|typeof(floor(CAST(5 AS FLOAT), 1))|
++--------------------------+----------------------------------+
+|                       5.0|                      decimal(9,1)|
++--------------------------+----------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS FLOAT), -15)|typeof(floor(CAST(5 AS FLOAT), -15))|"
 >>> spark.sql("SELECT floor(CAST(5 as FLOAT), -15), typeof(floor(CAST(5 as FLOAT), -15));").show()
-+-------------+---------------------+
-|floor(5, -15)|typeof(floor(5, -15))|
-+-------------+---------------------+
-|            0|        decimal(16,0)|
-+-------------+---------------------+
++----------------------------+------------------------------------+
+|floor(CAST(5 AS FLOAT), -15)|typeof(floor(CAST(5 AS FLOAT), -15))|
++----------------------------+------------------------------------+
+|                           0|                       decimal(16,0)|
++----------------------------+------------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS DOUBLE), 1)|typeof(floor(CAST(5 AS DOUBLE), 1))|"
 >>> spark.sql("SELECT floor(CAST(5 as DOUBLE), 1), typeof(floor(CAST(5 as DOUBLE), 1));").show()
-+-----------+-------------------+
-|floor(5, 1)|typeof(floor(5, 1))|
-+-----------+-------------------+
-|        5.0|      decimal(17,1)|
-+-----------+-------------------+
++---------------------------+-----------------------------------+
+|floor(CAST(5 AS DOUBLE), 1)|typeof(floor(CAST(5 AS DOUBLE), 1))|
++---------------------------+-----------------------------------+
+|                        5.0|                      decimal(17,1)|
++---------------------------+-----------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS DOUBLE), -31)|typeof(floor(CAST(5 AS DOUBLE), -31))|"
 >>> spark.sql("SELECT floor(CAST(5 as DOUBLE), -31), typeof(floor(CAST(5 as DOUBLE), -31));").show()
-+-------------+---------------------+
-|floor(5, -31)|typeof(floor(5, -31))|
-+-------------+---------------------+
-|            0|        decimal(32,0)|
-+-------------+---------------------+
++-----------------------------+-------------------------------------+
+|floor(CAST(5 AS DOUBLE), -31)|typeof(floor(CAST(5 AS DOUBLE), -31))|
++-----------------------------+-------------------------------------+
+|                            0|                        decimal(32,0)|
++-----------------------------+-------------------------------------+
 
->>> # TODO: Header columns in Spark are: "|floor(CAST(5 AS DECIMAL(5,2)), 1)|typeof(floor(CAST(5 AS DECIMAL(5,2)), 1))|"
 >>> spark.sql("SELECT floor(CAST(5 as DECIMAL(5, 2)), 1), typeof(floor(CAST(5 as DECIMAL(5, 2)), 1));").show()
-+-----------+-------------------+
-|floor(5, 1)|typeof(floor(5, 1))|
-+-----------+-------------------+
-|        5.0|       decimal(5,1)|
-+-----------+-------------------+
++---------------------------------+-----------------------------------------+
+|floor(CAST(5 AS DECIMAL(5,2)), 1)|typeof(floor(CAST(5 AS DECIMAL(5,2)), 1))|
++---------------------------------+-----------------------------------------+
+|                              5.0|                             decimal(5,1)|
++---------------------------------+-----------------------------------------+
 
->>> # TODO: Header columns in Spark are: "|FLOOR(CAST(5 AS DECIMAL(5,2)))|typeof(FLOOR(CAST(5 AS DECIMAL(5,2))))|"
 >>> spark.sql("SELECT floor(CAST(5 as DECIMAL(5, 2))), typeof(floor(CAST(5 as DECIMAL(5, 2))));").show()
-+--------+----------------+
-|FLOOR(5)|typeof(FLOOR(5))|
-+--------+----------------+
-|       5|    decimal(4,0)|
-+--------+----------------+
++------------------------------+--------------------------------------+
+|FLOOR(CAST(5 AS DECIMAL(5,2)))|typeof(FLOOR(CAST(5 AS DECIMAL(5,2))))|
++------------------------------+--------------------------------------+
+|                             5|                          decimal(4,0)|
++------------------------------+--------------------------------------+
 
 >>> spark.sql("SELECT floor(5.4, -1), typeof(floor(5.4, -1)), typeof(5.4);").show()
 +--------------+----------------------+------------+
