@@ -68,24 +68,6 @@ impl NamedExpr {
         }
     }
 
-    pub fn try_from_column_expr(
-        expr: expr::Expr,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<Self> {
-        match expr {
-            expr::Expr::Column(column) => {
-                let info = state.get_field_info(column.name())?;
-                Ok(Self::new(
-                    vec![info.name().to_string()],
-                    expr::Expr::Column(column),
-                ))
-            }
-            _ => Err(PlanError::invalid(
-                "column expected to create named expression",
-            )),
-        }
-    }
-
     pub fn with_metadata(mut self, metadata: Vec<(String, String)>) -> Self {
         self.metadata = metadata;
         self
