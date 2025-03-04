@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::cmp::{max, min};
+use std::cmp::max;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray};
@@ -109,12 +109,7 @@ fn ceil_floor_return_type_from_args(name: &str, args: ReturnTypeArgs) -> Result<
                 DataType::Float64 => Ok((max(30, -target_scale + 1), target_scale.clamp(0, 15))),
                 DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
                     if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
-                        let precision = *precision as i32;
-                        let scale = *scale as i32;
-                        Ok((
-                            max(precision - scale + 1, -target_scale + 1),
-                            min(scale, max(0, target_scale)),
-                        ))
+                        Ok((*precision as i32, *scale as i32))
                     } else {
                         Err(unsupported_data_type_exec_err(
                             name,
