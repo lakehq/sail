@@ -12,6 +12,6 @@ runs:
         sudo chown "$(id -un):$(id -gn)" /mnt/cargo/target
         sudo ls -la /mnt
         sudo ls -la /mnt/cargo
-        ln -s /mnt/build/target
+        ln -s /mnt/cargo/target
         ls -la
       shell: bash
