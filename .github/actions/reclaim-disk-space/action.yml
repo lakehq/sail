@@ -1,0 +1,11 @@
+name: Reclaim disk space
+description: Get more disk space by removing unused libraries and tools
+runs:
+  using: composite
+  steps:
+    - run: |
+        sudo df -h
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo df -h
+      shell: bash
