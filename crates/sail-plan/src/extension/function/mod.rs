@@ -2,6 +2,7 @@ pub mod array;
 pub mod collection;
 pub mod datetime;
 pub mod drop_struct_field;
+pub mod error_utils;
 pub mod explode;
 mod functions_nested_utils;
 mod functions_utils;
