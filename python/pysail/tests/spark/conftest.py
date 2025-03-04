@@ -54,4 +54,7 @@ def configure_spark_session(session: SparkSession):
 
 @pytest.fixture(scope="session", autouse=True)
 def sail_doctest(doctest_namespace, sail):
+    # TODO: we may need to isolate the Spark session for each doctest
+    #   so that the registered temporary views and UDFs does not interfere
+    #   with each other.
     doctest_namespace["spark"] = sail

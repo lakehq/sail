@@ -220,3 +220,65 @@ pyspark.errors.exceptions.connect.AnalysisException: ...
 +-----+---+
 |Alice|  2|
 +-----+---+
+
+>>> df1.createOrReplaceTempView("df1")
+>>> df2.createOrReplaceTempView("df2")
+>>> spark.sql("SELECT * FROM df1 JOIN df2 ON df1.name == df2.name").show()
++----+---+----+------+
+|name|age|name|height|
++----+---+----+------+
+| Bob|  5| Bob|    85|
++----+---+----+------+
+
+>>> spark.sql("SELECT * FROM df1 JOIN df2 USING (name)").show()
++----+---+------+
+|name|age|height|
++----+---+------+
+| Bob|  5|    85|
++----+---+------+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL JOIN df2").show()
++----+---+------+
+|name|age|height|
++----+---+------+
+| Bob|  5|    85|
++----+---+------+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL OUTER JOIN df2 ORDER BY name DESC").show()
++-----+----+------+
+| name| age|height|
++-----+----+------+
+|  Tom|NULL|    80|
+|  Bob|   5|    85|
+|Alice|   2|  NULL|
++-----+----+------+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL LEFT OUTER JOIN df2 ORDER BY name ASC").show()
++-----+---+------+
+| name|age|height|
++-----+---+------+
+|Alice|  2|  NULL|
+|  Bob|  5|    85|
++-----+---+------+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL RIGHT OUTER JOIN df2 ORDER BY name ASC").show()
++----+----+------+
+|name| age|height|
++----+----+------+
+| Bob|   5|    85|
+| Tom|NULL|    80|
++----+----+------+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL LEFT SEMI JOIN df2").show()
++----+---+
+|name|age|
++----+---+
+| Bob|  5|
++----+---+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL LEFT ANTI JOIN df2").show()
++-----+---+
+| name|age|
++-----+---+
+|Alice|  2|
++-----+---+

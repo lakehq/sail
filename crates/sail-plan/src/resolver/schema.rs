@@ -81,14 +81,14 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         name: &str,
         plan_id: Option<i64>,
-        state: &mut PlanResolverState,
+        state: &PlanResolverState,
     ) -> Vec<Column> {
         schema
             .iter()
             .filter(|(_, field)| {
                 state
                     .get_field_info(field.name())
-                    .is_ok_and(|info| info.matches(name, plan_id))
+                    .is_ok_and(|info| !info.is_hidden() && info.matches(name, plan_id))
             })
             .map(|x| x.into())
             .collect()
@@ -99,7 +99,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         name: &str,
         plan_id: Option<i64>,
-        state: &mut PlanResolverState,
+        state: &PlanResolverState,
     ) -> PlanResult<Option<Column>> {
         let columns = self.resolve_column_candidates(schema, name, plan_id, state);
         if columns.len() > 1 {
@@ -119,7 +119,7 @@ impl PlanResolver<'_> {
         &self,
         schema: &DFSchemaRef,
         name: &str,
-        state: &mut PlanResolverState,
+        state: &PlanResolverState,
     ) -> PlanResult<Column> {
         if let Some(column) = self.resolve_optional_column(schema, name, None, state)? {
             Ok(column)
@@ -134,7 +134,7 @@ impl PlanResolver<'_> {
         &self,
         schema: &DFSchemaRef,
         names: &[T],
-        state: &mut PlanResolverState,
+        state: &PlanResolverState,
     ) -> PlanResult<Vec<Column>> {
         names
             .iter()

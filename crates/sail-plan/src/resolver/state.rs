@@ -85,14 +85,12 @@ impl PlanResolverState {
 
     fn register_field_info(&mut self, name: impl Into<String>, hidden: bool) -> String {
         let field_id = self.next_field_id();
-        self.fields.insert(
-            field_id.clone(),
-            FieldInfo {
-                plan_ids: HashSet::new(),
-                name: name.into(),
-                hidden,
-            },
-        );
+        let info = FieldInfo {
+            plan_ids: HashSet::new(),
+            name: name.into(),
+            hidden,
+        };
+        self.fields.insert(field_id.clone(), info);
         field_id
     }
 
