@@ -860,7 +860,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))
             }
-            // FIXME: This is incorrect if the column name is named `*`:
+            // FIXME: This is incorrect if the column name is `*`:
             //   ```
             //   SELECT count(`*`) FROM VALUES 1 AS t(`*`)
             //   ```
