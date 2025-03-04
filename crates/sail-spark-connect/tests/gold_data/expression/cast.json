@@ -18,7 +18,8 @@
                 "dataType": "int32",
                 "nullable": true
               }
-            }
+            },
+            "rename": true
           }
         }
       }
@@ -36,7 +37,8 @@
                 "planId": null
               }
             },
-            "castToType": "int32"
+            "castToType": "int32",
+            "rename": true
           }
         }
       }
@@ -59,7 +61,8 @@
                 "timeUnit": "microsecond",
                 "timezoneInfo": "sQLConfigured"
               }
-            }
+            },
+            "rename": true
           }
         }
       }
@@ -79,10 +82,12 @@
                     "planId": null
                   }
                 },
-                "castToType": "int32"
+                "castToType": "int32",
+                "rename": true
               }
             },
-            "castToType": "int64"
+            "castToType": "int64",
+            "rename": true
           }
         }
       }
