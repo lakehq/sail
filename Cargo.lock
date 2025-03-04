@@ -4729,7 +4729,6 @@ dependencies = [
  "html-escape",
  "lazy_static",
  "num",
- "num-traits",
  "object_store",
  "rand 0.9.0",
  "rand_chacha 0.9.0",
