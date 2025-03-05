@@ -916,8 +916,6 @@ impl PlanResolver<'_> {
         join: spec::Join,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use spec::JoinType;
-
         let spec::Join {
             left,
             right,
@@ -925,22 +923,18 @@ impl PlanResolver<'_> {
             join_criteria,
             join_data_type,
         } = join;
-        let left = self
-            .resolve_query_plan_with_hidden_fields(*left, state)
-            .await?;
-        let right = self
-            .resolve_query_plan_with_hidden_fields(*right, state)
-            .await?;
+        let left = self.resolve_query_plan(*left, state).await?;
+        let right = self.resolve_query_plan(*right, state).await?;
         let join_type = match join_type {
-            JoinType::Inner => Some(plan::JoinType::Inner),
-            JoinType::LeftOuter => Some(plan::JoinType::Left),
-            JoinType::RightOuter => Some(plan::JoinType::Right),
-            JoinType::FullOuter => Some(plan::JoinType::Full),
-            JoinType::LeftSemi => Some(plan::JoinType::LeftSemi),
-            JoinType::RightSemi => Some(plan::JoinType::RightSemi),
-            JoinType::LeftAnti => Some(plan::JoinType::LeftAnti),
-            JoinType::RightAnti => Some(plan::JoinType::RightAnti),
-            JoinType::Cross => None,
+            spec::JoinType::Inner => Some(JoinType::Inner),
+            spec::JoinType::LeftOuter => Some(JoinType::Left),
+            spec::JoinType::RightOuter => Some(JoinType::Right),
+            spec::JoinType::FullOuter => Some(JoinType::Full),
+            spec::JoinType::LeftSemi => Some(JoinType::LeftSemi),
+            spec::JoinType::RightSemi => Some(JoinType::RightSemi),
+            spec::JoinType::LeftAnti => Some(JoinType::LeftAnti),
+            spec::JoinType::RightAnti => Some(JoinType::RightAnti),
+            spec::JoinType::Cross => None,
         };
 
         match (join_type, join_criteria) {
@@ -952,7 +946,6 @@ impl PlanResolver<'_> {
                 }
                 Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?)
             }
-            (Some(_), Some(spec::JoinCriteria::Natural)) => Err(PlanError::todo("natural join")),
             (Some(join_type), Some(spec::JoinCriteria::On(condition))) => {
                 let join_schema = Arc::new(build_join_schema(
                     left.schema(),
@@ -969,70 +962,102 @@ impl PlanResolver<'_> {
                     .build()?;
                 Ok(plan)
             }
-            (Some(join_type), Some(spec::JoinCriteria::Using(using))) => {
-                let join_columns = using
+            (Some(join_type), Some(spec::JoinCriteria::Natural)) => {
+                let left_names = Self::get_field_names(left.schema(), state)?;
+                let right_names = Self::get_field_names(right.schema(), state)?;
+                let using = left_names
                     .iter()
-                    .map(|name| {
-                        let left_column =
-                            self.resolve_one_column(left.schema(), name.as_ref(), state)?;
-                        let right_column =
-                            self.resolve_one_column(right.schema(), name.as_ref(), state)?;
-                        Ok((left_column, right_column))
-                    })
-                    .collect::<PlanResult<Vec<(_, _)>>>()?;
-                let (left_columns, right_columns) = join_columns
-                    .clone()
-                    .into_iter()
-                    .unzip::<_, _, Vec<_>, Vec<_>>();
-
-                let builder = LogicalPlanBuilder::from(left).join_detailed(
-                    right,
-                    join_type,
-                    (left_columns.clone(), right_columns.clone()),
-                    None,
-                    false,
-                )?;
-                let builder = match join_type {
-                    plan::JoinType::Inner
-                    | plan::JoinType::Left
-                    | plan::JoinType::Right
-                    | plan::JoinType::Full => {
-                        let columns = builder
-                            .schema()
-                            .columns()
-                            .into_iter()
-                            .map(|col| {
-                                if left_columns.contains(&col) || right_columns.contains(&col) {
-                                    let info = state.get_field_info(col.name())?.clone();
-                                    let field_id = state.register_hidden_field_name(info.name());
-                                    for plan_id in info.plan_ids() {
-                                        state.register_plan_id_for_field(&field_id, plan_id)?;
-                                    }
-                                    Ok(Expr::Column(col).alias(field_id))
-                                } else {
-                                    Ok(Expr::Column(col))
-                                }
-                            })
-                            .collect::<PlanResult<Vec<_>>>()?;
-                        let projections = join_columns
-                            .into_iter()
-                            .zip(using)
-                            .map(|((left, right), name)| {
-                                coalesce(vec![Expr::Column(left), Expr::Column(right)])
-                                    .alias(state.register_field_name(name))
-                            })
-                            .chain(columns);
-                        builder.project(projections)?
-                    }
-                    plan::JoinType::LeftSemi
-                    | plan::JoinType::RightSemi
-                    | plan::JoinType::LeftAnti
-                    | plan::JoinType::RightAnti
-                    | plan::JoinType::LeftMark => builder,
-                };
-                Ok(builder.build()?)
+                    .filter(|name| right_names.contains(name))
+                    .map(|x| x.clone().into())
+                    .collect::<Vec<_>>();
+                // We let the column resolver return errors when either plan contains
+                // duplicated columns for the natural join key.
+                let join_columns =
+                    self.resolve_query_join_using_columns(&left, &right, using, state)?;
+                self.resolve_query_join_using(left, right, join_type, join_columns, state)
+            }
+            (Some(join_type), Some(spec::JoinCriteria::Using(using))) => {
+                let join_columns =
+                    self.resolve_query_join_using_columns(&left, &right, using, state)?;
+                self.resolve_query_join_using(left, right, join_type, join_columns, state)
             }
         }
+    }
+
+    fn resolve_query_join_using_columns(
+        &self,
+        left: &LogicalPlan,
+        right: &LogicalPlan,
+        using: Vec<spec::Identifier>,
+        state: &PlanResolverState,
+    ) -> PlanResult<Vec<(String, (Column, Column))>> {
+        using
+            .into_iter()
+            .map(|name| {
+                let left_column = self.resolve_one_column(left.schema(), name.as_ref(), state)?;
+                let right_column = self.resolve_one_column(right.schema(), name.as_ref(), state)?;
+                Ok((name.into(), (left_column, right_column)))
+            })
+            .collect()
+    }
+
+    fn resolve_query_join_using(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+        join_type: JoinType,
+        join_columns: Vec<(String, (Column, Column))>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let (left_columns, right_columns) = join_columns
+            .iter()
+            .map(|(_, (left, right))| (left.clone(), right.clone()))
+            .unzip::<_, _, Vec<_>, Vec<_>>();
+
+        let builder = LogicalPlanBuilder::from(left).join_detailed(
+            right,
+            join_type,
+            (left_columns.clone(), right_columns.clone()),
+            None,
+            false,
+        )?;
+        let builder = match join_type {
+            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                let columns = builder
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(|col| {
+                        if left_columns.iter().any(|x| x.name == col.name)
+                            || right_columns.iter().any(|x| x.name == col.name)
+                        {
+                            let info = state.get_field_info(col.name())?.clone();
+                            let field_id = state.register_hidden_field_name(info.name());
+                            for plan_id in info.plan_ids() {
+                                state.register_plan_id_for_field(&field_id, plan_id)?;
+                            }
+                            Ok(Expr::Column(col).alias(field_id))
+                        } else {
+                            Ok(Expr::Column(col))
+                        }
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                let projections = join_columns
+                    .into_iter()
+                    .map(|(name, (left, right))| {
+                        coalesce(vec![Expr::Column(left), Expr::Column(right)])
+                            .alias(state.register_field_name(name))
+                    })
+                    .chain(columns);
+                builder.project(projections)?
+            }
+            JoinType::LeftSemi
+            | JoinType::RightSemi
+            | JoinType::LeftAnti
+            | JoinType::RightAnti
+            | JoinType::LeftMark => builder,
+        };
+        Ok(builder.build()?)
     }
 
     async fn resolve_query_set_operation(
@@ -1255,10 +1280,7 @@ impl PlanResolver<'_> {
                     sorts.push(sort_expr);
                 }
                 if sorts.len() != 1 {
-                    Err(PlanError::invalid(format!(
-                        "Expected one sort expression, found: {}. Sorts: {sorts:?}",
-                        sorts.len()
-                    )))
+                    Err(PlanError::invalid(format!("sort expression: {sort:?}",)))
                 } else {
                     Ok(sorts.one()?)
                 }
@@ -1430,15 +1452,9 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("deduplicate within watermark"));
         }
         if !column_names.is_empty() && !all_columns_as_keys {
-            let on_expr: Vec<Expr> = schema
-                .columns()
+            let on_expr: Vec<Expr> = self
+                .resolve_columns(schema, &column_names, state)?
                 .into_iter()
-                .filter(|column| {
-                    state.get_field_info(column.name()).is_ok_and(|info| {
-                        !info.is_hidden()
-                            && column_names.iter().any(|c| info.matches(c.as_ref(), None))
-                    })
-                })
                 .map(Expr::Column)
                 .collect();
             let select_expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();
@@ -3587,6 +3603,22 @@ impl PlanResolver<'_> {
         expr: Vec<NamedExpr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
+        fn to_named_expr(expr: Expr, state: &PlanResolverState) -> PlanResult<Option<NamedExpr>> {
+            let Expr::Column(column) = expr else {
+                return Err(PlanError::invalid(
+                    "column expected for expanded wildcard expression",
+                ));
+            };
+            let info = state.get_field_info(column.name())?;
+            if info.is_hidden() {
+                return Ok(None);
+            }
+            Ok(Some(NamedExpr::new(
+                vec![info.name().to_string()],
+                Expr::Column(column),
+            )))
+        }
+
         let schema = input.schema();
         let mut projected = vec![];
         for e in expr {
@@ -3595,13 +3627,14 @@ impl PlanResolver<'_> {
                 expr,
                 metadata,
             } = e;
+            // FIXME: wildcard options do not take into account opaque field IDs
             match expr {
                 Expr::Wildcard {
                     qualifier: None,
                     options,
                 } => {
                     for e in expand_wildcard(schema, &input, Some(&options))? {
-                        projected.push(NamedExpr::try_from_column_expr(e, state)?)
+                        projected.extend(to_named_expr(e, state)?)
                     }
                 }
                 Expr::Wildcard {
@@ -3609,7 +3642,7 @@ impl PlanResolver<'_> {
                     options,
                 } => {
                     for e in expand_qualified_wildcard(&qualifier, schema, Some(&options))? {
-                        projected.push(NamedExpr::try_from_column_expr(e, state)?)
+                        projected.extend(to_named_expr(e, state)?)
                     }
                 }
                 _ => projected.push(NamedExpr {
