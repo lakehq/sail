@@ -242,6 +242,7 @@ message MemoryExecNode {
   optional PhysicalProjection projection = 3;
   bool show_sizes = 4;
   repeated LexOrdering sort_information = 5;
+  optional uint64 limit = 6;
 }
 
 message ValuesExecNode {
