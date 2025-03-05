@@ -28,8 +28,14 @@ def data(sail, spark, duck):  # noqa: ARG001
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
+def test_derived_tpcds_query_execution(sail, query):
+    for sql in read_sql(query):
+        sail.sql(sql).toPandas()
+
+
+@pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
 @pytest.mark.skip(reason="Spark data loading is not reliable")
-def test_derived_tpcds_query(sail, spark, query):
+def test_derived_tpcds_query_spark_parity(sail, spark, query):
     for sql in read_sql(query):
         actual = sail.sql(sql)
         expected = spark.sql(sql)
