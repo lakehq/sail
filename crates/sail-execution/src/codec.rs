@@ -20,7 +20,7 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::memory::MemorySourceConfig;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
-use datafusion::physical_plan::source::DataSourceExec;
+use datafusion::physical_plan::source::{DataSource, DataSourceExec};
 #[allow(deprecated)]
 use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
@@ -240,6 +240,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
                 show_sizes,
                 sort_information,
+                limit,
             }) => {
                 let schema = self.try_decode_schema(&schema)?;
                 let partitions = partitions
@@ -250,12 +251,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
                 let sort_information =
                     self.try_decode_lex_orderings(&sort_information, registry, &schema)?;
-                Ok(Arc::new(
-                    #[allow(deprecated)]
-                    MemoryExec::try_new(&partitions, Arc::new(schema), projection)?
+                let source =
+                    MemorySourceConfig::try_new(&partitions, Arc::new(schema), projection)?
                         .with_show_sizes(show_sizes)
-                        .try_with_sort_information(sort_information)?,
-                ))
+                        .try_with_sort_information(sort_information)?
+                        .with_limit(limit.map(|x| x as usize));
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
                 let schema = self.try_decode_schema(&schema)?;
@@ -488,6 +489,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
                 show_sizes: memory.show_sizes(),
                 sort_information,
+                limit: memory.fetch().map(|x| x as u64),
             })
         } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
             let data = write_record_batches(&values.data(), &values.schema())?;
@@ -630,6 +632,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     projection,
                     show_sizes: memory.show_sizes(),
                     sort_information,
+                    limit: memory.fetch().map(|x| x as u64),
                 })
             } else {
                 return plan_err!("unsupported data source node: {data_source:?}");
