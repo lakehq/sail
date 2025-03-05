@@ -8,7 +8,7 @@ use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 #[allow(deprecated)]
 use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
-use datafusion::datasource::physical_plan::{ArrowSource, JsonSource};
+use datafusion::datasource::physical_plan::{ArrowSource, FileScanConfig, JsonSource};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
@@ -17,8 +17,10 @@ use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 #[allow(deprecated)]
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::memory::MemorySourceConfig;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
+use datafusion::physical_plan::source::DataSourceExec;
 #[allow(deprecated)]
 use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
@@ -585,6 +587,53 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 common_prefix_length,
             })
+        } else if let Some(data_source) = node.as_any().downcast_ref::<DataSourceExec>() {
+            let source = data_source.source();
+            if let Some(file_scan) = source.as_any().downcast_ref::<FileScanConfig>() {
+                let file_source = file_scan.file_source();
+                if file_source.as_any().is::<JsonSource>() {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let file_compression_type =
+                        self.try_encode_file_compression_type(file_scan.file_compression_type)?;
+                    NodeKind::NdJson(gen::NdJsonExecNode {
+                        base_config,
+                        file_compression_type,
+                    })
+                } else if file_source.as_any().is::<ArrowSource>() {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    NodeKind::Arrow(gen::ArrowExecNode { base_config })
+                } else {
+                    return plan_err!("unsupported data source node: {data_source:?}");
+                }
+            } else if let Some(memory) = source.as_any().downcast_ref::<MemorySourceConfig>() {
+                // `memory.schema()` is the schema after projection.
+                // We must use the original schema here.
+                let schema = memory.original_schema();
+                let partitions = memory
+                    .partitions()
+                    .iter()
+                    .map(|x| write_record_batches(x, schema.as_ref()))
+                    .collect::<Result<_>>()?;
+                let projection = memory
+                    .projection()
+                    .as_ref()
+                    .map(|x| gen::PhysicalProjection {
+                        columns: x.iter().map(|c| *c as u64).collect(),
+                    });
+                let schema = self.try_encode_schema(schema.as_ref())?;
+                let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
+                NodeKind::Memory(gen::MemoryExecNode {
+                    partitions,
+                    schema,
+                    projection,
+                    show_sizes: memory.show_sizes(),
+                    sort_information,
+                })
+            } else {
+                return plan_err!("unsupported data source node: {data_source:?}");
+            }
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
