@@ -244,7 +244,6 @@ pub struct WindowFrame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WindowFrameType {
-    Undefined,
     Row,
     Range,
 }
@@ -253,7 +252,12 @@ pub enum WindowFrameType {
 #[serde(rename_all = "camelCase")]
 pub enum WindowFrameBoundary {
     CurrentRow,
-    Unbounded,
+    UnboundedPreceding,
+    UnboundedFollowing,
+    Preceding(Box<Expr>),
+    Following(Box<Expr>),
+    /// An alternative way to specify a window frame boundary, where
+    /// a negative value is a preceding boundary and a positive value is a following boundary.
     Value(Box<Expr>),
 }
 
