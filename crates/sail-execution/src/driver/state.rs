@@ -224,6 +224,18 @@ impl DriverState {
         task.state = state;
     }
 
+    pub fn has_job_succeeded(&self, job_id: JobId) -> Option<bool> {
+        let job = self.jobs.get(&job_id)?;
+        let value = job.stages.iter().all(|stage| {
+            stage.tasks.iter().all(|task_id| {
+                self.tasks
+                    .get(task_id)
+                    .is_some_and(|task| matches!(task.state, TaskState::Succeeded { .. }))
+            })
+        });
+        Some(value)
+    }
+
     pub fn find_active_tasks_for_job(&self, job_id: JobId) -> Vec<(TaskId, &TaskDescriptor)> {
         let Some(job) = self.jobs.get(&job_id) else {
             return vec![];
