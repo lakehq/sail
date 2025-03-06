@@ -186,8 +186,15 @@ impl DriverActor {
     ) -> ActorAction {
         match self.accept_job(ctx, plan) {
             Ok(job_id) => {
-                self.job_outputs
-                    .insert(job_id, JobOutput::Pending { result });
+                let (tx, rx) = oneshot::channel();
+                self.job_outputs.insert(
+                    job_id,
+                    JobOutput::Pending {
+                        result,
+                        tx: Some(tx),
+                        rx,
+                    },
+                );
                 self.scale_up_workers(ctx);
                 self.schedule_tasks(ctx);
             }
@@ -418,6 +425,7 @@ impl DriverActor {
                 }
                 self.schedule_tasks(ctx);
                 self.try_update_job_output(ctx, job_id);
+                self.try_succeed_job(job_id);
             }
             TaskStatus::Failed => {
                 // TODO: support task retry
@@ -743,7 +751,7 @@ impl DriverActor {
             return;
         };
         match output {
-            JobOutput::Pending { result } => {
+            JobOutput::Pending { result, tx, rx } => {
                 if let Some(stream) = self.try_build_job_output(job_id) {
                     let stream = match stream {
                         Ok(x) => x,
@@ -764,10 +772,10 @@ impl DriverActor {
                         return;
                     }
                     self.job_outputs
-                        .insert(job_id, JobOutput::run(ctx, job_id, stream, sender));
+                        .insert(job_id, JobOutput::run(ctx, job_id, stream, sender, tx, rx));
                 } else {
                     self.job_outputs
-                        .insert(job_id, JobOutput::Pending { result });
+                        .insert(job_id, JobOutput::Pending { result, tx, rx });
                 }
             }
             x @ JobOutput::Running { .. } => {
@@ -836,6 +844,18 @@ impl DriverActor {
         .try_flatten();
         let stream = Box::pin(RecordBatchStreamAdapter::new(output_schema, output));
         Some(Ok(stream))
+    }
+
+    fn try_succeed_job(&mut self, job_id: JobId) {
+        match self.state.has_job_succeeded(job_id) {
+            None | Some(false) => return,
+            Some(true) => {}
+        }
+        if let Some(output) = self.job_outputs.remove(&job_id) {
+            if let Some(output) = output.succeed() {
+                self.job_outputs.insert(job_id, output);
+            }
+        }
     }
 
     fn cancel_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId, reason: String) {
