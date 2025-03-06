@@ -2,7 +2,7 @@
 
 ## 0.2.2
 
-_March 5, 2025_
+_March 6, 2025_
 
 - Switched to the built-in SQL parser ([#338](https://github.com/lakehq/sail/pull/338), [#358](https://github.com/lakehq/sail/pull/358), [#359](https://github.com/lakehq/sail/pull/359), and [#376](https://github.com/lakehq/sail/pull/376)).
 - Supported the majority of Spark SQL syntax ([#378](https://github.com/lakehq/sail/pull/378), [#380](https://github.com/lakehq/sail/pull/380), [#382](https://github.com/lakehq/sail/pull/382), [#385](https://github.com/lakehq/sail/pull/385), [#387](https://github.com/lakehq/sail/pull/387), [#389](https://github.com/lakehq/sail/pull/389), and [#390](https://github.com/lakehq/sail/pull/390)).
