@@ -10,7 +10,7 @@
     "ms-python.python",
     "ms-python.vscode-pylance"
   ],
-  "postCreateCommand": "pip install -r requirements.txt || true",
+  "postCreateCommand": "uv sync && cargo build -p sail-cli --profile dev --bins",
   "remoteUser": "vscode"
 }
 

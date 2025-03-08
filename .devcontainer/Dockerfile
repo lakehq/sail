@@ -5,6 +5,7 @@ ARG USERNAME=vscode
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 ARG PYSPARK_VERSION=3.5.4
+ARG RUST_PROFILE=dev
 
 ENV ZIG_VERSION=0.14.0
 ENV NODE_VERSION=v22.0.0
@@ -40,7 +41,6 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/home/$USERNAME/.cargo/bin:$NVM_DIR/versions/node/${NODE_VERSION}/bin:/usr/local/bin:$PATH"
 RUN rustup toolchain install stable --component rustfmt  && rustup toolchain install nightly --component rustfmt 
 RUN cargo install maturin  
-
 # Install NVM & Node.js 22
 ENV NVM_DIR="/home/$USERNAME/.nvm"
 RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash && \
@@ -51,13 +51,10 @@ RUN wget -qO- https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" SHELL="$(whic
 # Install Maturin (Python package), Hatch, and Protocol Buffers
 RUN pip install --upgrade pip \
     && pip install maturin hatch  
-WORKDIR /workspace
 
     # Set working directory
 ARG PYSPARK_VERSION=3.5.4
 RUN python3 -m pip install --no-cache-dir "pyspark[connect]==${PYSPARK_VERSION}"
 
-#RUN cargo build -p sail-cli --profile ${RUST_PROFILE} --bins && \
-#    cp /app/target/${RUST_TARGET_SUBDIR}/sail /usr/local/bin
-
 WORKDIR /workspace
+
