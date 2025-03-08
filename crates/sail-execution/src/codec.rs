@@ -563,7 +563,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 common_prefix_length,
             })
         } else if let Some(data_source) = node.as_any().downcast_ref::<DataSourceExec>() {
-            let source = data_source.source();
+            let source = data_source.data_source();
             if let Some(file_scan) = source.as_any().downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
                 if file_source.as_any().is::<JsonSource>() {
