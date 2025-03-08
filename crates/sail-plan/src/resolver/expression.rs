@@ -1134,6 +1134,7 @@ impl PlanResolver<'_> {
                     .await?;
                 Ok(NamedExpr::new(
                     vec!["*".to_string()],
+                    #[allow(deprecated)]
                     expr::Expr::Wildcard {
                         qualifier,
                         options: Box::new(options),
@@ -1159,6 +1160,7 @@ impl PlanResolver<'_> {
                     {
                         vec![NamedExpr::new(
                             vec!["*".to_string()],
+                            #[allow(deprecated)]
                             expr::Expr::Wildcard {
                                 qualifier: q,
                                 options: Default::default(),

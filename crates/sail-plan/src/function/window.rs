@@ -24,6 +24,8 @@ pub(crate) fn get_built_in_window_function(
         )),
         "sum" => Ok(expr::WindowFunctionDefinition::AggregateUDF(sum::sum_udaf())),
         "count" => Ok(expr::WindowFunctionDefinition::AggregateUDF(
+            // FIXME: CHECK HERE
+            //  DO NOT MERGE IN UNTIL COUNT WILDCARD IS FIXED LIKE WE DID IN `crates/sail-plan/src/function/aggregate.rs`
             count::count_udaf(),
         )),
         "cume_dist" => Ok(expr::WindowFunctionDefinition::WindowUDF(cume_dist_udwf())),

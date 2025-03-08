@@ -16,6 +16,7 @@ fn r#struct(input: FunctionInput) -> PlanResult<Expr> {
         .map(|(i, (expr, name))| -> PlanResult<_> {
             match expr {
                 Expr::Column(_) | Expr::Alias(_) => Ok(name.clone()),
+                #[allow(deprecated)]
                 Expr::Wildcard { .. } => Err(PlanError::invalid(
                     "wildcard is not yet supported in struct",
                 )),

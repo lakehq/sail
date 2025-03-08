@@ -188,6 +188,7 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
     let args = match arguments.as_slice() {
+        #[allow(deprecated)]
         [expr::Expr::Wildcard {
             qualifier: None,
             options: _,
