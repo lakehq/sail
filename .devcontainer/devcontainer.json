@@ -1,0 +1,16 @@
+{
+  "name": "Python 3.10 DevContainer",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "settings": {
+    "python.defaultInterpreterPath": "/usr/local/bin/python"
+  },
+  "extensions": [
+    "ms-python.python",
+    "ms-python.vscode-pylance"
+  ],
+  "postCreateCommand": "pip install -r requirements.txt || true",
+  "remoteUser": "vscode"
+}
+
