@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::NullTreatment;
+use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{expr, AggregateUDF, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl};
 
@@ -18,6 +19,7 @@ pub struct FunctionInput<'a> {
     pub argument_names: &'a [String],
     pub plan_config: &'a Arc<PlanConfig>,
     pub session_context: &'a SessionContext,
+    pub schema: &'a DFSchemaRef,
 }
 
 pub(crate) type Function = Arc<dyn Fn(FunctionInput) -> PlanResult<expr::Expr> + Send + Sync>;
@@ -183,7 +185,7 @@ impl AggFunctionBuilder {
     }
 }
 
-pub(super) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreatment> {
+pub(crate) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreatment> {
     match ignore_nulls {
         Some(true) => Some(NullTreatment::IgnoreNulls),
         Some(false) => Some(NullTreatment::RespectNulls),

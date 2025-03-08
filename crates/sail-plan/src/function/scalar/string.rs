@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions;
 use datafusion::functions::expr_fn;
+use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::string::contains::ContainsFunc;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, ScalarUDF};
@@ -295,7 +296,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> 
         ("overlay", F::custom(overlay)),
         ("position", F::custom(position)),
         ("printf", F::unknown("printf")),
-        ("regexp_count", F::unknown("regexp_count")),
+        ("regexp_count", F::udf(RegexpCountFunc::new())),
         ("regexp_extract", F::unknown("regexp_extract")),
         ("regexp_extract_all", F::unknown("regexp_extract_all")),
         ("regexp_instr", F::unknown("regexp_instr")),

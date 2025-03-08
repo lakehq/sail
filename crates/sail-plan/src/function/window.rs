@@ -28,9 +28,11 @@ pub(crate) fn get_built_in_window_function(
         )),
         "cume_dist" => Ok(expr::WindowFunctionDefinition::WindowUDF(cume_dist_udwf())),
         "dense_rank" => Ok(expr::WindowFunctionDefinition::WindowUDF(dense_rank_udwf())),
-        "first_value" => Ok(expr::WindowFunctionDefinition::WindowUDF(first_value_udwf())),
+        "first" | "first_value" => {
+            Ok(expr::WindowFunctionDefinition::WindowUDF(first_value_udwf()))
+        }
         "lag" => Ok(expr::WindowFunctionDefinition::WindowUDF(lag_udwf())),
-        "last_value" => Ok(expr::WindowFunctionDefinition::WindowUDF(last_value_udwf())),
+        "last" | "last_value" => Ok(expr::WindowFunctionDefinition::WindowUDF(last_value_udwf())),
         "lead" => Ok(expr::WindowFunctionDefinition::WindowUDF(lead_udwf())),
         "nth_value" => Ok(expr::WindowFunctionDefinition::WindowUDF(nth_value_udwf())),
         "ntile" => Ok(expr::WindowFunctionDefinition::WindowUDF(ntile_udwf())),

@@ -4,12 +4,11 @@ use std::sync::Arc;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
-use datafusion::common::{internal_err, plan_datafusion_err, plan_err, JoinSide, Result};
+use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
-use datafusion::datasource::memory::{DataSourceExec, MemorySourceConfig};
 #[allow(deprecated)]
 use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
-use datafusion::datasource::physical_plan::{ArrowSource, JsonSource};
+use datafusion::datasource::physical_plan::{ArrowSource, FileScanConfig, JsonSource};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
@@ -17,8 +16,11 @@ use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 #[allow(deprecated)]
+use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::memory::MemorySourceConfig;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
+use datafusion::physical_plan::source::{DataSource, DataSourceExec};
 #[allow(deprecated)]
 use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
@@ -55,24 +57,29 @@ use sail_plan::extension::function::datetime::spark_last_day::SparkLastDay;
 use sail_plan::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_plan::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_plan::extension::function::datetime::spark_next_day::SparkNextDay;
+use sail_plan::extension::function::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_plan::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_plan::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
 use sail_plan::extension::function::datetime::timestamp_now::TimestampNow;
 use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
-use sail_plan::extension::function::least_greatest::{Greatest, Least};
 use sail_plan::extension::function::map::map_function::MapFunction;
 use sail_plan::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
+use sail_plan::extension::function::math::least_greatest::{Greatest, Least};
+use sail_plan::extension::function::math::randn::Randn;
+use sail_plan::extension::function::math::random::Random;
 use sail_plan::extension::function::math::spark_abs::SparkAbs;
+use sail_plan::extension::function::math::spark_bin::SparkBin;
+use sail_plan::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
+use sail_plan::extension::function::math::spark_expm1::SparkExpm1;
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
+use sail_plan::extension::function::math::spark_pmod::SparkPmod;
 use sail_plan::extension::function::math::spark_signum::SparkSignum;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
 use sail_plan::extension::function::raise_error::RaiseError;
-use sail_plan::extension::function::randn::Randn;
-use sail_plan::extension::function::random::Random;
 use sail_plan::extension::function::skewness::SkewnessFunc;
 use sail_plan::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
@@ -233,6 +240,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
                 show_sizes,
                 sort_information,
+                limit,
             }) => {
                 let schema = self.try_decode_schema(&schema)?;
                 let partitions = partitions
@@ -246,7 +254,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let source =
                     MemorySourceConfig::try_new(&partitions, Arc::new(schema), projection)?
                         .with_show_sizes(show_sizes)
-                        .try_with_sort_information(sort_information)?;
+                        .try_with_sort_information(sort_information)?
+                        .with_limit(limit.map(|x| x as usize));
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
@@ -457,35 +466,31 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 consumption,
                 locations,
             })
-        } else if let Some(data_source_exec) = node.as_any().downcast_ref::<DataSourceExec>() {
-            let source = data_source_exec.source();
-            if let Some(memory) = source.as_any().downcast_ref::<MemorySourceConfig>() {
-                // `memory.schema()` is the schema after projection.
-                // We must use the original schema here.
-                let schema = memory.original_schema();
-                let partitions = memory
-                    .partitions()
-                    .iter()
-                    .map(|x| write_record_batches(x, schema.as_ref()))
-                    .collect::<Result<_>>()?;
-                let projection = memory
-                    .projection()
-                    .as_ref()
-                    .map(|x| gen::PhysicalProjection {
-                        columns: x.iter().map(|c| *c as u64).collect(),
-                    });
-                let schema = self.try_encode_schema(schema.as_ref())?;
-                let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
-                Ok(NodeKind::Memory(gen::MemoryExecNode {
-                    partitions,
-                    schema,
-                    projection,
-                    show_sizes: memory.show_sizes(),
-                    sort_information,
-                }))
-            } else {
-                internal_err!("Unable to encode DataSourceExec: {data_source_exec:?} for DataSource: {source:?}. This was likely caused by a bug in Sail's code and likely should not happen. We would welcome that you file an bug report in our issue tracker.")
-            }?
+        } else if let Some(memory) = node.as_any().downcast_ref::<MemoryExec>() {
+            // `memory.schema()` is the schema after projection.
+            // We must use the original schema here.
+            let schema = memory.original_schema();
+            let partitions = memory
+                .partitions()
+                .iter()
+                .map(|x| write_record_batches(x, schema.as_ref()))
+                .collect::<Result<_>>()?;
+            let projection = memory
+                .projection()
+                .as_ref()
+                .map(|x| gen::PhysicalProjection {
+                    columns: x.iter().map(|c| *c as u64).collect(),
+                });
+            let schema = self.try_encode_schema(schema.as_ref())?;
+            let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
+            NodeKind::Memory(gen::MemoryExecNode {
+                partitions,
+                schema,
+                projection,
+                show_sizes: memory.show_sizes(),
+                sort_information,
+                limit: memory.fetch().map(|x| x as u64),
+            })
         } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
             let data = write_record_batches(&values.data(), &values.schema())?;
             let schema = self.try_encode_schema(values.schema().as_ref())?;
@@ -584,6 +589,54 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 common_prefix_length,
             })
+        } else if let Some(data_source) = node.as_any().downcast_ref::<DataSourceExec>() {
+            let source = data_source.source();
+            if let Some(file_scan) = source.as_any().downcast_ref::<FileScanConfig>() {
+                let file_source = file_scan.file_source();
+                if file_source.as_any().is::<JsonSource>() {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let file_compression_type =
+                        self.try_encode_file_compression_type(file_scan.file_compression_type)?;
+                    NodeKind::NdJson(gen::NdJsonExecNode {
+                        base_config,
+                        file_compression_type,
+                    })
+                } else if file_source.as_any().is::<ArrowSource>() {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    NodeKind::Arrow(gen::ArrowExecNode { base_config })
+                } else {
+                    return plan_err!("unsupported data source node: {data_source:?}");
+                }
+            } else if let Some(memory) = source.as_any().downcast_ref::<MemorySourceConfig>() {
+                // `memory.schema()` is the schema after projection.
+                // We must use the original schema here.
+                let schema = memory.original_schema();
+                let partitions = memory
+                    .partitions()
+                    .iter()
+                    .map(|x| write_record_batches(x, schema.as_ref()))
+                    .collect::<Result<_>>()?;
+                let projection = memory
+                    .projection()
+                    .as_ref()
+                    .map(|x| gen::PhysicalProjection {
+                        columns: x.iter().map(|c| *c as u64).collect(),
+                    });
+                let schema = self.try_encode_schema(schema.as_ref())?;
+                let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
+                NodeKind::Memory(gen::MemoryExecNode {
+                    partitions,
+                    schema,
+                    projection,
+                    show_sizes: memory.show_sizes(),
+                    sort_information,
+                    limit: memory.fetch().map(|x| x as u64),
+                })
+            } else {
+                return plan_err!("unsupported data source node: {data_source:?}");
+            }
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -787,6 +840,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
             "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
+            "spark_bin" | "bin" => Ok(Arc::new(ScalarUDF::from(SparkBin::new()))),
+            "spark_try_to_timestamp" | "try_to_timestamp" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
+            }
+            "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
+            "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
+            "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
+            "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -834,6 +895,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkSequence>()
             || node.inner().as_any().is::<SparkEncode>()
             || node.inner().as_any().is::<SparkDecode>()
+            || node.inner().as_any().is::<SparkTryToTimestamp>()
+            || node.inner().as_any().is::<SparkBin>()
+            || node.inner().as_any().is::<SparkExpm1>()
+            || node.inner().as_any().is::<SparkPmod>()
+            || node.inner().as_any().is::<SparkCeil>()
+            || node.inner().as_any().is::<SparkFloor>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"

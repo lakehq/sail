@@ -4086,7 +4086,8 @@
                       "orderBy": null
                     }
                   },
-                  "castToType": "int32"
+                  "castToType": "int32",
+                  "rename": true
                 }
               }
             },

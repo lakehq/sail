@@ -81,12 +81,18 @@ impl ScalarUDFImpl for SparkElementAt {
             } = args;
             let args = match args[1].data_type() {
                 DataType::Int64 => args,
-                DataType::Int32 => {
+                DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64 => {
                     [args[0].clone(), args[1].cast_to(&DataType::Int64, None)?].to_vec()
                 }
                 _ => {
                     return exec_err!(
-                        "Spark `element_at` for array requires the second argument to be int, got {}",
+                        "Spark `element_at` for array requires the second argument to be INT, got {}",
                         args[1].data_type()
                     );
                 }

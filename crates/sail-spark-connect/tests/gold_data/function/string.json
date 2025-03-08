@@ -2129,7 +2129,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_count"
+        "success": "ok"
       }
     },
     {
@@ -2151,7 +2151,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_count"
+        "success": "ok"
       }
     },
     {
