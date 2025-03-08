@@ -6,21 +6,19 @@ use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::memory::MemorySourceConfig;
 #[allow(deprecated)]
 use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
 use datafusion::datasource::physical_plan::{ArrowSource, FileScanConfig, JsonSource};
+use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
-#[allow(deprecated)]
-use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::memory::MemorySourceConfig;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
-use datafusion::physical_plan::source::{DataSource, DataSourceExec};
 #[allow(deprecated)]
 use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
@@ -465,31 +463,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partitioning,
                 consumption,
                 locations,
-            })
-        } else if let Some(memory) = node.as_any().downcast_ref::<MemoryExec>() {
-            // `memory.schema()` is the schema after projection.
-            // We must use the original schema here.
-            let schema = memory.original_schema();
-            let partitions = memory
-                .partitions()
-                .iter()
-                .map(|x| write_record_batches(x, schema.as_ref()))
-                .collect::<Result<_>>()?;
-            let projection = memory
-                .projection()
-                .as_ref()
-                .map(|x| gen::PhysicalProjection {
-                    columns: x.iter().map(|c| *c as u64).collect(),
-                });
-            let schema = self.try_encode_schema(schema.as_ref())?;
-            let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
-            NodeKind::Memory(gen::MemoryExecNode {
-                partitions,
-                schema,
-                projection,
-                show_sizes: memory.show_sizes(),
-                sort_information,
-                limit: memory.fetch().map(|x| x as u64),
             })
         } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
             let data = write_record_batches(&values.data(), &values.schema())?;
