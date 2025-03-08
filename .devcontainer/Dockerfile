@@ -4,6 +4,8 @@ FROM mcr.microsoft.com/devcontainers/python:3.10
 ARG USERNAME=vscode
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
+ARG PYSPARK_VERSION=3.5.4
+
 ENV ZIG_VERSION=0.14.0
 ENV NODE_VERSION=v22.0.0
 
@@ -16,9 +18,12 @@ RUN apt-get update && apt-get install -y \
     unzip \
     tar \
     git \
-    protobuf-compiler \ 
     wget \
     ca-certificates \
+    gcc \
+    libc6-dev \
+    protobuf-compiler \
+    libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Zig (Latest Stable Version)
@@ -46,6 +51,13 @@ RUN wget -qO- https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" SHELL="$(whic
 # Install Maturin (Python package), Hatch, and Protocol Buffers
 RUN pip install --upgrade pip \
     && pip install maturin hatch  
-# Set working directory
+WORKDIR /workspace
+
+    # Set working directory
+ARG PYSPARK_VERSION=3.5.4
+RUN python3 -m pip install --no-cache-dir "pyspark[connect]==${PYSPARK_VERSION}"
+
+#RUN cargo build -p sail-cli --profile ${RUST_PROFILE} --bins && \
+#    cp /app/target/${RUST_TARGET_SUBDIR}/sail /usr/local/bin
 
 WORKDIR /workspace
