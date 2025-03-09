@@ -18,7 +18,7 @@ use crate::extension::function::datetime::spark_try_to_timestamp::SparkTryToTime
 use crate::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use crate::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
 use crate::extension::function::datetime::timestamp_now::TimestampNow;
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
@@ -58,7 +58,7 @@ fn trunc_part_conversion(part: Expr) -> Expr {
     })
 }
 
-fn trunc(input: FunctionInput) -> PlanResult<Expr> {
+fn trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (date, part) = input.arguments.two()?;
     Ok(Expr::Cast(expr::Cast::new(
         Box::new(expr_fn::date_trunc(trunc_part_conversion(part), date)),
@@ -66,7 +66,7 @@ fn trunc(input: FunctionInput) -> PlanResult<Expr> {
     )))
 }
 
-fn date_trunc(input: FunctionInput) -> PlanResult<Expr> {
+fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (part, timestamp) = input.arguments.two()?;
     Ok(Expr::Cast(expr::Cast::new(
         Box::new(expr_fn::date_trunc(trunc_part_conversion(part), timestamp)),
@@ -74,7 +74,7 @@ fn date_trunc(input: FunctionInput) -> PlanResult<Expr> {
     )))
 }
 
-fn interval_arithmetic(input: FunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
+fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
     let (date, interval) = input.arguments.two()?;
     let date = Expr::Cast(expr::Cast {
         expr: Box::new(date),
@@ -171,10 +171,10 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
     })
 }
 
-fn current_timezone(input: FunctionInput) -> PlanResult<Expr> {
+fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     input.arguments.zero()?;
     Ok(Expr::Literal(ScalarValue::Utf8(Some(
-        input.plan_config.session_timezone.clone(),
+        input.function_context.plan_config.session_timezone.clone(),
     ))))
 }
 
@@ -190,7 +190,7 @@ fn to_chrono_fmt(format: Expr) -> PlanResult<Expr> {
     }
 }
 
-fn to_date(input: FunctionInput) -> PlanResult<Expr> {
+fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
         Ok(expr_fn::to_date(input.arguments))
     } else if input.arguments.len() == 2 {
@@ -202,8 +202,13 @@ fn to_date(input: FunctionInput) -> PlanResult<Expr> {
     }
 }
 
-fn unix_timestamp(input: FunctionInput) -> PlanResult<Expr> {
-    let timezone: Arc<str> = input.plan_config.session_timezone.clone().into();
+fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let timezone: Arc<str> = input
+        .function_context
+        .plan_config
+        .session_timezone
+        .clone()
+        .into();
     if input.arguments.is_empty() {
         let expr = Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(TimestampNow::new(
@@ -232,13 +237,13 @@ fn unix_timestamp(input: FunctionInput) -> PlanResult<Expr> {
     }
 }
 
-fn date_format(input: FunctionInput) -> PlanResult<Expr> {
+fn date_format(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (expr, format) = input.arguments.two()?;
     let format = to_chrono_fmt(format)?;
     Ok(expr_fn::to_char(expr, format))
 }
 
-fn to_timestamp(input: FunctionInput) -> PlanResult<Expr> {
+fn to_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
         Ok(Expr::Cast(expr::Cast::new(
             Box::new(input.arguments.one()?),
@@ -253,7 +258,7 @@ fn to_timestamp(input: FunctionInput) -> PlanResult<Expr> {
     }
 }
 
-fn try_to_timestamp(input: FunctionInput) -> PlanResult<Expr> {
+fn try_to_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
         Ok(Expr::TryCast(expr::TryCast::new(
             Box::new(input.arguments.one()?),
@@ -273,7 +278,7 @@ fn try_to_timestamp(input: FunctionInput) -> PlanResult<Expr> {
     }
 }
 
-fn from_unixtime(input: FunctionInput) -> PlanResult<Expr> {
+fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (expr, format) = if input.arguments.len() == 1 {
         let expr = input.arguments.one()?;
         // default format is "yyyy-MM-dd HH:mm:ss"
@@ -289,7 +294,12 @@ fn from_unixtime(input: FunctionInput) -> PlanResult<Expr> {
         ));
     }?;
 
-    let timezone: Arc<str> = input.plan_config.session_timezone.clone().into();
+    let timezone: Arc<str> = input
+        .function_context
+        .plan_config
+        .session_timezone
+        .clone()
+        .into();
     let format = to_chrono_fmt(format)?;
     let expr = Expr::Cast(expr::Cast::new(
         Box::new(expr),
@@ -298,9 +308,14 @@ fn from_unixtime(input: FunctionInput) -> PlanResult<Expr> {
     Ok(expr_fn::to_char(expr, format))
 }
 
-fn weekofyear(input: FunctionInput) -> PlanResult<Expr> {
+fn weekofyear(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
-        let timezone: Arc<str> = input.plan_config.session_timezone.clone().into();
+        let timezone: Arc<str> = input
+            .function_context
+            .plan_config
+            .session_timezone
+            .clone()
+            .into();
         Ok(Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(SparkWeekOfYear::new(timezone))),
             args: input.arguments,
@@ -313,23 +328,35 @@ fn weekofyear(input: FunctionInput) -> PlanResult<Expr> {
     }
 }
 
-fn unix_time_unit(input: FunctionInput, time_unit: TimeUnit) -> PlanResult<Expr> {
+fn unix_time_unit(input: ScalarFunctionInput, time_unit: TimeUnit) -> PlanResult<Expr> {
     let arg = input.arguments.one()?;
     Ok(Expr::Cast(expr::Cast::new(
         Box::new(Expr::Cast(expr::Cast::new(
             Box::new(arg),
             DataType::Timestamp(
                 time_unit,
-                Some(input.plan_config.session_timezone.clone().into()),
+                Some(
+                    input
+                        .function_context
+                        .plan_config
+                        .session_timezone
+                        .clone()
+                        .into(),
+                ),
             ),
         ))),
         DataType::Int64,
     )))
 }
 
-fn current_timestamp_microseconds(input: FunctionInput) -> PlanResult<Expr> {
+fn current_timestamp_microseconds(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.is_empty() {
-        let timezone: Arc<str> = input.plan_config.session_timezone.clone().into();
+        let timezone: Arc<str> = input
+            .function_context
+            .plan_config
+            .session_timezone
+            .clone()
+            .into();
         Ok(Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(TimestampNow::new(
                 timezone,
@@ -345,7 +372,7 @@ fn current_timestamp_microseconds(input: FunctionInput) -> PlanResult<Expr> {
     }
 }
 
-fn current_localtimestamp_microseconds(input: FunctionInput) -> PlanResult<Expr> {
+fn current_localtimestamp_microseconds(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let expr = current_timestamp_microseconds(input)?;
     Ok(expr_fn::to_local_time(vec![expr]))
 }
@@ -359,7 +386,7 @@ fn from_utc_timestamp(timestamp: Expr, timezone: Expr) -> Expr {
     })
 }
 
-fn make_ym_interval(input: FunctionInput) -> PlanResult<Expr> {
+fn make_ym_interval(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (years, months) = if input.arguments.len() == 2 {
         input.arguments.two()?
     } else {
@@ -371,7 +398,7 @@ fn make_ym_interval(input: FunctionInput) -> PlanResult<Expr> {
     }))
 }
 
-fn make_timestamp(input: FunctionInput) -> PlanResult<Expr> {
+fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 6 {
         Ok(Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())),
@@ -389,8 +416,8 @@ fn make_timestamp(input: FunctionInput) -> PlanResult<Expr> {
     }
 }
 
-pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         (

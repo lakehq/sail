@@ -8,8 +8,11 @@ use datafusion::arrow::datatypes::{DataType, Field, Float64Type, UInt64Type};
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
-use datafusion_common::types::logical_float64;
-use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_common::types::{
+    logical_float16, logical_float32, logical_float64, logical_int16, logical_int32, logical_int64,
+    logical_int8, logical_uint16, logical_uint32, logical_uint64, logical_uint8, NativeType,
+};
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 
 pub struct SkewnessFunc {
     name: String,
@@ -35,7 +38,23 @@ impl SkewnessFunc {
         Self {
             name: "skewness".to_string(),
             signature: Signature::coercible(
-                vec![TypeSignatureClass::Native(logical_float64())],
+                vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_float64()),
+                    vec![
+                        TypeSignatureClass::Native(logical_int8()),
+                        TypeSignatureClass::Native(logical_int16()),
+                        TypeSignatureClass::Native(logical_int32()),
+                        TypeSignatureClass::Native(logical_int64()),
+                        TypeSignatureClass::Native(logical_uint8()),
+                        TypeSignatureClass::Native(logical_uint16()),
+                        TypeSignatureClass::Native(logical_uint32()),
+                        TypeSignatureClass::Native(logical_uint64()),
+                        TypeSignatureClass::Native(logical_float16()),
+                        TypeSignatureClass::Native(logical_float32()),
+                        TypeSignatureClass::Native(logical_float64()),
+                    ],
+                    NativeType::Float64,
+                )],
                 Volatility::Immutable,
             ),
         }

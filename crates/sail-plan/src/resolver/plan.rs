@@ -23,7 +23,7 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::expr::{ScalarFunction, Sort};
+use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::utils::{
@@ -889,7 +889,7 @@ impl PlanResolver<'_> {
             self.rewrite_aggregate(input, expr, vec![], None, false, state)
         } else {
             let expr = self.rewrite_named_expressions(expr, state)?;
-            Ok(LogicalPlan::Projection(plan::Projection::try_new(
+            Ok(LogicalPlan::Projection(Projection::try_new(
                 expr,
                 Arc::new(input),
             )?))
@@ -1550,7 +1550,7 @@ impl PlanResolver<'_> {
             .map(|(col, name)| NamedExpr::new(vec![name.into()], Expr::Column(col)))
             .collect();
         let expr = self.rewrite_named_expressions(expr, state)?;
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
         )?))
@@ -1580,7 +1580,7 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         let expr = self.rewrite_named_expressions(expr, state)?;
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
         )?))
@@ -1628,7 +1628,7 @@ impl PlanResolver<'_> {
             .filter(|column| !excluded.contains(column))
             .map(Expr::Column)
             .collect();
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
         )?))
@@ -1708,7 +1708,7 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
         )?))
@@ -1769,7 +1769,7 @@ impl PlanResolver<'_> {
             projected_exprs.push(expr);
         }
         let projected_plan =
-            LogicalPlan::Projection(plan::Projection::try_new(projected_exprs, Arc::new(input))?);
+            LogicalPlan::Projection(Projection::try_new(projected_exprs, Arc::new(input))?);
         Ok(projected_plan)
     }
 
@@ -1989,11 +1989,13 @@ impl PlanResolver<'_> {
         );
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
             func: Arc::new(AggregateUDF::from(udaf)),
-            args,
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         });
         let output_name = agg.name_for_alias()?;
         let output_col = Column::new_unqualified(&output_name);
@@ -2172,11 +2174,13 @@ impl PlanResolver<'_> {
         let udaf = PySparkBatchCollectorUDF::new(input_types.clone(), input_names.clone());
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
             func: Arc::new(AggregateUDF::from(udaf)),
-            args,
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         });
         let agg_name = agg.name_for_alias()?;
         let agg_alias = state.register_field_name(&agg_name);
@@ -2240,7 +2244,7 @@ impl PlanResolver<'_> {
             .enumerate()
             .map(|(i, col)| Expr::Column(col).alias(state.register_field_name(format!("col{i}"))))
             .collect::<Vec<_>>();
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(plan),
         )?))
@@ -2271,7 +2275,7 @@ impl PlanResolver<'_> {
                 .zip(columns.into_iter())
                 .map(|(col, name)| Expr::Column(col.clone()).alias(state.register_field_name(name)))
                 .collect();
-            LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
+            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?)
         };
         Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
             Arc::new(input),
@@ -2428,7 +2432,7 @@ impl PlanResolver<'_> {
             .map(Expr::Column)
             .chain(expr.into_iter())
             .collect::<Vec<_>>();
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             projections,
             Arc::new(input),
         )?))
@@ -2662,7 +2666,7 @@ impl PlanResolver<'_> {
                         LogicalPlanBuilder::insert_into(
                             plan,
                             table_ref,
-                            &table_provider.schema(),
+                            provider_as_source(table_provider),
                             insert_op,
                         )?
                         .build()?
@@ -3100,7 +3104,7 @@ impl PlanResolver<'_> {
             false => InsertOp::Append,
         };
         let plan =
-            LogicalPlanBuilder::insert_into(input, table_reference, schema.as_ref(), insert_op)?
+            LogicalPlanBuilder::insert_into(input, table_reference, table_source, insert_op)?
                 .build()?;
         Ok(plan)
     }
@@ -3180,7 +3184,7 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
 
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             self.rewrite_named_expressions(fill_na_exprs, state)?,
             Arc::new(input),
         )?))
@@ -3306,7 +3310,7 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
 
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             self.rewrite_named_expressions(replace_exprs, state)?,
             Arc::new(input),
         )?))
@@ -3435,22 +3439,24 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(input, state).await?;
         let covar_samp = Expr::AggregateFunction(expr::AggregateFunction {
             func: datafusion::functions_aggregate::covariance::covar_samp_udaf(),
-            args: vec![
-                Expr::Column(self.resolve_one_column(
-                    input.schema(),
-                    left_column.as_ref(),
-                    state,
-                )?),
-                Expr::Column(self.resolve_one_column(
-                    input.schema(),
-                    right_column.as_ref(),
-                    state,
-                )?),
-            ],
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args: vec![
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        left_column.as_ref(),
+                        state,
+                    )?),
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        right_column.as_ref(),
+                        state,
+                    )?),
+                ],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         })
         .alias(state.register_field_name("cov"));
         Ok(LogicalPlanBuilder::from(input)
@@ -3474,22 +3480,24 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(input, state).await?;
         let corr = Expr::AggregateFunction(expr::AggregateFunction {
             func: datafusion::functions_aggregate::correlation::corr_udaf(),
-            args: vec![
-                Expr::Column(self.resolve_one_column(
-                    input.schema(),
-                    left_column.as_ref(),
-                    state,
-                )?),
-                Expr::Column(self.resolve_one_column(
-                    input.schema(),
-                    right_column.as_ref(),
-                    state,
-                )?),
-            ],
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args: vec![
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        left_column.as_ref(),
+                        state,
+                    )?),
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        right_column.as_ref(),
+                        state,
+                    )?),
+                ],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         })
         .alias(state.register_field_name("corr"));
         Ok(LogicalPlanBuilder::from(input)
@@ -3629,6 +3637,7 @@ impl PlanResolver<'_> {
             } = e;
             // FIXME: wildcard options do not take into account opaque field IDs
             match expr {
+                #[allow(deprecated)]
                 Expr::Wildcard {
                     qualifier: None,
                     options,
@@ -3637,6 +3646,7 @@ impl PlanResolver<'_> {
                         projected.extend(to_named_expr(e, state)?)
                     }
                 }
+                #[allow(deprecated)]
                 Expr::Wildcard {
                     qualifier: Some(qualifier),
                     options,

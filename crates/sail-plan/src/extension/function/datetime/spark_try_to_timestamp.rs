@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::datetime::to_timestamp::ToTimestampMicrosFunc;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct SparkTryToTimestamp {
@@ -48,9 +48,9 @@ impl ScalarUDFImpl for SparkTryToTimestamp {
         }
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-        let data_type = args[0].data_type();
-        let result = ToTimestampMicrosFunc::new().invoke_batch(args, number_rows);
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let data_type = args.args[0].data_type();
+        let result = ToTimestampMicrosFunc::new().invoke_with_args(args);
         match result {
             Ok(result) => Ok(result),
             Err(_) => match data_type {

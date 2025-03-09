@@ -10,12 +10,12 @@ use crate::extension::function::raise_error::RaiseError;
 use crate::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
-fn assert_true(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     let (err_msg, col) = if arguments.len() == 1 {
         let col = arguments.one()?;
         (
@@ -48,40 +48,49 @@ fn assert_true(input: FunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn current_catalog(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn current_catalog(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     input.arguments.zero()?;
-    let catalog_manager = CatalogManager::new(input.session_context, input.plan_config.clone());
+    let catalog_manager = CatalogManager::new(
+        input.function_context.session_context,
+        input.function_context.plan_config.clone(),
+    );
     Ok(lit(catalog_manager.default_catalog()?))
 }
 
-fn current_database(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn current_database(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     input.arguments.zero()?;
-    let catalog_manager = CatalogManager::new(input.session_context, input.plan_config.clone());
+    let catalog_manager = CatalogManager::new(
+        input.function_context.session_context,
+        input.function_context.plan_config.clone(),
+    );
     Ok(lit(catalog_manager.default_database()?))
 }
 
-fn current_user(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn current_user(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     input.arguments.zero()?;
-    Ok(lit(input.plan_config.session_user_id.clone()))
+    Ok(lit(input
+        .function_context
+        .plan_config
+        .session_user_id
+        .clone()))
 }
 
-fn type_of(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput {
+fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
         arguments,
-        plan_config,
-        schema,
-        ..
+        function_context,
     } = input;
     let expr = arguments.one()?;
-    let data_type = expr.get_type(schema)?;
-    let type_of = plan_config
+    let data_type = expr.get_type(function_context.schema)?;
+    let type_of = function_context
+        .plan_config
         .plan_formatter
         .data_type_to_simple_string(&PlanResolver::unresolve_data_type(&data_type)?)?;
     Ok(lit(type_of))
 }
 
-pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("aes_decrypt", F::udf(SparkAESDecrypt::new())),

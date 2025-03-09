@@ -1,4 +1,4 @@
-use crate::function::common::Function;
+use crate::function::common::ScalarFunction;
 
 mod array;
 mod bitwise;
@@ -19,7 +19,7 @@ mod r#struct;
 mod url;
 mod xml;
 
-pub(super) fn list_built_in_scalar_functions() -> Vec<(&'static str, Function)> {
+pub(super) fn list_built_in_scalar_functions() -> Vec<(&'static str, ScalarFunction)> {
     let mut output = Vec::new();
     output.extend(array::list_built_in_array_functions());
     output.extend(bitwise::list_built_in_bitwise_functions());

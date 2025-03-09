@@ -1,8 +1,8 @@
 use crate::extension::function::explode::{Explode, ExplodeKind};
-use crate::function::common::Function;
+use crate::function::common::ScalarFunction;
 
-pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("explode", F::udf(Explode::new(ExplodeKind::Explode))),

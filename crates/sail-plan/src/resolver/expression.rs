@@ -11,7 +11,7 @@ use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::core::get_field;
 use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{ScalarFunction, WindowFunctionParams};
 use datafusion_expr::{
     col, expr, expr_fn, lit, window_frame, AggregateUDF, BinaryExpr, ExprSchemable, Operator,
     ScalarUDF,
@@ -29,7 +29,10 @@ use crate::extension::function::drop_struct_field::DropStructField;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::function::table_input::TableInput;
 use crate::extension::function::update_struct_field::UpdateStructField;
-use crate::function::common::{get_null_treatment, AggFunctionInput, FunctionInput};
+use crate::function::common::{
+    get_null_treatment, AggFunctionInput, FunctionContextInput, ScalarFunctionInput,
+    WinFunctionInput,
+};
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, get_built_in_window_function,
 };
@@ -806,7 +809,7 @@ impl PlanResolver<'_> {
             }
         }
 
-        let (argument_names, arguments) = self
+        let (argument_display_names, arguments) = self
             .resolve_expressions_and_names(arguments, schema, state)
             .await?;
 
@@ -827,7 +830,7 @@ impl PlanResolver<'_> {
                     function,
                     &function_name,
                     arguments,
-                    &argument_names,
+                    &argument_display_names,
                     schema,
                     f.deterministic(),
                     state,
@@ -842,12 +845,14 @@ impl PlanResolver<'_> {
             if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                 return Err(PlanError::invalid("invalid scalar function clause"));
             }
-            let input = FunctionInput {
+            let input = ScalarFunctionInput {
                 arguments,
-                argument_names: &argument_names,
-                plan_config: &self.config,
-                session_context: self.ctx,
-                schema,
+                function_context: FunctionContextInput {
+                    argument_display_names: &argument_display_names,
+                    plan_config: &self.config,
+                    session_context: self.ctx,
+                    schema,
+                },
             };
             func(input)?
         } else if let Ok(func) = get_built_in_aggregate_function(&canonical_function_name) {
@@ -865,6 +870,12 @@ impl PlanResolver<'_> {
                 ignore_nulls,
                 filter,
                 order_by,
+                function_context: FunctionContextInput {
+                    argument_display_names: &argument_display_names,
+                    plan_config: &self.config,
+                    session_context: self.ctx,
+                    schema,
+                },
             };
             func(input)?
         } else {
@@ -875,7 +886,7 @@ impl PlanResolver<'_> {
 
         let name = self.config.plan_formatter.function_to_string(
             &function_name,
-            argument_names.iter().map(|x| x.as_str()).collect(),
+            argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
         Ok(NamedExpr::new(vec![name], func))
@@ -985,128 +996,136 @@ impl PlanResolver<'_> {
                 "CLUSTER BY clause in window expression",
             ));
         }
-        let (function, function_name, argument_names, arguments, is_distinct, ignore_nulls) =
-            match window_function {
-                spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                    function_name,
-                    arguments,
-                    named_arguments,
-                    is_user_defined_function: false,
-                    is_distinct,
-                    ignore_nulls,
-                    filter: None,
-                    order_by: None,
-                }) => {
-                    let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
-                        return Err(PlanError::unsupported("qualified window function name"));
-                    };
-                    if !named_arguments.is_empty() {
-                        return Err(PlanError::todo("named window function arguments"));
-                    }
-                    let canonical_function_name = function_name.to_ascii_lowercase();
-                    let (argument_names, arguments) = self
-                        .resolve_expressions_and_names(arguments, schema, state)
-                        .await?;
-                    let function = get_built_in_window_function(&canonical_function_name)?;
-                    (
-                        function,
-                        function_name,
-                        argument_names,
-                        arguments,
-                        is_distinct,
-                        ignore_nulls,
-                    )
-                }
-                spec::Expr::CommonInlineUserDefinedFunction(function) => {
-                    let mut scope = state.enter_config_scope();
-                    let state = scope.state();
-                    state.config_mut().arrow_allow_large_var_types = true;
-                    let spec::CommonInlineUserDefinedFunction {
-                        function_name,
-                        deterministic,
-                        arguments,
-                        function,
-                    } = function;
-                    let function_name: String = function_name.into();
-                    let (argument_names, arguments) = self
-                        .resolve_expressions_and_names(arguments, schema, state)
-                        .await?;
-                    let input_types: Vec<DataType> = arguments
-                        .iter()
-                        .map(|arg| arg.get_type(schema))
-                        .collect::<Result<Vec<DataType>, DataFusionError>>()?;
-                    let function = self.resolve_python_udf(function, state)?;
-                    let payload = PySparkUdfPayload::build(
-                        &function.python_version,
-                        &function.command,
-                        function.eval_type,
-                        &((0..arguments.len()).collect::<Vec<_>>()),
-                        &self.config.pyspark_udf_config,
-                    )?;
-                    let function = match function.eval_type {
-                        PySparkUdfType::GroupedAggPandas => {
-                            let udaf = PySparkGroupAggregateUDF::new(
-                                get_udf_name(&function_name, &payload),
-                                payload,
-                                deterministic,
-                                argument_names.clone(),
-                                input_types,
-                                function.output_type,
-                                self.config.pyspark_udf_config.clone(),
-                            );
-                            let udaf = AggregateUDF::from(udaf);
-                            expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf))
-                        }
-                        _ => {
-                            return Err(PlanError::invalid(
-                                "invalid user-defined window function type",
-                            ))
-                        }
-                    };
-                    (
-                        function,
-                        function_name,
-                        argument_names,
-                        arguments,
-                        false,
-                        None,
-                    )
-                }
-                _ => {
-                    return Err(PlanError::invalid(format!(
-                        "invalid window function expression: {:?}",
-                        window_function
-                    )));
-                }
-            };
         let partition_by = self
             .resolve_expressions(partition_by, schema, state)
             .await?;
         // Spark treats literals as constants in ORDER BY window definition
-        let order_by = self
+        let sorts = self
             .resolve_sort_orders(order_by, false, schema, state)
             .await?;
         let window_frame = if let Some(frame) = frame {
-            self.resolve_window_frame(frame, &order_by, schema, state)?
+            self.resolve_window_frame(frame, &sorts, schema, state)?
         } else {
-            window_frame::WindowFrame::new(if order_by.is_empty() {
+            window_frame::WindowFrame::new(if sorts.is_empty() {
                 None
             } else {
                 // TODO: should we use strict ordering or not?
                 Some(false)
             })
         };
-        let window = expr::Expr::WindowFunction(expr::WindowFunction {
-            fun: function,
-            args: arguments,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment: get_null_treatment(ignore_nulls),
-        });
+        let (window, function_name, argument_display_names, is_distinct) = match window_function {
+            spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name,
+                arguments,
+                named_arguments,
+                is_user_defined_function: false,
+                is_distinct,
+                ignore_nulls,
+                filter: None,
+                // TODO: `window` and `window_function` both have an `order_by` field.
+                //  Check: Which one should we use? Are they the same? Is one of them empty?
+                order_by: None,
+            }) => {
+                let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
+                    return Err(PlanError::unsupported("qualified window function name"));
+                };
+                if !named_arguments.is_empty() {
+                    return Err(PlanError::todo("named window function arguments"));
+                }
+                let canonical_function_name = function_name.to_ascii_lowercase();
+                let (argument_display_names, arguments) = self
+                    .resolve_expressions_and_names(arguments, schema, state)
+                    .await?;
+                let function = get_built_in_window_function(&canonical_function_name)?;
+                let input = WinFunctionInput {
+                    arguments,
+                    partition_by,
+                    order_by: sorts,
+                    window_frame,
+                    ignore_nulls,
+                    function_context: FunctionContextInput {
+                        argument_display_names: &argument_display_names,
+                        plan_config: &self.config,
+                        session_context: self.ctx,
+                        schema,
+                    },
+                };
+                (
+                    function(input)?,
+                    function_name,
+                    argument_display_names,
+                    is_distinct,
+                )
+            }
+            spec::Expr::CommonInlineUserDefinedFunction(function) => {
+                let mut scope = state.enter_config_scope();
+                let state = scope.state();
+                state.config_mut().arrow_allow_large_var_types = true;
+                let spec::CommonInlineUserDefinedFunction {
+                    function_name,
+                    deterministic,
+                    arguments,
+                    function,
+                } = function;
+                let function_name: String = function_name.into();
+                let (argument_display_names, arguments) = self
+                    .resolve_expressions_and_names(arguments, schema, state)
+                    .await?;
+                let input_types: Vec<DataType> = arguments
+                    .iter()
+                    .map(|arg| arg.get_type(schema))
+                    .collect::<Result<Vec<DataType>, DataFusionError>>(
+                )?;
+                let function = self.resolve_python_udf(function, state)?;
+                let payload = PySparkUdfPayload::build(
+                    &function.python_version,
+                    &function.command,
+                    function.eval_type,
+                    &((0..arguments.len()).collect::<Vec<_>>()),
+                    &self.config.pyspark_udf_config,
+                )?;
+                let function = match function.eval_type {
+                    PySparkUdfType::GroupedAggPandas => {
+                        let udaf = PySparkGroupAggregateUDF::new(
+                            get_udf_name(&function_name, &payload),
+                            payload,
+                            deterministic,
+                            argument_display_names.clone(),
+                            input_types,
+                            function.output_type,
+                            self.config.pyspark_udf_config.clone(),
+                        );
+                        let udaf = AggregateUDF::from(udaf);
+                        expr::WindowFunctionDefinition::AggregateUDF(Arc::new(udaf))
+                    }
+                    _ => {
+                        return Err(PlanError::invalid(
+                            "invalid user-defined window function type",
+                        ))
+                    }
+                };
+                let window = expr::Expr::WindowFunction(expr::WindowFunction {
+                    fun: function,
+                    params: WindowFunctionParams {
+                        args: arguments,
+                        partition_by,
+                        order_by: sorts,
+                        window_frame,
+                        null_treatment: get_null_treatment(None),
+                    },
+                });
+                (window, function_name, argument_display_names, false)
+            }
+            _ => {
+                return Err(PlanError::invalid(format!(
+                    "invalid window function expression: {:?}",
+                    window_function
+                )));
+            }
+        };
         let name = self.config.plan_formatter.function_to_string(
             function_name.as_str(),
-            argument_names.iter().map(|x| x.as_str()).collect(),
+            argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
         Ok(NamedExpr::new(vec![name], window))
@@ -1132,6 +1151,7 @@ impl PlanResolver<'_> {
                     .await?;
                 Ok(NamedExpr::new(
                     vec!["*".to_string()],
+                    #[allow(deprecated)]
                     expr::Expr::Wildcard {
                         qualifier,
                         options: Box::new(options),
@@ -1157,6 +1177,7 @@ impl PlanResolver<'_> {
                     {
                         vec![NamedExpr::new(
                             vec!["*".to_string()],
+                            #[allow(deprecated)]
                             expr::Expr::Wildcard {
                                 qualifier: q,
                                 options: Default::default(),
@@ -1430,7 +1451,7 @@ impl PlanResolver<'_> {
             function,
         } = function;
         let function_name: String = function_name.into();
-        let (argument_names, arguments) = self
+        let (argument_display_names, arguments) = self
             .resolve_expressions_and_names(arguments, schema, state)
             .await?;
         let function = self.resolve_python_udf(function, state)?;
@@ -1438,14 +1459,14 @@ impl PlanResolver<'_> {
             function,
             &function_name,
             arguments,
-            &argument_names,
+            &argument_display_names,
             schema,
             deterministic,
             state,
         )?;
         let name = self.config.plan_formatter.function_to_string(
             &function_name,
-            argument_names.iter().map(|x| x.as_str()).collect(),
+            argument_display_names.iter().map(|x| x.as_str()).collect(),
             false,
         )?;
         Ok(NamedExpr::new(vec![name], func))

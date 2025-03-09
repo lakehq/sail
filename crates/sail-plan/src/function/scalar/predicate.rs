@@ -2,7 +2,7 @@ use datafusion::functions::expr_fn;
 use datafusion_expr::{expr, not, Operator};
 
 use crate::error::PlanResult;
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
 fn like(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
@@ -41,8 +41,8 @@ fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
     expr_fn::regexp_like(expr, pattern, None)
 }
 
-fn is_in_list(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn is_in_list(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     let (value, list) = arguments.at_least_one()?;
     Ok(expr::Expr::InList(expr::InList {
         expr: Box::new(value),
@@ -51,8 +51,8 @@ fn is_in_list(input: FunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("!", F::unary(not)),
