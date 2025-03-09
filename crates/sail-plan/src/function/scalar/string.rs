@@ -14,11 +14,11 @@ use crate::extension::function::string::spark_base64::{SparkBase64, SparkUnbase6
 use crate::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use crate::extension::function::string::spark_mask::SparkMask;
 use crate::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
-fn regexp_replace(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { mut arguments, .. } = input;
+fn regexp_replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { mut arguments, .. } = input;
     if arguments.len() != 3 {
         return Err(PlanError::invalid("regexp_replace requires 3 arguments"));
     }
@@ -34,8 +34,8 @@ fn regexp_replace(input: FunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn substr(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     if arguments.len() == 2 {
         let (first, second) = arguments.two()?;
         let first = match first {
@@ -65,8 +65,8 @@ fn substr(input: FunctionInput) -> PlanResult<expr::Expr> {
     Err(PlanError::invalid("substr requires 2 or 3 arguments"))
 }
 
-fn concat_ws(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn concat_ws(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     let (delimiter, args) = arguments.at_least_one()?;
     if args.is_empty() {
         return Ok(expr::Expr::Literal(ScalarValue::Utf8(Some("".to_string()))));
@@ -74,8 +74,8 @@ fn concat_ws(input: FunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::concat_ws(delimiter, args))
 }
 
-fn overlay(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn overlay(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     if arguments.len() == 3 {
         return Ok(expr_fn::overlay(arguments));
     }
@@ -92,8 +92,8 @@ fn overlay(input: FunctionInput) -> PlanResult<expr::Expr> {
     Err(PlanError::invalid("overlay requires 3 or 4 arguments"))
 }
 
-fn position(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     if arguments.len() == 2 {
         let (substr, str) = arguments.two()?;
         return Ok(expr_fn::strpos(str, substr));
@@ -111,8 +111,8 @@ fn space(n: expr::Expr) -> expr::Expr {
     expr_fn::repeat(lit(" "), n)
 }
 
-fn replace(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     if arguments.len() == 2 {
         let (str, substr) = arguments.two()?;
         return Ok(expr_fn::replace(str, substr, lit("")));
@@ -258,8 +258,8 @@ fn contains(str: expr::Expr, search_str: expr::Expr) -> expr::Expr {
     })
 }
 
-pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("ascii", F::unary(ascii)),

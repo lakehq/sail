@@ -5,11 +5,11 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::Expr;
 
 use crate::error::PlanResult;
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
-fn timestamp(input: FunctionInput) -> PlanResult<Expr> {
+fn timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
         let arg = input.arguments.one()?;
         match arg {
@@ -18,8 +18,8 @@ fn timestamp(input: FunctionInput) -> PlanResult<Expr> {
                     string_to_timestamp_nanos(&timestamp_string).map(|x| x / 1_000)?;
                 let timezone = PlanResolver::resolve_timezone(
                     &sail_common::spec::TimeZoneInfo::SQLConfigured,
-                    input.plan_config.system_timezone.as_str(),
-                    &input.plan_config.timestamp_type,
+                    input.function_context.plan_config.system_timezone.as_str(),
+                    &input.function_context.plan_config.timestamp_type,
                 )?;
                 Ok(Expr::Literal(ScalarValue::TimestampMicrosecond(
                     Some(timestamp_micros),
@@ -33,8 +33,8 @@ fn timestamp(input: FunctionInput) -> PlanResult<Expr> {
     }
 }
 
-pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("bigint", F::cast(DataType::Int64)),

@@ -8,7 +8,6 @@ use datafusion::functions_aggregate::{
     variance,
 };
 use datafusion::sql::sqlparser::ast::NullTreatment;
-use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{expr, AggregateUDF};
@@ -20,6 +19,7 @@ use crate::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use crate::extension::function::mode::ModeFunction;
 use crate::extension::function::skewness::SkewnessFunc;
 use crate::function::common::{get_null_treatment, AggFunction, AggFunctionInput};
+use crate::function::transform_count_star_wildcard_expr;
 use crate::utils::ItemTaker;
 
 lazy_static! {
@@ -185,18 +185,10 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         ignore_nulls,
         filter,
         order_by,
+        function_context: _,
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
-    let args = match arguments.as_slice() {
-        #[allow(deprecated)]
-        [expr::Expr::Wildcard {
-            qualifier: None,
-            options: _,
-        }] => {
-            vec![expr::Expr::Literal(COUNT_STAR_EXPANSION)]
-        }
-        _ => arguments,
-    };
+    let args = transform_count_star_wildcard_expr(arguments);
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: count::count_udaf(),
         params: AggregateFunctionParams {

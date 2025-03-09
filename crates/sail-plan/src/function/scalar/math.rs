@@ -19,7 +19,7 @@ use crate::extension::function::math::spark_expm1::SparkExpm1;
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_pmod::SparkPmod;
 use crate::extension::function::math::spark_signum::SparkSignum;
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
 /// Arguments:
@@ -35,15 +35,19 @@ use crate::utils::ItemTaker;
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-fn spark_plus(input: FunctionInput) -> PlanResult<Expr> {
-    let FunctionInput {
-        arguments, schema, ..
+fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
     } = input;
     if arguments.len() < 2 {
         Ok(arguments.one()?)
     } else {
         let (left, right) = arguments.two()?;
-        let (left_type, right_type) = (left.get_type(schema), right.get_type(schema));
+        let (left_type, right_type) = (
+            left.get_type(function_context.schema),
+            right.get_type(function_context.schema),
+        );
         match (left_type, right_type) {
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkPlus`.
@@ -113,15 +117,19 @@ fn spark_plus(input: FunctionInput) -> PlanResult<Expr> {
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-fn spark_minus(input: FunctionInput) -> PlanResult<Expr> {
-    let FunctionInput {
-        arguments, schema, ..
+fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
     } = input;
     if arguments.len() < 2 {
         Ok(Expr::Negative(Box::new(arguments.one()?)))
     } else {
         let (left, right) = arguments.two()?;
-        let (left_type, right_type) = (left.get_type(schema), right.get_type(schema));
+        let (left_type, right_type) = (
+            left.get_type(function_context.schema),
+            right.get_type(function_context.schema),
+        );
         match (left_type, right_type) {
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkMinus`.
@@ -172,13 +180,17 @@ fn spark_minus(input: FunctionInput) -> PlanResult<Expr> {
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-fn spark_multiply(input: FunctionInput) -> PlanResult<Expr> {
-    let FunctionInput {
-        arguments, schema, ..
+fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
     } = input;
 
     let (left, right) = arguments.two()?;
-    let (left_type, right_type) = (left.get_type(schema), right.get_type(schema));
+    let (left_type, right_type) = (
+        left.get_type(function_context.schema),
+        right.get_type(function_context.schema),
+    );
     match (left_type, right_type) {
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
@@ -242,12 +254,10 @@ fn spark_multiply(input: FunctionInput) -> PlanResult<Expr> {
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-fn spark_divide(input: FunctionInput) -> PlanResult<Expr> {
-    let FunctionInput {
+fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
         arguments,
-        schema,
-        plan_config,
-        ..
+        function_context,
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
@@ -266,7 +276,7 @@ fn spark_divide(input: FunctionInput) -> PlanResult<Expr> {
     ) || divisor == Expr::Literal(ScalarValue::Float16(Some(f16::from_f32(0.0))))
     {
         // FIXME: Account for array input.
-        let ansi_mode = plan_config.ansi_mode;
+        let ansi_mode = function_context.plan_config.ansi_mode;
         return if ansi_mode {
             Err(PlanError::ArrowError(ArrowError::DivideByZero))
         } else {
@@ -274,7 +284,10 @@ fn spark_divide(input: FunctionInput) -> PlanResult<Expr> {
         };
     }
 
-    let (dividend_type, divisor_type) = (dividend.get_type(schema), divisor.get_type(schema));
+    let (dividend_type, divisor_type) = (
+        dividend.get_type(function_context.schema),
+        divisor.get_type(function_context.schema),
+    );
     match (dividend_type, divisor_type) {
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
@@ -340,13 +353,17 @@ fn spark_divide(input: FunctionInput) -> PlanResult<Expr> {
 /// Returns:
 ///   A BIGINT
 ///
-fn spark_div(input: FunctionInput) -> PlanResult<Expr> {
-    let FunctionInput {
-        arguments, schema, ..
+fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
-    let (dividend_type, divisor_type) = (dividend.get_type(schema), divisor.get_type(schema));
+    let (dividend_type, divisor_type) = (
+        dividend.get_type(function_context.schema),
+        divisor.get_type(function_context.schema),
+    );
     let expr = match (dividend_type, divisor_type) {
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
@@ -449,8 +466,8 @@ fn eulers_constant() -> Expr {
     Expr::Literal(ScalarValue::Float64(Some(std::f64::consts::E)))
 }
 
-fn ceil_floor(input: FunctionInput, name: &str) -> PlanResult<Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     // DataFusion bug: `ReturnTypeArgs.scalar_arguments` is None if scalar argument is nested
     let arguments = if arguments.len() == 2 {
         let (arg, target_scale) = arguments.two()?;
@@ -515,8 +532,8 @@ fn ceil_floor(input: FunctionInput, name: &str) -> PlanResult<Expr> {
     }))
 }
 
-pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("%", F::binary_op(Operator::Modulo)),
