@@ -1,9 +1,9 @@
-use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
-use datafusion_expr::expr::Expr;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::TableFunction;
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
+use datafusion_expr::expr::Expr;
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};

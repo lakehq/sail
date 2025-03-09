@@ -210,7 +210,7 @@ impl AggFunctionBuilder {
                 ignore_nulls,
                 filter,
                 order_by,
-                function_context: _,
+                function_context: _function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
             Ok(expr::Expr::AggregateFunction(AggregateFunction {
@@ -268,7 +268,7 @@ impl WinFunctionBuilder {
                 order_by,
                 window_frame,
                 ignore_nulls,
-                function_context: _,
+                function_context: _function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
             Ok(expr::Expr::WindowFunction(expr::WindowFunction {
@@ -295,7 +295,7 @@ impl WinFunctionBuilder {
                 order_by,
                 window_frame,
                 ignore_nulls,
-                function_context: _,
+                function_context: _function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
             Ok(expr::Expr::WindowFunction(expr::WindowFunction {
@@ -318,6 +318,7 @@ impl WinFunctionBuilder {
         Arc::new(f)
     }
 
+    #[allow(dead_code)]
     pub fn unknown(name: &str) -> WinFunction {
         let name = name.to_string();
         Arc::new(move |_| Err(PlanError::todo(format!("unknown window function: {name}"))))

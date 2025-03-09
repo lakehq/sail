@@ -1,6 +1,5 @@
-use crate::error::{PlanError, PlanResult};
-use crate::function::common::{get_null_treatment, WinFunction, WinFunctionInput};
-use crate::function::transform_count_star_wildcard_expr;
+use std::collections::HashMap;
+
 use datafusion::functions_aggregate::{average, count, min_max, sum};
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
 use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
@@ -11,7 +10,10 @@ use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{expr, WindowFunctionDefinition};
 use lazy_static::lazy_static;
-use std::collections::HashMap;
+
+use crate::error::{PlanError, PlanResult};
+use crate::function::common::{get_null_treatment, WinFunction, WinFunctionInput};
+use crate::function::transform_count_star_wildcard_expr;
 
 lazy_static! {
     static ref BUILT_IN_WINDOW_FUNCTIONS: HashMap<&'static str, WinFunction> =
