@@ -569,6 +569,23 @@
       }
     },
     {
+      "input": "*",
+      "output": {
+        "success": {
+          "unresolvedStar": {
+            "target": null,
+            "wildcardOptions": {
+              "ilikePattern": null,
+              "excludeColumns": null,
+              "exceptColumns": null,
+              "replaceColumns": null,
+              "renameColumns": null
+            }
+          }
+        }
+      }
+    },
+    {
       "input": "-+~~a",
       "output": {
         "success": {

@@ -419,6 +419,48 @@
       }
     },
     {
+      "input": "-- single comment\nSELECT * FROM a",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
       "input": "-- single comment\\\nwith line continuity\nSELECT * FROM a",
       "output": {
         "failure": "invalid argument: found continuity at 29:39 expected '(', or 'AS'"

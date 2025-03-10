@@ -4703,6 +4703,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-gold-test"
+version = "0.2.2"
+dependencies = [
+ "clap",
+ "lazy_static",
+ "regex",
+ "sail-spark-connect",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "sail-plan"
 version = "0.2.2"
 dependencies = [
