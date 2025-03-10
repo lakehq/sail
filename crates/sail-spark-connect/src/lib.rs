@@ -10,6 +10,8 @@ mod service;
 mod session;
 mod session_manager;
 
+pub use proto::data_type_json::JsonDataType;
+
 const SPARK_VERSION: &str = "3.5.4";
 
 pub mod spark {

@@ -1,0 +1,13 @@
+[package]
+name = "sail-gold-test"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+sail-spark-connect = { path = "../sail-spark-connect" }
+
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+lazy_static = { workspace = true }
+regex = { workspace = true }

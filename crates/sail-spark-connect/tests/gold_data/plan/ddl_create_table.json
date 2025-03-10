@@ -1169,6 +1169,60 @@
       }
     },
     {
+      "input": "CREATE TABLE my_tab(a INT COMMENT 'test', b STRING NOT NULL) USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "int32",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "utf8Type": "configured"
+                      }
+                    },
+                    "nullable": false,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
       "input": "CREATE TABLE my_tab(a INT comment 'test', b STRING) USING parquet PARTITIONED BY (a)",
       "output": {
         "success": {

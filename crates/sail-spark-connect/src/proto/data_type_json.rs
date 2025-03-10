@@ -13,7 +13,7 @@ use crate::spark::connect::data_type as dt;
 ///   org.apache.spark.sql.types.DataType#parseDataType
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum JsonDataType {
+pub enum JsonDataType {
     #[serde(alias = "void")]
     Null,
     String,
@@ -85,15 +85,15 @@ pub(crate) enum JsonDataType {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) struct JsonStructField {
-    pub(crate) name: String,
-    pub(crate) nullable: bool,
-    pub(crate) r#type: JsonDataType,
-    pub(crate) metadata: Option<HashMap<String, String>>,
+pub struct JsonStructField {
+    pub name: String,
+    pub nullable: bool,
+    pub r#type: JsonDataType,
+    pub metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum DayTimeIntervalField {
+pub enum DayTimeIntervalField {
     Day = 0,
     Hour = 1,
     Minute = 2,
@@ -129,7 +129,7 @@ impl Display for DayTimeIntervalField {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum YearMonthIntervalField {
+pub enum YearMonthIntervalField {
     Year = 0,
     Month = 1,
 }

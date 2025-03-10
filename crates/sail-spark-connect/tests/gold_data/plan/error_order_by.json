@@ -181,6 +181,13 @@
       "output": {
         "failure": "invalid argument: found - at 100:101 expected ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
+    },
+    {
+      "input": "select *\nfrom r\norder by q\ncluster by q",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 3, pos 0)\n\n== SQL ==\nselect *\nfrom r\norder by q\n^^^\ncluster by q\n",
+      "output": {
+        "failure": "not implemented: CLUSTER BY"
+      }
     }
   ]
 }

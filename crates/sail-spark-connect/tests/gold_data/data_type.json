@@ -448,6 +448,12 @@
       }
     },
     {
+      "input": "int",
+      "output": {
+        "success": "int32"
+      }
+    },
+    {
       "input": "integer",
       "output": {
         "success": "int32"
