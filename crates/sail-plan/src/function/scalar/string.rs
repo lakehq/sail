@@ -6,7 +6,7 @@ use datafusion::functions::expr_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::string::contains::ContainsFunc;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, ScalarUDF};
+use datafusion_expr::{expr, lit, ExprSchemable, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::string::levenshtein::Levenshtein;
@@ -14,11 +14,11 @@ use crate::extension::function::string::spark_base64::{SparkBase64, SparkUnbase6
 use crate::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use crate::extension::function::string::spark_mask::SparkMask;
 use crate::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
-fn regexp_replace(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { mut arguments, .. } = input;
+fn regexp_replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { mut arguments, .. } = input;
     if arguments.len() != 3 {
         return Err(PlanError::invalid("regexp_replace requires 3 arguments"));
     }
@@ -34,20 +34,38 @@ fn regexp_replace(input: FunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn substr(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
     if arguments.len() == 2 {
         let (first, second) = arguments.two()?;
         let first = match first {
             expr::Expr::Literal(ScalarValue::Utf8(_))
             | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
             | expr::Expr::Literal(ScalarValue::Utf8View(_)) => first,
-            _ => expr::Expr::Cast(expr::Cast {
-                expr: Box::new(first),
-                data_type: DataType::Utf8,
-            }),
+            _ => {
+                let first_data_type = first.get_type(function_context.schema)?;
+                if matches!(
+                    first_data_type,
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) {
+                    first
+                } else {
+                    expr::Expr::Cast(expr::Cast {
+                        expr: Box::new(first),
+                        data_type: DataType::Utf8,
+                    })
+                }
+            }
         };
-        return Ok(expr_fn::substr(first, second));
+        // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
+        //  when the return type is Utf8View.
+        return Ok(expr::Expr::Cast(expr::Cast {
+            expr: Box::new(expr_fn::substr(first, second)),
+            data_type: DataType::Utf8,
+        }));
     }
     if arguments.len() == 3 {
         let (first, second, third) = arguments.three()?;
@@ -55,18 +73,33 @@ fn substr(input: FunctionInput) -> PlanResult<expr::Expr> {
             expr::Expr::Literal(ScalarValue::Utf8(_))
             | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
             | expr::Expr::Literal(ScalarValue::Utf8View(_)) => first,
-            _ => expr::Expr::Cast(expr::Cast {
-                expr: Box::new(first),
-                data_type: DataType::Utf8,
-            }),
+            _ => {
+                let first_data_type = first.get_type(function_context.schema)?;
+                if matches!(
+                    first_data_type,
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) {
+                    first
+                } else {
+                    expr::Expr::Cast(expr::Cast {
+                        expr: Box::new(first),
+                        data_type: DataType::Utf8,
+                    })
+                }
+            }
         };
-        return Ok(expr_fn::substring(first, second, third));
+        // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
+        //  when the return type is Utf8View.
+        return Ok(expr::Expr::Cast(expr::Cast {
+            expr: Box::new(expr_fn::substring(first, second, third)),
+            data_type: DataType::Utf8,
+        }));
     }
     Err(PlanError::invalid("substr requires 2 or 3 arguments"))
 }
 
-fn concat_ws(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn concat_ws(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     let (delimiter, args) = arguments.at_least_one()?;
     if args.is_empty() {
         return Ok(expr::Expr::Literal(ScalarValue::Utf8(Some("".to_string()))));
@@ -74,8 +107,8 @@ fn concat_ws(input: FunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::concat_ws(delimiter, args))
 }
 
-fn overlay(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn overlay(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     if arguments.len() == 3 {
         return Ok(expr_fn::overlay(arguments));
     }
@@ -92,8 +125,8 @@ fn overlay(input: FunctionInput) -> PlanResult<expr::Expr> {
     Err(PlanError::invalid("overlay requires 3 or 4 arguments"))
 }
 
-fn position(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     if arguments.len() == 2 {
         let (substr, str) = arguments.two()?;
         return Ok(expr_fn::strpos(str, substr));
@@ -111,8 +144,8 @@ fn space(n: expr::Expr) -> expr::Expr {
     expr_fn::repeat(lit(" "), n)
 }
 
-fn replace(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     if arguments.len() == 2 {
         let (str, substr) = arguments.two()?;
         return Ok(expr_fn::replace(str, substr, lit("")));
@@ -258,8 +291,8 @@ fn contains(str: expr::Expr, search_str: expr::Expr) -> expr::Expr {
     })
 }
 
-pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("ascii", F::unary(ascii)),

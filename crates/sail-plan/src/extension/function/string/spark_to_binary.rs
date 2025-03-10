@@ -6,7 +6,7 @@ use datafusion::functions::encoding::expr_fn::decode;
 use datafusion::functions::encoding::inner::DecodeFunc;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{expr, Expr, ScalarUDF, ScalarUDFImpl};
+use datafusion_expr::{expr, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
 
@@ -54,39 +54,59 @@ impl ScalarUDFImpl for SparkToBinary {
     }
 
     // This will only be called by TryToBinary
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-        if args.len() != 1 && args.len() != 2 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.args.len() != 1 && args.args.len() != 2 {
             return exec_err!(
                 "Spark `to_binary` function requires 1 or 2 arguments, got {}",
-                args.len()
+                args.args.len()
             );
         }
-        if args.len() == 1 {
-            SparkUnHex::new().invoke_batch(args, number_rows)
+        if args.args.len() == 1 {
+            SparkUnHex::new().invoke_with_args(args)
         } else {
-            match &args[1] {
+            match &args.args[1] {
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s)))
                 | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s)))
                     if s.trim().to_lowercase() == "utf-8" || s.trim().to_lowercase() == "utf8" =>
                 {
-                    args[0].cast_to(&DataType::Binary, None)
+                    args.args[0].cast_to(&DataType::Binary, None)
                 }
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s)))
                 | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s)))
                     if s.trim().to_lowercase() == "hex" =>
                 {
-                    SparkUnHex::new().invoke_batch(&args[0..1], number_rows)
+                    let ScalarFunctionArgs {
+                        args,
+                        number_rows,
+                        return_type,
+                    } = args;
+                    let args = ScalarFunctionArgs {
+                        args: args[0..1].to_vec(),
+                        number_rows,
+                        return_type,
+                    };
+                    SparkUnHex::new().invoke_with_args(args)
                 }
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s)))
                 | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s)))
                     if s.trim().to_lowercase() == "base64" =>
                 {
-                    SparkUnbase64::new().invoke_batch(&args[0..1], number_rows)
+                    let ScalarFunctionArgs {
+                        args,
+                        number_rows,
+                        return_type,
+                    } = args;
+                    let args = ScalarFunctionArgs {
+                        args: args[0..1].to_vec(),
+                        number_rows,
+                        return_type,
+                    };
+                    SparkUnbase64::new().invoke_with_args(args)
                 }
-                _ => DecodeFunc::new().invoke_batch(args, number_rows),
+                _ => DecodeFunc::new().invoke_with_args(args),
             }
         }
     }
@@ -188,8 +208,8 @@ impl ScalarUDFImpl for SparkTryToBinary {
         Ok(DataType::Binary)
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-        let result = SparkToBinary::new().invoke_batch(args, number_rows);
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let result = SparkToBinary::new().invoke_with_args(args);
         match result {
             Ok(result) => Ok(result),
             Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),

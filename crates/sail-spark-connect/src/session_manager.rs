@@ -11,7 +11,9 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use log::info;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
-use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
+use sail_plan::function::{
+    BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
+};
 use sail_plan::new_query_planner;
 use sail_plan::object_store::DynamicObjectStoreRegistry;
 use sail_plan::temp_view::TemporaryViewManager;
@@ -134,6 +136,12 @@ impl SessionManager {
         //   handler.rs needs to do this
         for (&name, _function) in BUILT_IN_SCALAR_FUNCTIONS.iter() {
             context.deregister_udf(name);
+        }
+        for (&name, _function) in BUILT_IN_GENERATOR_FUNCTIONS.iter() {
+            context.deregister_udf(name);
+        }
+        for (&name, _function) in BUILT_IN_TABLE_FUNCTIONS.iter() {
+            context.deregister_udtf(name);
         }
 
         Ok(context)

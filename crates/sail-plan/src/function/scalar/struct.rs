@@ -5,17 +5,18 @@ use datafusion_expr::{expr, Expr, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::struct_function::StructFunction;
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-fn r#struct(input: FunctionInput) -> PlanResult<Expr> {
+fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let field_names: Vec<String> = input
         .arguments
         .iter()
-        .zip(input.argument_names)
+        .zip(input.function_context.argument_display_names)
         .enumerate()
         .map(|(i, (expr, name))| -> PlanResult<_> {
             match expr {
                 Expr::Column(_) | Expr::Alias(_) => Ok(name.clone()),
+                #[allow(deprecated)]
                 Expr::Wildcard { .. } => Err(PlanError::invalid(
                     "wildcard is not yet supported in struct",
                 )),
@@ -29,8 +30,8 @@ fn r#struct(input: FunctionInput) -> PlanResult<Expr> {
     }))
 }
 
-pub(super) fn list_built_in_struct_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_struct_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("named_struct", F::var_arg(expr_fn::named_struct)),

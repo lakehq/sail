@@ -5,19 +5,19 @@ use datafusion_functions_nested::map::map_udf;
 use crate::error::PlanResult;
 use crate::extension::function::map::map_function::MapFunction;
 use crate::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
-fn map_contains_key(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn map_contains_key(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     let (map, key) = arguments.two()?;
     Ok(expr::Expr::Not(Box::new(expr_fn::array_empty(
         expr_fn::map_extract(map, key),
     ))))
 }
 
-pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("element_at", F::udf(SparkElementAt::new())),

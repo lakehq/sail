@@ -10,6 +10,7 @@ use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::stddev::stddev_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ScalarValue};
+use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{col, expr, lit, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use sail_common::spec;
 
@@ -54,11 +55,13 @@ impl PlanResolver<'_> {
             if statistics.contains("count") {
                 let count = Expr::AggregateFunction(expr::AggregateFunction {
                     func: count_udaf(),
-                    args: vec![Expr::Column(column.clone())],
-                    distinct: false,
-                    filter: None,
-                    order_by: None,
-                    null_treatment: None,
+                    params: AggregateFunctionParams {
+                        args: vec![Expr::Column(column.clone())],
+                        distinct: false,
+                        filter: None,
+                        order_by: None,
+                        null_treatment: None,
+                    },
                 })
                 .alias(state.register_field_name(format!("count_{}", column.name())));
                 all_aggregates.push(count);
@@ -69,11 +72,13 @@ impl PlanResolver<'_> {
                     if statistics.contains("mean") {
                         let mean = Expr::AggregateFunction(expr::AggregateFunction {
                             func: avg_udaf(),
-                            args: vec![Expr::Column(column.clone())],
-                            distinct: false,
-                            filter: None,
-                            order_by: None,
-                            null_treatment: None,
+                            params: AggregateFunctionParams {
+                                args: vec![Expr::Column(column.clone())],
+                                distinct: false,
+                                filter: None,
+                                order_by: None,
+                                null_treatment: None,
+                            },
                         })
                         .alias(state.register_field_name(format!("mean_{}", column.name())));
                         all_aggregates.push(mean);
@@ -81,11 +86,13 @@ impl PlanResolver<'_> {
                     if statistics.contains("stddev") {
                         let stddev = Expr::AggregateFunction(expr::AggregateFunction {
                             func: stddev_udaf(),
-                            args: vec![Expr::Column(column.clone())],
-                            distinct: false,
-                            filter: None,
-                            order_by: None,
-                            null_treatment: None,
+                            params: AggregateFunctionParams {
+                                args: vec![Expr::Column(column.clone())],
+                                distinct: false,
+                                filter: None,
+                                order_by: None,
+                                null_treatment: None,
+                            },
                         })
                         .alias(state.register_field_name(format!("stddev_{}", column.name())));
                         all_aggregates.push(stddev);
@@ -93,14 +100,16 @@ impl PlanResolver<'_> {
                     if statistics.contains("25%") {
                         let percentile_25 = Expr::AggregateFunction(expr::AggregateFunction {
                             func: approx_percentile_cont_udaf(),
-                            args: vec![
-                                Expr::Column(column.clone()),
-                                Expr::Literal(ScalarValue::Float64(Some(0.25_f64))),
-                            ],
-                            distinct: false,
-                            filter: None,
-                            order_by: None,
-                            null_treatment: None,
+                            params: AggregateFunctionParams {
+                                args: vec![
+                                    Expr::Column(column.clone()),
+                                    Expr::Literal(ScalarValue::Float64(Some(0.25_f64))),
+                                ],
+                                distinct: false,
+                                filter: None,
+                                order_by: None,
+                                null_treatment: None,
+                            },
                         })
                         .alias(state.register_field_name(format!("25%_{}", column.name())));
                         all_aggregates.push(percentile_25);
@@ -108,11 +117,13 @@ impl PlanResolver<'_> {
                     if statistics.contains("50%") {
                         let percentile_50 = Expr::AggregateFunction(expr::AggregateFunction {
                             func: approx_median_udaf(),
-                            args: vec![Expr::Column(column.clone())],
-                            distinct: false,
-                            filter: None,
-                            order_by: None,
-                            null_treatment: None,
+                            params: AggregateFunctionParams {
+                                args: vec![Expr::Column(column.clone())],
+                                distinct: false,
+                                filter: None,
+                                order_by: None,
+                                null_treatment: None,
+                            },
                         })
                         .alias(state.register_field_name(format!("50%_{}", column.name())));
                         all_aggregates.push(percentile_50);
@@ -120,14 +131,16 @@ impl PlanResolver<'_> {
                     if statistics.contains("75%") {
                         let percentile_75 = Expr::AggregateFunction(expr::AggregateFunction {
                             func: approx_percentile_cont_udaf(),
-                            args: vec![
-                                Expr::Column(column.clone()),
-                                Expr::Literal(ScalarValue::Float64(Some(0.75_f64))),
-                            ],
-                            distinct: false,
-                            filter: None,
-                            order_by: None,
-                            null_treatment: None,
+                            params: AggregateFunctionParams {
+                                args: vec![
+                                    Expr::Column(column.clone()),
+                                    Expr::Literal(ScalarValue::Float64(Some(0.75_f64))),
+                                ],
+                                distinct: false,
+                                filter: None,
+                                order_by: None,
+                                null_treatment: None,
+                            },
                         })
                         .alias(state.register_field_name(format!("75%_{}", column.name())));
                         all_aggregates.push(percentile_75);
@@ -138,11 +151,13 @@ impl PlanResolver<'_> {
             if statistics.contains("min") {
                 let min = Expr::AggregateFunction(expr::AggregateFunction {
                     func: min_udaf(),
-                    args: vec![Expr::Column(column.clone())],
-                    distinct: false,
-                    filter: None,
-                    order_by: None,
-                    null_treatment: None,
+                    params: AggregateFunctionParams {
+                        args: vec![Expr::Column(column.clone())],
+                        distinct: false,
+                        filter: None,
+                        order_by: None,
+                        null_treatment: None,
+                    },
                 })
                 .alias(state.register_field_name(format!("min_{}", column.name())));
                 all_aggregates.push(min);
@@ -151,11 +166,13 @@ impl PlanResolver<'_> {
             if statistics.contains("max") {
                 let max = Expr::AggregateFunction(expr::AggregateFunction {
                     func: max_udaf(),
-                    args: vec![Expr::Column(column.clone())],
-                    distinct: false,
-                    filter: None,
-                    order_by: None,
-                    null_treatment: None,
+                    params: AggregateFunctionParams {
+                        args: vec![Expr::Column(column.clone())],
+                        distinct: false,
+                        filter: None,
+                        order_by: None,
+                        null_treatment: None,
+                    },
                 })
                 .alias(state.register_field_name(format!("max_{}", column.name())));
                 all_aggregates.push(max);
@@ -335,11 +352,13 @@ impl PlanResolver<'_> {
             .map(|(value, alias)| {
                 Ok(Expr::AggregateFunction(expr::AggregateFunction {
                     func: sum_udaf(),
-                    args: vec![col(alias)],
-                    distinct: false,
-                    filter: None,
-                    order_by: None,
-                    null_treatment: None,
+                    params: AggregateFunctionParams {
+                        args: vec![col(alias)],
+                        distinct: false,
+                        filter: None,
+                        order_by: None,
+                        null_treatment: None,
+                    },
                 })
                 .alias(state.register_field_name(value)))
             })

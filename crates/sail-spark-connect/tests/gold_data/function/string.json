@@ -261,7 +261,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' expects 2 arguments but received 1,Error during planning: Function 'btrim' expects NativeType::String but received NativeType::Binary.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker No function matches the given name and argument types 'btrim(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(String(2))\n\tbtrim(String(1))"
+        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' expects 2 arguments but received 1,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(String), String)) but received NativeType::Binary, DataType: Binary.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker No function matches the given name and argument types 'btrim(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))"
       }
     },
     {
@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' expects NativeType::String but received NativeType::Binary,Error during planning: Function 'btrim' expects 1 arguments but received 2.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker No function matches the given name and argument types 'btrim(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(String(2))\n\tbtrim(String(1))"
+        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(String), String)) but received NativeType::Binary, DataType: Binary.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker,Error during planning: Function 'btrim' expects 1 arguments but received 2.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker No function matches the given name and argument types 'btrim(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))"
       }
     },
     {
@@ -633,7 +633,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with Execution(\"Spark `decode` function requires 2 arguments, got 10\") No function matches the given name and argument types 'spark_decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with \"Execution error: Spark `decode` function requires 2 arguments, got 10\" No function matches the given name and argument types 'spark_decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
       }
     },
     {
@@ -655,7 +655,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with Execution(\"Spark `decode` function requires 2 arguments, got 9\") No function matches the given name and argument types 'spark_decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with \"Execution error: Spark `decode` function requires 2 arguments, got 9\" No function matches the given name and argument types 'spark_decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
       }
     },
     {
@@ -677,7 +677,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with Execution(\"Spark `decode` function requires 2 arguments, got 10\") No function matches the given name and argument types 'spark_decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with \"Execution error: Spark `decode` function requires 2 arguments, got 10\" No function matches the given name and argument types 'spark_decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
       }
     },
     {
@@ -721,7 +721,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with Execution(\"Spark `decode` function requires 2 arguments, got 7\") No function matches the given name and argument types 'spark_decode(Null, Int32, Utf8, Null, Utf8, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with \"Execution error: Spark `decode` function requires 2 arguments, got 7\" No function matches the given name and argument types 'spark_decode(Null, Int32, Utf8, Null, Utf8, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
       }
     },
     {

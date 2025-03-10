@@ -2,11 +2,11 @@ use datafusion::functions::expr_fn;
 use datafusion_expr::expr;
 
 use crate::error::PlanResult;
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
-fn case(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     let mut when_then_expr = Vec::new();
     let mut iter = arguments.into_iter();
     let mut else_expr: Option<Box<expr::Expr>> = None;
@@ -25,8 +25,8 @@ fn case(input: FunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn if_expr(input: FunctionInput) -> PlanResult<expr::Expr> {
-    let FunctionInput { arguments, .. } = input;
+fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
     let (when_expr, then_expr, else_expr) = arguments.three()?;
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
@@ -35,8 +35,8 @@ fn if_expr(input: FunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("coalesce", F::var_arg(expr_fn::coalesce)),

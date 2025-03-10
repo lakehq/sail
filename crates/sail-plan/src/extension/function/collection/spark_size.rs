@@ -9,6 +9,7 @@ use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
+use datafusion_expr_common::signature::ArrayFunctionArgument;
 
 use crate::extension::function::functions_nested_utils::{
     compute_array_dims, make_scalar_function,
@@ -34,7 +35,10 @@ impl SparkSize {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: None,
+                    }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray),
                 ],
                 Volatility::Immutable,

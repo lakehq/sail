@@ -3,12 +3,12 @@ use datafusion_expr::{expr, lit};
 use datafusion_functions_json::udfs;
 
 use crate::error::PlanResult;
-use crate::function::common::{Function, FunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
-fn get_json_object(input: FunctionInput) -> PlanResult<expr::Expr> {
+fn get_json_object(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // > 1 path means nested access e.g. json_as_text(json, p1, p2) => json.p1.p2
-    let FunctionInput { arguments, .. } = input;
+    let ScalarFunctionInput { arguments, .. } = input;
     let (expr, paths) = arguments.at_least_one()?;
     let paths: Vec<expr::Expr> = paths
         .into_iter()
@@ -38,8 +38,8 @@ fn get_json_object(input: FunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("from_json", F::unknown("from_json")),
