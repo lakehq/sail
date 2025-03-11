@@ -129,6 +129,21 @@
       }
     },
     {
+      "input": "a int",
+      "output": {
+        "success": {
+          "fields": [
+            {
+              "name": "a",
+              "dataType": "int32",
+              "nullable": true,
+              "metadata": []
+            }
+          ]
+        }
+      }
+    },
+    {
       "input": "a int comment 'test'",
       "output": {
         "success": {
