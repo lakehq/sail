@@ -1,11 +1,12 @@
 use std::fmt::{Debug, Display};
+use std::pin::Pin;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
-use datafusion::execution::SendableRecordBatchStream;
 
 use crate::id::WorkerId;
-use crate::stream::ChannelName;
+use crate::stream::channel::ChannelName;
+use crate::stream::common::TaskStream;
 
 #[derive(Debug, Clone)]
 pub enum TaskReadLocation {
@@ -40,5 +41,10 @@ pub trait TaskStreamReader: Debug + Send + Sync {
         &self,
         location: &TaskReadLocation,
         schema: SchemaRef,
-    ) -> Result<SendableRecordBatchStream>;
+    ) -> Result<TaskStreamSource>;
 }
+
+/// This is similar to [`SendableRecordBatchStream`].
+///
+/// [`SendableRecordBatchStream`]: datafusion::execution::SendableRecordBatchStream
+pub type TaskStreamSource = Pin<Box<dyn TaskStream + Send>>;

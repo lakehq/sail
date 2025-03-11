@@ -1,9 +1,6 @@
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::exec_datafusion_err;
-use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use futures::TryStreamExt;
 use prost::Message;
 use tonic::transport::Channel;
@@ -11,7 +8,9 @@ use tonic::transport::Channel;
 use crate::error::ExecutionResult;
 use crate::id::TaskId;
 use crate::rpc::{ClientHandle, ClientOptions};
-use crate::stream::ChannelName;
+use crate::stream::channel::ChannelName;
+use crate::stream::common::TaskStreamAdapter;
+use crate::stream::reader::TaskStreamSource;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
 use crate::worker::gen::{
     RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
@@ -69,7 +68,7 @@ impl WorkerClient {
         &self,
         channel: ChannelName,
         schema: SchemaRef,
-    ) -> ExecutionResult<SendableRecordBatchStream> {
+    ) -> ExecutionResult<TaskStreamSource> {
         let ticket = TaskStreamTicket {
             channel: channel.into(),
         };
@@ -83,9 +82,8 @@ impl WorkerClient {
         };
         let response = self.flight_client.get().await?.do_get(request).await?;
         let stream = response.into_inner().map_err(|e| e.into());
-        let stream = FlightRecordBatchStream::new_from_flight_data(stream)
-            .map_err(|e| exec_datafusion_err!("{e}"));
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        let stream = FlightRecordBatchStream::new_from_flight_data(stream).map_err(|e| e.into());
+        Ok(Box::pin(TaskStreamAdapter::new(schema, stream)))
     }
 
     pub async fn remove_stream(&self, channel_prefix: String) -> ExecutionResult<()> {

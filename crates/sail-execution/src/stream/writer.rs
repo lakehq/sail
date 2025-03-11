@@ -1,13 +1,12 @@
 use std::fmt::{Debug, Display};
-use std::io::Write;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::common::{DataFusionError, Result};
 use tokio::sync::mpsc;
 
-use crate::stream::ChannelName;
+use crate::stream::channel::ChannelName;
+use crate::stream::error::TaskStreamResult;
 
 #[derive(Debug, Clone)]
 pub enum TaskWriteLocation {
@@ -54,29 +53,18 @@ pub trait TaskStreamWriter: Debug + Send + Sync {
         &self,
         location: &TaskWriteLocation,
         schema: SchemaRef,
-    ) -> Result<Box<dyn RecordBatchStreamWriter>>;
+    ) -> Result<Box<dyn TaskStreamSink>>;
 }
 
 #[tonic::async_trait]
-pub trait RecordBatchStreamWriter: Send {
-    async fn write(&mut self, batch: RecordBatch) -> Result<()>;
+pub trait TaskStreamSink: Send {
+    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> Result<()>;
     fn close(self: Box<Self>) -> Result<()>;
 }
 
 #[tonic::async_trait]
-impl<W: Write + Send> RecordBatchStreamWriter for StreamWriter<W> {
-    async fn write(&mut self, batch: RecordBatch) -> Result<()> {
-        Ok(self.write(&batch)?)
-    }
-
-    fn close(mut self: Box<Self>) -> Result<()> {
-        Ok(self.finish()?)
-    }
-}
-
-#[tonic::async_trait]
-impl RecordBatchStreamWriter for mpsc::Sender<RecordBatch> {
-    async fn write(&mut self, batch: RecordBatch) -> Result<()> {
+impl TaskStreamSink for mpsc::Sender<TaskStreamResult<RecordBatch>> {
+    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> Result<()> {
         self.send(batch)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))

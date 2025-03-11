@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::execution::SendableRecordBatchStream;
 use futures::StreamExt;
 use sail_server::actor::ActorHandle;
@@ -5,7 +7,8 @@ use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
 use crate::id::TaskId;
-use crate::stream::RecordBatchStreamWriter;
+use crate::stream::error::TaskStreamError;
+use crate::stream::writer::TaskStreamSink;
 use crate::worker::{WorkerActor, WorkerEvent};
 
 pub(super) struct TaskStreamMonitor {
@@ -13,7 +16,7 @@ pub(super) struct TaskStreamMonitor {
     task_id: TaskId,
     attempt: usize,
     stream: SendableRecordBatchStream,
-    writer: Option<Box<dyn RecordBatchStreamWriter>>,
+    sink: Option<Box<dyn TaskStreamSink>>,
     signal: oneshot::Receiver<()>,
 }
 
@@ -23,7 +26,7 @@ impl TaskStreamMonitor {
         task_id: TaskId,
         attempt: usize,
         stream: SendableRecordBatchStream,
-        writer: Option<Box<dyn RecordBatchStreamWriter>>,
+        sink: Option<Box<dyn TaskStreamSink>>,
         signal: oneshot::Receiver<()>,
     ) -> Self {
         Self {
@@ -31,7 +34,7 @@ impl TaskStreamMonitor {
             task_id,
             attempt,
             stream,
-            writer,
+            sink,
             signal,
         }
     }
@@ -42,13 +45,13 @@ impl TaskStreamMonitor {
             task_id,
             attempt,
             stream,
-            writer,
+            sink,
             signal,
         } = self;
         let event = Self::running(task_id, attempt);
         let _ = handle.send(event).await;
         let event = tokio::select! {
-            x = Self::execute(task_id, attempt, stream, writer) => x,
+            x = Self::execute(task_id, attempt, stream, sink) => x,
             x = Self::cancel(task_id, attempt, signal) => x,
         };
         let _ = handle.send(event).await;
@@ -77,7 +80,7 @@ impl TaskStreamMonitor {
         task_id: TaskId,
         attempt: usize,
         mut stream: SendableRecordBatchStream,
-        mut writer: Option<Box<dyn RecordBatchStreamWriter>>,
+        mut sink: Option<Box<dyn TaskStreamSink>>,
     ) -> WorkerEvent {
         let event = loop {
             let Some(batch) = stream.next().await else {
@@ -88,31 +91,34 @@ impl TaskStreamMonitor {
                     message: None,
                 };
             };
-            match batch {
-                Ok(batch) => {
-                    if let Some(ref mut writer) = writer {
-                        if let Err(e) = writer.write(batch).await {
-                            break WorkerEvent::ReportTaskStatus {
-                                task_id,
-                                attempt,
-                                status: TaskStatus::Failed,
-                                message: Some(format!("failed to send batch: {e}")),
-                            };
-                        }
-                    }
-                }
-                Err(e) => {
+            let message = match &batch {
+                Ok(_) => None,
+                Err(e) => Some(format!("failed to read batch: {e}")),
+            };
+            if let Some(ref mut sink) = sink {
+                if let Err(e) = sink
+                    .write(batch.map_err(|e| TaskStreamError::External(Arc::new(e))))
+                    .await
+                {
                     break WorkerEvent::ReportTaskStatus {
                         task_id,
                         attempt,
                         status: TaskStatus::Failed,
-                        message: Some(format!("failed to read batch: {e}")),
-                    }
+                        message: Some(format!("failed to send batch: {e}")),
+                    };
                 }
             }
+            if message.is_some() {
+                break WorkerEvent::ReportTaskStatus {
+                    task_id,
+                    attempt,
+                    status: TaskStatus::Failed,
+                    message,
+                };
+            }
         };
-        if let Some(writer) = writer {
-            if let Err(e) = writer.close() {
+        if let Some(sink) = sink {
+            if let Err(e) = sink.close() {
                 return WorkerEvent::ReportTaskStatus {
                     task_id,
                     attempt,

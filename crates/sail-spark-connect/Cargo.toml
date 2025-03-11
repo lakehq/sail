@@ -27,7 +27,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 monostate = { workspace = true }
 regex = { workspace = true }
-pyo3 = { workspace = true }
 phf = { workspace = true }
 log = { workspace = true }
 

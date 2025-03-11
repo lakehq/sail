@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::num::ParseIntError;
 use std::str::ParseBoolError;
 use std::sync::PoisonError;
@@ -7,10 +7,8 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use log::error;
 use prost::{DecodeError, UnknownEnumValue};
-use pyo3::prelude::PyAnyMethods;
-use pyo3::types::PyModule;
-use pyo3::{intern, PyErr, PyResult, Python};
 use sail_common::error::CommonError;
+use sail_common_datafusion::error::CommonErrorCause;
 use sail_execution::error::ExecutionError;
 use sail_plan::error::PlanError;
 use sail_sql_analyzer::error::SqlError;
@@ -272,59 +270,62 @@ impl From<SparkThrowable> for Status {
     }
 }
 
+impl From<CommonErrorCause> for SparkThrowable {
+    fn from(value: CommonErrorCause) -> Self {
+        match value {
+            CommonErrorCause::NotImplemented(x) => SparkThrowable::UnsupportedOperationException(x),
+            CommonErrorCause::InvalidArgument(x) => SparkThrowable::IllegalArgumentException(x),
+            CommonErrorCause::Unknown(x) | CommonErrorCause::Internal(x) => {
+                SparkThrowable::SparkRuntimeException(x)
+            }
+            CommonErrorCause::Io(x)
+            | CommonErrorCause::ArrowMemory(x)
+            | CommonErrorCause::ArrowCompute(x)
+            | CommonErrorCause::ArrowIpc(x)
+            | CommonErrorCause::ArrowCDataInterface(x)
+            | CommonErrorCause::FormatCsv(x)
+            | CommonErrorCause::FormatJson(x)
+            | CommonErrorCause::FormatParquet(x)
+            | CommonErrorCause::FormatAvro(x)
+            | CommonErrorCause::ArrowDictionaryKeyOverflow(x)
+            | CommonErrorCause::ArrowRunEndIndexOverflow(x) => {
+                SparkThrowable::QueryExecutionException(x)
+            }
+            CommonErrorCause::ArrowDivideByZero(x)
+            | CommonErrorCause::ArrowArithmeticOverflow(x) => {
+                SparkThrowable::ArithmeticException(x)
+            }
+            CommonErrorCause::ArrowParse(x) => SparkThrowable::ParseException(x),
+            CommonErrorCause::Python { summary, traceback } => {
+                // The message must end with a newline character
+                // since the PySpark unit tests expect it.
+                let message = if let Some(traceback) = traceback {
+                    // Each line string already ends with a newline character.
+                    traceback.join("")
+                } else {
+                    format!("{summary}\n")
+                };
+                SparkThrowable::PythonException(message)
+            }
+            CommonErrorCause::ArrowCast(x)
+            | CommonErrorCause::Schema(x)
+            | CommonErrorCause::Plan(x)
+            | CommonErrorCause::Configuration(x) => SparkThrowable::AnalysisException(x),
+            CommonErrorCause::Execution(x) => {
+                // TODO: handle situations where a different exception type is more appropriate.
+                SparkThrowable::AnalysisException(x)
+            }
+        }
+    }
+}
+
 impl From<SparkError> for Status {
     fn from(error: SparkError) -> Self {
         // TODO: extract nested error from `DataFusionError::Context`
         match error {
-            SparkError::ArrowError(ArrowError::ExternalError(e))
-            | SparkError::DataFusionError(DataFusionError::ArrowError(
-                ArrowError::ExternalError(e),
-                _,
-            ))
-            | SparkError::DataFusionError(DataFusionError::External(e)) => try_py_err(e.as_ref()),
-            SparkError::DataFusionError(DataFusionError::Shared(shared)) => {
-                if let DataFusionError::External(e) = shared.as_ref() {
-                    try_py_err(e.as_ref())
-                } else {
-                    SparkThrowable::SparkRuntimeException(shared.to_string()).into()
-                }
-            }
-            SparkError::ArrowError(e)
-            | SparkError::DataFusionError(DataFusionError::ArrowError(e, _)) => match e {
-                ArrowError::NotYetImplemented(s) => {
-                    SparkThrowable::UnsupportedOperationException(s).into()
-                }
-                ArrowError::CastError(s) | ArrowError::SchemaError(s) => {
-                    SparkThrowable::AnalysisException(s).into()
-                }
-                ArrowError::ParseError(s) => SparkThrowable::ParseException(s).into(),
-                ArrowError::DivideByZero => {
-                    SparkThrowable::ArithmeticException("divide by zero".to_string()).into()
-                }
-                ArrowError::InvalidArgumentError(s) => {
-                    SparkThrowable::IllegalArgumentException(s).into()
-                }
-                _ => SparkThrowable::QueryExecutionException(e.to_string()).into(),
-            },
-            SparkError::DataFusionError(e @ DataFusionError::Plan(_))
-            | SparkError::DataFusionError(e @ DataFusionError::Configuration(_)) => {
-                SparkThrowable::AnalysisException(e.to_string()).into()
-            }
-            SparkError::DataFusionError(DataFusionError::SQL(e, _)) => {
-                SparkThrowable::ParseException(e.to_string()).into()
-            }
-            SparkError::DataFusionError(DataFusionError::SchemaError(e, _)) => {
-                SparkThrowable::AnalysisException(e.to_string()).into()
-            }
-            SparkError::DataFusionError(DataFusionError::NotImplemented(s)) => {
-                SparkThrowable::UnsupportedOperationException(s).into()
-            }
-            SparkError::DataFusionError(e @ DataFusionError::Execution(_)) => {
-                // TODO: handle situations where a different exception type is more appropriate.
-                SparkThrowable::AnalysisException(e.to_string()).into()
-            }
+            SparkError::ArrowError(e) => SparkThrowable::from(CommonErrorCause::new(&e)).into(),
             SparkError::DataFusionError(e) => {
-                SparkThrowable::SparkRuntimeException(e.to_string()).into()
+                SparkThrowable::from(CommonErrorCause::new(&e)).into()
             }
             e @ SparkError::MissingArgument(_) | e @ SparkError::InvalidArgument(_) => {
                 SparkThrowable::IllegalArgumentException(e.to_string()).into()
@@ -340,45 +341,5 @@ impl From<SparkError> for Status {
             e @ SparkError::SendError(_) => Status::cancelled(e.to_string()),
             e @ SparkError::InternalError(_) => Status::internal(e.to_string()),
         }
-    }
-}
-
-fn try_py_err<'a>(e: &'a (dyn std::error::Error + 'static)) -> Status {
-    if let Some(e) = extract_py_err(e) {
-        let info = Python::with_gil(|py| -> PyResult<Vec<String>> {
-            let traceback = PyModule::import(py, intern!(py, "traceback"))?;
-            let format_exception = traceback.getattr(intern!(py, "format_exception"))?;
-            format_exception.call1((e,))?.extract()
-        });
-        // The message must end with a newline character
-        // since the PySpark unit tests expect it.
-        let message = if let Ok(info) = info {
-            // Each line string already ends with a newline character.
-            info.join("")
-        } else {
-            format!("{e}\n")
-        };
-        SparkThrowable::PythonException(message).into()
-    } else {
-        SparkThrowable::SparkRuntimeException(e.to_string()).into()
-    }
-}
-
-fn extract_py_err<'a>(e: &'a (dyn std::error::Error + 'static)) -> Option<&'a PyErr> {
-    if let Some(e) = e.downcast_ref::<PyErr>() {
-        Some(e)
-    } else {
-        let mut seen = HashSet::new();
-        seen.insert(e as *const _);
-        while let Some(e) = e.source() {
-            if seen.contains(&(e as *const _)) {
-                break;
-            }
-            seen.insert(e as *const _);
-            if let Some(e) = e.downcast_ref::<PyErr>() {
-                return Some(e);
-            }
-        }
-        None
     }
 }

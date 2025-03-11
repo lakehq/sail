@@ -4787,8 +4787,11 @@ dependencies = [
  "datafusion-expr",
  "futures",
  "lexical-core",
+ "pyo3",
  "ryu",
  "sail-common",
+ "serde",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -4803,6 +4806,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "log",
+ "pin-project-lite",
  "prost 0.13.5",
  "prost-build",
  "rand 0.9.0",
@@ -4811,10 +4815,12 @@ dependencies = [
  "sail-plan",
  "sail-python-udf",
  "sail-server",
+ "serde_json",
  "thiserror 2.0.12",
  "tokio",
  "tonic",
  "tonic-build",
+ "tonic-types",
 ]
 
 [[package]]
@@ -4936,7 +4942,6 @@ dependencies = [
  "prettyplease",
  "prost 0.13.5",
  "prost-build",
- "pyo3",
  "quote",
  "regex",
  "sail-common",

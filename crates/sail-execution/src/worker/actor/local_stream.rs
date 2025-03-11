@@ -4,31 +4,31 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::error::DataFusionError;
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::SendableRecordBatchStream;
-use futures::StreamExt;
 use sail_server::actor::ActorContext;
 use tokio::sync::{mpsc, watch};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::stream::RecordBatchStreamWriter;
+use crate::stream::common::TaskStreamAdapter;
+use crate::stream::error::TaskStreamResult;
+use crate::stream::reader::TaskStreamSource;
+use crate::stream::writer::TaskStreamSink;
 use crate::worker::WorkerActor;
 
 pub(super) trait LocalStream: Send {
     fn publish(
         &mut self,
         ctx: &mut ActorContext<WorkerActor>,
-    ) -> ExecutionResult<Box<dyn RecordBatchStreamWriter>>;
+    ) -> ExecutionResult<Box<dyn TaskStreamSink>>;
     fn subscribe(
         &mut self,
         ctx: &mut ActorContext<WorkerActor>,
-    ) -> ExecutionResult<SendableRecordBatchStream>;
+    ) -> ExecutionResult<TaskStreamSource>;
 }
 
 pub(super) struct EphemeralStream {
-    tx: Option<mpsc::Sender<RecordBatch>>,
-    rx: Option<mpsc::Receiver<RecordBatch>>,
+    tx: Option<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
+    rx: Option<mpsc::Receiver<TaskStreamResult<RecordBatch>>>,
     schema: SchemaRef,
 }
 
@@ -47,7 +47,7 @@ impl LocalStream for EphemeralStream {
     fn publish(
         &mut self,
         _ctx: &mut ActorContext<WorkerActor>,
-    ) -> ExecutionResult<Box<dyn RecordBatchStreamWriter>> {
+    ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
         let tx = self.tx.take().ok_or_else(|| {
             ExecutionError::InternalError("ephemeral stream can only be written once".to_string())
         })?;
@@ -57,12 +57,11 @@ impl LocalStream for EphemeralStream {
     fn subscribe(
         &mut self,
         _ctx: &mut ActorContext<WorkerActor>,
-    ) -> ExecutionResult<SendableRecordBatchStream> {
+    ) -> ExecutionResult<TaskStreamSource> {
         let rx = self.rx.take().ok_or_else(|| {
             ExecutionError::InternalError("ephemeral stream can only be read once".to_string())
         })?;
-        let stream =
-            RecordBatchStreamAdapter::new(self.schema.clone(), ReceiverStream::new(rx).map(Ok));
+        let stream = TaskStreamAdapter::new(self.schema.clone(), ReceiverStream::new(rx));
         Ok(Box::pin(stream))
     }
 }
@@ -76,12 +75,12 @@ struct MemoryStreamState {
 #[derive(Debug)]
 struct MemoryStreamWriter {
     tx: watch::Sender<MemoryStreamState>,
-    batches: Arc<RwLock<Vec<RecordBatch>>>,
+    batches: Arc<RwLock<Vec<TaskStreamResult<RecordBatch>>>>,
 }
 
 #[tonic::async_trait]
-impl RecordBatchStreamWriter for MemoryStreamWriter {
-    async fn write(&mut self, batch: RecordBatch) -> Result<()> {
+impl TaskStreamSink for MemoryStreamWriter {
+    async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> Result<()> {
         let mut batches = self
             .batches
             .write()
@@ -112,7 +111,7 @@ impl RecordBatchStreamWriter for MemoryStreamWriter {
 /// A memory stream that can be read multiple times.
 /// It maintains an unbounded list of record batches in memory.
 pub(super) struct MemoryStream {
-    batches: Arc<RwLock<Vec<RecordBatch>>>,
+    batches: Arc<RwLock<Vec<TaskStreamResult<RecordBatch>>>>,
     schema: SchemaRef,
     tx: Option<watch::Sender<MemoryStreamState>>,
     rx: watch::Receiver<MemoryStreamState>,
@@ -134,7 +133,7 @@ impl LocalStream for MemoryStream {
     fn publish(
         &mut self,
         _ctx: &mut ActorContext<WorkerActor>,
-    ) -> ExecutionResult<Box<dyn RecordBatchStreamWriter>> {
+    ) -> ExecutionResult<Box<dyn TaskStreamSink>> {
         let tx = self.tx.take().ok_or_else(|| {
             ExecutionError::InternalError("memory stream can only be written once".to_string())
         })?;
@@ -147,7 +146,7 @@ impl LocalStream for MemoryStream {
     fn subscribe(
         &mut self,
         ctx: &mut ActorContext<WorkerActor>,
-    ) -> ExecutionResult<SendableRecordBatchStream> {
+    ) -> ExecutionResult<TaskStreamSource> {
         // The channel only needs a capacity of 1 since the stream reader
         // controls the consumption rate.
         let (tx, rx) = mpsc::channel(1);
@@ -180,8 +179,7 @@ impl LocalStream for MemoryStream {
                 }
             }
         });
-        let stream =
-            RecordBatchStreamAdapter::new(self.schema.clone(), ReceiverStream::new(rx).map(Ok));
+        let stream = TaskStreamAdapter::new(self.schema.clone(), ReceiverStream::new(rx));
         Ok(Box::pin(stream))
     }
 }

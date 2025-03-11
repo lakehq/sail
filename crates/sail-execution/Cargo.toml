@@ -13,6 +13,7 @@ sail-python-udf = { path = "../sail-python-udf" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
+tonic-types = { workspace = true }
 prost = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
@@ -20,9 +21,11 @@ datafusion-functions-json = { workspace = true }
 arrow-flight = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
+serde_json = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
 rand = { workspace = true }
+pin-project-lite = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

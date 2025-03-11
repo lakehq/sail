@@ -31,9 +31,9 @@ use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskId, WorkerId};
 use crate::plan::{ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{
-    LocalStreamStorage, MergedRecordBatchStream, TaskReadLocation, TaskWriteLocation,
-};
+use crate::stream::merge::MergedRecordBatchStream;
+use crate::stream::reader::TaskReadLocation;
+use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use crate::worker_manager::WorkerLaunchOptions;
 
 impl DriverActor {

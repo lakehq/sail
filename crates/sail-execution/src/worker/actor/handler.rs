@@ -18,7 +18,9 @@ use crate::driver::state::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskAttempt, TaskId, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{ChannelName, LocalStreamStorage, RecordBatchStreamWriter};
+use crate::stream::channel::ChannelName;
+use crate::stream::reader::TaskStreamSource;
+use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::worker::actor::core::WorkerActor;
 use crate::worker::actor::local_stream::{EphemeralStream, LocalStream, MemoryStream};
 use crate::worker::actor::stream_accessor::WorkerStreamAccessor;
@@ -191,7 +193,7 @@ impl WorkerActor {
         channel: ChannelName,
         storage: LocalStreamStorage,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn RecordBatchStreamWriter>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
         let mut stream: Box<dyn LocalStream> = match storage {
             LocalStreamStorage::Ephemeral => Box::new(EphemeralStream::new(
@@ -213,7 +215,7 @@ impl WorkerActor {
         _ctx: &mut ActorContext<Self>,
         _uri: String,
         _schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn RecordBatchStreamWriter>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
         let _ = result.send(Err(ExecutionError::InternalError(
             "not implemented: create remote stream".to_string(),
@@ -225,7 +227,7 @@ impl WorkerActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         channel: ChannelName,
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let out = self
             .local_streams
@@ -254,7 +256,7 @@ impl WorkerActor {
         port: u16,
         channel: ChannelName,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let client = match self.worker_client(worker_id, host, port) {
             Ok(x) => x.clone(),
@@ -275,7 +277,7 @@ impl WorkerActor {
         _ctx: &mut ActorContext<Self>,
         _uri: String,
         _schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let _ = result.send(Err(ExecutionError::InternalError(
             "not implemented: fetch remote stream".to_string(),

@@ -1,11 +1,6 @@
-mod channel;
-mod merge;
-mod reader;
-mod writer;
-
-pub(crate) use channel::ChannelName;
-pub(crate) use merge::MergedRecordBatchStream;
-pub(crate) use reader::{TaskReadLocation, TaskStreamReader};
-pub(crate) use writer::{
-    LocalStreamStorage, RecordBatchStreamWriter, TaskStreamWriter, TaskWriteLocation,
-};
+pub(crate) mod channel;
+pub(crate) mod common;
+pub(crate) mod error;
+pub(crate) mod merge;
+pub(crate) mod reader;
+pub(crate) mod writer;
