@@ -83,7 +83,8 @@ impl Actor for WorkerActor {
                 attempt,
                 status,
                 message,
-            } => self.handle_report_task_status(ctx, task_id, attempt, status, message),
+                cause,
+            } => self.handle_report_task_status(ctx, task_id, attempt, status, message, cause),
             WorkerEvent::CreateLocalStream {
                 channel,
                 storage,

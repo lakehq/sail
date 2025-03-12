@@ -112,6 +112,7 @@ impl From<ExecutionError> for SparkError {
         match value {
             ExecutionError::DataFusionError(e) => SparkError::DataFusionError(e),
             ExecutionError::InvalidArgument(e) => SparkError::InvalidArgument(e),
+            ExecutionError::JsonError(e) => SparkError::JsonError(e),
             ExecutionError::IoError(e) => SparkError::IoError(e),
             ExecutionError::TonicTransportError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::TonicStatusError(e) => SparkError::InternalError(e.to_string()),

@@ -90,14 +90,15 @@ impl Actor for DriverActor {
                 self.handle_probe_lost_worker(ctx, worker_id, instant)
             }
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
-            DriverEvent::RemoveJobOutput { job_id } => self.handle_remove_job_output(ctx, job_id),
+            DriverEvent::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
             DriverEvent::UpdateTask {
                 task_id,
                 attempt,
                 status,
                 message,
+                cause,
                 sequence,
-            } => self.handle_update_task(ctx, task_id, attempt, status, message, sequence),
+            } => self.handle_update_task(ctx, task_id, attempt, status, message, cause, sequence),
             DriverEvent::ProbePendingTask { task_id, attempt } => {
                 self.handle_probe_pending_task(ctx, task_id, attempt)
             }

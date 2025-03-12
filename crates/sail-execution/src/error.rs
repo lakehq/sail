@@ -14,6 +14,8 @@ pub enum ExecutionError {
     DataFusionError(#[from] DataFusionError),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    #[error("error in JSON serde: {0}")]
+    JsonError(#[from] serde_json::Error),
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
     #[error("error in Tonic transport: {0}")]

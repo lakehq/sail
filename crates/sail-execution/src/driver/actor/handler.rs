@@ -15,6 +15,7 @@ use futures::TryStreamExt;
 use log::{debug, error, info, warn};
 use prost::bytes::BytesMut;
 use prost::Message;
+use sail_common_datafusion::error::CommonErrorCause;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -198,7 +199,7 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_remove_job_output(
+    pub(super) fn handle_clean_up_job(
         &mut self,
         ctx: &mut ActorContext<Self>,
         job_id: JobId,
@@ -218,6 +219,7 @@ impl DriverActor {
         attempt: usize,
         status: TaskStatus,
         message: Option<String>,
+        cause: Option<CommonErrorCause>,
         sequence: Option<u64>,
     ) -> ActorAction {
         if let Some(sequence) = sequence {
@@ -232,7 +234,7 @@ impl DriverActor {
             }
             self.task_sequences.insert(task_id, sequence);
         }
-        self.update_task(ctx, task_id, attempt, status, message);
+        self.update_task(ctx, task_id, attempt, status, message, cause);
         ActorAction::Continue
     }
 
@@ -254,6 +256,7 @@ impl DriverActor {
                 task.attempt,
                 TaskStatus::Failed,
                 Some(message),
+                None,
             );
         }
         ActorAction::Continue
@@ -386,6 +389,7 @@ impl DriverActor {
         attempt: usize,
         status: TaskStatus,
         message: Option<String>,
+        cause: Option<CommonErrorCause>,
     ) -> ActorAction {
         let Some(task) = self.state.get_task(task_id) else {
             return ActorAction::warn(format!("task {task_id} not found"));
@@ -421,12 +425,14 @@ impl DriverActor {
             }
             TaskStatus::Failed => {
                 // TODO: support task retry
-                let reason = format!(
-                    "task {} failed at attempt {}: {}",
-                    task_id,
-                    attempt,
-                    message.as_deref().unwrap_or("unknown reason")
-                );
+                let cause = cause.unwrap_or_else(|| {
+                    CommonErrorCause::Internal(format!(
+                        "task {} failed at attempt {}: {}",
+                        task_id,
+                        attempt,
+                        message.as_deref().unwrap_or("unknown reason")
+                    ))
+                });
                 let worker_id = task.state.worker_id();
                 self.state
                     .update_task(task_id, attempt, TaskState::Failed, message);
@@ -434,16 +440,18 @@ impl DriverActor {
                     self.state.detach_task_from_worker(task_id, worker_id);
                     self.schedule_idle_worker_probe(ctx, worker_id);
                 }
-                self.cancel_job(ctx, job_id, reason);
+                self.cancel_job(ctx, job_id, cause);
                 self.schedule_tasks(ctx);
             }
             TaskStatus::Canceled => {
-                let reason = format!(
-                    "task {} canceled at attempt {}: {}",
-                    task_id,
-                    attempt,
-                    message.as_deref().unwrap_or("unknown reason")
-                );
+                let cause = cause.unwrap_or_else(|| {
+                    CommonErrorCause::Internal(format!(
+                        "task {} canceled at attempt {}: {}",
+                        task_id,
+                        attempt,
+                        message.as_deref().unwrap_or("unknown reason")
+                    ))
+                });
                 let worker_id = task.state.worker_id();
                 self.state
                     .update_task(task_id, attempt, TaskState::Canceled, message);
@@ -451,7 +459,7 @@ impl DriverActor {
                     self.state.detach_task_from_worker(task_id, worker_id);
                     self.schedule_idle_worker_probe(ctx, worker_id);
                 }
-                self.cancel_job(ctx, job_id, reason);
+                self.cancel_job(ctx, job_id, cause);
                 self.schedule_tasks(ctx);
             }
         }
@@ -608,7 +616,15 @@ impl DriverActor {
             Ok(x) => x,
             Err(e) => {
                 let message = format!("failed to rewrite shuffle: {e}");
-                self.update_task(ctx, task_id, attempt, TaskStatus::Failed, Some(message));
+                let cause = CommonErrorCause::new(&e);
+                self.update_task(
+                    ctx,
+                    task_id,
+                    attempt,
+                    TaskStatus::Failed,
+                    Some(message),
+                    Some(cause),
+                );
                 return Err(ExecutionError::InternalError(e.to_string()));
             }
         };
@@ -616,7 +632,14 @@ impl DriverActor {
             Ok(x) => x,
             Err(e) => {
                 let message = format!("failed to encode task plan: {e}");
-                self.update_task(ctx, task_id, attempt, TaskStatus::Failed, Some(message));
+                self.update_task(
+                    ctx,
+                    task_id,
+                    attempt,
+                    TaskStatus::Failed,
+                    Some(message),
+                    None,
+                );
                 return Err(ExecutionError::InternalError(e.to_string()));
             }
         };
@@ -624,7 +647,15 @@ impl DriverActor {
             Ok(client) => client.clone(),
             Err(e) => {
                 let message = format!("failed to get worker {worker_id} client: {e}");
-                self.update_task(ctx, task_id, attempt, TaskStatus::Failed, Some(message));
+                let cause = CommonErrorCause::new(&e);
+                self.update_task(
+                    ctx,
+                    task_id,
+                    attempt,
+                    TaskStatus::Failed,
+                    Some(message),
+                    Some(cause),
+                );
                 return Err(ExecutionError::InternalError(e.to_string()));
             }
         };
@@ -643,6 +674,7 @@ impl DriverActor {
                         attempt,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to run task via the worker client: {e}")),
+                        cause: None,
                         sequence: None,
                     })
                     .await;
@@ -748,9 +780,9 @@ impl DriverActor {
                     let stream = match stream {
                         Ok(x) => x,
                         Err(e) => {
-                            let reason = e.to_string();
+                            let cause = CommonErrorCause::new(&e);
                             let _ = result.send(Err(e));
-                            self.cancel_job(ctx, job_id, reason);
+                            self.cancel_job(ctx, job_id, cause);
                             return;
                         }
                     };
@@ -760,7 +792,11 @@ impl DriverActor {
                         ReceiverStream::new(receiver),
                     ));
                     if result.send(Ok(receiver_stream)).is_err() {
-                        self.cancel_job(ctx, job_id, "job output receiver dropped".to_string());
+                        self.cancel_job(
+                            ctx,
+                            job_id,
+                            CommonErrorCause::Internal("job output receiver dropped".to_string()),
+                        );
                         return;
                     }
                     self.job_outputs
@@ -838,13 +874,9 @@ impl DriverActor {
         Some(Ok(stream))
     }
 
-    fn cancel_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId, reason: String) {
+    fn cancel_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId, cause: CommonErrorCause) {
         if let Some(output) = self.job_outputs.remove(&job_id) {
-            output.fail(reason);
-        }
-        for worker_id in self.state.detach_job_from_workers(job_id) {
-            self.remove_worker_streams(ctx, worker_id, job_id);
-            self.schedule_idle_worker_probe(ctx, worker_id);
+            output.fail(ctx, job_id, cause);
         }
         let tasks = self
             .state
@@ -898,7 +930,14 @@ impl DriverActor {
         for (task_id, attempt) in tasks {
             let reason =
                 format!("task {task_id} attempt {attempt} failed for worker {worker_id}: {reason}");
-            self.update_task(ctx, task_id, attempt, TaskStatus::Failed, Some(reason));
+            self.update_task(
+                ctx,
+                task_id,
+                attempt,
+                TaskStatus::Failed,
+                Some(reason),
+                None,
+            );
         }
     }
 

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::execution::SendableRecordBatchStream;
 use futures::StreamExt;
+use sail_common_datafusion::error::CommonErrorCause;
 use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 
@@ -63,6 +64,7 @@ impl TaskStreamMonitor {
             attempt,
             status: TaskStatus::Running,
             message: None,
+            cause: None,
         }
     }
 
@@ -73,6 +75,7 @@ impl TaskStreamMonitor {
             attempt,
             status: TaskStatus::Canceled,
             message: Some(format!("task {task_id} attempt {attempt} canceled")),
+            cause: None,
         }
     }
 
@@ -89,11 +92,15 @@ impl TaskStreamMonitor {
                     attempt,
                     status: TaskStatus::Succeeded,
                     message: None,
+                    cause: None,
                 };
             };
-            let message = match &batch {
+            let error = match &batch {
                 Ok(_) => None,
-                Err(e) => Some(format!("failed to read batch: {e}")),
+                Err(e) => Some((
+                    format!("failed to read batch: {e}"),
+                    CommonErrorCause::new(e),
+                )),
             };
             if let Some(ref mut sink) = sink {
                 if let Err(e) = sink
@@ -105,15 +112,17 @@ impl TaskStreamMonitor {
                         attempt,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to send batch: {e}")),
+                        cause: None,
                     };
                 }
             }
-            if message.is_some() {
+            if let Some((message, cause)) = error {
                 break WorkerEvent::ReportTaskStatus {
                     task_id,
                     attempt,
                     status: TaskStatus::Failed,
-                    message,
+                    message: Some(message),
+                    cause: Some(cause),
                 };
             }
         };
@@ -124,6 +133,7 @@ impl TaskStreamMonitor {
                     attempt,
                     status: TaskStatus::Failed,
                     message: Some(format!("failed to close writer: {e}")),
+                    cause: None,
                 };
             }
         }

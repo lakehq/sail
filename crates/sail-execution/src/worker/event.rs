@@ -1,4 +1,5 @@
 use datafusion::arrow::datatypes::SchemaRef;
+use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
@@ -32,6 +33,7 @@ pub enum WorkerEvent {
         attempt: usize,
         status: TaskStatus,
         message: Option<String>,
+        cause: Option<CommonErrorCause>,
     },
     CreateLocalStream {
         channel: ChannelName,

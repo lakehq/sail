@@ -11,6 +11,7 @@ use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
 use prost::Message;
+use sail_common_datafusion::error::CommonErrorCause;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -104,6 +105,7 @@ impl WorkerActor {
                     attempt,
                     status: TaskStatus::Failed,
                     message: Some(format!("failed to execute plan: {e}")),
+                    cause: Some(CommonErrorCause::new(&e)),
                 };
                 ctx.send(event);
                 return ActorAction::Continue;
@@ -124,6 +126,7 @@ impl WorkerActor {
                         attempt,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to create output stream writer: {e}")),
+                        cause: None,
                     };
                     ctx.send(event);
                     return ActorAction::Continue;
@@ -158,6 +161,7 @@ impl WorkerActor {
         attempt: usize,
         status: TaskStatus,
         message: Option<String>,
+        cause: Option<CommonErrorCause>,
     ) -> ActorAction {
         let sequence = self.sequence;
         self.sequence = match self.sequence.checked_add(1) {
@@ -172,9 +176,10 @@ impl WorkerActor {
                 .run(|| {
                     let client = client.clone();
                     let message = message.clone();
+                    let cause = cause.clone();
                     async move {
                         client
-                            .report_task_status(task_id, attempt, status, message, sequence)
+                            .report_task_status(task_id, attempt, status, message, cause, sequence)
                             .await
                     }
                 })

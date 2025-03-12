@@ -1,3 +1,4 @@
+use sail_common_datafusion::error::CommonErrorCause;
 use tonic::transport::Channel;
 
 use crate::driver::gen;
@@ -7,7 +8,7 @@ use crate::driver::gen::{
     ReportTaskStatusResponse,
 };
 use crate::driver::state::TaskStatus;
-use crate::error::ExecutionResult;
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskId, WorkerId};
 use crate::rpc::{ClientHandle, ClientOptions};
 
@@ -59,13 +60,22 @@ impl DriverClient {
         attempt: usize,
         status: TaskStatus,
         message: Option<String>,
+        cause: Option<CommonErrorCause>,
         sequence: u64,
     ) -> ExecutionResult<()> {
+        let cause = cause
+            .map(|x| {
+                serde_json::to_string(&x).map_err(|e| {
+                    ExecutionError::InternalError(format!("failed to serialize cause: {e}"))
+                })
+            })
+            .transpose()?;
         let request = tonic::Request::new(ReportTaskStatusRequest {
             task_id: task_id.into(),
             attempt: attempt as u64,
             status: gen::TaskStatus::from(status) as i32,
             message,
+            cause,
             sequence,
         });
         let response = self.inner.get().await?.report_task_status(request).await?;
