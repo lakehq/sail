@@ -1,5 +1,4 @@
 pub(crate) mod channel;
-pub(crate) mod common;
 pub(crate) mod error;
 pub(crate) mod merge;
 pub(crate) mod reader;

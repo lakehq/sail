@@ -1,7 +1,6 @@
 use std::sync::{Arc, RwLock};
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::error::DataFusionError;
 use sail_server::actor::ActorContext;
@@ -9,7 +8,6 @@ use tokio::sync::{mpsc, watch};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::stream::common::TaskStreamAdapter;
 use crate::stream::error::TaskStreamResult;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::TaskStreamSink;
@@ -29,16 +27,14 @@ pub(super) trait LocalStream: Send {
 pub(super) struct EphemeralStream {
     tx: Option<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
     rx: Option<mpsc::Receiver<TaskStreamResult<RecordBatch>>>,
-    schema: SchemaRef,
 }
 
 impl EphemeralStream {
-    pub fn new(buffer: usize, schema: SchemaRef) -> Self {
+    pub fn new(buffer: usize) -> Self {
         let (tx, rx) = mpsc::channel(buffer);
         Self {
             tx: Some(tx),
             rx: Some(rx),
-            schema,
         }
     }
 }
@@ -61,8 +57,7 @@ impl LocalStream for EphemeralStream {
         let rx = self.rx.take().ok_or_else(|| {
             ExecutionError::InternalError("ephemeral stream can only be read once".to_string())
         })?;
-        let stream = TaskStreamAdapter::new(self.schema.clone(), ReceiverStream::new(rx));
-        Ok(Box::pin(stream))
+        Ok(Box::pin(ReceiverStream::new(rx)))
     }
 }
 
@@ -112,17 +107,15 @@ impl TaskStreamSink for MemoryStreamWriter {
 /// It maintains an unbounded list of record batches in memory.
 pub(super) struct MemoryStream {
     batches: Arc<RwLock<Vec<TaskStreamResult<RecordBatch>>>>,
-    schema: SchemaRef,
     tx: Option<watch::Sender<MemoryStreamState>>,
     rx: watch::Receiver<MemoryStreamState>,
 }
 
 impl MemoryStream {
-    pub fn new(schema: SchemaRef) -> Self {
+    pub fn new() -> Self {
         let (tx, rx) = watch::channel(MemoryStreamState::default());
         Self {
             batches: Arc::new(RwLock::new(vec![])),
-            schema,
             tx: Some(tx),
             rx,
         }
@@ -179,7 +172,6 @@ impl LocalStream for MemoryStream {
                 }
             }
         });
-        let stream = TaskStreamAdapter::new(self.schema.clone(), ReceiverStream::new(rx));
-        Ok(Box::pin(stream))
+        Ok(Box::pin(ReceiverStream::new(rx)))
     }
 }

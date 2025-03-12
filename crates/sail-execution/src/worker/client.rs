@@ -9,7 +9,6 @@ use crate::error::ExecutionResult;
 use crate::id::TaskId;
 use crate::rpc::{ClientHandle, ClientOptions};
 use crate::stream::channel::ChannelName;
-use crate::stream::common::TaskStreamAdapter;
 use crate::stream::reader::TaskStreamSource;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
 use crate::worker::gen::{
@@ -67,7 +66,9 @@ impl WorkerClient {
     pub async fn fetch_task_stream(
         &self,
         channel: ChannelName,
-        schema: SchemaRef,
+        // The schema is unused for now since we have only in-memory streams.
+        // The schema may be needed if we have on-disk streams.
+        _schema: SchemaRef,
     ) -> ExecutionResult<TaskStreamSource> {
         let ticket = TaskStreamTicket {
             channel: channel.into(),
@@ -83,7 +84,7 @@ impl WorkerClient {
         let response = self.flight_client.get().await?.do_get(request).await?;
         let stream = response.into_inner().map_err(|e| e.into());
         let stream = FlightRecordBatchStream::new_from_flight_data(stream).map_err(|e| e.into());
-        Ok(Box::pin(TaskStreamAdapter::new(schema, stream)))
+        Ok(Box::pin(stream))
     }
 
     pub async fn remove_stream(&self, channel_prefix: String) -> ExecutionResult<()> {

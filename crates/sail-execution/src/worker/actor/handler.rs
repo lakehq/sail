@@ -116,8 +116,7 @@ impl WorkerActor {
         self.task_signals
             .insert(TaskAttempt::new(task_id, attempt), tx);
         let monitor = if let Some(channel) = channel {
-            let mut output =
-                EphemeralStream::new(self.options().worker_stream_buffer, stream.schema());
+            let mut output = EphemeralStream::new(self.options().worker_stream_buffer);
             let writer = match output.publish(ctx) {
                 Ok(x) => x,
                 Err(e) => {
@@ -197,15 +196,14 @@ impl WorkerActor {
         ctx: &mut ActorContext<Self>,
         channel: ChannelName,
         storage: LocalStreamStorage,
-        schema: SchemaRef,
+        _schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
         let mut stream: Box<dyn LocalStream> = match storage {
-            LocalStreamStorage::Ephemeral => Box::new(EphemeralStream::new(
-                self.options().worker_stream_buffer,
-                schema,
-            )),
-            LocalStreamStorage::Memory => Box::new(MemoryStream::new(schema)),
+            LocalStreamStorage::Ephemeral => {
+                Box::new(EphemeralStream::new(self.options().worker_stream_buffer))
+            }
+            LocalStreamStorage::Memory => Box::new(MemoryStream::new()),
             LocalStreamStorage::Disk => {
                 return ActorAction::fail("not implemented: create disk stream")
             }

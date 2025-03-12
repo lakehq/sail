@@ -17,18 +17,6 @@ use crate::error::ExecutionResult;
 use crate::id::JobId;
 use crate::stream::error::TaskStreamError;
 
-/// The time to wait after the stop signal is received.
-///
-/// In [`JobOutput::output`], we use `tokio::select!` to wait for either the task that reads
-/// the stream or the task that waits for the stop signal.
-/// A grace period after receiving the stop signal allows the job output to return error from the
-/// stream first, before the failure in the stop signal get a chance to be returned as an error.
-/// This can provider better error message to the consumer of the job output.
-///
-/// When the stop signal contains a failure, the stream will usually be closed immediately by the
-/// remote task, so the job output does not have to wait the entire grace period before completing.
-const STOP_SIGNAL_GRACE_PERIOD: tokio::time::Duration = tokio::time::Duration::from_secs(10);
-
 pub(super) enum JobOutput {
     Pending {
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
@@ -58,6 +46,11 @@ impl JobOutput {
         signal: oneshot::Receiver<CommonErrorCause>,
         sender: mpsc::Sender<Result<RecordBatch>>,
     ) {
+        // If the task fails, the consumer of the job output will receive an error
+        // from either the stream ("data plane") or the stop signal ("control plane").
+        // We cannot guarantee which error will be received. Fortunately, the error
+        // will appear to be the same to the consumer, since they are standardized
+        // via `CommonErrorCause`.
         tokio::select! {
             _ = Self::read(stream, sender.clone()) => {},
             _ = Self::stop(signal, sender) => {},
@@ -88,11 +81,6 @@ impl JobOutput {
         sender: mpsc::Sender<Result<RecordBatch>>,
     ) {
         if let Ok(cause) = signal.await {
-            // If the stream produces an error in `Self::read()` during the grace period, the error
-            // will be sent to the job output, and the read task will complete first. In this case,
-            // `tokio::select!` will terminate `Self::stop()` as well, and the error from the stop
-            // signal will not be sent to the job output.
-            tokio::time::sleep(STOP_SIGNAL_GRACE_PERIOD).await;
             let error = DataFusionError::External(Box::new(TaskStreamError::from(cause)));
             if let Err(e) = sender.send(Err(error)).await {
                 error!("failed to send job output stop signal: {e}");
@@ -103,6 +91,11 @@ impl JobOutput {
     pub fn fail(self, ctx: &mut ActorContext<DriverActor>, job_id: JobId, cause: CommonErrorCause) {
         match self {
             JobOutput::Pending { result } => {
+                // The job output can be pending when this function is called.
+                // This happens when the task "running" and "failed" events are received
+                // out of order. In this case, the stale "running" event is ignored,
+                // and the job output never transitions to the running state.
+                // So we create a data stream here and send the error to the job output consumer.
                 let (tx, rx) = mpsc::channel(1);
                 let stream = Box::pin(RecordBatchStreamAdapter::new(
                     Arc::new(Schema::empty()),
@@ -121,7 +114,6 @@ impl JobOutput {
             }
             JobOutput::Running { signal } => {
                 let _ = signal.send(cause);
-                // `Self::finalize()` will be called in the spawned task after receiving the signal.
             }
         }
     }
