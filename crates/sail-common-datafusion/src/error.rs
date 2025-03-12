@@ -130,6 +130,8 @@ impl CommonErrorCause {
         }
     }
 
+    /// Recursively traverse the error source and determine the best error cause
+    /// from the innermost error.
     pub fn new(error: &(dyn std::error::Error + 'static)) -> Self {
         Self::build(error, &mut HashSet::new())
     }

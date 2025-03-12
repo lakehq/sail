@@ -4806,7 +4806,6 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "log",
- "pin-project-lite",
  "prost 0.13.5",
  "prost-build",
  "rand 0.9.0",

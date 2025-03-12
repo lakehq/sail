@@ -322,7 +322,6 @@ impl From<CommonErrorCause> for SparkThrowable {
 
 impl From<SparkError> for Status {
     fn from(error: SparkError) -> Self {
-        // TODO: extract nested error from `DataFusionError::Context`
         match error {
             SparkError::ArrowError(e) => SparkThrowable::from(CommonErrorCause::new(&e)).into(),
             SparkError::DataFusionError(e) => {

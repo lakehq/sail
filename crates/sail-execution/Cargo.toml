@@ -25,7 +25,6 @@ serde_json = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
 rand = { workspace = true }
-pin-project-lite = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
