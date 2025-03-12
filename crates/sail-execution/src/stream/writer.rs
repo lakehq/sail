@@ -59,6 +59,7 @@ pub trait TaskStreamWriter: Debug + Send + Sync {
 #[tonic::async_trait]
 pub trait TaskStreamSink: Send {
     async fn write(&mut self, batch: TaskStreamResult<RecordBatch>) -> Result<()>;
+    // TODO: close the sink on drop
     fn close(self: Box<Self>) -> Result<()>;
 }
 
