@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 
-use crate::spark::{run_pyspark_shell, run_spark_connect_server};
+use crate::spark::{
+    run_pyspark_shell, run_spark_connect_server, run_spark_mcp_server, McpSettings, McpTransport,
+};
 use crate::worker::run_worker;
 
 #[derive(Parser)]
@@ -45,6 +47,33 @@ enum SparkCommand {
         about = "Start the PySpark shell with a Spark Connect server running in the background"
     )]
     Shell,
+    #[command(about = "Start the Spark MCP (Model Context Protocol) server")]
+    Mcp {
+        #[arg(
+            long,
+            default_value = "127.0.0.1",
+            help = "The host that the MCP server binds to"
+        )]
+        host: String,
+        #[arg(
+            long,
+            default_value_t = 8000,
+            help = "The port number that the server listens on"
+        )]
+        port: u16,
+        #[arg(
+            long,
+            default_value_t = McpTransport::Sse,
+            help = "The transport to use for the MCP server"
+        )]
+        transport: McpTransport,
+        #[arg(
+            short = 'C',
+            long,
+            help = "The directory to change to before starting the server"
+        )]
+        directory: Option<String>,
+    },
 }
 
 pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -67,6 +96,21 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 // TODO: Why is there warning about leaked semaphore objects
                 //   according to the Python multiprocessing resource tracker?
                 run_pyspark_shell()
+            }
+            SparkCommand::Mcp {
+                host,
+                port,
+                transport,
+                directory,
+            } => {
+                if let Some(directory) = directory {
+                    std::env::set_current_dir(directory)?;
+                }
+                run_spark_mcp_server(McpSettings {
+                    transport,
+                    host,
+                    port,
+                })
             }
         },
     }

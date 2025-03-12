@@ -34,6 +34,10 @@ spark = [
     "pyspark[connect]>=3.5,<4.0",
     "duckdb>=1.0,<2.0",
 ]
+mcp = [
+    "mcp>=1.0.0",
+    "tabulate~=0.9.0",
+]
 
 [project.urls]
 Homepage = "https://lakesail.com"
@@ -71,6 +75,8 @@ dependencies = [
     "rich>=12.4.4,<14", # (required by Ibis PySpark)
     "pytest~=8.3",
     "duckdb~=1.1",
+    "mcp>=1.0.0",
+    "tabulate~=0.9.0",
 ]
 
 [tool.hatch.envs.default.overrides]
