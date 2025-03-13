@@ -86,14 +86,20 @@ impl DriverService for DriverServer {
             status,
             attempt,
             message,
+            cause,
             sequence,
         } = request;
         let status = gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
+        let cause = cause
+            .map(|x| serde_json::from_str(&x))
+            .transpose()
+            .map_err(ExecutionError::from)?;
         let event = DriverEvent::UpdateTask {
             task_id: task_id.into(),
             attempt: attempt as usize,
             status: status.into(),
             message,
+            cause,
             sequence: Some(sequence),
         };
         self.handle

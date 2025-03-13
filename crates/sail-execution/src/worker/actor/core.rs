@@ -12,7 +12,7 @@ use crate::driver::DriverClient;
 use crate::error::ExecutionResult;
 use crate::id::{TaskAttempt, WorkerId};
 use crate::rpc::{ClientOptions, ServerMonitor};
-use crate::stream::ChannelName;
+use crate::stream::channel::ChannelName;
 use crate::worker::actor::local_stream::LocalStream;
 use crate::worker::event::WorkerEvent;
 use crate::worker::options::WorkerOptions;
@@ -83,7 +83,8 @@ impl Actor for WorkerActor {
                 attempt,
                 status,
                 message,
-            } => self.handle_report_task_status(ctx, task_id, attempt, status, message),
+                cause,
+            } => self.handle_report_task_status(ctx, task_id, attempt, status, message, cause),
             WorkerEvent::CreateLocalStream {
                 channel,
                 storage,

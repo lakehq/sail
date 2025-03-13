@@ -112,7 +112,8 @@ use crate::plan::gen::{
     ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
 use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{LocalStreamStorage, TaskReadLocation, TaskWriteLocation};
+use crate::stream::reader::TaskReadLocation;
+use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,

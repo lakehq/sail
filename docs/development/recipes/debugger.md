@@ -18,7 +18,7 @@ In **Run** > **Edit Configurations**, add a new **Cargo** configuration with the
      project
      path. **This must be an absolute path.**)
    - (optional) `RUST_BACKTRACE`: `full`
-   - (optional) `RUST_LOG`: `sail_spark_connect=debug`
+   - (optional) `RUST_LOG`: `sail=debug`
 
 When entering environment variables, you can click on the button on the right side of the input box to open the dialog
 and add the environment variables one by one.
