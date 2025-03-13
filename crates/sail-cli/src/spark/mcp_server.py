@@ -53,7 +53,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Spark MCP server")
     parser.add_argument("--transport", default="sse", help="The transport for the MCP server", choices=["stdio", "sse"])
-    parser.add_argument("--host", default="127.0.0.1", help="The host for the MCP server to listen on")
+    parser.add_argument("--host", default="127.0.0.1", help="The host for the MCP server to bind to")
     parser.add_argument("--port", default=8000, type=int, help="The port for the MCP server to listen on")
     args = parser.parse_args()
 

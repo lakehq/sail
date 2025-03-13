@@ -52,13 +52,13 @@ enum SparkCommand {
         #[arg(
             long,
             default_value = "127.0.0.1",
-            help = "The host that the MCP server binds to"
+            help = "The host that the MCP server binds to (ignored for the stdio transport)"
         )]
         host: String,
         #[arg(
             long,
             default_value_t = 8000,
-            help = "The port number that the server listens on"
+            help = "The port number that the server listens on (ignored for the stdio transport)"
         )]
         port: u16,
         #[arg(
