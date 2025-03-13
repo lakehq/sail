@@ -79,6 +79,8 @@ half = { version = "2.4.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.61"
 chumsky = { version = "=1.0.0-alpha.7", default-features = false, features = ["pratt", "label"] }
 num = "0.4.3"
+hf-hub = { version = "0.4.2", default-features = false, features = ["tokio"] }
+reqwest = "0.12.14"
 
 ######
 # The versions of the following dependencies are managed manually.
