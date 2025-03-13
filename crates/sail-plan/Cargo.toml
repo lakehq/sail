@@ -48,6 +48,7 @@ half = { workspace = true }
 num = { workspace = true }
 hf-hub = { workspace = true }
 reqwest = { workspace = true }
+log = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]

@@ -85,7 +85,10 @@ impl DynamicObjectStoreRegistry {
             }
             "hf" => {
                 if key.authority != "datasets" {
-                    return plan_err!("unsupported HuggingFace repository type: {}", key.authority);
+                    return plan_err!(
+                        "unsupported Hugging Face repository type: {}",
+                        key.authority
+                    );
                 }
                 Ok(Arc::new(HuggingFaceObjectStore::try_new()?))
             }

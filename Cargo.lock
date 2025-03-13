@@ -5085,6 +5085,7 @@ dependencies = [
  "hf-hub",
  "html-escape",
  "lazy_static",
+ "log",
  "num",
  "object_store",
  "rand 0.9.0",

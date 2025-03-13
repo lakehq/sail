@@ -8,6 +8,7 @@ use futures::stream::BoxStream;
 use hf_hub::api::tokio::{Api, ApiBuilder, ApiError, ApiRepo};
 use hf_hub::{Repo, RepoType};
 use lazy_static::lazy_static;
+use log::debug;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::{
@@ -26,7 +27,7 @@ lazy_static! {
 
 #[derive(Debug, thiserror::Error)]
 enum HuggingFaceError {
-    #[error("HuggingFace API error: {0}")]
+    #[error("Hugging Face API error: {0}")]
     ApiError(#[from] ApiError),
     #[error("date/time parse error: {0}")]
     DateTimeParseError(#[from] chrono::format::ParseError),
@@ -38,7 +39,7 @@ enum HuggingFaceError {
 
 impl From<HuggingFaceError> for object_store::Error {
     fn from(value: HuggingFaceError) -> Self {
-        const OBJECT_STORE_NAME: &str = "HuggingFace object store";
+        const OBJECT_STORE_NAME: &str = "Hugging Face object store";
 
         match value {
             HuggingFaceError::ApiError(error) => match error {
@@ -151,6 +152,7 @@ impl HuggingFaceObjectStore {
         filename: &str,
     ) -> object_store::Result<ObjectMeta> {
         let location = Path::parse(format!("{base_path}/{filename}"))?;
+        debug!("Getting Hugging Face file metadata: {location:?}");
         let response = self
             .api
             .client()
@@ -262,10 +264,12 @@ impl ObjectStore for HuggingFaceObjectStore {
                 attributes: Default::default(),
             })
         } else {
+            debug!("Fetching Hugging Face file if not cached: {location:?}");
             let location = repo
                 .get(path.path.as_str())
                 .await
                 .map_err(HuggingFaceError::from)?;
+            debug!("Reading Hugging Face file from local cache: {location:?}");
             self.local
                 .get_opts(
                     &Path::from_filesystem_path(location)?,
@@ -287,6 +291,7 @@ impl ObjectStore for HuggingFaceObjectStore {
             Ok(x) => x,
             Err(e) => return Box::pin(stream::once(async { Err(e) })),
         };
+        debug!("Listing Hugging Face files: {path:?}");
         let stream = async_stream::try_stream! {
             let repo = self.api.repo(path.repo());
             let info = repo.info().await.map_err(HuggingFaceError::from)?;
