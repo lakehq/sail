@@ -1,4 +1,5 @@
 mod config;
+mod hugging_face;
 mod registry;
 mod s3;
 

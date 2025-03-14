@@ -11,6 +11,7 @@ use object_store::ObjectStore;
 use url::Url;
 
 use crate::object_store::config::OBJECT_STORE_CONFIG;
+use crate::object_store::hugging_face::HuggingFaceObjectStore;
 use crate::object_store::s3::S3CredentialProvider;
 
 #[derive(Debug, Eq, PartialEq, Hash)]
@@ -81,6 +82,15 @@ impl DynamicObjectStoreRegistry {
                     None => HdfsObjectStore::with_url(url.as_str())?,
                 };
                 Ok(Arc::new(store))
+            }
+            "hf" => {
+                if key.authority != "datasets" {
+                    return plan_err!(
+                        "unsupported Hugging Face repository type: {}",
+                        key.authority
+                    );
+                }
+                Ok(Arc::new(HuggingFaceObjectStore::try_new()?))
             }
             _ => {
                 plan_err!("unsupported object store URL: {url}")

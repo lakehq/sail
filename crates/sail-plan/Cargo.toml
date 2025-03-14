@@ -19,6 +19,7 @@ tonic = { workspace = true }
 tokio-stream = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
+async-stream = { workspace = true }
 lazy_static = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
@@ -45,6 +46,9 @@ cbc = { workspace = true }
 base64 = { workspace = true }
 half = { workspace = true }
 num = { workspace = true }
+hf-hub = { workspace = true }
+reqwest = { workspace = true }
+log = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]
