@@ -1,6 +1,5 @@
 use datafusion_common::{exec_err, DFSchema, DFSchemaRef, Result, SchemaReference};
 use datafusion_expr::{CreateCatalogSchema, DdlStatement, DropCatalogSchema, LogicalPlan};
-use sail_common::unwrap_or;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::utils::match_pattern;
@@ -39,7 +38,7 @@ impl CatalogManager<'_> {
         };
         let database = self.get_database(database)?;
         if database.is_none() {
-            return exec_err!("Database not found: {database_name}");
+            return exec_err!("database not found: {database_name}");
         }
         let state = self.ctx.state_ref();
         let mut state = state.write();
@@ -52,11 +51,12 @@ impl CatalogManager<'_> {
         database: SchemaReference,
     ) -> Result<Option<DatabaseMetadata>> {
         let (catalog_name, database_name) = self.resolve_database_reference(Some(database))?;
-        let catalog_provider = unwrap_or!(self.ctx.catalog(catalog_name.as_ref()), return Ok(None));
-        let _ = unwrap_or!(
-            catalog_provider.schema(database_name.as_ref()),
-            return Ok(None)
-        );
+        let Some(catalog_provider) = self.ctx.catalog(catalog_name.as_ref()) else {
+            return Ok(None);
+        };
+        if catalog_provider.schema(database_name.as_ref()).is_none() {
+            return Ok(None);
+        };
         Ok(Some(DatabaseMetadata::new(
             catalog_name.as_ref(),
             database_name.as_ref(),
@@ -69,10 +69,9 @@ impl CatalogManager<'_> {
         database_pattern: Option<&str>,
     ) -> Result<Vec<DatabaseMetadata>> {
         let catalog_name = self.resolve_catalog_reference(catalog)?;
-        let catalog_provider = unwrap_or!(
-            self.ctx.catalog(catalog_name.as_ref()),
-            return Ok(Vec::new())
-        );
+        let Some(catalog_provider) = self.ctx.catalog(catalog_name.as_ref()) else {
+            return Ok(Vec::new());
+        };
         Ok(catalog_provider
             .schema_names()
             .iter()

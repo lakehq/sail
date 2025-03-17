@@ -686,12 +686,14 @@ impl PlanResolver<'_> {
                 view.map(|x| x.as_ref().clone())
             }
             TableReference::Partial { schema, table } => {
-                if schema.as_ref() == self.config.global_temp_database.as_str() {
+                if schema.as_ref() == self.config.global_temp_database {
                     let view = manage_temporary_views(self.ctx, true, |views| {
                         views.get_view(table.as_ref())
                     })?;
                     let view = view.ok_or_else(|| {
-                        PlanError::invalid(format!("global temporary view not found: {table}"))
+                        PlanError::AnalysisError(format!(
+                            "global temporary view not found: {table}"
+                        ))
                     })?;
                     Some(view.as_ref().clone())
                 } else {
@@ -2870,11 +2872,13 @@ impl PlanResolver<'_> {
         self.resolve_catalog_command(command)
     }
 
-    fn resolve_view_name(view: spec::ObjectName) -> PlanResult<String> {
-        let names: Vec<String> = view.into();
-        names
-            .one()
-            .map_err(|_| PlanError::invalid("multi-part view name"))
+    fn resolve_view_name(view: TableReference) -> PlanResult<String> {
+        match view {
+            TableReference::Bare { table } => Ok(table.as_ref().to_string()),
+            TableReference::Partial { .. } | TableReference::Full { .. } => {
+                Err(PlanError::invalid("qualified view name"))
+            }
+        }
     }
 
     async fn resolve_catalog_drop_view(
@@ -2885,37 +2889,32 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         use spec::ViewKind;
 
-        let kind = match kind {
-            None => {
-                let view = self.resolve_table_reference(&view)?;
-                match view {
-                    TableReference::Bare { table } => {
-                        let temporary = manage_temporary_views(self.ctx, false, |views| {
-                            Ok(views.get_view(&table)?.is_some())
-                        })?;
-                        if temporary {
-                            ViewKind::Temporary
-                        } else {
-                            ViewKind::Default
-                        }
+        let view = self.resolve_table_reference(&view)?;
+        let (kind, view) = match kind {
+            None => match view {
+                TableReference::Bare { ref table } => {
+                    let temporary = manage_temporary_views(self.ctx, false, |views| {
+                        Ok(views.get_view(table)?.is_some())
+                    })?;
+                    if temporary {
+                        (ViewKind::Temporary, view)
+                    } else {
+                        (ViewKind::Default, view)
                     }
-                    TableReference::Partial { schema, .. } => {
-                        if schema.as_ref() == self.config.global_temp_database.as_str() {
-                            ViewKind::GlobalTemporary
-                        } else {
-                            ViewKind::Default
-                        }
-                    }
-                    TableReference::Full { .. } => ViewKind::Default,
                 }
-            }
-            Some(x) => x,
+                TableReference::Partial { schema, table } => {
+                    if schema.as_ref() == self.config.global_temp_database {
+                        (ViewKind::GlobalTemporary, TableReference::bare(table))
+                    } else {
+                        (ViewKind::Default, TableReference::partial(schema, table))
+                    }
+                }
+                TableReference::Full { .. } => (ViewKind::Default, view),
+            },
+            Some(x) => (x, view),
         };
         let command = match kind {
-            ViewKind::Default => CatalogCommand::DropView {
-                view: self.resolve_table_reference(&view)?,
-                if_exists,
-            },
+            ViewKind::Default => CatalogCommand::DropView { view, if_exists },
             ViewKind::Temporary => CatalogCommand::DropTemporaryView {
                 view_name: Self::resolve_view_name(view)?,
                 is_global: false,
@@ -2955,10 +2954,11 @@ impl PlanResolver<'_> {
             None => Self::get_field_names(input.schema(), state)?,
         };
         let input = rename_logical_plan(input, &fields)?;
+        let view = self.resolve_table_reference(&view)?;
         let command = match kind {
             ViewKind::Default => CatalogCommand::CreateView {
                 input: Arc::new(input),
-                view: self.resolve_table_reference(&view)?,
+                view,
                 replace,
                 definition,
             },

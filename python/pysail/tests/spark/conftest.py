@@ -19,7 +19,7 @@ def remote():
         server.stop()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def sail(remote):
     if "SPARK_LOCAL_REMOTE" in os.environ:
         del os.environ["SPARK_LOCAL_REMOTE"]
@@ -29,7 +29,7 @@ def sail(remote):
     sail.stop()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def spark():
     os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
     os.environ["SPARK_LOCAL_REMOTE"] = "true"
@@ -52,9 +52,8 @@ def configure_spark_session(session: SparkSession):
     session.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def sail_doctest(doctest_namespace, sail):
-    # TODO: we may need to isolate the Spark session for each doctest
-    #   so that the registered temporary views and UDFs does not interfere
-    #   with each other.
+    # The Spark session is scoped to each module, so that the registered
+    # temporary views and UDFs do not interfere with each other.
     doctest_namespace["spark"] = sail

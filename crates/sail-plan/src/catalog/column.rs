@@ -1,7 +1,7 @@
 use datafusion_common::{exec_datafusion_err, exec_err, Result, TableReference};
-use sail_common::unwrap_or;
 use serde::{Deserialize, Serialize};
 
+use crate::catalog::table::TableObject;
 use crate::catalog::CatalogManager;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
@@ -34,21 +34,13 @@ impl CatalogManager<'_> {
         &self,
         table: TableReference,
     ) -> Result<Vec<TableColumnMetadata>> {
-        let (catalog_name, database_name, table_name) = self.resolve_table_reference(table)?;
-        let catalog_provider = unwrap_or!(
-            self.ctx.catalog(catalog_name.as_ref()),
-            return Ok(Vec::new())
-        );
-        let schema_provider = unwrap_or!(
-            catalog_provider.schema(database_name.as_ref()),
-            return Ok(Vec::new())
-        );
-        let table = unwrap_or!(
-            schema_provider.table(table_name.as_ref()).await?,
-            return exec_err!("Table not found: {table_name}")
-        );
-        table
-            .schema()
+        let schema = match self.get_table_object(table.clone()).await? {
+            Some(TableObject::Table { table_provider, .. }) => table_provider.schema(),
+            Some(TableObject::GlobalTemporaryView { plan, .. })
+            | Some(TableObject::TemporaryView { plan, .. }) => plan.schema().inner().clone(),
+            None => return exec_err!("table not found: {table}"),
+        };
+        schema
             .fields()
             .iter()
             .map(|column| -> PlanResult<_> {
