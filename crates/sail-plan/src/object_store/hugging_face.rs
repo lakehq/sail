@@ -264,12 +264,24 @@ impl ObjectStore for HuggingFaceObjectStore {
                 attributes: Default::default(),
             })
         } else {
-            debug!("Fetching Hugging Face file if not cached: {location:?}");
+            // TODO: The cache is not ideal for cluster mode. In cluster mode, the driver
+            //   only needs to access the metadata at the end of the Parquet file, but the
+            //   entire file is downloaded and cached.
+            // TODO: The cache is not efficient for wide tables with many columns when
+            //   only a small set of columns are accessed.
+            debug!("Fetching Hugging Face file if not cached: {location}");
             let location = repo
                 .get(path.path.as_str())
                 .await
                 .map_err(HuggingFaceError::from)?;
-            debug!("Reading Hugging Face file from local cache: {location:?}");
+            debug!(
+                "Reading Hugging Face file from local cache: {}{}",
+                location.as_path().display(),
+                range
+                    .as_ref()
+                    .map(|x| format!(" ({x})"))
+                    .unwrap_or_default()
+            );
             self.local
                 .get_opts(
                     &Path::from_filesystem_path(location)?,

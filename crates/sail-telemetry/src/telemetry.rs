@@ -56,9 +56,9 @@ pub fn init_logger(use_collector: bool) -> TelemetryResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format(move |buf, record| {
             if use_collector {
-                Event::add_to_local_parent(record.level().as_str(), || {
-                    [("message".into(), record.args().to_string().into())]
-                });
+                LocalSpan::add_event(Event::new(record.level().as_str()).with_properties(|| {
+                    [("message", record.args().to_string())]
+                }));
             }
             let level = record.level();
             let target = record.target();

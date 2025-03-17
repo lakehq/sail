@@ -16,6 +16,7 @@ mod schema;
 mod state;
 mod statistic;
 mod tree;
+mod url;
 
 pub struct PlanResolver<'a> {
     ctx: &'a SessionContext,
