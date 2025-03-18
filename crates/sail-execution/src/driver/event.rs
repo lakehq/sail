@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -40,7 +41,7 @@ pub enum DriverEvent {
         plan: Arc<dyn ExecutionPlan>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },
-    RemoveJobOutput {
+    CleanUpJob {
         job_id: JobId,
     },
     UpdateTask {
@@ -48,6 +49,7 @@ pub enum DriverEvent {
         attempt: usize,
         status: TaskStatus,
         message: Option<String>,
+        cause: Option<CommonErrorCause>,
         /// The sequence number from the worker,
         /// or [None] if it is a forced update within the driver.
         sequence: Option<u64>,

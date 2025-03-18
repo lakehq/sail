@@ -18,7 +18,7 @@ use futures::future::try_join_all;
 use futures::StreamExt;
 
 use crate::plan::{write_list_of_lists, ShuffleConsumption};
-use crate::stream::{TaskStreamWriter, TaskWriteLocation};
+use crate::stream::writer::{TaskStreamWriter, TaskWriteLocation};
 
 #[derive(Debug, Clone)]
 pub struct ShuffleWriteExec {
@@ -221,7 +221,7 @@ async fn shuffle_write(
         })?;
         for p in 0..partitions.len() {
             if let Some(batch) = partitions[p].take() {
-                partition_writers[p].write(batch).await?;
+                partition_writers[p].write(Ok(batch)).await?;
             }
         }
     }

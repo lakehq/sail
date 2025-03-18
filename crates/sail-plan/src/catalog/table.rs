@@ -8,12 +8,31 @@ use datafusion_common::{
 use datafusion_expr::{
     CreateExternalTable, CreateMemoryTable, DdlStatement, DropTable, Expr, LogicalPlan, TableType,
 };
-use sail_common::unwrap_or;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::utils::match_pattern;
 use crate::catalog::CatalogManager;
 use crate::extension::logical::CatalogCommand;
+use crate::temp_view::manage_temporary_views;
+
+#[derive(Debug, Clone)]
+pub(crate) enum TableObject {
+    Table {
+        catalog_name: String,
+        database_name: String,
+        table_name: String,
+        table_provider: Arc<dyn TableProvider>,
+    },
+    GlobalTemporaryView {
+        database_name: String,
+        table_name: String,
+        plan: Arc<LogicalPlan>,
+    },
+    TemporaryView {
+        table_name: String,
+        plan: Arc<LogicalPlan>,
+    },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TableTypeName {
@@ -22,6 +41,25 @@ pub(crate) enum TableTypeName {
     Managed,
     View,
     Temporary,
+}
+
+impl TableTypeName {
+    pub(crate) fn from_table_object(table: &TableObject) -> Self {
+        match table {
+            TableObject::Table { table_provider, .. } => {
+                match table_provider.table_type() {
+                    // TODO: determine whether the table is managed or external
+                    //   based on table properties
+                    TableType::Base => TableTypeName::Managed,
+                    TableType::View => TableTypeName::View,
+                    TableType::Temporary => TableTypeName::Temporary,
+                }
+            }
+            TableObject::GlobalTemporaryView { .. } | TableObject::TemporaryView { .. } => {
+                TableTypeName::Temporary
+            }
+        }
+    }
 }
 
 impl fmt::Display for TableTypeName {
@@ -35,62 +73,43 @@ impl fmt::Display for TableTypeName {
     }
 }
 
-impl From<TableType> for TableTypeName {
-    fn from(table_type: TableType) -> Self {
-        match table_type {
-            TableType::Base => TableTypeName::Managed, // TODO: Could also be EXTERNAL
-            TableType::Temporary => TableTypeName::Temporary,
-            TableType::View => TableTypeName::View,
-        }
-    }
-}
-
-impl From<TableTypeName> for TableType {
-    fn from(catalog_table_type: TableTypeName) -> Self {
-        match catalog_table_type {
-            TableTypeName::External => TableType::Base,
-            TableTypeName::Managed => TableType::Base,
-            TableTypeName::View => TableType::View,
-            TableTypeName::Temporary => TableType::Temporary,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TableMetadata {
     pub(crate) name: String,
     pub(crate) catalog: Option<String>,
-    pub(crate) namespace: Option<Vec<String>>,
+    pub(crate) namespace: Vec<String>,
     pub(crate) description: Option<String>,
     pub(crate) table_type: String,
     pub(crate) is_temporary: bool,
 }
 
 impl TableMetadata {
-    pub(crate) fn new(
-        catalog_name: &str,
-        database_name: &str,
-        table_name: &str,
-        table_provider: Arc<dyn TableProvider>,
-    ) -> Self {
-        let table_type: TableTypeName = table_provider.table_type().into();
-        let (catalog, namespace) =
-            if table_type == TableTypeName::Temporary || table_type == TableTypeName::View {
-                // Temporary views in the Spark session do not have a catalog or namespace
-                (None, None)
-            } else {
-                (
-                    Some(catalog_name.to_string()),
-                    Some(vec![database_name.to_string()]),
-                )
-            };
+    pub(crate) fn from_table_object(table: TableObject) -> Self {
+        let table_type = TableTypeName::from_table_object(&table);
+        let (name, catalog, namespace) = match table {
+            TableObject::Table {
+                catalog_name,
+                database_name,
+                table_name,
+                table_provider: _,
+            } => (table_name, Some(catalog_name), vec![database_name]),
+            TableObject::GlobalTemporaryView {
+                database_name,
+                table_name,
+                plan: _,
+            } => (table_name, None, vec![database_name]),
+            TableObject::TemporaryView {
+                table_name,
+                plan: _,
+            } => (table_name, None, vec![]),
+        };
         Self {
-            name: table_name.to_string(),
+            name,
             catalog,
             namespace,
             description: None, // TODO: support description
             table_type: table_type.to_string(),
-            is_temporary: table_type == TableTypeName::Temporary,
+            is_temporary: matches!(table_type, TableTypeName::Temporary),
         }
     }
 }
@@ -170,41 +189,125 @@ impl CatalogManager<'_> {
         }
     }
 
-    pub(crate) async fn get_table_provider(
+    pub(crate) async fn get_table_object(
         &self,
-        catalog_name: &str,
-        database_name: &str,
-        table_name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>> {
-        let catalog_provider = unwrap_or!(self.ctx.catalog(catalog_name.as_ref()), return Ok(None));
-        let schema_provider = unwrap_or!(
-            catalog_provider.schema(database_name.as_ref()),
-            return Ok(None)
-        );
-        let table_provider = unwrap_or!(
-            schema_provider.table(table_name.as_ref()).await?,
-            return Ok(None)
-        );
-        Ok(Some(table_provider))
+        table: TableReference,
+    ) -> Result<Option<TableObject>> {
+        match &table {
+            TableReference::Bare { table } => {
+                if let Some(plan) =
+                    manage_temporary_views(self.ctx, false, |views| views.get_view(table))?
+                {
+                    return Ok(Some(TableObject::TemporaryView {
+                        table_name: table.as_ref().to_string(),
+                        plan,
+                    }));
+                }
+            }
+            TableReference::Partial { schema, table }
+                if schema.as_ref() == self.config.global_temp_database =>
+            {
+                if let Some(plan) =
+                    manage_temporary_views(self.ctx, true, |views| views.get_view(table))?
+                {
+                    return Ok(Some(TableObject::GlobalTemporaryView {
+                        database_name: schema.as_ref().to_string(),
+                        table_name: table.as_ref().to_string(),
+                        plan,
+                    }));
+                }
+            }
+            _ => {}
+        };
+        let (catalog_name, database_name, table_name) = self.resolve_table_reference(table)?;
+        let Some(catalog_provider) = self.ctx.catalog(catalog_name.as_ref()) else {
+            return Ok(None);
+        };
+        let Some(schema_provider) = catalog_provider.schema(database_name.as_ref()) else {
+            return Ok(None);
+        };
+        let Some(table_provider) = schema_provider.table(table_name.as_ref()).await? else {
+            return Ok(None);
+        };
+        Ok(Some(TableObject::Table {
+            catalog_name: catalog_name.as_ref().to_string(),
+            database_name: database_name.as_ref().to_string(),
+            table_name: table_name.as_ref().to_string(),
+            table_provider,
+        }))
     }
 
     pub(crate) async fn get_table(&self, table: TableReference) -> Result<Option<TableMetadata>> {
-        let (catalog_name, database_name, table_name) = self.resolve_table_reference(table)?;
-        let table_provider = unwrap_or!(
-            self.get_table_provider(
-                catalog_name.as_ref(),
-                database_name.as_ref(),
-                table_name.as_ref()
-            )
-            .await?,
-            return Ok(None)
-        );
-        Ok(Some(TableMetadata::new(
-            catalog_name.as_ref(),
-            database_name.as_ref(),
-            table_name.as_ref(),
-            table_provider,
-        )))
+        Ok(self
+            .get_table_object(table)
+            .await?
+            .map(TableMetadata::from_table_object))
+    }
+
+    async fn list_global_temporary_views(
+        &self,
+        pattern: Option<&str>,
+    ) -> Result<Vec<TableMetadata>> {
+        manage_temporary_views(self.ctx, true, |views| {
+            views.list_views(pattern).map(|views| {
+                views
+                    .into_iter()
+                    .map(|(name, plan)| {
+                        TableMetadata::from_table_object(TableObject::GlobalTemporaryView {
+                            database_name: self.config.global_temp_database.clone(),
+                            table_name: name,
+                            plan,
+                        })
+                    })
+                    .collect()
+            })
+        })
+    }
+
+    async fn list_temporary_views(&self, pattern: Option<&str>) -> Result<Vec<TableMetadata>> {
+        manage_temporary_views(self.ctx, false, |views| {
+            views.list_views(pattern).map(|views| {
+                views
+                    .into_iter()
+                    .map(|(name, plan)| {
+                        TableMetadata::from_table_object(TableObject::TemporaryView {
+                            table_name: name,
+                            plan,
+                        })
+                    })
+                    .collect()
+            })
+        })
+    }
+
+    async fn list_catalog_tables(
+        &self,
+        database: Option<SchemaReference>,
+        table_pattern: Option<&str>,
+    ) -> Result<Vec<TableMetadata>> {
+        let (catalog_name, database_name) = self.resolve_database_reference(database)?;
+        let Some(catalog_provider) = self.ctx.catalog(catalog_name.as_ref()) else {
+            return Ok(Vec::new());
+        };
+        let Some(schema_provider) = catalog_provider.schema(database_name.as_ref()) else {
+            return exec_err!("database not found: {database_name}");
+        };
+        let mut tables = Vec::new();
+        for table_name in schema_provider.table_names() {
+            if !match_pattern(table_name.as_str(), table_pattern) {
+                continue;
+            }
+            let Some(table_provider) = schema_provider.table(&table_name).await? else {
+                continue;
+            };
+            tables.push(TableMetadata::from_table_object(TableObject::Table {
+                catalog_name: catalog_name.as_ref().to_string(),
+                database_name: database_name.as_ref().to_string(),
+                table_name,
+                table_provider,
+            }));
+        }
+        Ok(tables)
     }
 
     pub(crate) async fn list_tables(
@@ -212,66 +315,21 @@ impl CatalogManager<'_> {
         database: Option<SchemaReference>,
         table_pattern: Option<&str>,
     ) -> Result<Vec<TableMetadata>> {
-        let (catalog_name, database_name) = self.resolve_database_reference(database)?;
-        let catalog_provider = unwrap_or!(
-            self.ctx.catalog(catalog_name.as_ref()),
-            return Ok(Vec::new())
-        );
-        let schema_provider = unwrap_or!(
-            catalog_provider.schema(database_name.as_ref()),
-            return exec_err!("Database not found: {database_name}")
-        );
-        let mut tables = Vec::new();
-        for table_name in schema_provider.table_names() {
-            if !match_pattern(table_name.as_str(), table_pattern) {
-                continue;
-            }
-            let table_provider = unwrap_or!(schema_provider.table(&table_name).await?, continue);
-            tables.push(TableMetadata::new(
-                catalog_name.as_ref(),
-                database_name.as_ref(),
-                table_name.as_str(),
-                table_provider,
-            ));
-        }
-        let default_catalog = self.default_catalog()?;
-        let default_database = self.default_database()?;
-        if catalog_name.as_ref() != default_catalog.as_str()
-            || database_name.as_ref() != default_database.as_str()
-        {
-            let catalog_provider = unwrap_or!(
-                self.ctx.catalog(default_catalog.as_str()),
-                return Ok(tables)
-            );
-            let schema_provider = unwrap_or!(
-                catalog_provider.schema(default_database.as_str()),
-                return Ok(tables)
-            );
-            for table_name in schema_provider.table_names() {
-                if !match_pattern(table_name.as_str(), table_pattern) {
-                    continue;
-                }
-                let table_provider =
-                    unwrap_or!(schema_provider.table(&table_name).await?, continue);
-                if table_provider.table_type() != TableType::Temporary
-                    && table_provider.table_type() != TableType::View
-                {
-                    continue;
-                }
-                tables.push(TableMetadata::new(
-                    default_catalog.as_ref(),
-                    default_database.as_ref(),
-                    table_name.as_str(),
-                    table_provider,
-                ));
-            }
-            // TODO: Spark temporary views are session-scoped and are not associated with a catalog.
-            //   We should include the temporary views in the result.
-            //   Spark *global* temporary views should be put in the `global_temp` database, and they will be
-            //   included in the result if the database pattern matches `global_temp`.
-            //   The `global_temp` database name can be configured via `spark.sql.globalTempDatabase`.
-        }
-        Ok(tables)
+        // Spark *global* temporary views should be put in the `global_temp` database, and they will be
+        // included in the output if the database pattern matches `global_temp`.
+        // The `global_temp` database name can be changed via the `spark.sql.globalTempDatabase` configuration.
+        let mut output = if database.as_ref().is_some_and(|x| match x {
+            SchemaReference::Bare { schema } => schema.as_ref() == self.config.global_temp_database,
+            SchemaReference::Full { .. } => false,
+        }) {
+            self.list_global_temporary_views(table_pattern).await?
+        } else {
+            self.list_catalog_tables(database, table_pattern).await?
+        };
+        // Spark (local) temporary views are session-scoped and are not associated with a catalog.
+        // We should include the temporary views in the output.
+        output.extend(self.list_temporary_views(table_pattern).await?);
+        Ok(output)
     }
 
     pub(crate) async fn drop_table(

@@ -1,0 +1,13 @@
+>>> spark.range(1).createTempView("t1")
+>>> spark.catalog.listColumns("t1")
+[Column(name='id', description=None, dataType='bigint', nullable=False, isPartition=False, isBucket=False)]
+>>> spark.sql("DROP VIEW IF EXISTS global_temp.t2")
+DataFrame[...]
+>>> spark.sql("CREATE GLOBAL TEMPORARY VIEW t2 AS SELECT 1 AS a")
+DataFrame[...]
+>>> spark.catalog.listColumns("t2")
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: ...
+>>> spark.catalog.listColumns("global_temp.t2")
+[Column(name='a', description=None, dataType='int', nullable=False, isPartition=False, isBucket=False)]
