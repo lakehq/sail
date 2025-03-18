@@ -1,5 +1,6 @@
 import os
 
+import pyspark.sql.connect.session
 import pytest
 from pyspark.context import SparkContext
 from pyspark.sql import SparkSession
@@ -25,6 +26,7 @@ def sail(remote):
         del os.environ["SPARK_LOCAL_REMOTE"]
     sail = SparkSession.builder.remote(remote).appName("Sail").getOrCreate()
     configure_spark_session(sail)
+    patch_spark_connect_session(sail)
     yield sail
     sail.stop()
 
@@ -50,6 +52,20 @@ def configure_spark_session(session: SparkSession):
     session.conf.set("spark.sql.session.timeZone", "UTC")
     # Enable Arrow to avoid data type errors when creating Spark DataFrame from Pandas.
     session.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
+
+
+def patch_spark_connect_session(session: pyspark.sql.connect.session.SparkSession):
+    """
+    Patch the Spark Connect session to avoid deadlock when closing the session.
+    """
+    f = session._client.close  # noqa: SLF001
+
+    def close():
+        if session._client._closed:  # noqa: SLF001
+            return
+        return f()
+
+    session._client.close = close  # noqa: SLF001
 
 
 @pytest.fixture(scope="module", autouse=True)
