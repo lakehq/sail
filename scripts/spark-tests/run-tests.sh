@@ -66,6 +66,7 @@ else
   run_pytest test-connect --pyargs pyspark.sql.tests.connect "${pytest_args[@]}"
   # The Ibis tests are not run for now due to setup errors related to Spark streaming.
   # run_pytest test-ibis --pyargs ibis.backends -m pyspark "${pytest_args[@]}"
+  run_pytest doctest-catalog --doctest-modules --pyargs pyspark.sql.catalog "${pytest_args[@]}"
   run_pytest doctest-column --doctest-modules --pyargs pyspark.sql.column "${pytest_args[@]}"
   run_pytest doctest-dataframe --doctest-modules --pyargs pyspark.sql.dataframe "${pytest_args[@]}"
   run_pytest doctest-functions --doctest-modules --pyargs pyspark.sql.functions "${pytest_args[@]}"

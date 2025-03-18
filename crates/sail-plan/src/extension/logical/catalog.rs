@@ -9,7 +9,8 @@ use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{
-    exec_datafusion_err, not_impl_err, Constraints, DFSchema, SchemaReference, TableReference,
+    exec_datafusion_err, not_impl_err, plan_err, Constraints, DFSchema, SchemaReference,
+    TableReference,
 };
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{ScalarUDF, TableScan, UNNAMED_TABLE};
@@ -680,11 +681,10 @@ impl CatalogCommand {
                 build_record_batch(command_schema, &rows)?
             }
             CatalogCommand::GetTable { table } => {
-                let rows = match manager.get_table(table).await? {
-                    Some(x) => vec![x],
-                    None => vec![],
+                let Some(table) = manager.get_table(table.clone()).await? else {
+                    return plan_err!("table not found: {table}");
                 };
-                build_record_batch(command_schema, &rows)?
+                build_record_batch(command_schema, &[table])?
             }
             CatalogCommand::ListTables {
                 database,

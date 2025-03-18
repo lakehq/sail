@@ -6,6 +6,8 @@ use datafusion_common::{internal_datafusion_err, plan_err, Result};
 use datafusion_expr::LogicalPlan;
 use lazy_static::lazy_static;
 
+use crate::catalog::utils::match_pattern;
+
 lazy_static! {
     pub(crate) static ref GLOBAL_TEMPORARY_VIEW_MANAGER: TemporaryViewManager =
         TemporaryViewManager::default();
@@ -64,6 +66,21 @@ impl TemporaryViewManager {
             .read()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
         Ok(views.get(name).map(Arc::clone))
+    }
+
+    pub(crate) fn list_views(
+        &self,
+        pattern: Option<&str>,
+    ) -> Result<Vec<(String, Arc<LogicalPlan>)>> {
+        let views = self
+            .views
+            .read()
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        Ok(views
+            .iter()
+            .filter(|(name, _)| match_pattern(name.as_str(), pattern))
+            .map(|(name, plan)| (name.clone(), Arc::clone(plan)))
+            .collect())
     }
 }
 
