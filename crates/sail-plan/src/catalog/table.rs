@@ -238,10 +238,10 @@ impl CatalogManager<'_> {
     }
 
     pub(crate) async fn get_table(&self, table: TableReference) -> Result<Option<TableMetadata>> {
-        let Some(table) = self.get_table_object(table).await? else {
-            return Ok(None);
-        };
-        Ok(Some(TableMetadata::from_table_object(table)))
+        Ok(self
+            .get_table_object(table)
+            .await?
+            .map(TableMetadata::from_table_object))
     }
 
     async fn list_global_temporary_views(
