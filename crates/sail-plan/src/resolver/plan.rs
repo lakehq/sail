@@ -4,18 +4,17 @@ use std::sync::Arc;
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes as adt;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
-use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
-use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
-use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
-use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
-use datafusion::datasource::file_format::{format_as_file_type, FileFormat, FileFormatFactory};
+use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
+use datafusion::datasource::file_format::avro::AvroFormatFactory;
+use datafusion::datasource::file_format::csv::CsvFormatFactory;
+use datafusion::datasource::file_format::json::JsonFormatFactory;
+use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use datafusion::prelude::coalesce;
-use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
@@ -822,7 +821,7 @@ impl PlanResolver<'_> {
         let spec::ReadDataSource {
             format,
             schema,
-            options: _,
+            options,
             paths,
             predicates: _,
         } = source;
@@ -830,13 +829,17 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("empty data source paths"));
         }
         let urls = self.resolve_listing_urls(paths).await?;
-        let (format, extension): (Arc<dyn FileFormat>, _) =
-            match format.map(|x| x.to_lowercase()).as_deref() {
-                Some("json") => (Arc::new(JsonFormat::default()), ".json"),
-                Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
-                Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
-                Some("arrow") => (Arc::new(ArrowFormat), ".arrow"),
-                Some("avro") => (Arc::new(AvroFormat), ".avro"),
+        let Some(format) = format else {
+            return Err(PlanError::invalid("missing data source format"));
+        };
+        let options = Self::resolve_data_reader_options(&format, options)?;
+        let (format_factory, extension): (Box<dyn FileFormatFactory>, _) =
+            match format.to_lowercase().as_str() {
+                "json" => (Box::new(JsonFormatFactory::new()), ".json"),
+                "csv" => (Box::new(CsvFormatFactory::new()), ".csv"),
+                "parquet" => (Box::new(ParquetFormatFactory::new()), ".parquet"),
+                "arrow" => (Box::new(ArrowFormatFactory::new()), ".arrow"),
+                "avro" => (Box::new(AvroFormatFactory::new()), ".avro"),
                 other => {
                     return Err(PlanError::unsupported(format!(
                         "unsupported data source format: {:?}",
@@ -844,6 +847,7 @@ impl PlanResolver<'_> {
                     )))
                 }
             };
+        let format = format_factory.create(&self.ctx.state(), &options)?;
         let options = ListingOptions::new(format).with_file_extension(extension);
         let schema = self
             .resolve_listing_schema(&urls, &options, schema, state)
@@ -2580,12 +2584,9 @@ impl PlanResolver<'_> {
         if bucket_by.is_some() {
             return Err(PlanError::unsupported("bucketing"));
         }
-        let options: HashMap<_, _> = options.into_iter().collect();
         let partitioning_columns: Vec<String> =
             partitioning_columns.into_iter().map(String::from).collect();
 
-        let mut table_options =
-            TableOptions::default_from_session_config(self.ctx.state().config_options());
         let plan = self.resolve_query_plan(*input, state).await?;
         let fields = Self::get_field_names(plan.schema(), state)?;
         let plan = rename_logical_plan(plan, &fields)?;
@@ -2597,34 +2598,17 @@ impl PlanResolver<'_> {
                 } else {
                     format!("{}{}", path, object_store::path::DELIMITER)
                 };
-                let source = source.ok_or_else(|| PlanError::invalid("missing source"))?;
-                // FIXME: option compatibility
+                let Some(source) = source else {
+                    return Err(PlanError::invalid("missing source"));
+                };
+                let options = Self::resolve_data_writer_options(&source, options)?;
                 let format_factory: Arc<dyn FileFormatFactory> = match source.as_str() {
-                    "json" => {
-                        table_options.set_config_format(ConfigFileType::JSON);
-                        table_options.alter_with_string_hash_map(&options)?;
-                        Arc::new(JsonFormatFactory::new_with_options(table_options.json))
-                    }
-                    "parquet" => {
-                        table_options.set_config_format(ConfigFileType::PARQUET);
-                        table_options.alter_with_string_hash_map(&options)?;
-                        Arc::new(ParquetFormatFactory::new_with_options(
-                            table_options.parquet,
-                        ))
-                    }
-                    "csv" => {
-                        table_options.set_config_format(ConfigFileType::CSV);
-                        table_options.alter_with_string_hash_map(&options)?;
-                        Arc::new(CsvFormatFactory::new_with_options(table_options.csv))
-                    }
+                    "json" => Arc::new(JsonFormatFactory::new()),
+                    "parquet" => Arc::new(ParquetFormatFactory::new()),
+                    "csv" => Arc::new(CsvFormatFactory::new()),
                     "arrow" => Arc::new(ArrowFormatFactory::new()),
                     "avro" => Arc::new(AvroFormatFactory::new()),
-                    _ => {
-                        return Err(PlanError::invalid(format!(
-                            "unsupported source: {}",
-                            source
-                        )))
-                    }
+                    _ => return Err(PlanError::invalid(format!("unsupported source: {source}"))),
                 };
                 LogicalPlanBuilder::copy_to(
                     plan,
@@ -2779,40 +2763,19 @@ impl PlanResolver<'_> {
             Ok(results) as PlanResult<_>
         }
         .await?;
-        let options: Vec<(String, String)> = options
-            .into_iter()
-            .map(|(k, v)| Ok((k, v)))
-            .collect::<PlanResult<Vec<(String, String)>>>()?;
 
         let copy_to_plan = if let Some(query_logical_plan) = query_logical_plan {
-            let mut table_options =
-                TableOptions::default_from_session_config(self.ctx.state().config_options());
-            let options_map = options.clone().into_iter().collect();
+            let options = Self::resolve_data_writer_options(&file_format, options.clone())?;
             let format_factory: Arc<dyn FileFormatFactory> =
                 match file_format.to_lowercase().as_str() {
-                    "json" => {
-                        table_options.set_config_format(ConfigFileType::JSON);
-                        table_options.alter_with_string_hash_map(&options_map)?;
-                        Arc::new(JsonFormatFactory::new_with_options(table_options.json))
-                    }
-                    "parquet" => {
-                        table_options.set_config_format(ConfigFileType::PARQUET);
-                        table_options.alter_with_string_hash_map(&options_map)?;
-                        Arc::new(ParquetFormatFactory::new_with_options(
-                            table_options.parquet,
-                        ))
-                    }
-                    "csv" => {
-                        table_options.set_config_format(ConfigFileType::CSV);
-                        table_options.alter_with_string_hash_map(&options_map)?;
-                        Arc::new(CsvFormatFactory::new_with_options(table_options.csv))
-                    }
+                    "json" => Arc::new(JsonFormatFactory::new()),
+                    "parquet" => Arc::new(ParquetFormatFactory::new()),
+                    "csv" => Arc::new(CsvFormatFactory::new()),
                     "arrow" => Arc::new(ArrowFormatFactory::new()),
                     "avro" => Arc::new(AvroFormatFactory::new()),
                     _ => {
                         return Err(PlanError::invalid(format!(
-                            "unsupported file_format: {}",
-                            file_format
+                            "unsupported file format: {file_format}",
                         )))
                     }
                 };
@@ -2821,7 +2784,7 @@ impl PlanResolver<'_> {
                     query_logical_plan,
                     location.clone(),
                     format_as_file_type(format_factory),
-                    options_map,
+                    options,
                     table_partition_cols.clone(),
                 )?
                 .build()?,

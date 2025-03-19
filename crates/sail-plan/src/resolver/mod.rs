@@ -10,6 +10,7 @@ mod ddl;
 mod expression;
 mod function;
 mod literal;
+mod option;
 pub mod plan;
 mod schema;
 mod state;
