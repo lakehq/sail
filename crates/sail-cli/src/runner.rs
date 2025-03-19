@@ -48,7 +48,7 @@ enum SparkCommand {
     )]
     Shell,
     #[command(about = "Start the Spark MCP (Model Context Protocol) server")]
-    Mcp {
+    McpServer {
         #[arg(
             long,
             default_value = "127.0.0.1",
@@ -97,7 +97,7 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 //   according to the Python multiprocessing resource tracker?
                 run_pyspark_shell()
             }
-            SparkCommand::Mcp {
+            SparkCommand::McpServer {
                 host,
                 port,
                 transport,

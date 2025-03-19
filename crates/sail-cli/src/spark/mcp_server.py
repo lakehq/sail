@@ -1,8 +1,28 @@
+import json
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Literal
 
 from mcp.server.fastmcp import Context, FastMCP
 from pyspark.sql import SparkSession
+
+
+def _is_temp_view(table):
+    return table.catalog is None and not table.namespace and table.tableType == "TEMPORARY" and table.isTemporary
+
+
+def _describe_table(table):
+    if not _is_temp_view(table):
+        return None
+    return {"name": table.name, "description": table.description}
+
+
+def _describe_column(column):
+    return {
+        "name": column.name,
+        "description": column.description,
+        "dataType": column.dataType,
+        "nullable": column.nullable,
+    }
 
 
 def run_spark_mcp_server(transport: Literal["stdio", "sse"], host: str, port: int, spark_port: int):
@@ -15,28 +35,87 @@ def run_spark_mcp_server(transport: Literal["stdio", "sse"], host: str, port: in
     mcp = FastMCP("PySpark MCP server powered by Sail", lifespan=spark_lifespan, host=host, port=port)
 
     @mcp.tool()
-    def create_view(name: str, format: str, path: str, ctx: Context):  # noqa: A002
+    def create_parquet_view(name: str, path: str, ctx: Context) -> str:
+        """
+        Create a temporary view from a Parquet dataset.
+
+        Args:
+            name: The name of the temporary view.
+            path: The path to the Parquet dataset.
+            ctx: The context object.
+        Returns:
+            An empty JSON object.
+        """
         spark: SparkSession = ctx.request_context.lifespan_context
-        spark.read.format(format).load(path).createOrReplaceTempView(name)
+        spark.read.parquet(path).createOrReplaceTempView(name)
+        return json.dumps({})
 
     @mcp.tool()
-    def describe_view(name: str) -> str:
-        _ = name
-        return ""
+    def describe_view(name: str, ctx: Context) -> str:
+        """
+        Describe a temporary view.
+
+        Args:
+            name: The name of the temporary view.
+            ctx: The context object.
+        Returns:
+            A JSON object with the view description.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+        table = spark.catalog.getTable(name)
+        if not _is_temp_view(table):
+            msg = f"not a temporary view: {name}"
+            raise ValueError(msg)
+        columns = spark.catalog.listColumns(name)
+        summary = _describe_table(table)
+        summary["columns"] = [_describe_column(c) for c in columns]
+        return json.dumps(summary)
 
     @mcp.tool()
-    def drop_view(name: str):
-        _ = name
+    def drop_view(name: str, ctx: Context) -> str:
+        """
+        Drop a temporary view.
+        An error will be returned if the view does not exist.
+
+        Args:
+            name: The name of the temporary view.
+            ctx: The context object.
+        Returns:
+            An empty JSON object.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+        spark.catalog.dropTempView(name)
+        return json.dumps({})
 
     @mcp.tool()
-    def list_views() -> str:
-        return ""
+    def list_views(ctx: Context) -> str:
+        """
+        List all temporary views.
+
+        Args:
+            ctx: The context object.
+        Returns:
+            A JSON array of objects.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+        views = [_describe_table(t) for t in spark.catalog.listTables() if _is_temp_view(t)]
+        return json.dumps(views)
 
     @mcp.tool()
-    async def execute_query(query: str, limit: int, ctx: Context) -> str:
+    def execute_query(query: str, limit: int, ctx: Context) -> str:
+        """
+        Execute a SQL query and return the results as a JSON array.
+
+        Args:
+            query: The SQL query to execute.
+            limit: The maximum number of rows to return.
+            ctx: The context object.
+        Returns:
+            A JSON array of objects.
+        """
         spark: SparkSession = ctx.request_context.lifespan_context
         df = spark.sql(query).limit(limit)
-        return df.toPandas().to_markdown()
+        return df.toPandas().to_json(orient="records")
 
     mcp.run(transport)
 
