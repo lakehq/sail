@@ -11,8 +11,6 @@ def _is_temp_view(table):
 
 
 def _describe_table(table):
-    if not _is_temp_view(table):
-        return None
     return {"name": table.name, "description": table.description}
 
 
@@ -67,9 +65,9 @@ def run_spark_mcp_server(transport: Literal["stdio", "sse"], host: str, port: in
             msg = f"not a temporary view: {name}"
             raise ValueError(msg)
         columns = spark.catalog.listColumns(name)
-        summary = _describe_table(table)
-        summary["columns"] = [_describe_column(c) for c in columns]
-        return json.dumps(summary)
+        output = _describe_table(table)
+        output["columns"] = [_describe_column(c) for c in columns]
+        return json.dumps(output)
 
     @mcp.tool()
     def drop_view(name: str, ctx: Context) -> str:
