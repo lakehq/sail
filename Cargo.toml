@@ -102,10 +102,10 @@ datafusion-proto = { version = "46.0.0" }
 datafusion-functions-nested = { version = "46.0.0" }
 datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "da30208" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
-pyo3 = { version = "0.23.4", features = ["auto-initialize", "serde"] }
-arrow-buffer = { version = "54.2.0" }
-arrow-schema = { version = "54.2.0", features = ["serde"] }
-arrow-flight = { version = "54.2.0" }
+pyo3 = { version = "0.23.5", features = ["auto-initialize", "serde"] }
+arrow-buffer = { version = "54.2.1" }
+arrow-schema = { version = "54.2.1", features = ["serde"] }
+arrow-flight = { version = "54.2.1" }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
 
