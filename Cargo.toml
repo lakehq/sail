@@ -5,7 +5,6 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# Define LakeSail version
 version = "0.2.2"
 authors = ["LakeSail <hello@lakesail.com>"]
 edition = "2021"
