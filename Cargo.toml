@@ -55,7 +55,7 @@ phf = { version = "0.11.2", features = ["macros"] }
 ryu = "1.0.18"
 either = "1.14.0"
 num-bigint = "0.4.6"
-serde_arrow = { version = "0.12.3", features = ["arrow-54"] }
+serde_arrow = { version = "0.13.0", features = ["arrow-54"] }
 mimalloc = { version = "0.1.43", default-features = false }
 rand = "0.9.0"
 rand_chacha = "0.9.0"
