@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::mem;
 use std::path::PathBuf;
 
 use chumsky::prelude::{any, choice, end, just, none_of, recursive};
@@ -332,16 +332,6 @@ impl GlobUrl {
         Self { base, glob }
     }
 
-    pub fn new_collection(base: Url, glob: Option<Vec<Pattern>>) -> Vec<Self> {
-        if let Some(glob) = glob {
-            glob.into_iter()
-                .map(|x| Self::new(base.clone(), Some(x)))
-                .collect()
-        } else {
-            vec![Self::new(base, None)]
-        }
-    }
-
     pub fn parse(s: &str) -> PlanResult<Vec<GlobUrl>> {
         if std::path::Path::new(s).is_absolute() {
             return GlobUrl::parse_file_path(s);
@@ -361,10 +351,6 @@ impl GlobUrl {
                 query,
                 fragment,
             } => {
-                let (prefix, suffix) = Self::parse_glob_path(path)?;
-                if prefix.is_empty() {
-                    return Err(PlanError::invalid(format!("empty path in URL: {s}")));
-                }
                 // `"/path"` is a placeholder that will be replaced after parsing the URL.
                 // The actual path may contain special characters such as `#` that will be
                 // percent-encoded after replacing the path placeholder.
@@ -377,45 +363,58 @@ impl GlobUrl {
                     base.push('#');
                     base.push_str(fragment);
                 }
-                let Ok(mut url) = Url::parse(&base) else {
+                let Ok(url) = Url::parse(&base) else {
                     return Err(PlanError::invalid(format!("base URL: {s}")));
                 };
-                url.set_path(&prefix);
-                Ok(Self::new_collection(url, suffix))
+                Self::parse_glob_path(path)?
+                    .into_iter()
+                    .map(|(prefix, suffix)| {
+                        let mut url = url.clone();
+                        url.set_path(&prefix);
+                        Ok(Self::new(url, suffix))
+                    })
+                    .collect()
             }
             RawGlobUrl::RelativePath(x) => GlobUrl::parse_file_path(x),
         }
     }
 
     fn parse_file_path(path: &str) -> PlanResult<Vec<Self>> {
-        let (prefix, suffix) = Self::parse_glob_path(path)?;
-        let url = Self::url_from_file_path(&prefix)?;
-        Ok(Self::new_collection(url, suffix))
+        Self::parse_glob_path(path)?
+            .into_iter()
+            .map(|(prefix, suffix)| {
+                let url = Self::url_from_file_path(&prefix)?;
+                Ok(Self::new(url, suffix))
+            })
+            .collect()
     }
 
-    fn parse_glob_path(path: &str) -> PlanResult<(String, Option<Vec<Pattern>>)> {
+    fn parse_glob_path(path: &str) -> PlanResult<Vec<(String, Option<Pattern>)>> {
         let patterns = PatternSegment::sequence_parser()
             .parse(path)
             .into_result()
             .map_err(|_| PlanError::invalid(format!("glob path: {path}")))?;
-        let (prefix, suffix) = Self::split_glob_path(patterns);
-        let suffix = if suffix.is_empty() {
-            None
-        } else {
-            let patterns = PatternSegment::expand_sequence(suffix)
-                .into_iter()
-                .map(|x| Self::create_percent_decoded_pattern(&x))
-                .collect::<PlanResult<Vec<_>>>()?;
-            Some(patterns)
-        };
-        Ok((prefix, suffix))
+        let paths = PatternSegment::expand_sequence(patterns)
+            .into_iter()
+            .map(|x| {
+                let (prefix, suffix) = Self::split_glob_path(&x)?;
+                let suffix = Self::create_percent_decoded_pattern(&suffix)?;
+                Ok((prefix, suffix))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(paths)
     }
 
-    fn create_percent_decoded_pattern(s: &str) -> PlanResult<Pattern> {
+    fn create_percent_decoded_pattern(s: &str) -> PlanResult<Option<Pattern>> {
+        if s.is_empty() {
+            return Ok(None);
+        }
         let decoded = percent_decode(s.as_bytes())
             .decode_utf8()
             .map_err(|e| PlanError::invalid(format!("{e}: {s}")))?;
-        Pattern::new(decoded.as_ref()).map_err(|e| PlanError::invalid(format!("{e}: {s}")))
+        let pattern =
+            Pattern::new(decoded.as_ref()).map_err(|e| PlanError::invalid(format!("{e}: {s}")))?;
+        Ok(Some(pattern))
     }
 
     /// Create a URL from a file path.
@@ -445,31 +444,35 @@ impl GlobUrl {
     }
 
     /// Split a glob path into the base path and the remaining pattern segments.
+    /// The glob path should be expanded already, so no alternation should be present.
     /// The base path is the longest path that does not contain any glob patterns.
     /// For example, `"a/b/c*"` would be split into `"a/b/"` and `"c*"`.
-    fn split_glob_path(patterns: Vec<PatternSegment>) -> (String, Vec<PatternSegment>) {
+    fn split_glob_path(s: &str) -> PlanResult<(String, String)> {
         let mut prefix = String::new();
-        let mut patterns = VecDeque::from(patterns);
+        let mut suffix = String::new();
+        let mut chars = s.chars();
         let mut part = String::new();
-        while let Some(pattern) = patterns.pop_front() {
-            match pattern {
-                PatternSegment::Character(c @ '/') | PatternSegment::Character(c @ '\\') => {
+        while let Some(c) = chars.next() {
+            match c {
+                '/' | '\\' => {
                     prefix.push_str(&part);
                     prefix.push(c);
                     part.clear();
                 }
-                PatternSegment::Character(c) => part.push(c),
-                x => {
-                    patterns.push_front(x);
-                    while let Some(c) = part.pop() {
-                        patterns.push_front(PatternSegment::Character(c));
-                    }
+                '*' | '?' | '[' => {
+                    suffix = mem::take(&mut part);
+                    suffix.push(c);
+                    suffix.push_str(chars.as_str());
                     break;
                 }
+                _ => part.push(c),
             }
         }
         prefix.push_str(&part);
-        (prefix, patterns.into())
+        if prefix.is_empty() {
+            return Err(PlanError::invalid(format!("empty path in URL: {s}")));
+        }
+        Ok((prefix, suffix))
     }
 }
 
@@ -497,14 +500,15 @@ impl PlanResolver<'_> {
         let path = object_store::path::Path::from_url_path(url.base.path())
             .map_err(DataFusionError::from)?;
         match store.head(&path).await {
-            Ok(_) | Err(object_store::Error::NotFound { .. }) => Ok(url),
-            _ => {
+            Ok(_) => Ok(url),
+            Err(object_store::Error::NotFound { .. }) => {
                 let mut url = url;
                 // The object at the path does not exist, so we treat it as a directory.
                 let path = format!("{}{}", url.base.path(), object_store::path::DELIMITER);
                 url.base.set_path(&path);
                 Ok(url)
             }
+            Err(e) => Err(DataFusionError::External(Box::new(e)))?,
         }
     }
 }
@@ -747,6 +751,17 @@ mod tests {
             &[
                 ("s3://bucket/path/", Some("**/a")),
                 ("s3://bucket/path/", Some("**/b")),
+            ],
+        );
+        test(
+            "s3://bucket/path/{a,b}",
+            &[("s3://bucket/path/a", None), ("s3://bucket/path/b", None)],
+        );
+        test(
+            "s3://bucket/path/{a,b*/**}",
+            &[
+                ("s3://bucket/path/a", None),
+                ("s3://bucket/path/", Some("b*/**")),
             ],
         );
         test("s3://bucket/foo/../bar", &[("s3://bucket/bar", None)]);
