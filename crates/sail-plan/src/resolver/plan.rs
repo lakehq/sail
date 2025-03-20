@@ -13,6 +13,8 @@ use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion::logical_expr::sqlparser::ast::NullTreatment;
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use datafusion::prelude::coalesce;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -22,7 +24,7 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort};
+use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort, WindowFunctionParams};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::utils::{
@@ -31,7 +33,8 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
-    ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
+    ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast, WindowFrame,
+    WindowFunctionDefinition,
 };
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
@@ -1165,7 +1168,102 @@ impl PlanResolver<'_> {
                         .build()?)
                 }
             }
-            SetOpType::Except => Ok(LogicalPlanBuilder::except(left, right, is_all)?),
+            SetOpType::Except => {
+                let left_len = left.schema().fields().len();
+                let right_len = right.schema().fields().len();
+
+                if left_len != right_len {
+                    return Err(PlanError::invalid(format!(
+                        "`EXCEPT ALL` must have the same number of columns. Left has {left_len} columns, right has {right_len} columns."
+                    )));
+                }
+
+                let mut join_keys = left
+                    .schema()
+                    .fields()
+                    .iter()
+                    .zip(right.schema().fields().iter())
+                    .map(|(left_field, right_field)| {
+                        (
+                            Column::from_name(left_field.name()),
+                            Column::from_name(right_field.name()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                let plan = if is_all {
+                    let left_row_number_alias = state.register_field_name("row_num");
+                    let right_row_number_alias = state.register_field_name("row_num");
+                    let left_row_number_window = Expr::WindowFunction(expr::WindowFunction {
+                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                        params: WindowFunctionParams {
+                            args: vec![],
+                            partition_by: left
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|field| Expr::Column(Column::from_name(field.name())))
+                                .collect::<Vec<_>>(),
+                            order_by: vec![],
+                            window_frame: WindowFrame::new(None),
+                            null_treatment: Some(NullTreatment::RespectNulls),
+                        },
+                    })
+                    .alias(left_row_number_alias.as_str());
+                    let right_row_number_window = Expr::WindowFunction(expr::WindowFunction {
+                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                        params: WindowFunctionParams {
+                            args: vec![],
+                            partition_by: right
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|field| Expr::Column(Column::from_name(field.name())))
+                                .collect::<Vec<_>>(),
+                            order_by: vec![],
+                            window_frame: WindowFrame::new(None),
+                            null_treatment: Some(NullTreatment::RespectNulls),
+                        },
+                    })
+                    .alias(right_row_number_alias.as_str());
+                    let left = LogicalPlanBuilder::from(left)
+                        .window(vec![left_row_number_window])?
+                        .build()?;
+                    let right = LogicalPlanBuilder::from(right)
+                        .window(vec![right_row_number_window])?
+                        .build()?;
+                    let left_join_columns = join_keys
+                        .iter()
+                        .map(|(left_col, _)| left_col.clone())
+                        .collect::<Vec<_>>();
+                    join_keys.push((
+                        Column::from_name(left_row_number_alias),
+                        Column::from_name(right_row_number_alias),
+                    ));
+                    LogicalPlanBuilder::from(left)
+                        .join_detailed(
+                            right,
+                            JoinType::LeftAnti,
+                            join_keys.into_iter().unzip(),
+                            None,
+                            true,
+                        )?
+                        .project(left_join_columns)?
+                        .build()
+                } else {
+                    LogicalPlanBuilder::from(left)
+                        .distinct()?
+                        .join_detailed(
+                            right,
+                            JoinType::LeftAnti,
+                            join_keys.into_iter().unzip(),
+                            None,
+                            true,
+                        )?
+                        .build()
+                }?;
+                Ok(plan)
+            }
         }
     }
 
