@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
+use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
+use datafusion::arrow::datatypes::Int64Type;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::avro::AvroFormatFactory;
@@ -13,12 +15,14 @@ use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::sqlparser::ast::NullTreatment;
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use datafusion::prelude::coalesce;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, JoinType, ParamValues, ScalarValue, TableReference, ToDFSchema,
 };
@@ -1740,11 +1744,63 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_tail(
         &self,
-        _input: spec::QueryPlan,
-        _limit: spec::Expr,
-        _state: &mut PlanResolverState,
+        input: spec::QueryPlan,
+        limit: spec::Expr,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("tail"))
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let limit = self
+            .resolve_expression(limit, input.schema(), state)
+            .await?;
+        let limit_num = match limit {
+            Expr::Literal(ScalarValue::Int8(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::Int16(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::Int32(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
+            Expr::Literal(ScalarValue::UInt8(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::UInt16(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::UInt32(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::UInt64(Some(value))) => Ok(value as i64),
+            _ => Err(PlanError::invalid("`tail` limit must be an integer")),
+        }?;
+        // TODO: This can be expensive for large input datasets
+        //  According to Spark's docs:
+        //    Running tail requires moving data into the application's driver process, and doing so
+        //    with a very large `num` can crash the driver process with OutOfMemoryError.
+        let count_alias = state.register_field_name("COUNT(*)");
+        let count_expr = Expr::AggregateFunction(expr::AggregateFunction {
+            func: count_udaf(),
+            params: AggregateFunctionParams {
+                args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
+        })
+        .alias(count_alias);
+        let count_plan = LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(input.clone()),
+            vec![],
+            vec![count_expr],
+        )?);
+        let count_batches = self
+            .ctx
+            .execute_logical_plan(count_plan)
+            .await?
+            .collect()
+            .await?;
+        let count = count_batches[0]
+            .column(0)
+            .as_primitive::<Int64Type>()
+            .value(0);
+        Ok(LogicalPlan::Limit(plan::Limit {
+            skip: Some(Box::new(lit(0i64.max(count - limit_num)))),
+            fetch: Some(Box::new(limit)),
+            input: Arc::new(input),
+        }))
     }
 
     async fn resolve_query_with_columns(
