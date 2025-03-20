@@ -25,50 +25,50 @@ tonic-build = "0.12.3"
 tonic-reflection = "0.12.3"
 tonic-health = "0.12.3"
 tonic-types = "0.12.3"
-prost-build = "0.13.3"
-prost = "0.13.4"
+prost-build = "0.13.5"
+prost = "0.13.5"
 pbjson = "0.7.0"
 pbjson-types = "0.7.0"
 pbjson-build = "0.7.0"
-tower = { version = "0.5", features = ["full"] }
-uuid = { version = "1.12.1", features = ["v4"] }
+tower = { version = "0.5.2", features = ["full"] }
+uuid = { version = "1.16.0", features = ["v4"] }
 async-trait = "0.1.88"
-async-recursion = "1.1.0"
-async-stream = "0.3"
+async-recursion = "1.1.1"
+async-stream = "0.3.6"
 lazy_static = "1.5.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-monostate = "0.1"
-regex = "1.10"
-glob = "0.3"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+monostate = "0.1.14"
+regex = "1.11.1"
+glob = "0.3.2"
 chrono = "=0.4.39" # TODO: 0.4.40 won't compile, so we fully specify the version of chrono.
 chrono-tz = "0.10.1"
-futures = "0.3"
-comfy-table = "7.1"
-html-escape = "0.2"
+futures = "0.3.31"
+comfy-table = "7.1.4"
+html-escape = "0.2.13"
 syn = "2.0.100"
 quote = "1.0.40"
 paste = "1.0.15"
 proc-macro2 = "1.0.94"
-prettyplease = "0.2.29"
-phf = { version = "0.11.2", features = ["macros"] }
-ryu = "1.0.18"
-either = "1.14.0"
+prettyplease = "0.2.31"
+phf = { version = "0.11.3", features = ["macros"] }
+ryu = "1.0.20"
+either = "1.15.0"
 num-bigint = "0.4.6"
 serde_arrow = { version = "0.13.0", features = ["arrow-54"] }
-mimalloc = { version = "0.1.43", default-features = false }
+mimalloc = { version = "0.1.44", default-features = false }
 rand = "0.9.0"
 rand_chacha = "0.9.0"
 rand_distr = "0.5.1"
 url = "2.5.4"
 lexical-core = { version = "1.0.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-aws-config = "1.5.15"
-aws-credential-types = "1.2.1"
+aws-config = "1.6.0"
+aws-credential-types = "1.2.2"
 clap = { version = "4.5.32", features = ["derive"] }
 num_enum = "0.7.3"
-log = "0.4.22"
+log = "0.4.26"
 env_logger = "0.11.7"
-fastrace = { version = "0.7.6", features = ["enable"] }
+fastrace = { version = "0.7.8", features = ["enable"] }
 fastrace-opentelemetry = "0.7.4"
 opentelemetry = "0.26.0"
 opentelemetry_sdk = "0.26.0"
