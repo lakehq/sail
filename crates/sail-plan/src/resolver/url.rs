@@ -1,106 +1,77 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
-use chumsky::prelude::{any, choice, end, just, recursive};
+use chumsky::prelude::{any, choice, end, just, none_of, recursive};
 use chumsky::text::whitespace;
 use chumsky::{IterParser, Parser};
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion_common::{plan_err, DataFusionError};
+use datafusion_common::DataFusionError;
 use glob::Pattern;
+use percent_encoding::percent_decode;
 use url::Url;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
+/// A parsed pattern segment in a glob pattern.
 #[derive(Debug, PartialEq)]
-pub(super) struct GlobUrl {
-    pub base: Url,
-    pub glob: Option<Pattern>,
-}
-
-#[derive(Debug, PartialEq)]
-enum PathPattern {
+enum PatternSegment {
     Asterisk,
     QuestionMark,
     Character(char),
     CharacterClass {
         negated: bool,
-        chars: Vec<char>,
-    },
-    CharacterRange {
-        negated: bool,
-        first: char,
-        last: char,
+        choices: Vec<CharacterClass>,
     },
     Alternation {
-        patterns: Vec<Vec<PathPattern>>,
+        patterns: Vec<Vec<PatternSegment>>,
     },
 }
 
-#[derive(Default)]
-struct CharacterSet {
-    exclamation_mark: bool,
-    right_bracket: bool,
-    hyphen: bool,
-    others: String,
+/// A character class in a parsed pattern segment.
+#[derive(Debug, PartialEq)]
+enum CharacterClass {
+    Single(char),
+    Range(char, char),
 }
 
-impl CharacterSet {
-    fn build(chars: &[char]) -> Self {
-        let mut output = Self::default();
-        for c in chars {
-            match c {
-                '!' => output.exclamation_mark = true,
-                ']' => output.right_bracket = true,
-                '-' => output.hyphen = true,
-                _ => {
-                    if !output.others.contains(*c) {
-                        output.others.push(*c);
-                    }
-                }
-            }
-        }
-        output
-    }
-}
-
-impl PathPattern {
-    fn parser<'a>() -> impl Parser<'a, &'a str, Vec<Self>> {
+impl PatternSegment {
+    /// Create a parser for glob patterns that follow the glob syntax of Hadoop file systems.
+    /// Note that the syntax is different from the `glob` crate.
+    /// 1. We use `^` for negated character classes.
+    /// 2. We support alternation (e.g. `{a,b}`).
+    fn sequence_parser<'a>() -> impl Parser<'a, &'a str, Vec<Self>> {
         let character_class = choice((
-            just(']')
-                .then(any().and_is(just(']').not()).repeated())
-                .to_slice(),
             any()
-                .and_is(just(']').not())
-                .repeated()
-                .at_least(1)
-                .to_slice(),
-        ));
-        let character_range = any().then_ignore(just('-')).then(any());
+                .then_ignore(just('-'))
+                .then(any())
+                .map(|(first, last)| CharacterClass::Range(first, last)),
+            any().map(CharacterClass::Single),
+        ))
+        .repeated()
+        .collect()
+        .nested_in(
+            // `]` must only appear as the first character inside `[...]`.
+            choice((
+                just(']').then(none_of("]").repeated()).to_slice(),
+                none_of("]").repeated().at_least(1).to_slice(),
+            )),
+        );
         let pattern = recursive(|pattern| {
             let alternation = pattern
                 .and_is(just(',').not())
                 .and_is(just('}').not())
                 .and_is(whitespace().at_least(1).not());
             choice((
-                just('*').map(|_| PathPattern::Asterisk),
-                just('?').map(|_| PathPattern::QuestionMark),
-                just('^')
-                    .or_not()
-                    .then(character_range)
-                    .delimited_by(just('['), just(']'))
-                    .map(|(caret, (first, last))| PathPattern::CharacterRange {
-                        negated: caret.is_some(),
-                        first,
-                        last,
-                    }),
+                just('*').map(|_| PatternSegment::Asterisk),
+                just('?').map(|_| PatternSegment::QuestionMark),
                 just('^')
                     .or_not()
                     .then(character_class)
                     .delimited_by(just('['), just(']'))
-                    .map(|(caret, chars): (_, &str)| PathPattern::CharacterClass {
+                    .map(|(caret, choices)| PatternSegment::CharacterClass {
                         negated: caret.is_some(),
-                        chars: chars.chars().collect(),
+                        choices,
                     }),
                 alternation
                     .repeated()
@@ -111,10 +82,8 @@ impl PathPattern {
                     .at_least(1)
                     .collect()
                     .delimited_by(just('{'), just('}'))
-                    .map(|patterns| PathPattern::Alternation { patterns }),
-                any()
-                    .filter(|c: &char| *c != '[' && *c != '{')
-                    .map(PathPattern::Character),
+                    .map(|patterns| PatternSegment::Alternation { patterns }),
+                none_of("[{").map(PatternSegment::Character),
             ))
         });
         pattern
@@ -124,26 +93,13 @@ impl PathPattern {
             .then_ignore(end())
     }
 
-    fn split(patterns: Vec<PathPattern>) -> (String, Vec<PathPattern>) {
-        let mut prefix = String::new();
-        let mut patterns = VecDeque::from(patterns);
-        while let Some(pattern) = patterns.pop_front() {
-            match pattern {
-                PathPattern::Character(c) => prefix.push(c),
-                x => {
-                    patterns.push_front(x);
-                    break;
-                }
-            }
-        }
-        (prefix, patterns.into())
-    }
-
-    fn expand_all(patterns: &[PathPattern]) -> Vec<String> {
-        // The number of possible expansions is the product of
-        // the number of expansions of each pattern.
+    /// Expand a sequence of pattern segments into a list of glob patterns written in the syntax
+    /// supported by the `glob` crate.
+    /// The number of possible expansions is the product of
+    /// the number of expansions of each pattern.
+    fn expand_sequence(patterns: Vec<PatternSegment>) -> Vec<String> {
         patterns
-            .iter()
+            .into_iter()
             .map(|x| x.expand())
             .fold(vec!["".to_string()], |acc, x| {
                 acc.into_iter()
@@ -152,64 +108,221 @@ impl PathPattern {
             })
     }
 
-    fn expand(&self) -> Vec<String> {
-        match self {
-            PathPattern::Character(value) => vec![value.to_string()],
-            PathPattern::Asterisk => vec!["*".to_string()],
-            PathPattern::QuestionMark => vec!["?".to_string()],
-            PathPattern::CharacterClass { negated, chars } => {
-                let CharacterSet {
-                    exclamation_mark,
-                    right_bracket,
-                    hyphen,
-                    others,
-                } = CharacterSet::build(chars);
-                match (*negated, exclamation_mark, right_bracket, hyphen, others) {
-                    (false, false, false, false, x) => vec![format!("[{x}]")],
-                    (false, false, false, true, x) => vec![format!("[{x}-]")],
-                    (false, false, true, false, x) => vec![format!("[]{x}]")],
-                    (false, false, true, true, x) => vec![format!("[]{x}-]")],
-                    (false, true, false, false, x) if x.is_empty() => vec!["!".to_string()],
-                    (false, true, false, true, x) if x.is_empty() => {
-                        vec!["!".to_string(), "-".to_string()]
+    /// Convert character class choices to a glob pattern written in the syntax
+    /// supported by the `glob` crate.
+    ///
+    /// The following rules must be followed:
+    /// 1. `!` should not appear as the first character inside `[...]`.
+    /// 2. `-` must be the last character inside `[...]` if present.
+    /// 3. `]` must be the first character inside `[...]` if present.
+    fn expand_character_class(negated: bool, choices: Vec<CharacterClass>) -> String {
+        let mut normal = vec![];
+        let mut has_exclamation_mark = false;
+        let mut has_hyphen = false;
+        let mut has_right_bracket = false;
+
+        for choice in choices {
+            // We do not need special handling for the following cases:
+            // 1. `-` being the first or last character of a character range.
+            // 2. `!` being the last character of a character range.
+            match choice {
+                CharacterClass::Single('!') => has_exclamation_mark = true,
+                CharacterClass::Single('-') => has_hyphen = true,
+                CharacterClass::Single(']') => has_right_bracket = true,
+                CharacterClass::Single(_) => normal.push(choice),
+                // Although we handle the case when `]` is the last character of
+                // a character range, this would not appear in parsed patterns.
+                // For example, `[a-]]` would be parsed as `[a-]` followed by `]`.
+                CharacterClass::Range('!', ']') => {
+                    has_exclamation_mark = true;
+                    has_right_bracket = true;
+                    normal.push(CharacterClass::Range('"', '\\'))
+                }
+                CharacterClass::Range('!', last) => {
+                    if last >= '!' {
+                        has_exclamation_mark = true;
                     }
-                    (false, true, false, false, x) => vec![format!("[{x}!]")],
-                    (false, true, false, true, x) => vec![format!("[{x}!-]")],
-                    (false, true, true, false, x) => vec![format!("[]{x}!]")],
-                    (false, true, true, true, x) => vec![format!("[]{x}!-]")],
-                    (true, false, false, false, x) => vec![format!("[!{x}]")],
-                    (true, false, false, true, x) => vec![format!("[!{x}-]")],
-                    (true, false, true, false, x) => vec![format!("[!]{x}]")],
-                    (true, false, true, true, x) => vec![format!("[!]{x}-]")],
-                    (true, true, false, false, x) => vec![format!("[!{x}!]")],
-                    (true, true, false, true, x) => vec![format!("[!{x}!-]")],
-                    (true, true, true, false, x) => vec![format!("[!]{x}!]")],
-                    (true, true, true, true, x) => vec![format!("[!]{x}!-]")],
+                    if last > '!' {
+                        normal.push(CharacterClass::Range('"', last));
+                    }
+                }
+                CharacterClass::Range(']', last) => {
+                    if last >= ']' {
+                        has_right_bracket = true;
+                    }
+                    if last > ']' {
+                        normal.push(CharacterClass::Range('^', last));
+                    }
+                }
+                CharacterClass::Range(first, ']') => {
+                    if first <= ']' {
+                        has_right_bracket = true;
+                    }
+                    if first < ']' {
+                        normal.push(CharacterClass::Range(first, '\\'));
+                    }
+                }
+                CharacterClass::Range(_, _) => normal.push(choice),
+            }
+        }
+
+        if normal.is_empty() && !has_right_bracket && !negated {
+            return match (has_exclamation_mark, has_hyphen) {
+                (true, true) => "[-!]",
+                (true, false) => "!",
+                (false, true) => "-",
+                (false, false) => "",
+            }
+            .to_string();
+        }
+
+        let mut pattern = String::from("[");
+        if negated {
+            pattern.push('!');
+        }
+        if has_right_bracket {
+            pattern.push(']');
+        }
+        for choice in normal {
+            match choice {
+                CharacterClass::Single(c) => pattern.push(c),
+                CharacterClass::Range(first, last) => {
+                    pattern.push(first);
+                    pattern.push('-');
+                    pattern.push(last);
                 }
             }
-            PathPattern::CharacterRange {
-                negated,
-                first,
-                last,
-            } => match (*negated, first, last) {
-                (false, '!', ']') => {
-                    vec!["!".to_string(), "]".to_string(), "[\"-\\]".to_string()]
-                }
-                (false, '!', '-') => vec!["!".to_string(), "-".to_string(), "[\"-,]".to_string()],
-                (false, '!', y) => vec!["!".to_string(), format!("[\"-{y}]")],
-                (false, '-', ']') => vec!["-".to_string(), "]".to_string(), "[.-\\]".to_string()],
-                (false, x, ']') => vec!["]".to_string(), format!("[{x}-\\]")],
-                (false, '-', '-') => vec!["-".to_string()],
-                (false, x, y) => vec![format!("[{x}-{y}]")],
-                (true, x, ']') => vec!["]".to_string(), format!("[!{x}-\\]")],
-                (true, x, y) => vec![format!("[!{x}-{y}]")],
-            },
-            PathPattern::Alternation { patterns } => patterns
-                .iter()
-                .flat_map(|x| PathPattern::expand_all(x))
+        }
+        // If we reach here, we are sure that `!` is not the first character class inside `[...]`,
+        // since we have already written something inside `[...]`.
+        if has_exclamation_mark {
+            pattern.push('!');
+        }
+        if has_hyphen {
+            pattern.push('-');
+        }
+        pattern.push(']');
+        pattern
+    }
+
+    fn expand(self) -> Vec<String> {
+        match self {
+            // Special characters such as `*` and `?` do not appear as a character in the segment.
+            // They must be part of a character class if they need to be matched literally.
+            PatternSegment::Character(value) => vec![value.to_string()],
+            PatternSegment::Asterisk => vec!["*".to_string()],
+            PatternSegment::QuestionMark => vec!["?".to_string()],
+            PatternSegment::CharacterClass { negated, choices } => {
+                vec![Self::expand_character_class(negated, choices)]
+            }
+            PatternSegment::Alternation { patterns } => patterns
+                .into_iter()
+                .flat_map(PatternSegment::expand_sequence)
                 .collect(),
         }
     }
+}
+
+/// A parsed URL that may contain glob patterns.
+/// We do not use [`Url::parse`] since we need to handle glob patterns
+/// in the path differently based on the scheme.
+#[derive(Debug)]
+enum RawGlobUrl<'a> {
+    #[expect(dead_code)]
+    NonHierarchical {
+        scheme: &'a str,
+        path: &'a str,
+        query: Option<&'a str>,
+        fragment: Option<&'a str>,
+    },
+    Hierarchical {
+        scheme: &'a str,
+        authority: &'a str,
+        path: &'a str,
+        query: Option<&'a str>,
+        fragment: Option<&'a str>,
+    },
+    RelativePath(&'a str),
+}
+
+impl<'a> RawGlobUrl<'a> {
+    fn scheme_parser(value: &'static str) -> impl Parser<'a, &'a str, &'a str> {
+        any()
+            .repeated()
+            .exactly(value.len())
+            .to_slice()
+            .filter(|s: &&str| s.eq_ignore_ascii_case(value))
+    }
+
+    fn parser() -> impl Parser<'a, &'a str, Self> {
+        let scheme = none_of("\\/:")
+            .repeated()
+            .at_least(1)
+            .to_slice()
+            .then_ignore(just(':'));
+        let scheme_allowing_query_or_segment = choice((
+            // We explicitly define the schemes that allows query and fragment.
+            // For all other schemes, `?` is considered a glob pattern in the path.
+            // Please be careful about the order of the scheme parsers.
+            // More specific parsers should be placed before more general parsers.
+            Self::scheme_parser("https"),
+            Self::scheme_parser("http"),
+        ))
+        .then_ignore(just(':'));
+        let non_hierarchical_path = none_of("/?#").then(none_of("?#").repeated()).to_slice();
+        let hierarchical_path = none_of("?#").repeated().to_slice();
+        let authority = just("//").ignore_then(none_of("/").repeated().to_slice());
+        let query = just('?').ignore_then(none_of("#").repeated().to_slice());
+        let fragment = just('#').ignore_then(any().repeated().to_slice());
+        choice((
+            scheme
+                .then(non_hierarchical_path)
+                .then(query.or_not())
+                .then(fragment.or_not())
+                .map(
+                    |(((scheme, path), query), fragment)| RawGlobUrl::NonHierarchical {
+                        scheme,
+                        path,
+                        query,
+                        fragment,
+                    },
+                ),
+            scheme_allowing_query_or_segment
+                .then(authority)
+                .then(hierarchical_path)
+                .then(query.or_not())
+                .then(fragment.or_not())
+                .map(
+                    |((((scheme, authority), path), query), fragment)| RawGlobUrl::Hierarchical {
+                        scheme,
+                        authority,
+                        path,
+                        query,
+                        fragment,
+                    },
+                ),
+            scheme
+                .then(authority)
+                // The path can be an arbitrary string since we consider the URL
+                // to have no query or fragment.
+                .then(any().repeated().to_slice())
+                .map(|((scheme, authority), path)| RawGlobUrl::Hierarchical {
+                    scheme,
+                    authority,
+                    path,
+                    query: None,
+                    fragment: None,
+                }),
+            any().repeated().to_slice().map(RawGlobUrl::RelativePath),
+        ))
+        .then_ignore(end())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) struct GlobUrl {
+    pub base: Url,
+    pub glob: Option<Pattern>,
 }
 
 impl GlobUrl {
@@ -217,64 +330,94 @@ impl GlobUrl {
         Self { base, glob }
     }
 
-    pub fn parse(url: &str) -> PlanResult<Vec<GlobUrl>> {
-        if std::path::Path::new(url).is_absolute() {
-            return GlobUrl::parse_file_path(url);
+    pub fn new_collection(base: Url, glob: Option<Vec<Pattern>>) -> Vec<Self> {
+        if let Some(glob) = glob {
+            glob.into_iter()
+                .map(|x| Self::new(base.clone(), Some(x)))
+                .collect()
+        } else {
+            vec![Self::new(base, None)]
         }
-        match Url::parse(url) {
-            Ok(x) => {
-                if x.query().is_some() || x.fragment().is_some() {
-                    Ok(vec![GlobUrl::new(x, None)])
-                } else {
-                    GlobUrl::parse_url(url)
+    }
+
+    pub fn parse(s: &str) -> PlanResult<Vec<GlobUrl>> {
+        if std::path::Path::new(s).is_absolute() {
+            return GlobUrl::parse_file_path(s);
+        }
+        let url = RawGlobUrl::parser()
+            .parse(s)
+            .into_result()
+            .map_err(|_| PlanError::invalid(format!("URL: {s}")))?;
+        match url {
+            RawGlobUrl::NonHierarchical { .. } => Err(PlanError::unsupported(format!(
+                "URL without authority: {s}"
+            ))),
+            RawGlobUrl::Hierarchical {
+                scheme,
+                authority,
+                path,
+                query,
+                fragment,
+            } => {
+                let (prefix, suffix) = Self::parse_glob_path(path)?;
+                if prefix.is_empty() {
+                    return Err(PlanError::invalid(format!("empty path in URL: {s}")));
                 }
+                // `"/path"` is a placeholder that will be replaced after parsing the URL.
+                // The actual path may contain special characters such as `#` that will be
+                // percent-encoded after replacing the path placeholder.
+                let mut base = format!("{scheme}://{authority}/path");
+                if let Some(query) = query {
+                    base.push('?');
+                    base.push_str(query);
+                }
+                if let Some(fragment) = fragment {
+                    base.push('#');
+                    base.push_str(fragment);
+                }
+                let Ok(mut url) = Url::parse(&base) else {
+                    return Err(PlanError::invalid(format!("base URL: {s}")));
+                };
+                url.set_path(&prefix);
+                Ok(Self::new_collection(url, suffix))
             }
-            Err(url::ParseError::RelativeUrlWithoutBase) => GlobUrl::parse_file_path(url),
-            Err(e) => plan_err!("failed to parse URL: {e}")?,
+            RawGlobUrl::RelativePath(x) => GlobUrl::parse_file_path(x),
         }
     }
 
-    pub fn parse_url(url: &str) -> PlanResult<Vec<Self>> {
-        // TODO: parse URL scheme and authority
-        // TODO: support '?' glob pattern
-        let (prefix, suffix) = Self::parse_url_with_glob(url)?;
-        let url = Url::parse(&prefix).map_err(|_| PlanError::invalid(format!("URL: {url}")))?;
-        Ok(suffix
-            .into_iter()
-            .map(|x| Self::new(url.clone(), x))
-            .collect())
-    }
-
-    pub fn parse_file_path(path: &str) -> PlanResult<Vec<Self>> {
-        let (prefix, suffix) = Self::parse_url_with_glob(path)?;
+    fn parse_file_path(path: &str) -> PlanResult<Vec<Self>> {
+        let (prefix, suffix) = Self::parse_glob_path(path)?;
         let url = Self::url_from_file_path(&prefix)?;
-        Ok(suffix
-            .into_iter()
-            .map(|x| Self::new(url.clone(), x))
-            .collect())
+        Ok(Self::new_collection(url, suffix))
     }
 
-    pub fn parse_url_with_glob(path: &str) -> PlanResult<(String, Vec<Option<Pattern>>)> {
-        let patterns = PathPattern::parser()
+    fn parse_glob_path(path: &str) -> PlanResult<(String, Option<Vec<Pattern>>)> {
+        let patterns = PatternSegment::sequence_parser()
             .parse(path)
             .into_result()
-            .map_err(|_| PlanError::invalid(format!("file path: {path}")))?;
-        let (prefix, patterns) = PathPattern::split(patterns);
-        let suffix = if patterns.is_empty() {
-            vec![None]
+            .map_err(|_| PlanError::invalid(format!("glob path: {path}")))?;
+        let (prefix, suffix) = Self::split_glob_path(patterns);
+        let suffix = if suffix.is_empty() {
+            None
         } else {
-            PathPattern::expand_all(&patterns)
+            let patterns = PatternSegment::expand_sequence(suffix)
                 .into_iter()
-                .map(|x| {
-                    Pattern::new(&x)
-                        .map(Some)
-                        .map_err(|e| PlanError::invalid(e.to_string()))
-                })
-                .collect::<PlanResult<Vec<_>>>()?
+                .map(|x| Self::create_percent_decoded_pattern(&x))
+                .collect::<PlanResult<Vec<_>>>()?;
+            Some(patterns)
         };
         Ok((prefix, suffix))
     }
 
+    fn create_percent_decoded_pattern(s: &str) -> PlanResult<Pattern> {
+        let decoded = percent_decode(s.as_bytes())
+            .decode_utf8()
+            .map_err(|e| PlanError::invalid(format!("{e}: {s}")))?;
+        Pattern::new(decoded.as_ref()).map_err(|e| PlanError::invalid(format!("{e}: {s}")))
+    }
+
+    /// Create a URL from a file path.
+    /// The logic is similar to [`ListingTableUrl::parse_path`].
     fn url_from_file_path(s: &str) -> PlanResult<Url> {
         let path = std::path::Path::new(s);
         let is_dir = path.is_dir() || s.chars().last().is_some_and(std::path::is_separator);
@@ -298,6 +441,34 @@ impl GlobUrl {
         Url::parse(url.as_str())
             .map_err(|_| PlanError::AnalysisError(format!("cannot create URL from file path: {s}")))
     }
+
+    /// Split a glob path into the base path and the remaining pattern segments.
+    /// The base path is the longest path that does not contain any glob patterns.
+    /// For example, `"a/b/c*"` would be split into `"a/b/"` and `"c*"`.
+    fn split_glob_path(patterns: Vec<PatternSegment>) -> (String, Vec<PatternSegment>) {
+        let mut prefix = String::new();
+        let mut patterns = VecDeque::from(patterns);
+        let mut part = String::new();
+        while let Some(pattern) = patterns.pop_front() {
+            match pattern {
+                PatternSegment::Character(c @ '/') | PatternSegment::Character(c @ '\\') => {
+                    prefix.push_str(&part);
+                    prefix.push(c);
+                    part.clear();
+                }
+                PatternSegment::Character(c) => part.push(c),
+                x => {
+                    patterns.push_front(x);
+                    while let Some(c) = part.pop() {
+                        patterns.push_front(PatternSegment::Character(c));
+                    }
+                    break;
+                }
+            }
+        }
+        prefix.push_str(&part);
+        (prefix, patterns.into())
+    }
 }
 
 impl AsRef<Url> for GlobUrl {
@@ -311,9 +482,6 @@ impl TryFrom<GlobUrl> for ListingTableUrl {
 
     fn try_from(value: GlobUrl) -> PlanResult<Self> {
         let GlobUrl { base, glob } = value;
-        if glob.is_some() && (base.query().is_some() || base.fragment().is_some()) {
-            return plan_err!("unexpected query or fragment in glob URLs")?;
-        }
         Ok(Self::try_new(base, glob)?)
     }
 }
@@ -345,85 +513,107 @@ mod tests {
 
     #[test]
     fn test_path_pattern_parser() {
-        let parser = PathPattern::parser();
-        let test = |input: &'static str, expected: Vec<PathPattern>| {
+        let parser = PatternSegment::sequence_parser();
+        let test = |input: &'static str, expected: Vec<PatternSegment>| {
             let result = parser.parse(input).into_result().unwrap();
             assert_eq!(result, expected);
         };
 
-        test("*", vec![PathPattern::Asterisk]);
-        test("?", vec![PathPattern::QuestionMark]);
-        test("a", vec![PathPattern::Character('a')]);
+        test("*", vec![PatternSegment::Asterisk]);
+        test("?", vec![PatternSegment::QuestionMark]);
+        test("a", vec![PatternSegment::Character('a')]);
         test(
             "[a]",
-            vec![PathPattern::CharacterClass {
+            vec![PatternSegment::CharacterClass {
                 negated: false,
-                chars: vec!['a'],
+                choices: vec![CharacterClass::Single('a')],
             }],
         );
         test(
             "[^ab]",
-            vec![PathPattern::CharacterClass {
+            vec![PatternSegment::CharacterClass {
                 negated: true,
-                chars: vec!['a', 'b'],
+                choices: vec![CharacterClass::Single('a'), CharacterClass::Single('b')],
             }],
         );
         test(
             "[a-z]",
-            vec![PathPattern::CharacterRange {
+            vec![PatternSegment::CharacterClass {
                 negated: false,
-                first: 'a',
-                last: 'z',
+                choices: vec![CharacterClass::Range('a', 'z')],
+            }],
+        );
+        test(
+            "[ab-xy]",
+            vec![PatternSegment::CharacterClass {
+                negated: false,
+                choices: vec![
+                    CharacterClass::Single('a'),
+                    CharacterClass::Range('b', 'x'),
+                    CharacterClass::Single('y'),
+                ],
             }],
         );
         test(
             "[^a-z]",
-            vec![PathPattern::CharacterRange {
+            vec![PatternSegment::CharacterClass {
                 negated: true,
-                first: 'a',
-                last: 'z',
+                choices: vec![CharacterClass::Range('a', 'z')],
             }],
         );
         test(
+            "[a-]]",
+            vec![
+                PatternSegment::CharacterClass {
+                    negated: false,
+                    choices: vec![CharacterClass::Single('a'), CharacterClass::Single('-')],
+                },
+                PatternSegment::Character(']'),
+            ],
+        );
+        test(
             "{a}",
-            vec![PathPattern::Alternation {
-                patterns: vec![vec![PathPattern::Character('a')]],
+            vec![PatternSegment::Alternation {
+                patterns: vec![vec![PatternSegment::Character('a')]],
             }],
         );
         test(
             "{a,bc}",
-            vec![PathPattern::Alternation {
+            vec![PatternSegment::Alternation {
                 patterns: vec![
-                    vec![PathPattern::Character('a')],
-                    vec![PathPattern::Character('b'), PathPattern::Character('c')],
+                    vec![PatternSegment::Character('a')],
+                    vec![
+                        PatternSegment::Character('b'),
+                        PatternSegment::Character('c'),
+                    ],
                 ],
             }],
         );
         test(
             "{a,b,c?}",
-            vec![PathPattern::Alternation {
+            vec![PatternSegment::Alternation {
                 patterns: vec![
-                    vec![PathPattern::Character('a')],
-                    vec![PathPattern::Character('b')],
-                    vec![PathPattern::Character('c'), PathPattern::QuestionMark],
+                    vec![PatternSegment::Character('a')],
+                    vec![PatternSegment::Character('b')],
+                    vec![PatternSegment::Character('c'), PatternSegment::QuestionMark],
                 ],
             }],
         );
         test(
             "{a,b{c**,d}}",
-            vec![PathPattern::Alternation {
+            vec![PatternSegment::Alternation {
                 patterns: vec![
-                    vec![PathPattern::Character('a')],
+                    vec![PatternSegment::Character('a')],
                     vec![
-                        PathPattern::Character('b'),
-                        PathPattern::Alternation {
+                        PatternSegment::Character('b'),
+                        PatternSegment::Alternation {
                             patterns: vec![
                                 vec![
-                                    PathPattern::Character('c'),
-                                    PathPattern::Asterisk,
-                                    PathPattern::Asterisk,
+                                    PatternSegment::Character('c'),
+                                    PatternSegment::Asterisk,
+                                    PatternSegment::Asterisk,
                                 ],
-                                vec![PathPattern::Character('d')],
+                                vec![PatternSegment::Character('d')],
                             ],
                         },
                     ],
@@ -432,23 +622,23 @@ mod tests {
         );
         test(
             "{a,b{c,d},?e{f}}",
-            vec![PathPattern::Alternation {
+            vec![PatternSegment::Alternation {
                 patterns: vec![
-                    vec![PathPattern::Character('a')],
+                    vec![PatternSegment::Character('a')],
                     vec![
-                        PathPattern::Character('b'),
-                        PathPattern::Alternation {
+                        PatternSegment::Character('b'),
+                        PatternSegment::Alternation {
                             patterns: vec![
-                                vec![PathPattern::Character('c')],
-                                vec![PathPattern::Character('d')],
+                                vec![PatternSegment::Character('c')],
+                                vec![PatternSegment::Character('d')],
                             ],
                         },
                     ],
                     vec![
-                        PathPattern::QuestionMark,
-                        PathPattern::Character('e'),
-                        PathPattern::Alternation {
-                            patterns: vec![vec![PathPattern::Character('f')]],
+                        PatternSegment::QuestionMark,
+                        PatternSegment::Character('e'),
+                        PatternSegment::Alternation {
+                            patterns: vec![vec![PatternSegment::Character('f')]],
                         },
                     ],
                 ],
@@ -458,10 +648,13 @@ mod tests {
 
     #[test]
     fn test_path_pattern_expansion() {
-        let parser = PathPattern::parser();
+        let parser = PatternSegment::sequence_parser();
         let test = |input: &'static str, expected: &[&str]| {
             let patterns = parser.parse(input).into_result().unwrap();
-            let result = PathPattern::expand_all(&patterns);
+            let result = PatternSegment::expand_sequence(patterns);
+            for x in result.iter() {
+                Pattern::new(x).expect("valid pattern");
+            }
             assert_eq!(result, expected);
         };
 
@@ -472,31 +665,96 @@ mod tests {
         test("[ab]", &["[ab]"]);
         test("[a-z]", &["[a-z]"]);
         test("[a-]", &["[a-]"]);
-        test("[ab-cd]", &["[abcd-]"]);
+        test("[ab-cd]", &["[ab-cd]"]);
         test("[a--]", &["[a--]"]);
-        test("[a--b]", &["[ab-]"]);
+        test("[a--b]", &["[a--b]"]);
+        test("[*]", &["[*]"]);
+        test("[?]", &["[?]"]);
+        test("[[]", &["[[]"]);
         test("[]]", &["[]]"]);
+        test("[a]]", &["[a]]"]);
         test("[!]a", &["!a"]);
-        test("[!-]a", &["!a", "-a"]);
+        test("[!-]a", &["[-!]a"]);
         test("[a!]", &["[a!]"]);
         test("[!a]", &["[a!]"]);
         test("[^a]", &["[!a]"]);
-        test("[!-]]", &["!", "]", "[\"-\\]"]);
-        test("[!--]", &["!", "-", "[\"-,]"]);
-        test("[!-a]", &["!", "[\"-a]"]);
-        test("[--]]", &["-", "]", "[.-\\]"]);
-        test("[a-]]", &["]", "[a-\\]"]);
-        test("[---]", &["-"]);
-        test("[^a-]]", &["]", "[!a-\\]"]);
+        test("[!--]", &["[\"--!]"]);
+        test("[!-a]", &["[\"-a!]"]);
+        test("[---]", &["[---]"]);
         test("[^a-z]", &["[!a-z]"]);
         test("[^a-]", &["[!a-]"]);
         test("[^a!^]", &["[!a^!]"]);
         test("[^a!-]", &["[!a!-]"]);
         test("[^]]", &["[!]]"]);
         test("{a}", &["a"]);
+        test("{ a}", &["a"]);
+        test("{ a, bc ,d }", &["a", "bc", "d"]);
         test("{a,bc}", &["a", "bc"]);
         test("{a,b,c?}", &["a", "b", "c?"]);
-        test("{a,b{c**,d}}", &["a", "bc**", "bd"]);
+        test("{a,b{c/**,d}}/x", &["a/x", "bc/**/x", "bd/x"]);
         test("{a,b{c,d},?e{f}}", &["a", "bc", "bd", "?ef"]);
+    }
+
+    #[test]
+    fn test_parse_url_glob() {
+        fn test(input: &str, expected: &[(&str, Option<&str>)]) {
+            let actual = GlobUrl::parse(input).unwrap();
+            assert_eq!(actual.len(), expected.len());
+            for (actual, (base, glob)) in actual.iter().zip(expected.iter()) {
+                assert_eq!(actual.base.as_str(), *base);
+                assert_eq!(actual.glob.as_ref().map(|x| x.as_str()), *glob);
+            }
+        }
+
+        let cwd = std::env::current_dir().unwrap();
+        let cwd = Url::from_directory_path(cwd).unwrap();
+
+        test(
+            "https://example.com/path/?foo#bar",
+            &[("https://example.com/path/?foo#bar", None)],
+        );
+        test("s3://bucket/path", &[("s3://bucket/path", None)]);
+        test(
+            "s3://bucket/path/*.txt",
+            &[("s3://bucket/path/", Some("*.txt"))],
+        );
+        test("s3://bucket/path/?", &[("s3://bucket/path/", Some("?"))]);
+        test(
+            "s3://bucket/path%20/%23????.txt",
+            &[("s3://bucket/path%20/", Some("#????.txt"))],
+        );
+        test(
+            "s3://bucket/path/abc?foo#bar",
+            &[("s3://bucket/path/", Some("abc?foo#bar"))],
+        );
+        test(
+            "s3://bucket/path/foo#bar",
+            &[("s3://bucket/path/foo%23bar", None)],
+        );
+        test(
+            "s3://bucket/path/abc%3Ffoo%23bar",
+            &[("s3://bucket/path/abc%3Ffoo%23bar", None)],
+        );
+        test(
+            "s3://bucket/path/**/{a,b}",
+            &[
+                ("s3://bucket/path/", Some("**/a")),
+                ("s3://bucket/path/", Some("**/b")),
+            ],
+        );
+        test("s3://bucket/foo/../bar", &[("s3://bucket/bar", None)]);
+        test("hdfs://data//path*", &[("hdfs://data//", Some("path*"))]);
+        test("hdfs://data/path*", &[("hdfs://data/", Some("path*"))]);
+        test("file:///tmp/data.txt", &[("file:///tmp/data.txt", None)]);
+        test("file:///tmp/*.txt", &[("file:///tmp/", Some("*.txt"))]);
+        test("file:///foo/../bar", &[("file:///bar", None)]);
+        test("/tmp/data.txt", &[("file:///tmp/data.txt", None)]);
+        test("/tmp/*.txt", &[("file:///tmp/", Some("*.txt"))]);
+        test("tmp/data.txt", &[(&format!("{cwd}tmp/data.txt",), None)]);
+        test("tmp/*.txt", &[(&format!("{cwd}tmp/",), Some("*.txt"))]);
+        test("tmp/", &[(&format!("{cwd}tmp/",), None)]);
+        test("./foo/", &[(&format!("{cwd}foo/",), None)]);
+        test("./foo/.", &[(&format!("{cwd}foo",), None)]);
+        test("foo/../bar", &[(&format!("{cwd}bar",), None)]);
     }
 }

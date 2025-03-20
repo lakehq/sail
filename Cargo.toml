@@ -81,6 +81,7 @@ chumsky = { version = "=1.0.0-alpha.7", default-features = false, features = ["p
 num = "0.4.3"
 hf-hub = { version = "0.4.2", default-features = false, features = ["tokio"] }
 reqwest = "0.12.14"
+percent-encoding = "2.3.1"
 
 ######
 # The versions of the following dependencies are managed manually.

@@ -51,6 +51,7 @@ hf-hub = { workspace = true }
 reqwest = { workspace = true }
 log = { workspace = true }
 chumsky = { workspace = true }
+percent-encoding = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]

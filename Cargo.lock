@@ -5184,6 +5184,7 @@ dependencies = [
  "log",
  "num",
  "object_store",
+ "percent-encoding",
  "rand 0.9.0",
  "rand_chacha 0.9.0",
  "rand_distr",
