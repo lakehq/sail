@@ -18,7 +18,7 @@ rust-version = "1.82.0"
 
 [workspace.dependencies]
 thiserror = { version = "2.0.12" }
-tokio = { version = "1.42.0", features = ["full"] }
+tokio = { version = "1.44.1", features = ["full"] }
 tokio-stream = "0.1.17"
 tonic = { version = "0.12.3", features = ["tls", "tls-roots", "gzip", "zstd"] }
 tonic-build = "0.12.3"
@@ -69,10 +69,10 @@ num_enum = "0.7.3"
 log = "0.4.26"
 env_logger = "0.11.7"
 fastrace = { version = "0.7.8", features = ["enable"] }
-fastrace-opentelemetry = "0.7.4"
-opentelemetry = "0.26.0"
-opentelemetry_sdk = "0.26.0"
-opentelemetry-otlp = { version = "0.26.0", features = ["tls", "tls-roots"] }
+fastrace-opentelemetry = "0.9.0"
+opentelemetry = "0.28.0"
+opentelemetry_sdk = "0.28.0"
+opentelemetry-otlp = { version = "0.28.0", features = ["tls", "tls-roots", "grpc-tonic"] }
 hdfs-native-object-store = "0.13.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "0.99.0"
