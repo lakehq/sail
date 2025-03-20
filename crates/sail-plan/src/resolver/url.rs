@@ -224,8 +224,10 @@ impl PatternSegment {
 }
 
 /// A parsed URL that may contain glob patterns.
-/// We do not use [`Url::parse`] since we need to handle glob patterns
-/// in the path differently based on the scheme.
+/// The parsing is coarse-grained and permissive since we only need to
+/// identify the path that may contain glob patterns.
+/// We do not use [`Url::parse`] for this since we need to handle glob patterns
+/// differently for different schemes.
 #[derive(Debug)]
 enum RawGlobUrl<'a> {
     #[expect(dead_code)]
@@ -512,7 +514,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_path_pattern_parser() {
+    fn test_pattern_segment_parser() {
         let parser = PatternSegment::sequence_parser();
         let test = |input: &'static str, expected: Vec<PatternSegment>| {
             let result = parser.parse(input).into_result().unwrap();
@@ -647,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn test_path_pattern_expansion() {
+    fn test_pattern_segment_expansion() {
         let parser = PatternSegment::sequence_parser();
         let test = |input: &'static str, expected: &[&str]| {
             let patterns = parser.parse(input).into_result().unwrap();
@@ -693,10 +695,11 @@ mod tests {
         test("{a,b,c?}", &["a", "b", "c?"]);
         test("{a,b{c/**,d}}/x", &["a/x", "bc/**/x", "bd/x"]);
         test("{a,b{c,d},?e{f}}", &["a", "bc", "bd", "?ef"]);
+        test("{a,b{c,d}{e,f}}", &["a", "bce", "bcf", "bde", "bdf"]);
     }
 
     #[test]
-    fn test_parse_url_glob() {
+    fn test_parse_glob_url() {
         fn test(input: &str, expected: &[(&str, Option<&str>)]) {
             let actual = GlobUrl::parse(input).unwrap();
             assert_eq!(actual.len(), expected.len());
@@ -712,6 +715,10 @@ mod tests {
         test(
             "https://example.com/path/?foo#bar",
             &[("https://example.com/path/?foo#bar", None)],
+        );
+        test(
+            "https://example.com/path/**/*.txt?foo#bar",
+            &[("https://example.com/path/?foo#bar", Some("**/*.txt"))],
         );
         test("s3://bucket/path", &[("s3://bucket/path", None)]);
         test(
@@ -745,6 +752,10 @@ mod tests {
         test("s3://bucket/foo/../bar", &[("s3://bucket/bar", None)]);
         test("hdfs://data//path*", &[("hdfs://data//", Some("path*"))]);
         test("hdfs://data/path*", &[("hdfs://data/", Some("path*"))]);
+        test(
+            "hdfs://user:password@host:8000/path/**/*.txt",
+            &[("hdfs://user:password@host:8000/path/", Some("**/*.txt"))],
+        );
         test("file:///tmp/data.txt", &[("file:///tmp/data.txt", None)]);
         test("file:///tmp/*.txt", &[("file:///tmp/", Some("*.txt"))]);
         test("file:///foo/../bar", &[("file:///bar", None)]);
