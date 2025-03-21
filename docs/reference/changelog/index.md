@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.3
+
+_March 21, 2025_
+
+- Implemented MCP (Model Context Protocol) server ([#410](https://github.com/lakehq/sail/pull/410)).
+- Supported the `hf://` protocol for reading Hugging Face datasets ([#412](https://github.com/lakehq/sail/pull/412)).
+- Supported glob patterns in data source URLs ([#415](https://github.com/lakehq/sail/pull/415)).
+- Supported a few data reader and writer options for CSV files ([#414](https://github.com/lakehq/sail/pull/414)).
+- Fixed a few issues with SQL temporary views ([#413](https://github.com/lakehq/sail/pull/413)).
+- Improved task error reporting in cluster mode ([#409](https://github.com/lakehq/sail/pull/409)).
+
 ## 0.2.2
 
 _March 6, 2025_
