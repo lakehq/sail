@@ -31,7 +31,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
-    ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
+    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
 };
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
@@ -2549,6 +2549,7 @@ impl PlanResolver<'_> {
         let schema = schema.to_dfschema_ref()?;
         Ok(LogicalPlan::Explain(plan::Explain {
             verbose: matches!(mode, spec::ExplainMode::Verbose),
+            explain_format: ExplainFormat::Indent,
             plan: Arc::new(input),
             stringified_plans,
             schema,
