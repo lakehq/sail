@@ -160,7 +160,7 @@ jobs:
                 ;;
               "x86_64")
                 yum update -y
-                yum install -y wget unzip pkgconfig libssl-devel
+                yum install -y wget unzip pkgconfig openssl-devel
                 ;;
               *)
                 echo "Unsupported platform target: ${platform_target}"
