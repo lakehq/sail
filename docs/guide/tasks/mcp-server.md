@@ -33,6 +33,11 @@ Open the configuration file in a text editor and add the following content.
 
 Replace `/path/to/sail` with the absolute path to the Sail CLI on your system.
 If you have installed Sail via `pip` in a Python virtual environment, the path is `$VENV/bin/sail` where `$VENV` is the absolute path to the virtual environment.
+Please note that you must install the PySail library with MCP dependencies.
+
+```bash
+pip install "pysail[spark,mcp]"
+```
 
 ::: info
 You can run `sail spark mcp-server --help` to see the available options for launching the MCP server.

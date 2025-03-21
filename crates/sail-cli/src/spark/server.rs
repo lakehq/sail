@@ -20,7 +20,7 @@ const SERVER_STACK_SIZE: usize = 1024 * 1024 * 8;
 /// References:
 ///   - [1] https://github.com/PyO3/pyo3/issues/2576
 ///   - [2] https://github.com/PyO3/pyo3/issues/3218
-pub async fn shutdown() {
+async fn shutdown() {
     let _ = tokio::signal::ctrl_c().await;
     info!("Shutting down the Spark Connect server...");
 }

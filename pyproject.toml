@@ -35,7 +35,7 @@ spark = [
     "duckdb>=1.0,<2.0",
 ]
 mcp = [
-    "mcp>=1.0.0",
+    "mcp>=1.0.0,<2",
 ]
 
 [project.urls]
@@ -74,7 +74,7 @@ dependencies = [
     "rich>=12.4.4,<14", # (required by Ibis PySpark)
     "pytest~=8.3",
     "duckdb~=1.1",
-    "mcp>=1.0.0",
+    "mcp>=1.0.0,<2",
 ]
 
 [tool.hatch.envs.default.overrides]
