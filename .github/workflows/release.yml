@@ -231,7 +231,7 @@ jobs:
         # Building native dependencies (e.g. using CMake) may fail on Windows due to long paths.
         # We mitigate this by making the temporary directory shorter, though this workaround
         # is not future-proof.
-        # We do not need this workaround when building wheels since the temporary directory
+        # We do not have this issue when building wheels since the temporary directory
         # in that case is much shorter than the temporary directory created by pip.
         run: |
           if [[ "${TEST_SDIST_RUNS_ON}" == "windows-latest" ]]; then
