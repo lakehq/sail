@@ -232,7 +232,7 @@ jobs:
           TEST_SDIST_RUNS_ON: ${{ matrix.platform.runner }}
         run: |
           if [[ "${TEST_SDIST_RUNS_ON}" == "windows-latest" ]]; then
-            mkdir 'C:\Temp'
+            mkdir -p 'C:\Temp'
             export TEMP='C:\Temp'
           fi
           pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --no-binary pysail
