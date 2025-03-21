@@ -36,8 +36,8 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
         let shell = PyModule::from_code(
             py,
             CString::new(SHELL_SOURCE_CODE)?.as_c_str(),
-            CString::new("shell.py")?.as_c_str(),
-            CString::new("shell")?.as_c_str(),
+            CString::new("spark_shell.py")?.as_c_str(),
+            CString::new("spark_shell")?.as_c_str(),
         )?;
         shell
             .getattr("run_pyspark_shell")?
