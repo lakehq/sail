@@ -1321,7 +1321,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::DropView {
                     view: from_ast_object_name(parse_object_name(view_name.as_str())?)?,
                     kind: Some(spec::ViewKind::Temporary),
-                    if_exists: true,
+                    if_exists: false,
                 })
             }
             CatType::DropGlobalTempView(x) => {
