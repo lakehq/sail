@@ -16,6 +16,7 @@ use object_store::{
     ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
 };
 use regex::Regex;
+use reqwest::StatusCode;
 use tonic::codegen::http;
 
 lazy_static! {
@@ -42,30 +43,41 @@ impl From<HuggingFaceError> for object_store::Error {
         const OBJECT_STORE_NAME: &str = "Hugging Face object store";
 
         match value {
-            HuggingFaceError::ApiError(error) => match error {
-                ApiError::MissingHeader(_)
-                | ApiError::InvalidHeader(_)
-                | ApiError::InvalidHeaderValue(_)
-                | ApiError::ToStr(_)
-                | ApiError::RequestError(_)
-                | ApiError::ParseIntError(_)
-                | ApiError::IoError(_)
-                | ApiError::TooManyRetries(_)
-                | ApiError::TryAcquireError(_)
-                | ApiError::AcquireError(_)
-                | ApiError::LockAcquisition(_) => object_store::Error::Generic {
+            HuggingFaceError::ApiError(e @ ApiError::MissingHeader(_))
+            | HuggingFaceError::ApiError(e @ ApiError::InvalidHeader(_))
+            | HuggingFaceError::ApiError(e @ ApiError::InvalidHeaderValue(_))
+            | HuggingFaceError::ApiError(e @ ApiError::ToStr(_))
+            | HuggingFaceError::ApiError(e @ ApiError::ParseIntError(_))
+            | HuggingFaceError::ApiError(e @ ApiError::IoError(_))
+            | HuggingFaceError::ApiError(e @ ApiError::TooManyRetries(_))
+            | HuggingFaceError::ApiError(e @ ApiError::TryAcquireError(_))
+            | HuggingFaceError::ApiError(e @ ApiError::AcquireError(_))
+            | HuggingFaceError::ApiError(e @ ApiError::LockAcquisition(_)) => {
+                object_store::Error::Generic {
                     store: OBJECT_STORE_NAME,
-                    source: Box::new(error),
-                },
-                ApiError::Join(e) => object_store::Error::JoinError { source: e },
-            },
-            HuggingFaceError::DateTimeParseError(error) => object_store::Error::Generic {
+                    source: Box::new(e),
+                }
+            }
+            HuggingFaceError::ApiError(ApiError::RequestError(e))
+            | HuggingFaceError::RequestError(e) => {
+                if e.status().is_some_and(|s| s == StatusCode::NOT_FOUND) {
+                    object_store::Error::NotFound {
+                        path: e.url().map(|x| x.path().to_string()).unwrap_or_default(),
+                        source: Box::new(e),
+                    }
+                } else {
+                    object_store::Error::Generic {
+                        store: OBJECT_STORE_NAME,
+                        source: Box::new(e),
+                    }
+                }
+            }
+            HuggingFaceError::ApiError(ApiError::Join(e)) => {
+                object_store::Error::JoinError { source: e }
+            }
+            HuggingFaceError::DateTimeParseError(e) => object_store::Error::Generic {
                 store: OBJECT_STORE_NAME,
-                source: Box::new(error),
-            },
-            HuggingFaceError::RequestError(error) => object_store::Error::Generic {
-                store: OBJECT_STORE_NAME,
-                source: Box::new(error),
+                source: Box::new(e),
             },
             HuggingFaceError::InvalidPath(path) => object_store::Error::InvalidPath {
                 source: path::Error::InvalidPath { path },
@@ -264,12 +276,24 @@ impl ObjectStore for HuggingFaceObjectStore {
                 attributes: Default::default(),
             })
         } else {
-            debug!("Fetching Hugging Face file if not cached: {location:?}");
+            // TODO: The cache is not ideal for cluster mode. In cluster mode, the driver
+            //   only needs to access the metadata at the end of the Parquet file, but the
+            //   entire file is downloaded and cached.
+            // TODO: The cache is not efficient for wide tables with many columns when
+            //   only a small set of columns are accessed.
+            debug!("Fetching Hugging Face file if not cached: {location}");
             let location = repo
                 .get(path.path.as_str())
                 .await
                 .map_err(HuggingFaceError::from)?;
-            debug!("Reading Hugging Face file from local cache: {location:?}");
+            debug!(
+                "Reading Hugging Face file from local cache: {}{}",
+                location.as_path().display(),
+                range
+                    .as_ref()
+                    .map(|x| format!(" ({x})"))
+                    .unwrap_or_default()
+            );
             self.local
                 .get_opts(
                     &Path::from_filesystem_path(location)?,

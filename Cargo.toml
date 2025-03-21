@@ -88,6 +88,7 @@ chumsky = { version = "=1.0.0-alpha.7", default-features = false, features = ["p
 num = "0.4.3"
 hf-hub = { version = "0.4.2", default-features = false, features = ["tokio"] }
 reqwest = "0.12.15"
+percent-encoding = "2.3.1"
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -116,6 +117,36 @@ object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] 
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-catalog = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-common-runtime = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-datasource-avro = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-datasource-csv = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-datasource-json = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-datasource-parquet = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-doc = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+# datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-functions-aggregate-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-functions-table = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-functions-window = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-functions-window-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-macros = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-physical-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-physical-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-proto-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion-sql = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release

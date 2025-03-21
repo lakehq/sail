@@ -113,6 +113,10 @@ impl SessionManager {
                 "datafusion.execution.parquet.maximum_buffered_record_batches_per_stream",
                 config.parquet.maximum_buffered_record_batches_per_stream,
             )
+            .set_bool(
+                "datafusion.execution.listing_table_ignore_subdirectory",
+                false,
+            )
             // Spark defaults to false:
             //  https://spark.apache.org/docs/latest/sql-data-sources-csv.html
             .set_bool("datafusion.catalog.has_header", false);
