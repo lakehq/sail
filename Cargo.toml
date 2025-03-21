@@ -93,13 +93,13 @@ reqwest = "0.12.15"
 # The versions of the following dependencies are managed manually.
 ######
 
-datafusion = { version = "46.0.0", features = ["serde", "pyarrow", "avro"] }
-datafusion-common = { version = "46.0.0", features = ["object_store", "pyarrow", "avro"] }
-datafusion-expr = { version = "46.0.0" }
-datafusion-expr-common = { version = "46.0.0" }
-datafusion-proto = { version = "46.0.0" }
-datafusion-functions-nested = { version = "46.0.0" }
-datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "da30208" }
+datafusion = { version = "46.0.1", features = ["serde", "pyarrow", "avro"] }
+datafusion-common = { version = "46.0.1", features = ["object_store", "pyarrow", "avro"] }
+datafusion-expr = { version = "46.0.1" }
+datafusion-expr-common = { version = "46.0.1" }
+datafusion-proto = { version = "46.0.1" }
+datafusion-functions-nested = { version = "46.0.1" }
+datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "f8bc055" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.23.5", features = ["auto-initialize", "serde"] }
 arrow-buffer = { version = "54.2.1" }
