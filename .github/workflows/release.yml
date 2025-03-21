@@ -200,9 +200,7 @@ jobs:
       matrix:
         platform:
           - runner: ubuntu-latest
-          # FIXME: sdist installation becomes slow on `ubuntu-24.04-arm`.
-          #   We have skipped the ARM runner for now.
-          #   We should investigate the issue.
+          - runner: ubuntu-24.04-arm
           - runner: macos-13
           - runner: macos-14
           - runner: windows-latest
@@ -230,6 +228,11 @@ jobs:
         shell: bash
         env:
           TEST_SDIST_RUNS_ON: ${{ matrix.platform.runner }}
+        # Building native dependencies (e.g. using CMake) may fail on Windows due to long paths.
+        # We mitigate this by making the temporary directory shorter, though this workaround
+        # is not future-proof.
+        # We do not need this workaround when building wheels since the temporary directory
+        # in that case is much shorter than the temporary directory created by pip.
         run: |
           if [[ "${TEST_SDIST_RUNS_ON}" == "windows-latest" ]]; then
             mkdir -p 'C:\Temp'
