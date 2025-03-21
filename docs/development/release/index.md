@@ -1,6 +1,6 @@
 ---
 title: Release Process
-rank: 5
+rank: 6
 ---
 
 # Release Process
