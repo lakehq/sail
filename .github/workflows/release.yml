@@ -200,7 +200,9 @@ jobs:
       matrix:
         platform:
           - runner: ubuntu-latest
-          - runner: ubuntu-24.04-arm
+          # FIXME: sdist installation becomes slow on `ubuntu-24.04-arm`.
+          #   We have skipped the ARM runner for now.
+          #   We should investigate the issue.
           - runner: macos-13
           - runner: macos-14
           - runner: windows-latest
