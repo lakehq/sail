@@ -1,13 +1,13 @@
 ---
-title: MCP Server
-rank: 5
+title: MCP Server Testing
+rank: 60
 ---
 
-# MCP Server
+# MCP Server Testing
 
-This guide provides tips for developing the MCP (Model Context Protocol) server for Sail.
+This guide provides tips for testing the MCP (Model Context Protocol) server in Sail.
 
-### Running the MCP Server
+## Running the MCP Server
 
 Run the following command to build the Sail CLI and install it in the `default` Hatch environment.
 
