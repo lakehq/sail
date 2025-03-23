@@ -1,4 +1,4 @@
-ARG RUST_VERSION=1.82.0
+ARG RUST_VERSION=1.85.1
 ARG RUST_PROFILE=dev
 ARG RUSTFLAGS=""
 ARG PYSPARK_VERSION=3.5.4
@@ -19,7 +19,9 @@ RUN apt-get update && \
         protobuf-compiler \
         libprotobuf-dev \
         curl \
-        git
+        git \
+        pkg-config \
+        libssl-dev
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup-init && \
     chmod a+x /tmp/rustup-init && \
