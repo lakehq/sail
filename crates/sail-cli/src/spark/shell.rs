@@ -1,14 +1,12 @@
-use std::ffi::CString;
 use std::net::Ipv4Addr;
 
 use pyo3::prelude::PyAnyMethods;
-use pyo3::types::PyModule;
 use pyo3::{PyResult, Python};
 use sail_spark_connect::entrypoint::serve;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-const SHELL_SOURCE_CODE: &str = include_str!("shell.py");
+use crate::python::Modules;
 
 pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -33,12 +31,7 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     runtime.spawn(server_task);
     Python::with_gil(|py| -> PyResult<_> {
-        let shell = PyModule::from_code(
-            py,
-            CString::new(SHELL_SOURCE_CODE)?.as_c_str(),
-            CString::new("spark_shell.py")?.as_c_str(),
-            CString::new("spark_shell")?.as_c_str(),
-        )?;
+        let shell = Modules::SPARK_SHELL.load(py)?;
         shell
             .getattr("run_pyspark_shell")?
             .call((server_port,), None)?;

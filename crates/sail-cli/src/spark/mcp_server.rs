@@ -1,4 +1,3 @@
-use std::ffi::CString;
 use std::fmt;
 use std::fmt::Formatter;
 use std::net::Ipv4Addr;
@@ -6,13 +5,13 @@ use std::net::Ipv4Addr;
 use clap::ValueEnum;
 use log::info;
 use pyo3::prelude::PyAnyMethods;
-use pyo3::types::PyModule;
 use pyo3::{PyResult, Python};
 use sail_spark_connect::entrypoint::serve;
 use sail_telemetry::telemetry::init_telemetry;
 use tokio::net::TcpListener;
+use tokio::runtime::Runtime;
 
-const MCP_SERVER_SOURCE_CODE: &str = include_str!("mcp_server.py");
+use crate::python::Modules;
 
 async fn shutdown() {
     let _ = tokio::signal::ctrl_c().await;
@@ -40,14 +39,10 @@ pub struct McpSettings {
     pub transport: McpTransport,
     pub host: String,
     pub port: u16,
+    pub spark_remote: Option<String>,
 }
 
-pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::error::Error>> {
-    init_telemetry()?;
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+fn run_spark_connect_server(runtime: &Runtime) -> Result<String, Box<dyn std::error::Error>> {
     let (server_port, server_task) = runtime.block_on(async move {
         // Listen on only the loopback interface for security.
         let listener = TcpListener::bind((Ipv4Addr::new(127, 0, 0, 1), 0)).await?;
@@ -60,22 +55,34 @@ pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::er
         <Result<_, Box<dyn std::error::Error>>>::Ok((port, task))
     })?;
     runtime.spawn(server_task);
+    Ok(format!("sc://127.0.0.1:{server_port}"))
+}
+
+pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::error::Error>> {
+    init_telemetry()?;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    let spark_remote = match settings.spark_remote {
+        None => run_spark_connect_server(&runtime)?,
+        Some(x) => x,
+    };
+
     Python::with_gil(|py| -> PyResult<_> {
-        let shell = PyModule::from_code(
-            py,
-            CString::new(MCP_SERVER_SOURCE_CODE)?.as_c_str(),
-            CString::new("spark_mcp_server.py")?.as_c_str(),
-            CString::new("spark_mcp_server")?.as_c_str(),
-        )?;
-        shell.getattr("run_spark_mcp_server")?.call(
-            (
-                settings.transport.to_string(),
-                settings.host,
-                settings.port,
-                server_port,
-            ),
-            None,
-        )?;
+        let _ = Modules::NATIVE_LOGGING.load(py)?;
+        let server = Modules::SPARK_MCP_SERVER.load(py)?;
+        server.getattr("configure_logging")?.call0()?;
+        server.getattr("configure_fastmcp_log_level")?.call0()?;
+        let mcp = server.getattr("create_spark_mcp_server")?.call1((
+            settings.host,
+            settings.port,
+            spark_remote,
+        ))?;
+        server.getattr("override_default_logging_config")?.call0()?;
+        mcp.getattr("run")?
+            .call1((settings.transport.to_string(),))?;
         Ok(())
     })?;
     Ok(())
