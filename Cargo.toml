@@ -41,7 +41,7 @@ monostate = "0.1.14"
 regex = "1.11.1"
 glob = "0.3.2"
 chrono = "=0.4.39" # TODO: 0.4.40 won't compile, so we fully specify the version of chrono.
-chrono-tz = "0.10.1"
+chrono-tz = "0.10.3"
 futures = "0.3.31"
 comfy-table = "7.1.4"
 html-escape = "0.2.13"
@@ -54,7 +54,7 @@ phf = { version = "0.11.3", features = ["macros"] }
 ryu = "1.0.20"
 either = "1.15.0"
 num-bigint = "0.4.6"
-serde_arrow = { version = "0.13.0", features = ["arrow-54"] }
+serde_arrow = { version = "0.13.1", features = ["arrow-54"] }
 mimalloc = { version = "0.1.44", default-features = false }
 rand = "0.9.0"
 rand_chacha = "0.9.0"
@@ -65,7 +65,7 @@ aws-config = "1.6.0"
 aws-credential-types = "1.2.2"
 clap = { version = "4.5.32", features = ["derive"] }
 num_enum = "0.7.3"
-log = "0.4.26"
+log = "0.4.27"
 env_logger = "0.11.7"
 fastrace = { version = "0.7.8", features = ["enable"] }
 fastrace-opentelemetry = "0.9.0"
@@ -83,7 +83,7 @@ cbc = { version = "0.1.2", features = ["std"] }
 base64 = "0.22.1"
 md-5 = "0.10.6"
 half = { version = "2.5.0", features = ["serde", "num-traits", "zerocopy"] }
-iana-time-zone = "0.1.61"
+iana-time-zone = "0.1.62"
 chumsky = { version = "=1.0.0-alpha.7", default-features = false, features = ["pratt", "label"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.2", default-features = false, features = ["tokio"] }
