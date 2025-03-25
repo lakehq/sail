@@ -28,10 +28,11 @@ def _describe_column(column):
 
 
 def configure_logging():
-    """Configure logging for the MCP server."""
-    # We modify the default Uvicorn logging configuration directly,
-    # since we cannot override the configuration of the underlying Uvicorn server
-    # when creating the MCP server.
+    """Configure logging for the MCP server.
+    We modify the default Uvicorn logging configuration directly,
+    since we cannot override the configuration of the underlying Uvicorn server
+    when creating the MCP server.
+    """
     uvicorn.config.LOGGING_CONFIG["handlers"]["default"] = {
         "class": "_sail_cli_native_logging.NativeHandler",
         "formatter": "default",
@@ -70,7 +71,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         logging.info("Stopping Spark session")
         spark.stop()
 
-    mcp = FastMCP("PySpark MCP server powered by Sail", lifespan=lifespan, host=host, port=port)
+    mcp = FastMCP("Sail MCP server for Spark SQL", lifespan=lifespan, host=host, port=port)
 
     @mcp.tool()
     def create_parquet_view(name: str, path: str, ctx: Context) -> str:
