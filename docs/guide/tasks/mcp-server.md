@@ -23,7 +23,7 @@ Open the configuration file in a text editor and add the following content.
 ```json
 {
   "mcpServers": {
-    "filesystem": {
+    "sail": {
       "command": "/path/to/sail",
       "args": ["spark", "mcp-server", "--transport", "stdio"]
     }
