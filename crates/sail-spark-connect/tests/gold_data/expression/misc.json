@@ -3660,7 +3660,7 @@
       "input": "foo(a x)",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'x': extra input 'x'.(line 1, pos 6)\n\n== SQL ==\nfoo(a x)\n------^^^\n",
       "output": {
-        "failure": "invalid argument: found x at 6:7 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+        "failure": "invalid argument: found x at 6:7 expected ',', or ')'"
       }
     },
     {

@@ -5146,21 +5146,21 @@
       "input": "Interval 'interval 1 daysss 2 hoursss'",
       "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"INTERVAL\" is invalid: 'interval 1 daysss 2 hoursss'.(line 1, pos 0)\n\n== SQL ==\nInterval 'interval 1 daysss 2 hoursss'\n^^^\n",
       "output": {
-        "failure": "invalid argument: found daysss at 11:17 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'YEAR', 'YEARS', 'MONTH', 'MONTHS', 'WEEK', 'WEEKS', 'DAY', 'DAYS', 'HOUR', 'HOURS', 'MINUTE', 'MINUTES', 'SECOND', 'SECONDS', 'MILLISECOND', 'MILLISECONDS', 'MICROSECOND', or 'MICROSECONDS'"
+        "failure": "invalid argument: found daysss at 11:17 expected 'YEAR', 'YEARS', 'MONTH', 'MONTHS', 'WEEK', 'WEEKS', 'DAY', 'DAYS', 'HOUR', 'HOURS', 'MINUTE', 'MINUTES', 'SECOND', 'SECONDS', 'MILLISECOND', 'MILLISECONDS', 'MICROSECOND', or 'MICROSECONDS'"
       }
     },
     {
       "input": "Interval 'interval 1 yearsss 2 monthsss'",
       "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"INTERVAL\" is invalid: 'interval 1 yearsss 2 monthsss'.(line 1, pos 0)\n\n== SQL ==\nInterval 'interval 1 yearsss 2 monthsss'\n^^^\n",
       "output": {
-        "failure": "invalid argument: found yearsss at 11:18 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'YEAR', 'YEARS', 'MONTH', 'MONTHS', 'WEEK', 'WEEKS', 'DAY', 'DAYS', 'HOUR', 'HOURS', 'MINUTE', 'MINUTES', 'SECOND', 'SECONDS', 'MILLISECOND', 'MILLISECONDS', 'MICROSECOND', or 'MICROSECONDS'"
+        "failure": "invalid argument: found yearsss at 11:18 expected 'YEAR', 'YEARS', 'MONTH', 'MONTHS', 'WEEK', 'WEEKS', 'DAY', 'DAYS', 'HOUR', 'HOURS', 'MINUTE', 'MINUTES', 'SECOND', 'SECONDS', 'MILLISECOND', 'MILLISECONDS', 'MICROSECOND', or 'MICROSECONDS'"
       }
     },
     {
       "input": "Interval 'interval 3 monthsss 1 hoursss'",
       "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"INTERVAL\" is invalid: 'interval 3 monthsss 1 hoursss'.(line 1, pos 0)\n\n== SQL ==\nInterval 'interval 3 monthsss 1 hoursss'\n^^^\n",
       "output": {
-        "failure": "invalid argument: found monthsss at 11:19 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'YEAR', 'YEARS', 'MONTH', 'MONTHS', 'WEEK', 'WEEKS', 'DAY', 'DAYS', 'HOUR', 'HOURS', 'MINUTE', 'MINUTES', 'SECOND', 'SECONDS', 'MILLISECOND', 'MILLISECONDS', 'MICROSECOND', or 'MICROSECONDS'"
+        "failure": "invalid argument: found monthsss at 11:19 expected 'YEAR', 'YEARS', 'MONTH', 'MONTHS', 'WEEK', 'WEEKS', 'DAY', 'DAYS', 'HOUR', 'HOURS', 'MINUTE', 'MINUTES', 'SECOND', 'SECONDS', 'MILLISECOND', 'MILLISECONDS', 'MICROSECOND', or 'MICROSECONDS'"
       }
     },
     {
@@ -6039,7 +6039,7 @@
       "input": "interval '10' month to second",
       "exception": "\nIntervals FROM month TO second are not supported.(line 1, pos 9)\n\n== SQL ==\ninterval '10' month to second\n---------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected expression, or something else"
+        "failure": "invalid argument: found end of input expected something else"
       }
     },
     {

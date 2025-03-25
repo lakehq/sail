@@ -84,7 +84,7 @@ base64 = "0.22.1"
 md-5 = "0.10.6"
 half = { version = "2.5.0", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.62"
-chumsky = { version = "=1.0.0-alpha.8", default-features = false, features = ["pratt"] }
+chumsky = { version = "0.10.0", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.2", default-features = false, features = ["tokio"] }
 reqwest = "0.12.15"
