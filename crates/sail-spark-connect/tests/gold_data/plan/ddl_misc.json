@@ -3,49 +3,133 @@
     {
       "input": "COMMENT ON DATABASE a.b.c IS 'NULL'",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "command": {
+            "commentOnDatabase": {
+              "database": [
+                "a",
+                "b",
+                "c"
+              ],
+              "value": "NULL"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "COMMENT ON DATABASE a.b.c IS NULL",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "command": {
+            "commentOnDatabase": {
+              "database": [
+                "a",
+                "b",
+                "c"
+              ],
+              "value": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "COMMENT ON NAMESPACE a.b.c IS ''",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found NAMESPACE at 11:20 expected 'CATALOG', 'DATABASE', 'SCHEMA', 'TABLE', or 'COLUMN'"
       }
     },
     {
       "input": "COMMENT ON TABLE a.b.c IS 'xYz'",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "command": {
+            "commentOnTable": {
+              "table": [
+                "a",
+                "b",
+                "c"
+              ],
+              "value": "xYz"
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "REFRESH FUNCTION a.b.c",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "command": {
+            "refreshFunction": {
+              "function": [
+                "a",
+                "b",
+                "c"
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "REFRESH FUNCTION b.c",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "command": {
+            "refreshFunction": {
+              "function": [
+                "b",
+                "c"
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "REFRESH FUNCTION c",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "command": {
+            "refreshFunction": {
+              "function": [
+                "c"
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "REFRESH TABLE a.b.c",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "command": {
+            "refreshTable": {
+              "table": [
+                "a",
+                "b",
+                "c"
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -61,6 +145,8 @@
                       "information_schema",
                       "columns"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -102,6 +188,8 @@
                       "information_schema",
                       "columns"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -143,6 +231,8 @@
                       "information_schema",
                       "columns"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -184,6 +274,8 @@
                       "information_schema",
                       "columns"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false

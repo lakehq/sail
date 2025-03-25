@@ -8,7 +8,7 @@ use tokio::time::Instant;
 use crate::driver::gen;
 use crate::error::ExecutionResult;
 use crate::id::{IdGenerator, JobId, TaskId, WorkerId};
-use crate::stream::ChannelName;
+use crate::stream::channel::ChannelName;
 
 #[derive(Debug)]
 pub struct DriverState {

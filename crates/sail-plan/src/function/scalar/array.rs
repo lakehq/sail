@@ -4,11 +4,13 @@ use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position_udf;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
+use datafusion_functions_nested::string::ArrayToString;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::array_min_max::{ArrayMax, ArrayMin};
-use crate::extension::function::spark_array::SparkArray;
-use crate::function::common::{Function, FunctionContext};
+use crate::extension::function::array::spark_array::SparkArray;
+use crate::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
+use crate::extension::function::array::spark_sequence::SparkSequence;
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
 fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
@@ -44,11 +46,9 @@ fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr
     expr_fn::array_slice(array, start, end, None)
 }
 
-fn sort_array(
-    args: Vec<expr::Expr>,
-    _function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    let (array, asc) = args.two()?;
+fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let (array, asc) = arguments.two()?;
     let (sort, nulls) = match asc {
         expr::Expr::Literal(ScalarValue::Boolean(Some(true))) => (
             lit(ScalarValue::Utf8(Some("ASC".to_string()))),
@@ -70,11 +70,6 @@ fn sort_array(
 
 fn array_prepend(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_prepend(element, array)
-}
-
-// TODO: Add in optional third argument null replacement
-fn array_join(array: expr::Expr, delimiter: expr::Expr) -> expr::Expr {
-    expr_fn::array_to_string(array, delimiter)
 }
 
 fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
@@ -100,8 +95,8 @@ fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     )
 }
 
-pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("array", F::udf(SparkArray::new())),
@@ -113,7 +108,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("array_except", F::binary(expr_fn::array_except)),
         ("array_insert", F::unknown("array_insert")),
         ("array_intersect", F::binary(expr_fn::array_intersect)),
-        ("array_join", F::binary(array_join)),
+        ("array_join", F::udf(ArrayToString::new())),
         ("array_max", F::udf(ArrayMax::new())),
         ("array_min", F::udf(ArrayMin::new())),
         ("array_position", F::scalar_udf(array_position_udf)),
@@ -125,7 +120,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, Function)> {
         ("arrays_zip", F::unknown("arrays_zip")),
         ("flatten", F::unary(expr_fn::flatten)),
         ("get", F::binary(array_element)),
-        ("sequence", F::ternary(expr_fn::gen_series)),
+        ("sequence", F::udf(SparkSequence::new())),
         ("shuffle", F::unknown("shuffle")),
         ("slice", F::ternary(slice)),
         ("sort_array", F::custom(sort_array)),
@@ -153,7 +148,7 @@ mod tests {
             Some(4),
             Some(5),
         ])]);
-        let batch = RecordBatch::try_from_iter([("l1", Arc::new(l1) as _)]).unwrap();
+        let batch = RecordBatch::try_from_iter([("l1", Arc::new(l1) as _)])?;
 
         let start = lit(2);
         let length = lit(3);

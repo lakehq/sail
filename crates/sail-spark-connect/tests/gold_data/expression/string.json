@@ -15,7 +15,13 @@
     {
       "input": "\"hello\" 'world'",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "literal": {
+            "utf8": {
+              "value": "helloworld"
+            }
+          }
+        }
       }
     },
     {
@@ -160,7 +166,13 @@
     {
       "input": "'hello' \" \" 'world'",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "literal": {
+            "utf8": {
+              "value": "hello world"
+            }
+          }
+        }
       }
     },
     {

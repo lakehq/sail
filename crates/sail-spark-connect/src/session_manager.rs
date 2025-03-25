@@ -11,7 +11,9 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use log::info;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
-use sail_plan::function::BUILT_IN_SCALAR_FUNCTIONS;
+use sail_plan::function::{
+    BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
+};
 use sail_plan::new_query_planner;
 use sail_plan::object_store::DynamicObjectStoreRegistry;
 use sail_plan::temp_view::TemporaryViewManager;
@@ -111,6 +113,10 @@ impl SessionManager {
                 "datafusion.execution.parquet.maximum_buffered_record_batches_per_stream",
                 config.parquet.maximum_buffered_record_batches_per_stream,
             )
+            .set_bool(
+                "datafusion.execution.listing_table_ignore_subdirectory",
+                false,
+            )
             // Spark defaults to false:
             //  https://spark.apache.org/docs/latest/sql-data-sources-csv.html
             .set_bool("datafusion.catalog.has_header", false);
@@ -134,6 +140,12 @@ impl SessionManager {
         //   handler.rs needs to do this
         for (&name, _function) in BUILT_IN_SCALAR_FUNCTIONS.iter() {
             context.deregister_udf(name);
+        }
+        for (&name, _function) in BUILT_IN_GENERATOR_FUNCTIONS.iter() {
+            context.deregister_udf(name);
+        }
+        for (&name, _function) in BUILT_IN_TABLE_FUNCTIONS.iter() {
+            context.deregister_udtf(name);
         }
 
         Ok(context)

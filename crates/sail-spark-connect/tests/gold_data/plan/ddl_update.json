@@ -3,20 +3,134 @@
     {
       "input": "\nUPDATE testcat.ns1.ns2.tbl\nSET a='Robert', b=32\n      ",
       "output": {
-        "failure": "not implemented: UPDATE"
+        "success": {
+          "command": {
+            "update": {
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "tableAlias": null,
+              "assignments": [
+                [
+                  [
+                    "a"
+                  ],
+                  {
+                    "literal": {
+                      "utf8": {
+                        "value": "Robert"
+                      }
+                    }
+                  }
+                ],
+                [
+                  [
+                    "b"
+                  ],
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 32
+                      }
+                    }
+                  }
+                ]
+              ],
+              "condition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "\nUPDATE testcat.ns1.ns2.tbl AS t\nSET t.a='Robert', t.b=32\nWHERE t.c=2\n      ",
       "output": {
-        "failure": "not implemented: UPDATE"
+        "success": {
+          "command": {
+            "update": {
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "tableAlias": "t",
+              "assignments": [
+                [
+                  [
+                    "t",
+                    "a"
+                  ],
+                  {
+                    "literal": {
+                      "utf8": {
+                        "value": "Robert"
+                      }
+                    }
+                  }
+                ],
+                [
+                  [
+                    "t",
+                    "b"
+                  ],
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 32
+                      }
+                    }
+                  }
+                ]
+              ],
+              "condition": {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "=="
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "t",
+                          "c"
+                        ],
+                        "planId": null
+                      }
+                    },
+                    {
+                      "literal": {
+                        "int32": {
+                          "value": 2
+                        }
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              }
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "UPDATE testcat.ns1.ns2.tbl AS t(a,b,c,d)\nSET b='Robert', c=32\nWHERE d=2",
       "exception": "\n[COLUMN_ALIASES_IS_NOT_ALLOWED] Columns aliases are not allowed in UPDATE.(line 1, pos 31)\n\n== SQL ==\nUPDATE testcat.ns1.ns2.tbl AS t(a,b,c,d)\n-------------------------------^^^\nSET b='Robert', c=32\nWHERE d=2\n",
       "output": {
-        "failure": "not implemented: UPDATE"
+        "failure": "invalid argument: column list must not appear in table alias for UPDATE"
       }
     }
   ]

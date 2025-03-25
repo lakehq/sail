@@ -54,15 +54,19 @@ impl TryFrom<Expression> for spec::Expr {
                 arguments,
                 is_distinct,
                 is_user_defined_function,
-            }) => Ok(spec::Expr::UnresolvedFunction {
-                function_name,
+            }) => Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name: spec::ObjectName::bare(function_name),
                 arguments: arguments
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<_>>()?,
+                named_arguments: vec![],
                 is_distinct,
                 is_user_defined_function,
-            }),
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            })),
             ExprType::ExpressionString(ExpressionString { expression }) => {
                 let expr = parse_expression(expression.as_str())
                     .and_then(from_ast_expression)
@@ -121,6 +125,7 @@ impl TryFrom<Expression> for spec::Expr {
                 Ok(spec::Expr::Cast {
                     expr: Box::new((*expr).try_into()?),
                     cast_to_type,
+                    rename: false,
                 })
             }
             ExprType::UnresolvedRegex(UnresolvedRegex { col_name, plan_id }) => {
@@ -151,15 +156,18 @@ impl TryFrom<Expression> for spec::Expr {
                 let window_function = window_function.required("window function")?;
                 Ok(spec::Expr::Window {
                     window_function: Box::new((*window_function).try_into()?),
-                    partition_spec: partition_spec
-                        .into_iter()
-                        .map(|x| x.try_into())
-                        .collect::<SparkResult<_>>()?,
-                    order_spec: order_spec
-                        .into_iter()
-                        .map(|x| x.try_into())
-                        .collect::<SparkResult<_>>()?,
-                    frame_spec: frame_spec.map(|x| (*x).try_into()).transpose()?,
+                    window: spec::Window::Unnamed {
+                        cluster_by: vec![],
+                        partition_by: partition_spec
+                            .into_iter()
+                            .map(|x| x.try_into())
+                            .collect::<SparkResult<_>>()?,
+                        order_by: order_spec
+                            .into_iter()
+                            .map(|x| x.try_into())
+                            .collect::<SparkResult<_>>()?,
+                        frame: frame_spec.map(|x| (*x).try_into()).transpose()?,
+                    },
                 })
             }
             ExprType::UnresolvedExtractValue(extract) => {
@@ -259,17 +267,24 @@ impl TryFrom<WindowFrame> for spec::WindowFrame {
     type Error = SparkError;
 
     fn try_from(window_frame: WindowFrame) -> SparkResult<spec::WindowFrame> {
+        fn boundary(boundary: Option<Box<FrameBoundary>>) -> Option<Boundary> {
+            boundary.and_then(|x| {
+                let FrameBoundary { boundary } = *x;
+                boundary
+            })
+        }
+
         let WindowFrame {
             frame_type,
             lower,
             upper,
         } = window_frame;
         let frame_type = FrameType::try_from(frame_type)?;
-        let lower = lower.required("lower window frame boundary")?;
-        let upper = upper.required("upper window frame boundary")?;
+        let lower = boundary(lower).required("lower window frame boundary")?;
+        let upper = boundary(upper).required("upper window frame boundary")?;
         let frame_type = frame_type.try_into()?;
-        let lower = (*lower).try_into()?;
-        let upper = (*upper).try_into()?;
+        let lower = WindowBoundaryKind::Lower(lower).try_into()?;
+        let upper = WindowBoundaryKind::Upper(upper).try_into()?;
         Ok(spec::WindowFrame {
             frame_type,
             lower,
@@ -290,19 +305,34 @@ impl TryFrom<FrameType> for spec::WindowFrameType {
     }
 }
 
-impl TryFrom<FrameBoundary> for spec::WindowFrameBoundary {
+enum WindowBoundaryKind {
+    Lower(Boundary),
+    Upper(Boundary),
+}
+
+impl TryFrom<WindowBoundaryKind> for spec::WindowFrameBoundary {
     type Error = SparkError;
 
-    fn try_from(frame_boundary: FrameBoundary) -> SparkResult<spec::WindowFrameBoundary> {
-        let FrameBoundary { boundary } = frame_boundary;
-        let boundary = boundary.required("window frame boundary")?;
-        match boundary {
-            Boundary::CurrentRow(true) => Ok(spec::WindowFrameBoundary::CurrentRow),
-            Boundary::Unbounded(true) => Ok(spec::WindowFrameBoundary::Unbounded),
-            Boundary::Value(expr) => Ok(spec::WindowFrameBoundary::Value(Box::new(
-                (*expr).try_into()?,
-            ))),
-            Boundary::CurrentRow(false) | Boundary::Unbounded(false) => {
+    fn try_from(kind: WindowBoundaryKind) -> SparkResult<spec::WindowFrameBoundary> {
+        match kind {
+            WindowBoundaryKind::Lower(Boundary::CurrentRow(true))
+            | WindowBoundaryKind::Upper(Boundary::CurrentRow(true)) => {
+                Ok(spec::WindowFrameBoundary::CurrentRow)
+            }
+            WindowBoundaryKind::Lower(Boundary::Unbounded(true)) => {
+                Ok(spec::WindowFrameBoundary::UnboundedPreceding)
+            }
+            WindowBoundaryKind::Upper(Boundary::Unbounded(true)) => {
+                Ok(spec::WindowFrameBoundary::UnboundedFollowing)
+            }
+            WindowBoundaryKind::Lower(Boundary::Value(expr))
+            | WindowBoundaryKind::Upper(Boundary::Value(expr)) => Ok(
+                spec::WindowFrameBoundary::Value(Box::new((*expr).try_into()?)),
+            ),
+            WindowBoundaryKind::Lower(Boundary::CurrentRow(false))
+            | WindowBoundaryKind::Lower(Boundary::Unbounded(false))
+            | WindowBoundaryKind::Upper(Boundary::CurrentRow(false))
+            | WindowBoundaryKind::Upper(Boundary::Unbounded(false)) => {
                 Err(SparkError::invalid("invalid window frame boundary"))
             }
         }
@@ -323,7 +353,7 @@ impl TryFrom<CommonInlineUserDefinedFunction> for spec::CommonInlineUserDefinedF
         } = function;
         let function = function.required("common inline UDF function")?;
         Ok(spec::CommonInlineUserDefinedFunction {
-            function_name,
+            function_name: function_name.into(),
             deterministic,
             arguments: arguments
                 .into_iter()
@@ -399,7 +429,7 @@ impl TryFrom<CommonInlineUserDefinedTableFunction> for spec::CommonInlineUserDef
         } = function;
         let function = function.required("common inline UDTF function")?;
         Ok(spec::CommonInlineUserDefinedTableFunction {
-            function_name,
+            function_name: function_name.into(),
             deterministic,
             arguments: arguments
                 .into_iter()

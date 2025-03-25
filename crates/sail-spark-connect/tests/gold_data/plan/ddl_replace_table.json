@@ -52,6 +52,8 @@
                         "name": [
                           "src"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -138,7 +140,46 @@
     {
       "input": "REPLACE TABLE 1m.2g(a INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found 1m at 14:16 expected identifier"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "1m",
+                "2g"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "int32",
+                    "nullable": true,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [],
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": true,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -668,7 +709,7 @@
       "input": "REPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)",
       "exception": "\nOperation not allowed: CREATE TABLE ... SKEWED BY.(line 1, pos 33)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n---------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found SKEWED at 33:39 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {

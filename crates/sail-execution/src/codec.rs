@@ -6,17 +6,17 @@ use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::memory::MemorySourceConfig;
 #[allow(deprecated)]
 use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
-use datafusion::datasource::physical_plan::{ArrowSource, JsonSource};
+use datafusion::datasource::physical_plan::{ArrowSource, FileScanConfig, JsonSource};
+use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
-#[allow(deprecated)]
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
 #[allow(deprecated)]
@@ -41,36 +41,55 @@ use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
-use sail_plan::extension::function::array::{ArrayEmptyToNull, ArrayItemWithPosition, MapToArray};
-use sail_plan::extension::function::array_min_max::{ArrayMax, ArrayMin};
+use sail_plan::extension::function::array::spark_array::SparkArray;
+use sail_plan::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
+use sail_plan::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
+use sail_plan::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
+use sail_plan::extension::function::array::spark_map_to_array::MapToArray;
+use sail_plan::extension::function::array::spark_sequence::SparkSequence;
+use sail_plan::extension::function::collection::spark_concat::SparkConcat;
+use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
+use sail_plan::extension::function::collection::spark_size::SparkSize;
+use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
+use sail_plan::extension::function::datetime::spark_last_day::SparkLastDay;
+use sail_plan::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
+use sail_plan::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
+use sail_plan::extension::function::datetime::spark_next_day::SparkNextDay;
+use sail_plan::extension::function::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
+use sail_plan::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_plan::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
+use sail_plan::extension::function::datetime::timestamp_now::TimestampNow;
 use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
-use sail_plan::extension::function::least_greatest::{Greatest, Least};
-use sail_plan::extension::function::levenshtein::Levenshtein;
-use sail_plan::extension::function::map_function::MapFunction;
+use sail_plan::extension::function::map::map_function::MapFunction;
+use sail_plan::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
+use sail_plan::extension::function::math::least_greatest::{Greatest, Least};
+use sail_plan::extension::function::math::randn::Randn;
+use sail_plan::extension::function::math::random::Random;
+use sail_plan::extension::function::math::spark_abs::SparkAbs;
+use sail_plan::extension::function::math::spark_bin::SparkBin;
+use sail_plan::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
+use sail_plan::extension::function::math::spark_expm1::SparkExpm1;
+use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
+use sail_plan::extension::function::math::spark_pmod::SparkPmod;
+use sail_plan::extension::function::math::spark_signum::SparkSignum;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
 use sail_plan::extension::function::raise_error::RaiseError;
-use sail_plan::extension::function::randn::Randn;
-use sail_plan::extension::function::random::Random;
-use sail_plan::extension::function::size::Size;
 use sail_plan::extension::function::skewness::SkewnessFunc;
 use sail_plan::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
-use sail_plan::extension::function::spark_array::SparkArray;
-use sail_plan::extension::function::spark_base64::{SparkBase64, SparkUnbase64};
-use sail_plan::extension::function::spark_concat::SparkConcat;
-use sail_plan::extension::function::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_plan::extension::function::spark_reverse::SparkReverse;
-use sail_plan::extension::function::spark_unix_timestamp::SparkUnixTimestamp;
-use sail_plan::extension::function::spark_weekofyear::SparkWeekOfYear;
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
+use sail_plan::extension::function::string::levenshtein::Levenshtein;
+use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_plan::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
+use sail_plan::extension::function::string::spark_mask::SparkMask;
+use sail_plan::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_plan::extension::function::struct_function::StructFunction;
-use sail_plan::extension::function::timestamp_now::TimestampNow;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{
@@ -93,7 +112,8 @@ use crate::plan::gen::{
     ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
 use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{LocalStreamStorage, TaskReadLocation, TaskWriteLocation};
+use crate::stream::reader::TaskReadLocation;
+use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,
@@ -219,6 +239,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
                 show_sizes,
                 sort_information,
+                limit,
             }) => {
                 let schema = self.try_decode_schema(&schema)?;
                 let partitions = partitions
@@ -229,12 +250,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
                 let sort_information =
                     self.try_decode_lex_orderings(&sort_information, registry, &schema)?;
-                Ok(Arc::new(
-                    #[allow(deprecated)]
-                    MemoryExec::try_new(&partitions, Arc::new(schema), projection)?
+                let source =
+                    MemorySourceConfig::try_new(&partitions, Arc::new(schema), projection)?
                         .with_show_sizes(show_sizes)
-                        .try_with_sort_information(sort_information)?,
-                ))
+                        .try_with_sort_information(sort_information)?
+                        .with_limit(limit.map(|x| x as usize));
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
                 let schema = self.try_decode_schema(&schema)?;
@@ -444,30 +465,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 consumption,
                 locations,
             })
-        } else if let Some(memory) = node.as_any().downcast_ref::<MemoryExec>() {
-            // `memory.schema()` is the schema after projection.
-            // We must use the original schema here.
-            let schema = memory.original_schema();
-            let partitions = memory
-                .partitions()
-                .iter()
-                .map(|x| write_record_batches(x, schema.as_ref()))
-                .collect::<Result<_>>()?;
-            let projection = memory
-                .projection()
-                .as_ref()
-                .map(|x| gen::PhysicalProjection {
-                    columns: x.iter().map(|c| *c as u64).collect(),
-                });
-            let schema = self.try_encode_schema(schema.as_ref())?;
-            let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
-            NodeKind::Memory(gen::MemoryExecNode {
-                partitions,
-                schema,
-                projection,
-                show_sizes: memory.show_sizes(),
-                sort_information,
-            })
         } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
             let data = write_record_batches(&values.data(), &values.schema())?;
             let schema = self.try_encode_schema(values.schema().as_ref())?;
@@ -566,6 +563,54 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 common_prefix_length,
             })
+        } else if let Some(data_source) = node.as_any().downcast_ref::<DataSourceExec>() {
+            let source = data_source.data_source();
+            if let Some(file_scan) = source.as_any().downcast_ref::<FileScanConfig>() {
+                let file_source = file_scan.file_source();
+                if file_source.as_any().is::<JsonSource>() {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let file_compression_type =
+                        self.try_encode_file_compression_type(file_scan.file_compression_type)?;
+                    NodeKind::NdJson(gen::NdJsonExecNode {
+                        base_config,
+                        file_compression_type,
+                    })
+                } else if file_source.as_any().is::<ArrowSource>() {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    NodeKind::Arrow(gen::ArrowExecNode { base_config })
+                } else {
+                    return plan_err!("unsupported data source node: {data_source:?}");
+                }
+            } else if let Some(memory) = source.as_any().downcast_ref::<MemorySourceConfig>() {
+                // `memory.schema()` is the schema after projection.
+                // We must use the original schema here.
+                let schema = memory.original_schema();
+                let partitions = memory
+                    .partitions()
+                    .iter()
+                    .map(|x| write_record_batches(x, schema.as_ref()))
+                    .collect::<Result<_>>()?;
+                let projection = memory
+                    .projection()
+                    .as_ref()
+                    .map(|x| gen::PhysicalProjection {
+                        columns: x.iter().map(|c| *c as u64).collect(),
+                    });
+                let schema = self.try_encode_schema(schema.as_ref())?;
+                let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
+                NodeKind::Memory(gen::MemoryExecNode {
+                    partitions,
+                    schema,
+                    projection,
+                    show_sizes: memory.show_sizes(),
+                    sort_information,
+                    limit: memory.fetch().map(|x| x as u64),
+                })
+            } else {
+                return plan_err!("unsupported data source node: {data_source:?}");
+            }
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -694,6 +739,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = TimestampNow::new(Arc::from(timezone), time_unit);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkFromUtcTimestamp(gen::SparkFromUtcTimestampUdf { time_unit }) => {
+                let time_unit = gen_datafusion_common::TimeUnit::from_str_name(time_unit.as_str())
+                    .ok_or_else(|| plan_datafusion_err!("invalid time unit: {time_unit}"))?;
+                let udf = SparkFromUtcTimestamp::new(time_unit.into());
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -710,7 +761,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
-            "size" | "cardinality" => Ok(Arc::new(ScalarUDF::from(Size::new()))),
+            "spark_size" | "size" | "spark_cardinality" | "cardinality" => {
+                Ok(Arc::new(ScalarUDF::from(SparkSize::new())))
+            }
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
             }
@@ -737,6 +790,38 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_aes_decrypt" | "try_aes_decrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryAESDecrypt::new())))
             }
+            "spark_to_binary" | "to_binary" => Ok(Arc::new(ScalarUDF::from(SparkToBinary::new()))),
+            "spark_try_to_binary" | "try_to_binary" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
+            }
+            "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
+            "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
+            "spark_element_at" | "element_at" => {
+                Ok(Arc::new(ScalarUDF::from(SparkElementAt::new())))
+            }
+            "spark_try_element_at" | "try_element_at" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryElementAt::new())))
+            }
+            "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
+            "spark_next_day" | "next_day" => Ok(Arc::new(ScalarUDF::from(SparkNextDay::new()))),
+            "spark_make_ym_interval" | "make_ym_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
+            }
+            "spark_make_timestamp_ntz" | "make_timestamp_ntz" => {
+                Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
+            }
+            "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
+            "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
+            "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
+            "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
+            "spark_bin" | "bin" => Ok(Arc::new(ScalarUDF::from(SparkBin::new()))),
+            "spark_try_to_timestamp" | "try_to_timestamp" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
+            }
+            "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
+            "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
+            "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
+            "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -755,7 +840,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<RaiseError>()
             || node.inner().as_any().is::<Randn>()
             || node.inner().as_any().is::<Random>()
-            || node.inner().as_any().is::<Size>()
+            || node.inner().as_any().is::<SparkSize>()
             || node.inner().as_any().is::<SparkArray>()
             || node.inner().as_any().is::<SparkConcat>()
             || node.inner().as_any().is::<SparkHex>()
@@ -770,6 +855,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryAESEncrypt>()
             || node.inner().as_any().is::<SparkAESDecrypt>()
             || node.inner().as_any().is::<SparkTryAESDecrypt>()
+            || node.inner().as_any().is::<SparkAbs>()
+            || node.inner().as_any().is::<SparkSignum>()
+            || node.inner().as_any().is::<SparkToBinary>()
+            || node.inner().as_any().is::<SparkTryToBinary>()
+            || node.inner().as_any().is::<SparkElementAt>()
+            || node.inner().as_any().is::<SparkTryElementAt>()
+            || node.inner().as_any().is::<SparkLastDay>()
+            || node.inner().as_any().is::<SparkNextDay>()
+            || node.inner().as_any().is::<SparkMakeYmInterval>()
+            || node.inner().as_any().is::<SparkMakeTimestampNtz>()
+            || node.inner().as_any().is::<SparkMask>()
+            || node.inner().as_any().is::<SparkSequence>()
+            || node.inner().as_any().is::<SparkEncode>()
+            || node.inner().as_any().is::<SparkDecode>()
+            || node.inner().as_any().is::<SparkTryToTimestamp>()
+            || node.inner().as_any().is::<SparkBin>()
+            || node.inner().as_any().is::<SparkExpm1>()
+            || node.inner().as_any().is::<SparkPmod>()
+            || node.inner().as_any().is::<SparkCeil>()
+            || node.inner().as_any().is::<SparkFloor>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"
@@ -846,6 +951,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 timezone,
                 time_unit,
             })
+        } else if let Some(func) = node
+            .inner()
+            .as_any()
+            .downcast_ref::<SparkFromUtcTimestamp>()
+        {
+            let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
+            let time_unit = time_unit.as_str_name().to_string();
+            UdfKind::SparkFromUtcTimestamp(gen::SparkFromUtcTimestampUdf { time_unit })
         } else {
             return Ok(());
         };

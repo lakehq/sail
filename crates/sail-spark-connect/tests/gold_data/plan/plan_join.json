@@ -3,7 +3,130 @@
     {
       "input": "SELECT * FROM (src1 s1 INNER JOIN src2 s2 ON s1.id = s2.id) dst(a, b, c, d)",
       "output": {
-        "failure": "invalid argument: found src1 at 15:19 expected query"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "tableAlias": {
+                  "input": {
+                    "join": {
+                      "left": {
+                        "tableAlias": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "src1"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "name": "s1",
+                          "columns": []
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "right": {
+                        "tableAlias": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "src2"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null,
+                            "sourceInfo": null
+                          },
+                          "name": "s2",
+                          "columns": []
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "joinType": "inner",
+                      "joinCriteria": {
+                        "on": {
+                          "unresolvedFunction": {
+                            "functionName": [
+                              "=="
+                            ],
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "s1",
+                                    "id"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "s2",
+                                    "id"
+                                  ],
+                                  "planId": null
+                                }
+                              }
+                            ],
+                            "namedArguments": [],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
+                          }
+                        }
+                      },
+                      "joinDataType": null
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "name": "dst",
+                  "columns": [
+                    "a",
+                    "b",
+                    "c",
+                    "d"
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -24,6 +147,8 @@
                                 "name": [
                                   "a"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false
@@ -37,6 +162,8 @@
                                 "name": [
                                   "b"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false
@@ -44,9 +171,8 @@
                             "planId": null,
                             "sourceInfo": null
                           },
-                          "joinCondition": null,
                           "joinType": "inner",
-                          "usingColumns": [],
+                          "joinCriteria": null,
                           "joinDataType": null
                         },
                         "planId": null,
@@ -58,6 +184,8 @@
                             "name": [
                               "c"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -65,9 +193,8 @@
                         "planId": null,
                         "sourceInfo": null
                       },
-                      "joinCondition": null,
                       "joinType": "inner",
-                      "usingColumns": [],
+                      "joinCriteria": null,
                       "joinDataType": null
                     },
                     "planId": null,
@@ -79,6 +206,8 @@
                         "name": [
                           "d"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -86,9 +215,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "rightOuter",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -119,14 +247,74 @@
       "input": "select * from a natural cross join b",
       "exception": "\n[INCOMPATIBLE_JOIN_TYPES] The join types NATURAL and CROSS are incompatible.(line 1, pos 16)\n\n== SQL ==\nselect * from a natural cross join b\n----------------^^^\n",
       "output": {
-        "failure": "not implemented: NATURAL JOIN"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "a"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "b"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "cross",
+                  "joinCriteria": "natural",
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from a natural join b on a.id = b.id",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'.(line 1, pos 31)\n\n== SQL ==\nselect * from a natural join b on a.id = b.id\n-------------------------------^^^\n",
       "output": {
-        "failure": "not implemented: NATURAL JOIN"
+        "failure": "invalid argument: NATURAL JOIN with criteria"
       }
     },
     {
@@ -143,6 +331,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -158,6 +348,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -171,33 +363,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "leftAnti",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "leftAnti",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -238,6 +437,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -251,6 +452,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -258,12 +461,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftAnti",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -306,6 +510,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -325,6 +531,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -332,9 +540,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftAnti",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -377,6 +584,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -396,6 +605,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -403,9 +614,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "cross",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -448,6 +658,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -467,6 +679,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -474,9 +688,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "fullOuter",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -519,6 +732,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -538,6 +753,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -545,9 +762,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "fullOuter",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -590,6 +806,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -609,6 +827,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -616,9 +836,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "inner",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -661,6 +880,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -680,6 +901,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -687,9 +910,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "inner",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -732,6 +954,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -751,6 +975,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -758,9 +984,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftAnti",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -803,6 +1028,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -822,6 +1049,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -829,9 +1058,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftOuter",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -874,6 +1102,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -893,6 +1123,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -900,9 +1132,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftOuter",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -945,6 +1176,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -964,6 +1197,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -971,9 +1206,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftSemi",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1016,6 +1250,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1035,6 +1271,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1042,9 +1280,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "rightOuter",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1087,6 +1324,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1106,6 +1345,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1113,9 +1354,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "rightOuter",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1158,6 +1398,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1177,6 +1419,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1184,9 +1428,8 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftSemi",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1233,6 +1476,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1248,6 +1493,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1261,33 +1508,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "fullOuter",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "fullOuter",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1328,6 +1582,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1341,6 +1597,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1348,12 +1606,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "fullOuter",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1394,6 +1653,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1409,6 +1670,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1422,33 +1685,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "fullOuter",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "fullOuter",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1489,6 +1759,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1502,6 +1774,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1509,12 +1783,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "fullOuter",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1561,6 +1836,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1576,6 +1853,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1589,33 +1868,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "inner",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "inner",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1656,6 +1942,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1669,6 +1957,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1676,12 +1966,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "inner",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1734,6 +2025,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1749,6 +2042,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1762,33 +2057,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "inner",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "inner",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1829,6 +2131,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1842,6 +2146,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1849,12 +2155,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "inner",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1895,6 +2202,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -1910,6 +2219,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -1923,33 +2234,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "leftAnti",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "leftAnti",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -1990,6 +2308,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2003,6 +2323,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2010,12 +2332,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftAnti",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2062,6 +2385,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2077,6 +2402,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -2090,33 +2417,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "leftOuter",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "leftOuter",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2157,6 +2491,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2170,6 +2506,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2177,12 +2515,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftOuter",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2229,6 +2568,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2244,6 +2585,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -2257,33 +2600,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "leftOuter",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "leftOuter",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2324,6 +2674,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2337,6 +2689,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2344,12 +2698,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftOuter",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2390,6 +2745,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2405,6 +2762,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -2418,33 +2777,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "leftSemi",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "leftSemi",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2485,6 +2851,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2498,6 +2866,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2505,12 +2875,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftSemi",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2551,6 +2922,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2566,6 +2939,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -2579,33 +2954,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "rightOuter",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "rightOuter",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2646,6 +3028,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2659,6 +3043,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2666,12 +3052,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "rightOuter",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2712,6 +3099,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2727,6 +3116,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -2740,33 +3131,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "rightOuter",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "rightOuter",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2807,6 +3205,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2820,6 +3220,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2827,12 +3229,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "rightOuter",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2873,6 +3276,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2888,6 +3293,8 @@
                             "name": [
                               "u"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -2901,33 +3308,40 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "a"
-                            ],
-                            "planId": null
+                  "joinType": "leftSemi",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "b"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "b"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "leftSemi",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -2968,6 +3382,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2981,6 +3397,8 @@
                         "name": [
                           "u"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -2988,12 +3406,13 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "leftSemi",
-                  "usingColumns": [
-                    "a",
-                    "b"
-                  ],
+                  "joinCriteria": {
+                    "using": [
+                      "a",
+                      "b"
+                    ]
+                  },
                   "joinDataType": null
                 },
                 "planId": null,
@@ -3023,49 +3442,657 @@
     {
       "input": "select * from t tt natural full join u as uu",
       "output": {
-        "failure": "not implemented: NATURAL JOIN"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "u"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "fullOuter",
+                  "joinCriteria": "natural",
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tt natural full outer join u as uu",
       "output": {
-        "failure": "not implemented: NATURAL JOIN"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "u"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "fullOuter",
+                  "joinCriteria": "natural",
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tt natural inner join u as uu",
       "output": {
-        "failure": "not implemented: NATURAL JOIN"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "u"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "inner",
+                  "joinCriteria": "natural",
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tt natural join u as uu",
       "output": {
-        "failure": "not implemented: NATURAL JOIN"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "u"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "inner",
+                  "joinCriteria": "natural",
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tt natural left join u as uu",
       "output": {
-        "failure": "not implemented: NATURAL JOIN"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "u"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "leftOuter",
+                  "joinCriteria": "natural",
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tt natural left outer join u as uu",
       "output": {
-        "failure": "not implemented: NATURAL JOIN"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "u"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "leftOuter",
+                  "joinCriteria": "natural",
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tt natural right join u as uu",
       "output": {
-        "failure": "not implemented: NATURAL JOIN"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "u"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "rightOuter",
+                  "joinCriteria": "natural",
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t tt natural right outer join u as uu",
       "output": {
-        "failure": "not implemented: NATURAL JOIN"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "tt",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "u"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "rightOuter",
+                  "joinCriteria": "natural",
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -3084,6 +4111,8 @@
                             "name": [
                               "t1"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -3097,6 +4126,8 @@
                             "name": [
                               "t2"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -3104,9 +4135,8 @@
                         "planId": null,
                         "sourceInfo": null
                       },
-                      "joinCondition": null,
                       "joinType": "inner",
-                      "usingColumns": [],
+                      "joinCriteria": null,
                       "joinDataType": null
                     },
                     "planId": null,
@@ -3120,6 +4150,8 @@
                             "name": [
                               "t3"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -3133,6 +4165,8 @@
                             "name": [
                               "t2"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -3140,43 +4174,49 @@
                         "planId": null,
                         "sourceInfo": null
                       },
-                      "joinCondition": {
-                        "unresolvedFunction": {
-                          "functionName": "==",
-                          "arguments": [
-                            {
-                              "unresolvedAttribute": {
-                                "name": [
-                                  "t1",
-                                  "col1"
-                                ],
-                                "planId": null
+                      "joinType": "inner",
+                      "joinCriteria": {
+                        "on": {
+                          "unresolvedFunction": {
+                            "functionName": [
+                              "=="
+                            ],
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "t1",
+                                    "col1"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "t2",
+                                    "col2"
+                                  ],
+                                  "planId": null
+                                }
                               }
-                            },
-                            {
-                              "unresolvedAttribute": {
-                                "name": [
-                                  "t2",
-                                  "col2"
-                                ],
-                                "planId": null
-                              }
-                            }
-                          ],
-                          "isDistinct": false,
-                          "isUserDefinedFunction": false
+                            ],
+                            "namedArguments": [],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
+                          }
                         }
                       },
-                      "joinType": "inner",
-                      "usingColumns": [],
                       "joinDataType": null
                     },
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "cross",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,
@@ -3221,6 +4261,8 @@
                                 "name": [
                                   "t1"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false
@@ -3234,6 +4276,8 @@
                                 "name": [
                                   "t2"
                                 ],
+                                "temporal": null,
+                                "sample": null,
                                 "options": []
                               },
                               "isStreaming": false
@@ -3241,9 +4285,8 @@
                             "planId": null,
                             "sourceInfo": null
                           },
-                          "joinCondition": null,
                           "joinType": "cross",
-                          "usingColumns": [],
+                          "joinCriteria": null,
                           "joinDataType": null
                         },
                         "planId": null,
@@ -3255,6 +4298,8 @@
                             "name": [
                               "t3"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -3262,35 +4307,42 @@
                         "planId": null,
                         "sourceInfo": null
                       },
-                      "joinCondition": {
-                        "unresolvedFunction": {
-                          "functionName": "==",
-                          "arguments": [
-                            {
-                              "unresolvedAttribute": {
-                                "name": [
-                                  "t3",
-                                  "id"
-                                ],
-                                "planId": null
+                      "joinType": "inner",
+                      "joinCriteria": {
+                        "on": {
+                          "unresolvedFunction": {
+                            "functionName": [
+                              "=="
+                            ],
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "t3",
+                                    "id"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "t1",
+                                    "id"
+                                  ],
+                                  "planId": null
+                                }
                               }
-                            },
-                            {
-                              "unresolvedAttribute": {
-                                "name": [
-                                  "t1",
-                                  "id"
-                                ],
-                                "planId": null
-                              }
-                            }
-                          ],
-                          "isDistinct": false,
-                          "isUserDefinedFunction": false
+                            ],
+                            "namedArguments": [],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
+                          }
                         }
                       },
-                      "joinType": "inner",
-                      "usingColumns": [],
                       "joinDataType": null
                     },
                     "planId": null,
@@ -3302,6 +4354,8 @@
                         "name": [
                           "t4"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -3309,35 +4363,42 @@
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": {
-                    "unresolvedFunction": {
-                      "functionName": "==",
-                      "arguments": [
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "t4",
-                              "id"
-                            ],
-                            "planId": null
+                  "joinType": "inner",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "t4",
+                                "id"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "t1",
+                                "id"
+                              ],
+                              "planId": null
+                            }
                           }
-                        },
-                        {
-                          "unresolvedAttribute": {
-                            "name": [
-                              "t1",
-                              "id"
-                            ],
-                            "planId": null
-                          }
-                        }
-                      ],
-                      "isDistinct": false,
-                      "isUserDefinedFunction": false
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
                     }
                   },
-                  "joinType": "inner",
-                  "usingColumns": [],
                   "joinDataType": null
                 },
                 "planId": null,
@@ -3367,26 +4428,406 @@
     {
       "input": "select * from t1 inner join (t2 inner join t3 on col3 = col2)",
       "output": {
-        "failure": "invalid argument: found t2 at 29:31 expected query"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t1"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "join": {
+                      "left": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t2"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "right": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t3"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "joinType": "inner",
+                      "joinCriteria": {
+                        "on": {
+                          "unresolvedFunction": {
+                            "functionName": [
+                              "=="
+                            ],
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "col3"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "col2"
+                                  ],
+                                  "planId": null
+                                }
+                              }
+                            ],
+                            "namedArguments": [],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
+                          }
+                        }
+                      },
+                      "joinDataType": null
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "inner",
+                  "joinCriteria": null,
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t1 inner join (t2 inner join t3 on col3 = col2) on col3 = col1",
       "output": {
-        "failure": "invalid argument: found t2 at 29:31 expected query"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t1"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "join": {
+                      "left": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t2"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "right": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t3"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "joinType": "inner",
+                      "joinCriteria": {
+                        "on": {
+                          "unresolvedFunction": {
+                            "functionName": [
+                              "=="
+                            ],
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "col3"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "col2"
+                                  ],
+                                  "planId": null
+                                }
+                              }
+                            ],
+                            "namedArguments": [],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
+                          }
+                        }
+                      },
+                      "joinDataType": null
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "inner",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "col3"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "col1"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    }
+                  },
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t1 inner join (t2 inner join t3) on col3 = col2",
       "output": {
-        "failure": "invalid argument: found t2 at 29:31 expected query"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "join": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t1"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "right": {
+                    "join": {
+                      "left": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t2"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "right": {
+                        "read": {
+                          "namedTable": {
+                            "name": [
+                              "t3"
+                            ],
+                            "temporal": null,
+                            "sample": null,
+                            "options": []
+                          },
+                          "isStreaming": false
+                        },
+                        "planId": null,
+                        "sourceInfo": null
+                      },
+                      "joinType": "inner",
+                      "joinCriteria": null,
+                      "joinDataType": null
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "joinType": "inner",
+                  "joinCriteria": {
+                    "on": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "=="
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "col3"
+                              ],
+                              "planId": null
+                            }
+                          },
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "col2"
+                              ],
+                              "planId": null
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    }
+                  },
+                  "joinDataType": null
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "select * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'.(line 1, pos 60)\n\n== SQL ==\nselect * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1\n------------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found on at 60:62 expected '->', '.', '(', '[', '::', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', 'ESCAPE', 'IS', 'NOT', 'IN', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -3403,6 +4844,8 @@
                         "name": [
                           "t1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -3418,6 +4861,8 @@
                             "name": [
                               "t3"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -3431,6 +4876,8 @@
                             "name": [
                               "t2"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -3438,43 +4885,49 @@
                         "planId": null,
                         "sourceInfo": null
                       },
-                      "joinCondition": {
-                        "unresolvedFunction": {
-                          "functionName": "==",
-                          "arguments": [
-                            {
-                              "unresolvedAttribute": {
-                                "name": [
-                                  "t1",
-                                  "col1"
-                                ],
-                                "planId": null
+                      "joinType": "inner",
+                      "joinCriteria": {
+                        "on": {
+                          "unresolvedFunction": {
+                            "functionName": [
+                              "=="
+                            ],
+                            "arguments": [
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "t1",
+                                    "col1"
+                                  ],
+                                  "planId": null
+                                }
+                              },
+                              {
+                                "unresolvedAttribute": {
+                                  "name": [
+                                    "t2",
+                                    "col2"
+                                  ],
+                                  "planId": null
+                                }
                               }
-                            },
-                            {
-                              "unresolvedAttribute": {
-                                "name": [
-                                  "t2",
-                                  "col2"
-                                ],
-                                "planId": null
-                              }
-                            }
-                          ],
-                          "isDistinct": false,
-                          "isUserDefinedFunction": false
+                            ],
+                            "namedArguments": [],
+                            "isDistinct": false,
+                            "isUserDefinedFunction": false,
+                            "ignoreNulls": null,
+                            "filter": null,
+                            "orderBy": null
+                          }
                         }
                       },
-                      "joinType": "inner",
-                      "usingColumns": [],
                       "joinDataType": null
                     },
                     "planId": null,
                     "sourceInfo": null
                   },
-                  "joinCondition": null,
                   "joinType": "cross",
-                  "usingColumns": [],
+                  "joinCriteria": null,
                   "joinDataType": null
                 },
                 "planId": null,

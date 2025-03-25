@@ -15,7 +15,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 pub type Aes192Gcm = AesGcm<Aes192, U12>;
 
@@ -107,6 +107,7 @@ impl SparkAESEncrypt {
     }
 }
 
+// TODO: Support array batch
 impl ScalarUDFImpl for SparkAESEncrypt {
     fn as_any(&self) -> &dyn Any {
         self
@@ -556,6 +557,7 @@ impl SparkAESDecrypt {
     }
 }
 
+// TODO: Support array batch
 impl ScalarUDFImpl for SparkAESDecrypt {
     fn as_any(&self) -> &dyn Any {
         self
@@ -579,7 +581,12 @@ impl ScalarUDFImpl for SparkAESDecrypt {
         Ok(DataType::Binary)
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs {
+            args,
+            number_rows: _,
+            return_type: _,
+        } = args;
         if args.len() < 2 || args.len() > 5 {
             return exec_err!(
                 "Spark `aes_decrypt` function requires 2 to 5 arguments, got {}",
@@ -958,8 +965,8 @@ impl ScalarUDFImpl for SparkTryAESEncrypt {
         Ok(DataType::Binary)
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-        let result = SparkAESEncrypt::new().invoke_batch(args, number_rows);
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let result = SparkAESEncrypt::new().invoke_with_args(args);
         match result {
             Ok(result) => Ok(result),
             Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),
@@ -1003,8 +1010,8 @@ impl ScalarUDFImpl for SparkTryAESDecrypt {
         Ok(DataType::Binary)
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-        let result = SparkAESDecrypt::new().invoke_batch(args, number_rows);
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let result = SparkAESDecrypt::new().invoke_with_args(args);
         match result {
             Ok(result) => Ok(result),
             Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),

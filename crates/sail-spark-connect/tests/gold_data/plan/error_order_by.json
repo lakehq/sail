@@ -11,7 +11,7 @@
       "input": "\nSELECT a, b\nFROM grammar-breaker\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n        ",
       "exception": "\n[INVALID_IDENTIFIER] The identifier grammar-breaker is invalid. Please, consider quoting it with back-quotes as `grammar-breaker`.(line 3, pos 12)\n\n== SQL ==\n\nSELECT a, b\nFROM grammar-breaker\n------------^^^\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n        \n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found - at 25:26 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -30,6 +30,8 @@
                             "name": [
                               "t"
                             ],
+                            "temporal": null,
+                            "sample": null,
                             "options": []
                           },
                           "isStreaming": false
@@ -39,11 +41,15 @@
                       },
                       "condition": {
                         "unresolvedFunction": {
-                          "functionName": ">",
+                          "functionName": [
+                            ">"
+                          ],
                           "arguments": [
                             {
                               "unresolvedFunction": {
-                                "functionName": "-",
+                                "functionName": [
+                                  "-"
+                                ],
                                 "arguments": [
                                   {
                                     "unresolvedAttribute": {
@@ -62,8 +68,12 @@
                                     }
                                   }
                                 ],
+                                "namedArguments": [],
                                 "isDistinct": false,
-                                "isUserDefinedFunction": false
+                                "isUserDefinedFunction": false,
+                                "ignoreNulls": null,
+                                "filter": null,
+                                "orderBy": null
                               }
                             },
                             {
@@ -74,8 +84,12 @@
                               }
                             }
                           ],
+                          "namedArguments": [],
                           "isDistinct": false,
-                          "isUserDefinedFunction": false
+                          "isUserDefinedFunction": false,
+                          "ignoreNulls": null,
+                          "filter": null,
+                          "orderBy": null
                         }
                       }
                     },
@@ -85,7 +99,9 @@
                   "grouping": [
                     {
                       "unresolvedFunction": {
-                        "functionName": "-",
+                        "functionName": [
+                          "-"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -104,8 +120,12 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
@@ -159,7 +179,14 @@
       "input": "\nSELECT product, category, dense_rank()\nOVER (PARTITION BY category ORDER BY revenue DESC) as hyphen-rank\nFROM productRevenue\n        ",
       "exception": "\n[INVALID_IDENTIFIER] The identifier hyphen-rank is invalid. Please, consider quoting it with back-quotes as `hyphen-rank`.(line 3, pos 60)\n\n== SQL ==\n\nSELECT product, category, dense_rank()\nOVER (PARTITION BY category ORDER BY revenue DESC) as hyphen-rank\n------------------------------------------------------------^^^\nFROM productRevenue\n        \n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found - at 100:101 expected ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+      }
+    },
+    {
+      "input": "select *\nfrom r\norder by q\ncluster by q",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 3, pos 0)\n\n== SQL ==\nselect *\nfrom r\norder by q\n^^^\ncluster by q\n",
+      "output": {
+        "failure": "not implemented: CLUSTER BY"
       }
     }
   ]

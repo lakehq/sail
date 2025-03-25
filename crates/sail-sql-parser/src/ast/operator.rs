@@ -105,6 +105,8 @@ define_operator!(LessThanEquals, [LessThan, Equals]);
 define_operator!(LessThanGreaterThan, [LessThan, GreaterThan]);
 define_operator!(Spaceship, [LessThan, Equals, GreaterThan]);
 define_operator!(NotEquals, [ExclamationMark, Equals]);
+define_operator!(NotLessThan, [ExclamationMark, LessThan]);
+define_operator!(NotGreaterThan, [ExclamationMark, GreaterThan]);
 define_operator!(Arrow, [Minus, GreaterThan]);
 define_operator!(FatArrow, [Equals, GreaterThan]);
 define_operator!(TripleGreaterThan, [GreaterThan, GreaterThan, GreaterThan]);

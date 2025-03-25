@@ -104,12 +104,24 @@ pub trait ClientBuilder: Sized {
     async fn connect(options: &ClientOptions) -> ExecutionResult<Self>;
 }
 
+/// Maximum header list size for gRPC clients.
+/// The value here is larger than the default, so that the clients can receive long error details
+/// (e.g. Python traceback) from the server via HTTP headers.
+/// The error details are stored as binary data in the Tonic status.
+/// If the header list size is larger than the allowed size, the error details would be
+/// dropped silently.
+const CLIENT_MAX_HEADER_LIST_SIZE: u32 = 1024 * 1024;
+
 macro_rules! impl_client_builder {
     ($client_type:ty) => {
         #[tonic::async_trait]
         impl ClientBuilder for $client_type {
             async fn connect(options: &ClientOptions) -> ExecutionResult<Self> {
-                Ok(<$client_type>::connect(options.to_url_string()).await?)
+                let conn = tonic::transport::Endpoint::new(options.to_url_string())?
+                    .http2_max_header_list_size(CLIENT_MAX_HEADER_LIST_SIZE)
+                    .connect()
+                    .await?;
+                Ok(<$client_type>::new(conn))
             }
         }
     };

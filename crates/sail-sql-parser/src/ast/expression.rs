@@ -11,20 +11,24 @@ use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit
 use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
     All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate,
-    CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Distribute, Div, Else, End,
-    Escape, Exists, Extract, False, First, Following, For, From, Grouping, Hour, Hours, Ilike, In,
-    Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond, Milliseconds,
-    Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay, Partition, Placing,
-    Position, Preceding, Range, Rlike, Rollup, Row, Rows, Second, Seconds, Sets, Similar, Sort,
-    Struct, Substr, Substring, Table, Then, Timestamp, TimestampLtz, TimestampNtz, To, Trailing,
-    Trim, True, Unbounded, Unknown, Week, Weeks, When, Year, Years,
+    CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Div, Else, End, Escape, Exists,
+    Extract, False, Filter, First, Following, For, From, Group, Grouping, Hour, Hours, Ignore,
+    Ilike, In, Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond,
+    Milliseconds, Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay,
+    Placing, Position, Preceding, Range, Regexp, Respect, Rlike, Rollup, Row, Rows, Second,
+    Seconds, Sets, Similar, Struct, Substr, Substring, Table, Then, Timestamp, TimestampLtz,
+    TimestampNtz, To, Trailing, Trim, True, Unbounded, Unknown, Week, Weeks, When, Where, Within,
+    Year, Years,
 };
 use crate::ast::literal::{NumberLiteral, StringLiteral};
 use crate::ast::operator;
 use crate::ast::operator::{
     Comma, DoubleColon, LeftBracket, LeftParenthesis, Period, RightBracket, RightParenthesis,
 };
-use crate::ast::query::{NamedExpr, Query};
+use crate::ast::query::{
+    ClusterByClause, DistributeByClause, NamedExpr, OrderByClause, PartitionByClause, Query,
+    SortByClause,
+};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
 use crate::options::ParserOptions;
@@ -80,6 +84,7 @@ pub enum Expr {
         Option<PatternEscape>,
     ),
     RLike(Box<Expr>, Option<Not>, Rlike, Box<Expr>),
+    RegExp(Box<Expr>, Option<Not>, Regexp, Box<Expr>),
     SimilarTo(
         Box<Expr>,
         Option<Not>,
@@ -121,25 +126,27 @@ pub enum AtomExpr {
     ),
     Tuple(
         LeftParenthesis,
-        #[parser(function = |(e, _, _), o| sequence(compose(e, o), unit(o)))]
+        #[parser(function = |(e, _, _), o| sequence(compose((e, unit(o)), o), unit(o)))]
         Sequence<NamedExpr, Comma>,
         RightParenthesis,
     ),
     Struct(
         Struct,
         LeftParenthesis,
-        #[parser(function = |(e, _, _), o| sequence(compose(e, o), unit(o)))]
+        #[parser(function = |(e, _, _), o| sequence(compose((e, unit(o)), o), unit(o)))]
         Sequence<NamedExpr, Comma>,
         RightParenthesis,
     ),
     Case {
         case: Case,
-        #[parser(function = |(e, _, _), o| When::parser((), o).not().rewind().ignore_then(boxed(e)).or_not())]
+        #[parser(function = |(e, _, _), o| boxed(e).and_is(When::parser((), o).not()).or_not())]
         operand: Option<Box<Expr>>,
+        #[parser(function = |(e, _, _), o| boxed(compose(e, o)))]
+        first_condition: Box<CaseWhen>,
         #[parser(function = |(e, _, _), o| compose(e, o))]
-        conditions: (CaseWhen, Vec<CaseWhen>),
-        #[parser(function = |(e, _, _), o| compose(e, o))]
-        r#else: Option<CaseElse>,
+        other_conditions: Vec<CaseWhen>,
+        #[parser(function = |(e, _, _), o| boxed(compose(e, o)).or_not())]
+        r#else: Option<Box<CaseElse>>,
         end: End,
     },
     Cast(
@@ -147,7 +154,7 @@ pub enum AtomExpr {
         LeftParenthesis,
         #[parser(function = |(e, _, _), _| boxed(e))] Box<Expr>,
         As,
-        #[parser(function = |(_, _, t), _| t)] DataType,
+        #[parser(function = |(_, _, d), _| d)] DataType,
         RightParenthesis,
     ),
     Extract(
@@ -171,7 +178,7 @@ pub enum AtomExpr {
     Trim(
         Trim,
         LeftParenthesis,
-        #[parser(function = |(e, _, _), o| compose(e, o))] TrimExpr,
+        #[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<TrimExpr>,
         RightParenthesis,
     ),
     Overlay(
@@ -203,9 +210,9 @@ pub enum AtomExpr {
     // TODO: handle `timestamp(value)` and `date(value)` as normal functions in the plan resolver
     Timestamp(Timestamp, LeftParenthesis, StringLiteral, RightParenthesis),
     Date(Date, LeftParenthesis, StringLiteral, RightParenthesis),
-    Function(#[parser(function = |(e, _, _), o| compose(e, o))] FunctionExpr),
+    Function(#[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<FunctionExpr>),
     Wildcard(operator::Asterisk),
-    StringLiteral(StringLiteral),
+    StringLiteral(StringLiteral, Vec<StringLiteral>),
     NumberLiteral(NumberLiteral),
     BooleanLiteral(BooleanLiteral),
     TimestampLiteral(Timestamp, StringLiteral),
@@ -215,7 +222,7 @@ pub enum AtomExpr {
     Null(Null),
     Interval(
         Interval,
-        #[parser(function = |(e, _, _), o| compose(e, o))] IntervalExpr,
+        #[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<IntervalExpr>,
     ),
     Placeholder(Variable),
     Identifier(Ident),
@@ -257,18 +264,16 @@ pub enum IntervalExpr {
     // Note that interval expressions such as `1 millisecond` can only be parsed as
     // multi-unit intervals since the unit is not recognized in the standard pattern.
     MultiUnit {
-        #[parser(function = |e, o| boxed(compose(e, o)))]
-        head: Box<IntervalValueWithUnit>,
+        #[parser(function = |e, o| compose(e, o))]
+        head: IntervalValueWithUnit,
         // If the unit is followed by `TO` (e.g. `'1 1' DAY TO HOUR`), it must be parsed
         // as a standard interval,
-        #[parser(function = |_, o| To::parser((), o).not().rewind())]
-        barrier: (),
-        #[parser(function = |e, o| compose(e, o))]
+        #[parser(function = |e, o| compose(e, o).and_is(To::parser((), o).not()))]
         tail: Vec<IntervalValueWithUnit>,
     },
     Standard {
-        #[parser(function = |e, _| boxed(e))]
-        value: Box<Expr>,
+        #[parser(function = |e, _| e)]
+        value: Expr,
         qualifier: IntervalQualifier,
     },
     Literal(StringLiteral),
@@ -313,34 +318,26 @@ pub enum IntervalQualifier {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub enum TrimExpr {
-    LeadingSpace(
-        Leading,
-        From,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
-    ),
+    LeadingSpace(Leading, From, #[parser(function = |e, _| e)] Expr),
     Leading(
         Leading,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
         From,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
     ),
-    TrailingSpace(
-        Trailing,
-        From,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
-    ),
+    TrailingSpace(Trailing, From, #[parser(function = |e, _| e)] Expr),
     Trailing(
         Trailing,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
         From,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
     ),
-    BothSpace(Both, From, #[parser(function = |e, _| boxed(e))] Box<Expr>),
+    BothSpace(Both, From, #[parser(function = |e, _| e)] Expr),
     Both(
         Option<Both>,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
         From,
-        #[parser(function = |e, _| boxed(e))] Box<Expr>,
+        #[parser(function = |e, _| e)] Expr,
     ),
 }
 
@@ -348,13 +345,28 @@ pub enum TrimExpr {
 #[parser(dependency = "Expr")]
 pub struct FunctionExpr {
     pub name: ObjectName,
+    #[parser(function = |e, o| compose(e, o))]
+    pub arguments: FunctionArgumentList,
+    // The null treatment can be inside or outside the function argument list.
+    // The SQL analyzer should handle conflicts between the two.
+    pub null_treatment: Option<NullTreatment>,
+    #[parser(function = |e, o| compose(e, o))]
+    pub within_group: Option<WithinGroupClause>,
+    #[parser(function = |e, o| compose(e, o))]
+    pub filter: Option<FilterClause>,
+    #[parser(function = |e, o| compose(e, o))]
+    pub over_clause: Option<OverClause>,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct FunctionArgumentList {
     pub left: LeftParenthesis,
     pub duplicate_treatment: Option<DuplicateTreatment>,
     #[parser(function = |e, o| sequence(compose(e, o), unit(o)).or_not())]
     pub arguments: Option<Sequence<FunctionArgument, Comma>>,
+    pub null_treatment: Option<NullTreatment>,
     pub right: RightParenthesis,
-    #[parser(function = |e, o| compose(e, o))]
-    pub over_clause: Option<OverClause>,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -375,6 +387,34 @@ pub enum DuplicateTreatment {
 }
 
 #[derive(Debug, Clone, TreeParser)]
+pub enum NullTreatment {
+    RespectNulls(Respect, Nulls),
+    IgnoreNulls(Ignore, Nulls),
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct WithinGroupClause {
+    pub within_group: (Within, Group),
+    pub left: LeftParenthesis,
+    pub order_by: (Order, By),
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    pub expressions: Sequence<OrderByExpr, Comma>,
+    pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser)]
+#[parser(dependency = "Expr")]
+pub struct FilterClause {
+    pub filter: Filter,
+    pub left: LeftParenthesis,
+    pub r#where: Where,
+    #[parser(function = |e, _| e)]
+    pub condition: Expr,
+    pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct OverClause {
     pub over: Over,
@@ -386,34 +426,25 @@ pub struct OverClause {
 #[parser(dependency = "Expr")]
 pub enum WindowSpec {
     Named(Ident),
-    Detailed {
+    Unnamed {
         left: LeftParenthesis,
         #[parser(function = |e, o| compose(e, o))]
-        partition_by: Option<PartitionBy>,
-        #[parser(function = |e, o| compose(e, o))]
-        order_by: Option<OrderBy>,
+        modifiers: Vec<WindowModifier>,
         #[parser(function = |e, o| compose(e, o))]
         window_frame: Option<WindowFrame>,
         right: RightParenthesis,
     },
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
-pub struct PartitionBy {
-    pub partition: Either<Partition, Distribute>,
-    pub by: By,
-    #[parser(function = |e, o| sequence(e, unit(o)))]
-    pub columns: Sequence<Expr, Comma>,
-}
-
-#[derive(Debug, Clone, TreeParser)]
-#[parser(dependency = "Expr")]
-pub struct OrderBy {
-    pub order: Either<Order, Sort>,
-    pub by: By,
-    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
-    pub expressions: Sequence<OrderByExpr, Comma>,
+pub enum WindowModifier {
+    ClusterBy(#[parser(function = |e, o| compose(e, o))] ClusterByClause),
+    PartitionBy(#[parser(function = |e, o| compose(e, o))] PartitionByClause),
+    DistributeBy(#[parser(function = |e, o| compose(e, o))] DistributeByClause),
+    OrderBy(#[parser(function = |e, o| compose(e, o))] OrderByClause),
+    SortBy(#[parser(function = |e, o| compose(e, o))] SortByClause),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -468,10 +499,10 @@ pub enum WindowFrame {
 #[parser(dependency = "Expr")]
 pub enum WindowFrameBound {
     UnboundedPreceding(Unbounded, Preceding),
-    Preceding(#[parser(function = |e, _| boxed(e))] Box<Expr>, Preceding),
+    Preceding(#[parser(function = |e, _| e)] Expr, Preceding),
     CurrentRow(Current, Row),
     UnboundedFollowing(Unbounded, Following),
-    Following(#[parser(function = |e, _| boxed(e))] Box<Expr>, Following),
+    Following(#[parser(function = |e, _| e)] Expr, Following),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -497,6 +528,8 @@ pub enum BinaryOperator {
     Eq(operator::Equals),
     EqEq(operator::DoubleEquals),
     NotEq(operator::NotEquals),
+    NotLt(operator::NotLessThan),
+    NotGt(operator::NotGreaterThan),
     LtGt(operator::LessThanGreaterThan),
     Lt(operator::LessThan),
     LtEq(operator::LessThanEquals),
@@ -515,19 +548,19 @@ pub enum BinaryOperator {
 #[parser(dependency = "Expr")]
 pub struct CaseWhen {
     pub when: When,
-    #[parser(function = |e, _| boxed(e))]
-    pub condition: Box<Expr>,
+    #[parser(function = |e, _| e)]
+    pub condition: Expr,
     pub then: Then,
-    #[parser(function = |e, _| boxed(e))]
-    pub result: Box<Expr>,
+    #[parser(function = |e, _| e)]
+    pub result: Expr,
 }
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
 pub struct CaseElse {
     pub r#else: Else,
-    #[parser(function = |e, _| boxed(e))]
-    pub result: Box<Expr>,
+    #[parser(function = |e, _| e)]
+    pub result: Expr,
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -590,7 +623,7 @@ enum ExprModifier {
         #[parser(function = |(e, _), _| e)] Expr,
         RightBracket,
     ),
-    Cast(DoubleColon, #[parser(function = |(_, t), _| t)] DataType),
+    Cast(DoubleColon, #[parser(function = |(_, d), _| d)] DataType),
 }
 
 #[derive(Debug, Clone, TreeParser)]
@@ -623,6 +656,7 @@ enum ExprInfixPredicate {
     Like(Option<Not>, Like, Option<PatternQuantifier>),
     ILike(Option<Not>, Ilike, Option<PatternQuantifier>),
     RLike(Option<Not>, Rlike),
+    RegExp(Option<Not>, Regexp),
     SimilarTo(Option<Not>, Similar, To),
 }
 
@@ -773,6 +807,12 @@ where
                     ))
                 }
                 (left, ExprInfixPredicate::RLike(x1, x2), right) => Ok(Expr::RLike(
+                    Box::new(left.build::<I, E>()?),
+                    x1,
+                    x2,
+                    Box::new(right.build::<I, E>()?),
+                )),
+                (left, ExprInfixPredicate::RegExp(x1, x2), right) => Ok(Expr::RegExp(
                     Box::new(left.build::<I, E>()?),
                     x1,
                     x2,
@@ -977,6 +1017,8 @@ where
                 left(18),
                 choice((
                     operator::NotEquals::parser((), options).map(BinaryOperator::NotEq),
+                    operator::NotGreaterThan::parser((), options).map(BinaryOperator::NotGt),
+                    operator::NotLessThan::parser((), options).map(BinaryOperator::NotLt),
                     operator::DoubleEquals::parser((), options).map(BinaryOperator::EqEq),
                     operator::Equals::parser((), options).map(BinaryOperator::Eq),
                     operator::GreaterThanEquals::parser((), options).map(BinaryOperator::GtEq),

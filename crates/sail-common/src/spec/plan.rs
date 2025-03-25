@@ -1,5 +1,8 @@
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
+use crate::error::CommonError;
 use crate::spec::data_type::Schema;
 use crate::spec::expression::{
     CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction, Expr, ObjectName,
@@ -96,8 +99,8 @@ pub enum QueryNode {
     },
     Limit {
         input: Box<QueryPlan>,
-        skip: usize,
-        limit: usize,
+        skip: Option<Expr>,
+        limit: Option<Expr>,
     },
     Aggregate(Aggregate),
     LocalRelation {
@@ -105,10 +108,6 @@ pub enum QueryNode {
         schema: Option<Schema>,
     },
     Sample(Sample),
-    Offset {
-        input: Box<QueryPlan>,
-        offset: usize,
-    },
     Deduplicate(Deduplicate),
     Range(Range),
     SubqueryAlias {
@@ -136,7 +135,7 @@ pub enum QueryNode {
     },
     Tail {
         input: Box<QueryPlan>,
-        limit: usize,
+        limit: Expr,
     },
     WithColumns {
         input: Box<QueryPlan>,
@@ -262,6 +261,7 @@ pub enum QueryNode {
         input: Option<Box<QueryPlan>>,
         function: ObjectName,
         arguments: Vec<Expr>,
+        named_arguments: Vec<(Identifier, Expr)>,
         table_alias: Option<ObjectName>,
         column_aliases: Option<Vec<Identifier>>,
         outer: bool,
@@ -326,10 +326,13 @@ pub enum CommandNode {
     },
     CacheTable {
         table: ObjectName,
+        lazy: bool,
         storage_level: Option<StorageLevel>,
+        query: Option<Box<QueryPlan>>,
     },
     UncacheTable {
         table: ObjectName,
+        if_exists: bool,
     },
     ClearCache,
     RefreshTable {
@@ -363,6 +366,9 @@ pub enum CommandNode {
     },
     RegisterFunction(CommonInlineUserDefinedFunction),
     RegisterTableFunction(CommonInlineUserDefinedTableFunction),
+    RefreshFunction {
+        function: ObjectName,
+    },
     DropFunction {
         function: ObjectName,
         if_exists: bool,
@@ -394,27 +400,102 @@ pub enum CommandNode {
         input: Box<QueryPlan>,
         table: ObjectName,
         columns: Vec<Identifier>,
-        partition_spec: Vec<(String, Expr)>,
+        partition_spec: Vec<(Identifier, Option<Expr>)>,
+        replace: Option<Expr>,
+        if_not_exists: bool,
         overwrite: bool,
+    },
+    InsertOverwriteDirectory {
+        input: Box<QueryPlan>,
+        local: bool,
+        location: Option<String>,
+        file_format: Option<TableFileFormat>,
+        row_format: Option<TableRowFormat>,
+        options: Vec<(String, String)>,
+    },
+    MergeInto {
+        target: ObjectName,
+        with_schema_evolution: bool,
+        // TODO: add other fields
     },
     SetVariable {
         variable: String,
         value: String,
     },
     Update {
-        input: Box<QueryPlan>,
         table: ObjectName,
         table_alias: Option<Identifier>,
         assignments: Vec<(ObjectName, Expr)>,
+        condition: Option<Expr>,
     },
     Delete {
         table: ObjectName,
+        table_alias: Option<Identifier>,
         condition: Option<Expr>,
     },
     AlterTable {
         table: ObjectName,
         if_exists: bool,
         operation: AlterTableOperation,
+    },
+    AlterView {
+        view: ObjectName,
+        if_exists: bool,
+        operation: AlterViewOperation,
+    },
+    LoadData {
+        local: bool,
+        location: String,
+        table: ObjectName,
+        overwrite: bool,
+        partition: Vec<(Identifier, Option<Expr>)>,
+    },
+    AnalyzeTable {
+        table: ObjectName,
+        partition: Vec<(Identifier, Option<Expr>)>,
+        columns: Vec<ObjectName>,
+        no_scan: bool,
+    },
+    AnalyzeTables {
+        from: Option<ObjectName>,
+        no_scan: bool,
+    },
+    DescribeQuery {
+        query: Box<QueryPlan>,
+    },
+    DescribeFunction {
+        function: ObjectName,
+        extended: bool,
+    },
+    DescribeCatalog {
+        catalog: ObjectName,
+        extended: bool,
+    },
+    DescribeDatabase {
+        database: ObjectName,
+        extended: bool,
+    },
+    DescribeTable {
+        table: ObjectName,
+        extended: bool,
+        partition: Vec<(Identifier, Option<Expr>)>,
+        column: Option<ObjectName>,
+    },
+    CommentOnCatalog {
+        catalog: ObjectName,
+        value: Option<String>,
+    },
+    CommentOnDatabase {
+        database: ObjectName,
+        value: Option<String>,
+    },
+    CommentOnTable {
+        table: ObjectName,
+        value: Option<String>,
+    },
+    CommentOnColumn {
+        column: ObjectName,
+        value: Option<String>,
     },
 }
 
@@ -430,7 +511,38 @@ pub enum ReadType {
 #[serde(rename_all = "camelCase")]
 pub struct ReadNamedTable {
     pub name: ObjectName,
+    pub temporal: Option<TableTemporal>,
+    pub sample: Option<TableSample>,
     pub options: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum TableTemporal {
+    Version { value: Expr },
+    Timestamp { value: Expr },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableSample {
+    pub method: TableSampleMethod,
+    pub seed: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum TableSampleMethod {
+    Percent {
+        value: Expr,
+    },
+    Rows {
+        value: Expr,
+    },
+    Bucket {
+        numerator: usize,
+        denominator: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -438,6 +550,7 @@ pub struct ReadNamedTable {
 pub struct ReadUdtf {
     pub name: ObjectName,
     pub arguments: Vec<Expr>,
+    pub named_arguments: Vec<(Identifier, Expr)>,
     pub options: Vec<(String, String)>,
 }
 
@@ -456,9 +569,8 @@ pub struct ReadDataSource {
 pub struct Join {
     pub left: Box<QueryPlan>,
     pub right: Box<QueryPlan>,
-    pub join_condition: Option<Expr>,
     pub join_type: JoinType,
-    pub using_columns: Vec<Identifier>,
+    pub join_criteria: Option<JoinCriteria>,
     pub join_data_type: Option<JoinDataType>,
 }
 
@@ -629,7 +741,7 @@ pub struct HtmlString {
 pub struct TableDefinition {
     pub schema: Schema,
     pub comment: Option<String>,
-    pub column_defaults: Vec<(String, Expr)>,
+    pub column_defaults: Vec<(Identifier, Expr)>,
     pub constraints: Vec<TableConstraint>,
     pub location: Option<String>,
     pub file_format: Option<TableFileFormat>,
@@ -751,6 +863,14 @@ pub enum JoinType {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum JoinCriteria {
+    Natural,
+    On(Expr),
+    Using(Vec<Identifier>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JoinDataType {
     pub is_left_struct: bool,
@@ -795,6 +915,107 @@ pub struct StorageLevel {
     pub use_off_heap: bool,
     pub deserialized: bool,
     pub replication: usize,
+}
+
+impl FromStr for StorageLevel {
+    type Err = CommonError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_uppercase().as_str() {
+            "NONE" => Ok(Self {
+                use_disk: false,
+                use_memory: false,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 1,
+            }),
+            "DISK_ONLY" => Ok(Self {
+                use_disk: true,
+                use_memory: false,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 1,
+            }),
+            "DISK_ONLY_2" => Ok(Self {
+                use_disk: true,
+                use_memory: false,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 2,
+            }),
+            "DISK_ONLY_3" => Ok(Self {
+                use_disk: true,
+                use_memory: false,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 3,
+            }),
+            "MEMORY_ONLY" => Ok(Self {
+                use_disk: false,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: true,
+                replication: 1,
+            }),
+            "MEMORY_ONLY_2" => Ok(Self {
+                use_disk: false,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: true,
+                replication: 2,
+            }),
+            "MEMORY_ONLY_SER" => Ok(Self {
+                use_disk: false,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 1,
+            }),
+            "MEMORY_ONLY_SER_2" => Ok(Self {
+                use_disk: false,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 2,
+            }),
+            "MEMORY_AND_DISK" => Ok(Self {
+                use_disk: true,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: true,
+                replication: 1,
+            }),
+            "MEMORY_AND_DISK_2" => Ok(Self {
+                use_disk: true,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: true,
+                replication: 2,
+            }),
+            "MEMORY_AND_DISK_SER" => Ok(Self {
+                use_disk: true,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 1,
+            }),
+            "MEMORY_AND_DISK_SER_2" => Ok(Self {
+                use_disk: true,
+                use_memory: true,
+                use_off_heap: false,
+                deserialized: false,
+                replication: 2,
+            }),
+            "OFF_HEAP" => Ok(Self {
+                use_disk: true,
+                use_memory: true,
+                use_off_heap: true,
+                deserialized: false,
+                replication: 1,
+            }),
+            _ => Err(CommonError::invalid(format!("storage level: {s}"))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -857,4 +1078,11 @@ pub enum ExplainMode {
 pub enum AlterTableOperation {
     Unknown,
     // TODO: add all the alter table operations
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AlterViewOperation {
+    Unknown,
+    // TODO: add all the alter view operations
 }

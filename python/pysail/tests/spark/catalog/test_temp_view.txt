@@ -1,0 +1,27 @@
+>>> spark.range(1).createTempView("t1")
+>>> spark.catalog.listTables()
+[Table(name='t1', catalog=None, namespace=[], description=None, tableType='TEMPORARY', isTemporary=True)]
+>>> spark.sql("DROP VIEW IF EXISTS global_temp.t2")
+DataFrame[...]
+>>> spark.sql("CREATE GLOBAL TEMPORARY VIEW t2 AS SELECT 1")
+DataFrame[...]
+>>> spark.sql("CREATE VIEW global_temp.t3 AS SELECT 1")
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: ...
+>>> spark.catalog.listTables()
+[Table(name='t1', catalog=None, namespace=[], description=None, tableType='TEMPORARY', isTemporary=True)]
+>>> spark.catalog.listTables(dbName="global_temp")
+[Table(name='t2', catalog=None, namespace=['global_temp'], description=None, tableType='TEMPORARY', isTemporary=True), Table(name='t1', catalog=None, namespace=[], description=None, tableType='TEMPORARY', isTemporary=True)]
+>>> spark.sql("DROP VIEW t1")
+DataFrame[...]
+>>> spark.sql("DROP VIEW t1")
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: ...
+>>> spark.sql("DROP VIEW t2")
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: ...
+>>> spark.sql("DROP VIEW global_temp.t2")
+DataFrame[...]

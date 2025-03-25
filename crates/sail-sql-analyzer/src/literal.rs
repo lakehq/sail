@@ -241,13 +241,9 @@ impl TryFrom<LiteralValue<Signed<IntervalExpr>>> for spec::Literal {
         match interval.clone() {
             IntervalExpr::Standard { value, qualifier } => {
                 let kind = from_ast_interval_qualifier(qualifier)?;
-                parse_standard_interval(*value, kind, negated)
+                parse_standard_interval(value, kind, negated)
             }
-            IntervalExpr::MultiUnit {
-                head,
-                barrier: _,
-                tail,
-            } => {
+            IntervalExpr::MultiUnit { head, tail } => {
                 if tail.is_empty() {
                     match head.unit {
                         IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
@@ -280,10 +276,10 @@ impl TryFrom<LiteralValue<Signed<IntervalExpr>>> for spec::Literal {
                                 negated,
                             )
                         }
-                        _ => parse_multi_unit_interval(vec![*head], negated),
+                        _ => parse_multi_unit_interval(vec![head], negated),
                     }
                 } else {
-                    let values = once(*head).chain(tail).collect();
+                    let values = once(head).chain(tail).collect();
                     parse_multi_unit_interval(values, negated)
                 }
             }
@@ -320,7 +316,7 @@ impl TryFrom<&str> for LiteralValue<Vec<u8>> {
                 try_decode_hex_char(hex_bytes[i])?,
                 try_decode_hex_char(hex_bytes[i + 1])?,
             ) {
-                (Some(high), Some(low)) => decoded_bytes.push(high << 4 | low),
+                (Some(high), Some(low)) => decoded_bytes.push((high << 4) | low),
                 _ => return Err(SqlError::invalid(format!("hex string: {value}"))),
             }
         }
@@ -490,13 +486,16 @@ where
             Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral {
                 span: _,
                 value,
-                suffix,
-            })) if suffix.is_empty() => match value.parse::<T>() {
+                suffix: None,
+            })) => match value.parse::<T>() {
                 Ok(x) => Ok(LiteralValue(x)),
                 Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
             },
-            Expr::Atom(AtomExpr::StringLiteral(value)) => {
-                let value = from_ast_string(value)?;
+            Expr::Atom(AtomExpr::StringLiteral(head, tail)) => {
+                if !tail.is_empty() {
+                    return Err(SqlError::invalid("literal: cannot convert multiple adjacent string literals to a single value"));
+                }
+                let value = from_ast_string(head)?;
                 match value.parse::<T>() {
                     Ok(x) => Ok(LiteralValue(x)),
                     Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
@@ -1008,6 +1007,11 @@ fn parse_multi_unit_interval(
 }
 
 pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
+    // FIXME: There are temporal coercion issues in [`datafusion_expr::binary::BinaryTypeCoercer`].
+    //  After we fix the coercion issues, this function should simply return:
+    //      spec::Literal::DurationMicrosecond {
+    //          microseconds: Some(microseconds),
+    //      }
     let total_days = microseconds / (24 * 60 * 60 * 1_000_000);
     let remaining_micros = microseconds % (24 * 60 * 60 * 1_000_000);
     if remaining_micros % 1000 == 0 {

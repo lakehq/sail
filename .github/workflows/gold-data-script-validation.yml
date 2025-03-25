@@ -19,6 +19,8 @@ jobs:
 
       - uses: ./.github/actions/adjust-swap-space
 
+      - uses: ./.github/actions/mount-target-directory
+
       - uses: actions/checkout@v4
         name: Checkout Spark
         with:

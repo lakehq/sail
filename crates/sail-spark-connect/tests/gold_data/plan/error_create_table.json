@@ -4,14 +4,14 @@
       "input": "\nCREATE TABLE IF NOT EXISTS mydb.page-view\nUSING parquet\nCOMMENT 'This is the staging page view table'\nLOCATION '/user/external/page_view'\nTBLPROPERTIES ('p1'='v1', 'p2'='v2')\nAS SELECT * FROM src",
       "exception": "\n[INVALID_IDENTIFIER] The identifier page-view is invalid. Please, consider quoting it with back-quotes as `page-view`.(line 2, pos 36)\n\n== SQL ==\n\nCREATE TABLE IF NOT EXISTS mydb.page-view\n------------------------------------^^^\nUSING parquet\nCOMMENT 'This is the staging page view table'\nLOCATION '/user/external/page_view'\nTBLPROPERTIES ('p1'='v1', 'p2'='v2')\nAS SELECT * FROM src\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found - at 37:38 expected '.', '(', 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "\nCREATE TABLE IF NOT EXISTS tab\nUSING test-provider\nAS SELECT * FROM src",
       "exception": "\n[INVALID_IDENTIFIER] The identifier test-provider is invalid. Please, consider quoting it with back-quotes as `test-provider`.(line 3, pos 10)\n\n== SQL ==\n\nCREATE TABLE IF NOT EXISTS tab\nUSING test-provider\n----------^^^\nAS SELECT * FROM src\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found - at 42:43 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {

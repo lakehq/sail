@@ -1,0 +1,284 @@
+>>> # The tests are adapted from the doctests of the `pyspark.sql.dataframe.DataFrame.join()` method.
+>>> # There are [recent changes](https://github.com/apache/spark/pull/43039) to the doctests in Spark,
+>>> # and both the tests before and after the changes are included.
+>>>
+>>> import pyspark.sql.functions as F
+>>> from pyspark.sql import Row
+>>> df1 = spark.createDataFrame([Row(name="Alice", age=2), Row(name="Bob", age=5)])
+>>> df2 = spark.createDataFrame([Row(name="Tom", height=80), Row(name="Bob", height=85)])
+>>> df3 = spark.createDataFrame([
+...     Row(name="Alice", age=10, height=80),
+...     Row(name="Bob", age=5, height=None),
+...     Row(name="Tom", age=None, height=None),
+...     Row(name=None, age=None, height=None),
+... ])
+
+>>> df1.join(df2, "name").show()
++----+---+------+
+|name|age|height|
++----+---+------+
+| Bob|  5|    85|
++----+---+------+
+
+>>> df1.join(df2, "name").select(df1.name, df2.height).show()
++----+------+
+|name|height|
++----+------+
+| Bob|    85|
++----+------+
+
+>>> df1.join(df2, "name").select("name", "height").show()
++----+------+
+|name|height|
++----+------+
+| Bob|    85|
++----+------+
+
+>>> df1.join(df2, df1.name == df2.name).show()
++----+---+----+------+
+|name|age|name|height|
++----+---+----+------+
+| Bob|  5| Bob|    85|
++----+---+----+------+
+
+>>> df1.join(df2, df1.name == df2.name).select("name", "height").show()
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: ...
+>>> df1.join(df3, ["name", "age"]).show()
++----+---+------+
+|name|age|height|
++----+---+------+
+| Bob|  5|  NULL|
++----+---+------+
+
+>>> df1.join(df3, ["name", "age"]).select(df1.name, df1.age).show()
++----+---+
+|name|age|
++----+---+
+| Bob|  5|
++----+---+
+
+>>> df1.join(df2, df1.name == df2.name, "outer").sort(F.desc(df1.name)).show()
++-----+----+----+------+
+| name| age|name|height|
++-----+----+----+------+
+|  Bob|   5| Bob|    85|
+|Alice|   2|NULL|  NULL|
+| NULL|NULL| Tom|    80|
++-----+----+----+------+
+
+>>> df1.join(df2, df1.name == df2.name, "outer").sort(F.desc(df1.name)).select(df1.name, df2.height).show()
++-----+------+
+| name|height|
++-----+------+
+|  Bob|    85|
+|Alice|  NULL|
+| NULL|    80|
++-----+------+
+
+>>> df1.join(df2, df1.name == df2.name, "outer").select(df1.name, df2.height).sort(F.desc("name")).show()
++-----+------+
+| name|height|
++-----+------+
+|  Bob|    85|
+|Alice|  NULL|
+| NULL|    80|
++-----+------+
+
+>>> df1.join(
+...     df3,
+...     [df1.name == df3.name, df1.age == df3.age],
+...     "outer",
+... ).select(df1.name, df3.age).sort(df1.name, df3.age).show()
++-----+----+
+| name| age|
++-----+----+
+| NULL|NULL|
+| NULL|NULL|
+| NULL|  10|
+|Alice|NULL|
+|  Bob|   5|
++-----+----+
+
+>>> df1.join(df1, df1.name == df1.name, "outer").select(df1.name).show()
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: ...
+>>> df1.alias("a").join(
+...     df1.alias("b"),
+...     F.col("a.name") == F.col("b.name"),
+...     "outer",
+... ).sort(F.desc("a.name")).select("a.name", "b.age").show()
++-----+---+
+| name|age|
++-----+---+
+|  Bob|  5|
+|Alice|  2|
++-----+---+
+
+>>> df1.join(df2, "name", "outer").sort(F.desc("name")).show()
++-----+----+------+
+| name| age|height|
++-----+----+------+
+|  Tom|NULL|    80|
+|  Bob|   5|    85|
+|Alice|   2|  NULL|
++-----+----+------+
+
+>>> df1.join(df2, "name", "outer").sort(F.desc("name")).show()
++-----+----+------+
+| name| age|height|
++-----+----+------+
+|  Tom|NULL|    80|
+|  Bob|   5|    85|
+|Alice|   2|  NULL|
++-----+----+------+
+
+>>> df1.join(df2, "name", "outer").sort(F.desc(df1.name)).show()
++-----+----+------+
+| name| age|height|
++-----+----+------+
+|  Bob|   5|    85|
+|Alice|   2|  NULL|
+|  Tom|NULL|    80|
++-----+----+------+
+
+>>> df1.join(df2, "name", "outer").sort(F.desc(df2.name)).show()
++-----+----+------+
+| name| age|height|
++-----+----+------+
+|  Tom|NULL|    80|
+|  Bob|   5|    85|
+|Alice|   2|  NULL|
++-----+----+------+
+
+>>> df1.join(df2, "name", "outer").select("name", "height").sort(F.desc("name")).show()
++-----+------+
+| name|height|
++-----+------+
+|  Tom|    80|
+|  Bob|    85|
+|Alice|  NULL|
++-----+------+
+
+>>> df1.join(df2, "name", "outer").select(df1.name, "height").sort(F.desc("name")).show()
++-----+------+
+| name|height|
++-----+------+
+|  Bob|    85|
+|Alice|  NULL|
+| NULL|    80|
++-----+------+
+
+>>> df1.join(df2, "name", "outer").select(df2.name, "height").sort(F.desc("name")).show()
++----+------+
+|name|height|
++----+------+
+| Tom|    80|
+| Bob|    85|
+|NULL|  NULL|
++----+------+
+
+>>> df1.join(df3, ["name", "age"], "outer").sort("name", "age").show()
++-----+----+------+
+| name| age|height|
++-----+----+------+
+| NULL|NULL|  NULL|
+|Alice|   2|  NULL|
+|Alice|  10|    80|
+|  Bob|   5|  NULL|
+|  Tom|NULL|  NULL|
++-----+----+------+
+
+>>> df1.join(df2, "name", "left_outer").sort(F.asc("name")).show()
++-----+---+------+
+| name|age|height|
++-----+---+------+
+|Alice|  2|  NULL|
+|  Bob|  5|    85|
++-----+---+------+
+
+>>> df1.join(df2, "name", "right_outer").sort(F.asc("name")).show()
++----+----+------+
+|name| age|height|
++----+----+------+
+| Bob|   5|    85|
+| Tom|NULL|    80|
++----+----+------+
+
+>>> df1.join(df2, "name", "left_semi").show()
++----+---+
+|name|age|
++----+---+
+| Bob|  5|
++----+---+
+
+>>> df1.join(df2, "name", "left_anti").show()
++-----+---+
+| name|age|
++-----+---+
+|Alice|  2|
++-----+---+
+
+>>> df1.createOrReplaceTempView("df1")
+>>> df2.createOrReplaceTempView("df2")
+>>> spark.sql("SELECT * FROM df1 JOIN df2 ON df1.name == df2.name").show()
++----+---+----+------+
+|name|age|name|height|
++----+---+----+------+
+| Bob|  5| Bob|    85|
++----+---+----+------+
+
+>>> spark.sql("SELECT * FROM df1 JOIN df2 USING (name)").show()
++----+---+------+
+|name|age|height|
++----+---+------+
+| Bob|  5|    85|
++----+---+------+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL JOIN df2").show()
++----+---+------+
+|name|age|height|
++----+---+------+
+| Bob|  5|    85|
++----+---+------+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL OUTER JOIN df2 ORDER BY name DESC").show()
++-----+----+------+
+| name| age|height|
++-----+----+------+
+|  Tom|NULL|    80|
+|  Bob|   5|    85|
+|Alice|   2|  NULL|
++-----+----+------+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL LEFT OUTER JOIN df2 ORDER BY name ASC").show()
++-----+---+------+
+| name|age|height|
++-----+---+------+
+|Alice|  2|  NULL|
+|  Bob|  5|    85|
++-----+---+------+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL RIGHT OUTER JOIN df2 ORDER BY name ASC").show()
++----+----+------+
+|name| age|height|
++----+----+------+
+| Bob|   5|    85|
+| Tom|NULL|    80|
++----+----+------+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL LEFT SEMI JOIN df2").show()
++----+---+
+|name|age|
++----+---+
+| Bob|  5|
++----+---+
+
+>>> spark.sql("SELECT * FROM df1 NATURAL LEFT ANTI JOIN df2").show()
++-----+---+
+| name|age|
++-----+---+
+|Alice|  2|
++-----+---+

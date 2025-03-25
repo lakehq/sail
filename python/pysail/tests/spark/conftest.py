@@ -1,5 +1,6 @@
 import os
 
+import pyspark.sql.connect.session
 import pytest
 from pyspark.context import SparkContext
 from pyspark.sql import SparkSession
@@ -19,17 +20,18 @@ def remote():
         server.stop()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def sail(remote):
     if "SPARK_LOCAL_REMOTE" in os.environ:
         del os.environ["SPARK_LOCAL_REMOTE"]
     sail = SparkSession.builder.remote(remote).appName("Sail").getOrCreate()
     configure_spark_session(sail)
+    patch_spark_connect_session(sail)
     yield sail
     sail.stop()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def spark():
     os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
     os.environ["SPARK_LOCAL_REMOTE"] = "true"
@@ -52,6 +54,22 @@ def configure_spark_session(session: SparkSession):
     session.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
 
 
-@pytest.fixture(scope="session", autouse=True)
+def patch_spark_connect_session(session: pyspark.sql.connect.session.SparkSession):
+    """
+    Patch the Spark Connect session to avoid deadlock when closing the session.
+    """
+    f = session._client.close  # noqa: SLF001
+
+    def close():
+        if session._client._closed:  # noqa: SLF001
+            return
+        return f()
+
+    session._client.close = close  # noqa: SLF001
+
+
+@pytest.fixture(scope="module", autouse=True)
 def sail_doctest(doctest_namespace, sail):
+    # The Spark session is scoped to each module, so that the registered
+    # temporary views and UDFs do not interfere with each other.
     doctest_namespace["spark"] = sail

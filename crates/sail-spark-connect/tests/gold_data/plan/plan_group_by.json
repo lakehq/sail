@@ -4,7 +4,7 @@
       "input": "SELECT a, b, count(distinct a, distinct b) as c FROM d GROUP BY a, b",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'b': extra input 'b'.(line 1, pos 40)\n\n== SQL ==\nSELECT a, b, count(distinct a, distinct b) as c FROM d GROUP BY a, b\n----------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found b at 40:41 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'SIMILAR', 'AND', 'OR', '=>', ',', or ')'"
+        "failure": "invalid argument: found b at 40:41 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {
@@ -19,6 +19,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -65,7 +67,9 @@
                   "alias": {
                     "expr": {
                       "unresolvedFunction": {
-                        "functionName": "sum",
+                        "functionName": [
+                          "sum"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -76,8 +80,12 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     },
                     "name": [
@@ -99,7 +107,7 @@
     {
       "input": "select a, b, sum(c) as c from d group by a, b grouping sets((a, b), (a), ())",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found grouping at 46:54 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', 'WITH', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -114,6 +122,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -164,7 +174,9 @@
                   "alias": {
                     "expr": {
                       "unresolvedFunction": {
-                        "functionName": "sum",
+                        "functionName": [
+                          "sum"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -175,8 +187,12 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     },
                     "name": [
@@ -207,6 +223,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -257,7 +275,9 @@
                   "alias": {
                     "expr": {
                       "unresolvedFunction": {
-                        "functionName": "sum",
+                        "functionName": [
+                          "sum"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -268,8 +288,12 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     },
                     "name": [
@@ -300,6 +324,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -350,7 +376,9 @@
                   "alias": {
                     "expr": {
                       "unresolvedFunction": {
-                        "functionName": "sum",
+                        "functionName": [
+                          "sum"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -361,8 +389,12 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     },
                     "name": [
@@ -393,6 +425,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -443,7 +477,9 @@
                   "alias": {
                     "expr": {
                       "unresolvedFunction": {
-                        "functionName": "sum",
+                        "functionName": [
+                          "sum"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -454,8 +490,12 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     },
                     "name": [
@@ -486,6 +526,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -549,7 +591,9 @@
                   "alias": {
                     "expr": {
                       "unresolvedFunction": {
-                        "functionName": "sum",
+                        "functionName": [
+                          "sum"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -560,8 +604,12 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     },
                     "name": [
@@ -592,6 +640,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -642,7 +692,9 @@
                   "alias": {
                     "expr": {
                       "unresolvedFunction": {
-                        "functionName": "sum",
+                        "functionName": [
+                          "sum"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -653,8 +705,12 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     },
                     "name": [
@@ -685,6 +741,8 @@
                     "name": [
                       "d"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -735,7 +793,9 @@
                   "alias": {
                     "expr": {
                       "unresolvedFunction": {
-                        "functionName": "sum",
+                        "functionName": [
+                          "sum"
+                        ],
                         "arguments": [
                           {
                             "unresolvedAttribute": {
@@ -746,8 +806,12 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     },
                     "name": [
@@ -778,6 +842,8 @@
                     "name": [
                       "t"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -807,7 +873,9 @@
               ],
               "having": {
                 "unresolvedFunction": {
-                  "functionName": ">",
+                  "functionName": [
+                    ">"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -827,6 +895,8 @@
                                   "name": [
                                     "s"
                                   ],
+                                  "temporal": null,
+                                  "sample": null,
                                   "options": []
                                 },
                                 "isStreaming": false
@@ -851,8 +921,12 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               },
               "withGroupingExpressions": false

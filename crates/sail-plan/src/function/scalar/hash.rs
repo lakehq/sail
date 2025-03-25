@@ -5,14 +5,15 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, ScalarUDF};
 
 use crate::error::PlanResult;
-use crate::extension::function::spark_hex_unhex::SparkHex;
+use crate::extension::function::math::spark_hex_unhex::SparkHex;
 use crate::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use crate::extension::function::spark_xxhash64::SparkXxhash64;
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
-fn sha2(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResult<expr::Expr> {
-    let (expr, bit_length) = args.two()?;
+fn sha2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let (expr, bit_length) = arguments.two()?;
     let result = match bit_length {
         expr::Expr::Literal(ScalarValue::Int32(Some(0)))
         | expr::Expr::Literal(ScalarValue::Int32(Some(256))) => expr_fn::sha256(expr),
@@ -32,8 +33,8 @@ fn sha2(args: Vec<expr::Expr>, _function_context: &FunctionContext) -> PlanResul
     Ok(expr_fn::lower(hex))
 }
 
-pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("crc32", F::unknown("crc32")),

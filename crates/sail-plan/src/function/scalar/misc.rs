@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, Operator, ScalarUDF};
+use datafusion_expr::{expr, lit, ExprSchemable, Operator, ScalarUDF};
 
 use crate::catalog::CatalogManager;
 use crate::error::{PlanError, PlanResult};
@@ -10,27 +10,26 @@ use crate::extension::function::raise_error::RaiseError;
 use crate::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
-use crate::function::common::{Function, FunctionContext};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
-fn assert_true(
-    args: Vec<expr::Expr>,
-    _function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    let (err_msg, col) = if args.len() == 1 {
-        let col = args.one()?;
+fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let (err_msg, col) = if arguments.len() == 1 {
+        let col = arguments.one()?;
         (
             // Need to do this order to avoid the "value used after being moved" error.
             lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", &col)))),
             col,
         )
-    } else if args.len() == 2 {
-        let (col, err_msg) = args.two()?;
+    } else if arguments.len() == 2 {
+        let (col, err_msg) = arguments.two()?;
         (err_msg, col)
     } else {
         return Err(PlanError::invalid(format!(
             "assert_true expects at most two arguments, got {}",
-            args.len()
+            arguments.len()
         )));
     };
 
@@ -49,40 +48,49 @@ fn assert_true(
     }))
 }
 
-fn current_catalog(
-    args: Vec<expr::Expr>,
-    function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    args.zero()?;
+fn current_catalog(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    input.arguments.zero()?;
     let catalog_manager = CatalogManager::new(
-        function_context.session_context(),
-        function_context.plan_config().clone(),
+        input.function_context.session_context,
+        input.function_context.plan_config.clone(),
     );
     Ok(lit(catalog_manager.default_catalog()?))
 }
 
-fn current_database(
-    args: Vec<expr::Expr>,
-    function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    args.zero()?;
+fn current_database(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    input.arguments.zero()?;
     let catalog_manager = CatalogManager::new(
-        function_context.session_context(),
-        function_context.plan_config().clone(),
+        input.function_context.session_context,
+        input.function_context.plan_config.clone(),
     );
     Ok(lit(catalog_manager.default_database()?))
 }
 
-fn current_user(
-    args: Vec<expr::Expr>,
-    function_context: &FunctionContext,
-) -> PlanResult<expr::Expr> {
-    args.zero()?;
-    Ok(lit(function_context.plan_config().session_user_id.clone()))
+fn current_user(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    input.arguments.zero()?;
+    Ok(lit(input
+        .function_context
+        .plan_config
+        .session_user_id
+        .clone()))
 }
 
-pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {
-    use crate::function::common::FunctionBuilder as F;
+fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let expr = arguments.one()?;
+    let data_type = expr.get_type(function_context.schema)?;
+    let type_of = function_context
+        .plan_config
+        .plan_formatter
+        .data_type_to_simple_string(&PlanResolver::unresolve_data_type(&data_type)?)?;
+    Ok(lit(type_of))
+}
+
+pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("aes_decrypt", F::udf(SparkAESDecrypt::new())),
@@ -117,7 +125,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, Function)> {
         ("spark_partition_id", F::unknown("spark_partition_id")),
         ("try_aes_encrypt", F::udf(SparkTryAESEncrypt::new())),
         ("try_aes_decrypt", F::udf(SparkTryAESDecrypt::new())),
-        ("typeof", F::unknown("typeof")),
+        ("typeof", F::custom(type_of)),
         ("user", F::unknown("user")),
         ("uuid", F::nullary(expr_fn::uuid)),
         ("version", F::unknown("version")),

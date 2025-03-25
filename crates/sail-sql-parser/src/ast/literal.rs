@@ -16,7 +16,147 @@ use crate::utils::skip_whitespace;
 pub struct NumberLiteral {
     pub span: TokenSpan,
     pub value: String,
-    pub suffix: String,
+    pub suffix: Option<NumberSuffix>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum NumberSuffix {
+    Y,
+    S,
+    L,
+    F,
+    D,
+    Bd,
+}
+
+impl NumberSuffix {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NumberSuffix::Y => "Y",
+            NumberSuffix::S => "S",
+            NumberSuffix::L => "L",
+            NumberSuffix::F => "F",
+            NumberSuffix::D => "D",
+            NumberSuffix::Bd => "BD",
+        }
+    }
+}
+
+/// The state for number literal parsing.
+/// Formally, the state and state transitions are equivalent to a minimal DFA
+/// derived from the regular grammar for number literals.
+/// We cannot use regular expressions to parse number literals since the literal
+/// may be represented by multiple adjacent non-whitespace tokens.
+#[derive(Debug, Clone)]
+enum NumberState {
+    Start,
+    WholeNumber(String),
+    DecimalPoint(String),
+    DecimalNumber(String),
+    ExponentMarker(String),
+    ExponentSign(String),
+    Exponent(String),
+    SuffixY(String),
+    SuffixS(String),
+    SuffixL(String),
+    SuffixF(String),
+    SuffixD(String),
+    SuffixB(String),
+    SuffixBd(String),
+}
+
+impl NumberState {
+    fn next_slice(mut self, slice: &str) -> Option<NumberState> {
+        let chars = slice.chars();
+        for c in chars {
+            self = self.next(c)?;
+        }
+        Some(self)
+    }
+
+    fn next(self, c: char) -> Option<NumberState> {
+        fn extend(mut s: String, c: char) -> String {
+            s.push(c);
+            s
+        }
+
+        match self {
+            NumberState::Start => match c {
+                '0'..='9' => Some(NumberState::WholeNumber(c.to_string())),
+                '.' => Some(NumberState::DecimalPoint(c.to_string())),
+                _ => None,
+            },
+            NumberState::WholeNumber(x) => match c {
+                '0'..='9' => Some(NumberState::WholeNumber(extend(x, c))),
+                '.' => Some(NumberState::DecimalNumber(extend(x, c))),
+                'e' | 'E' => Some(NumberState::ExponentMarker(extend(x, c))),
+                'y' | 'Y' => Some(NumberState::SuffixY(x)),
+                's' | 'S' => Some(NumberState::SuffixS(x)),
+                'l' | 'L' => Some(NumberState::SuffixL(x)),
+                'f' | 'F' => Some(NumberState::SuffixF(x)),
+                'd' | 'D' => Some(NumberState::SuffixD(x)),
+                'b' | 'B' => Some(NumberState::SuffixB(x)),
+                _ => None,
+            },
+            NumberState::DecimalPoint(x) => match c {
+                '0'..='9' => Some(NumberState::DecimalNumber(extend(x, c))),
+                _ => None,
+            },
+            NumberState::DecimalNumber(x) => match c {
+                '0'..='9' => Some(NumberState::DecimalNumber(extend(x, c))),
+                'e' | 'E' => Some(NumberState::ExponentMarker(extend(x, c))),
+                'f' | 'F' => Some(NumberState::SuffixF(x)),
+                'd' | 'D' => Some(NumberState::SuffixD(x)),
+                'b' | 'B' => Some(NumberState::SuffixB(x)),
+                _ => None,
+            },
+            NumberState::ExponentMarker(x) => match c {
+                '+' | '-' => Some(NumberState::ExponentSign(extend(x, c))),
+                '0'..='9' => Some(NumberState::Exponent(extend(x, c))),
+                _ => None,
+            },
+            NumberState::ExponentSign(x) => match c {
+                '0'..='9' => Some(NumberState::Exponent(extend(x, c))),
+                _ => None,
+            },
+            NumberState::Exponent(x) => match c {
+                '0'..='9' => Some(NumberState::Exponent(extend(x, c))),
+                'f' | 'F' => Some(NumberState::SuffixF(x)),
+                'd' | 'D' => Some(NumberState::SuffixD(x)),
+                'b' | 'B' => Some(NumberState::SuffixB(x)),
+                _ => None,
+            },
+            NumberState::SuffixY(_)
+            | NumberState::SuffixS(_)
+            | NumberState::SuffixL(_)
+            | NumberState::SuffixF(_)
+            | NumberState::SuffixD(_)
+            | NumberState::SuffixBd(_) => None,
+            NumberState::SuffixB(x) => match c {
+                'd' | 'D' => Some(NumberState::SuffixBd(x)),
+                _ => None,
+            },
+        }
+    }
+
+    fn finalize(self) -> Option<(String, Option<NumberSuffix>)> {
+        match self {
+            NumberState::WholeNumber(x)
+            | NumberState::DecimalNumber(x)
+            | NumberState::Exponent(x) => Some((x, None)),
+            NumberState::SuffixY(x) => Some((x, Some(NumberSuffix::Y))),
+            NumberState::SuffixS(x) => Some((x, Some(NumberSuffix::S))),
+            NumberState::SuffixL(x) => Some((x, Some(NumberSuffix::L))),
+            NumberState::SuffixF(x) => Some((x, Some(NumberSuffix::F))),
+            NumberState::SuffixD(x) => Some((x, Some(NumberSuffix::D))),
+            NumberState::SuffixBd(x) => Some((x, Some(NumberSuffix::Bd))),
+            NumberState::Start
+            | NumberState::DecimalPoint(_)
+            | NumberState::ExponentMarker(_)
+            | NumberState::ExponentSign(_)
+            | NumberState::SuffixB(_) => None,
+        }
+    }
 }
 
 impl<'a, I, E> TreeParser<'a, I, E> for NumberLiteral
@@ -28,21 +168,43 @@ where
 {
     fn parser(_args: (), _options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
         custom(|input: &mut InputRef<'a, '_, I, E>| {
-            let before = input.cursor();
-            let token = input.next();
-            if let Some(Token::Number { value, suffix }) = token {
-                let node = NumberLiteral {
-                    span: input.span_since(&before).into(),
-                    value: value.to_string(),
-                    suffix: suffix.to_string(),
+            let marker = input.save();
+            let mut state = NumberState::Start;
+            let mut candidate = None;
+            let token = loop {
+                let token = input.next();
+                let raw = match &token {
+                    Some(Token::Word { raw, keyword: _ }) => raw,
+                    Some(Token::Punctuation(Punctuation::Period)) => ".",
+                    Some(Token::Punctuation(Punctuation::Plus)) => "+",
+                    Some(Token::Punctuation(Punctuation::Minus)) => "-",
+                    _ => {
+                        break token;
+                    }
                 };
+                if let Some(s) = state.next_slice(raw) {
+                    state = s.clone();
+                    if let Some((value, suffix)) = s.finalize() {
+                        let literal = NumberLiteral {
+                            span: input.span_since(marker.cursor()).into(),
+                            value,
+                            suffix,
+                        };
+                        candidate = Some((literal, input.save()));
+                    }
+                } else {
+                    break token;
+                }
+            };
+            if let Some((literal, marker)) = candidate {
+                input.rewind(marker);
                 skip_whitespace(input);
-                return Ok(node);
+                return Ok(literal);
             }
             Err(E::Error::expected_found(
                 vec![TokenLabel::Number],
                 token.map(Into::into),
-                input.span_since(&before),
+                input.span_since(marker.cursor()),
             ))
         })
     }
@@ -75,15 +237,15 @@ where
                 }
             };
             let token = input.next();
-            if let Some(Token::Number { value, suffix: "" }) = &token {
-                let value = format!("{}{}", if negative { "-" } else { "" }, value);
+            if let Some(Token::Word { raw, keyword: None }) = &token {
+                let value = format!("{}{}", if negative { "-" } else { "" }, raw);
                 if let Ok(value) = value.parse() {
-                    let node = IntegerLiteral {
+                    let literal = IntegerLiteral {
                         span: input.span_since(marker.cursor()).into(),
                         value,
                     };
                     skip_whitespace(input);
-                    return Ok(node);
+                    return Ok(literal);
                 }
             }
             Err(E::Error::expected_found(
@@ -161,12 +323,12 @@ where
                         Ok(style) => style.parse(raw, options),
                         Err(e) => StringValue::Invalid { reason: e },
                     };
-                    let node = StringLiteral {
+                    let literal = StringLiteral {
                         span: input.span_since(&before).into(),
                         value,
                     };
                     skip_whitespace(input);
-                    return Ok(node);
+                    return Ok(literal);
                 }
                 _ => {}
             }

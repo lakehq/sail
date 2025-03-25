@@ -11,7 +11,7 @@
       "input": "\nSELECT tb.*\nFROM t-a INNER JOIN tb\nON ta.a = tb.a AND ta.tag = tb.tag\n        ",
       "exception": "\n[INVALID_IDENTIFIER] The identifier t-a is invalid. Please, consider quoting it with back-quotes as `t-a`.(line 3, pos 6)\n\n== SQL ==\n\nSELECT tb.*\nFROM t-a INNER JOIN tb\n------^^^\nON ta.a = tb.a AND ta.tag = tb.tag\n        \n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found - at 19:20 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     }
   ]

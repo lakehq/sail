@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{plan_err, DFSchemaRef, DataFusionError, Result, TableReference};
+use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
     expr, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, Projection, ScalarUDF,
 };
@@ -100,7 +101,7 @@ impl PlanResolver<'_> {
         function: PythonUdf,
         name: &str,
         arguments: Vec<Expr>,
-        argument_names: &[String],
+        argument_display_names: &[String],
         schema: &DFSchemaRef,
         deterministic: bool,
         state: &mut PlanResolverState,
@@ -201,18 +202,20 @@ impl PlanResolver<'_> {
                     get_udf_name(name, &payload),
                     payload,
                     deterministic,
-                    argument_names.to_vec(),
+                    argument_display_names.to_vec(),
                     input_types,
                     function.output_type,
                     self.config.pyspark_udf_config.clone(),
                 );
                 Ok(Expr::AggregateFunction(expr::AggregateFunction {
                     func: Arc::new(AggregateUDF::from(udaf)),
-                    args: arguments,
-                    distinct: false,
-                    filter: None,
-                    order_by: None,
-                    null_treatment: None,
+                    params: AggregateFunctionParams {
+                        args: arguments,
+                        distinct: false,
+                        filter: None,
+                        order_by: None,
+                        null_treatment: None,
+                    },
                 }))
             }
         }

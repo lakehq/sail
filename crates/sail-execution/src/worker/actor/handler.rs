@@ -11,6 +11,7 @@ use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
 use prost::Message;
+use sail_common_datafusion::error::CommonErrorCause;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -18,7 +19,9 @@ use crate::driver::state::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskAttempt, TaskId, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::{ChannelName, LocalStreamStorage, RecordBatchStreamWriter};
+use crate::stream::channel::ChannelName;
+use crate::stream::reader::TaskStreamSource;
+use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::worker::actor::core::WorkerActor;
 use crate::worker::actor::local_stream::{EphemeralStream, LocalStream, MemoryStream};
 use crate::worker::actor::stream_accessor::WorkerStreamAccessor;
@@ -102,6 +105,7 @@ impl WorkerActor {
                     attempt,
                     status: TaskStatus::Failed,
                     message: Some(format!("failed to execute plan: {e}")),
+                    cause: Some(CommonErrorCause::new(&e)),
                 };
                 ctx.send(event);
                 return ActorAction::Continue;
@@ -112,8 +116,7 @@ impl WorkerActor {
         self.task_signals
             .insert(TaskAttempt::new(task_id, attempt), tx);
         let monitor = if let Some(channel) = channel {
-            let mut output =
-                EphemeralStream::new(self.options().worker_stream_buffer, stream.schema());
+            let mut output = EphemeralStream::new(self.options().worker_stream_buffer);
             let writer = match output.publish(ctx) {
                 Ok(x) => x,
                 Err(e) => {
@@ -122,6 +125,7 @@ impl WorkerActor {
                         attempt,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to create output stream writer: {e}")),
+                        cause: None,
                     };
                     ctx.send(event);
                     return ActorAction::Continue;
@@ -156,6 +160,7 @@ impl WorkerActor {
         attempt: usize,
         status: TaskStatus,
         message: Option<String>,
+        cause: Option<CommonErrorCause>,
     ) -> ActorAction {
         let sequence = self.sequence;
         self.sequence = match self.sequence.checked_add(1) {
@@ -170,9 +175,10 @@ impl WorkerActor {
                 .run(|| {
                     let client = client.clone();
                     let message = message.clone();
+                    let cause = cause.clone();
                     async move {
                         client
-                            .report_task_status(task_id, attempt, status, message, sequence)
+                            .report_task_status(task_id, attempt, status, message, cause, sequence)
                             .await
                     }
                 })
@@ -190,15 +196,14 @@ impl WorkerActor {
         ctx: &mut ActorContext<Self>,
         channel: ChannelName,
         storage: LocalStreamStorage,
-        schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn RecordBatchStreamWriter>>>,
+        _schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
         let mut stream: Box<dyn LocalStream> = match storage {
-            LocalStreamStorage::Ephemeral => Box::new(EphemeralStream::new(
-                self.options().worker_stream_buffer,
-                schema,
-            )),
-            LocalStreamStorage::Memory => Box::new(MemoryStream::new(schema)),
+            LocalStreamStorage::Ephemeral => {
+                Box::new(EphemeralStream::new(self.options().worker_stream_buffer))
+            }
+            LocalStreamStorage::Memory => Box::new(MemoryStream::new()),
             LocalStreamStorage::Disk => {
                 return ActorAction::fail("not implemented: create disk stream")
             }
@@ -213,7 +218,7 @@ impl WorkerActor {
         _ctx: &mut ActorContext<Self>,
         _uri: String,
         _schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn RecordBatchStreamWriter>>>,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
         let _ = result.send(Err(ExecutionError::InternalError(
             "not implemented: create remote stream".to_string(),
@@ -225,7 +230,7 @@ impl WorkerActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         channel: ChannelName,
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let out = self
             .local_streams
@@ -254,7 +259,7 @@ impl WorkerActor {
         port: u16,
         channel: ChannelName,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let client = match self.worker_client(worker_id, host, port) {
             Ok(x) => x.clone(),
@@ -275,7 +280,7 @@ impl WorkerActor {
         _ctx: &mut ActorContext<Self>,
         _uri: String,
         _schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
         let _ = result.send(Err(ExecutionError::InternalError(
             "not implemented: fetch remote stream".to_string(),

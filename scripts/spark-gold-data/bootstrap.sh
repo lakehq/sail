@@ -38,34 +38,6 @@ echo "Removing existing test data..."
 rm -rf "${output_path}"
 mkdir -p "${output_path}"
 
-function write_grouped_tests() {
-  local kind="$1"
-  local suite="$2"
-  local file_prefix="$3"
-  local script_file="${scripts_path}/process_${kind}.jq"
-  local input_file="${logs_path}/${suite}.jsonl"
-
-  mkdir -p "${output_path}/${kind}"
-  echo "Processing $(basename "${input_file}")..."
-  # Write each group of test cases to a separate file.
-  # The idea is that we run `jq` to get a list of unique groups first,
-  # and then use `xargs` to run `jq` again for each group to produce the output file.
-  # shellcheck disable=SC2016
-  jq -r -f "${script_file}" --arg group "" "${input_file}" \
-    | xargs -I {} bash -c 'jq -f "$0" --arg group "$1" "$2" > "$3"' \
-    "${script_file}" {} "${input_file}" "${output_path}/${kind}/${file_prefix}"{}.json
-}
-
-function write_tests() {
-  local kind="$1"
-  local suite="$2"
-  local script_file="${scripts_path}/process_${kind}.jq"
-  local input_file="${logs_path}/${suite}.jsonl"
-
-  echo "Processing $(basename "${input_file}")..."
-  jq -f "${script_file}" "${input_file}" > "${output_path}/${kind}.json"
-}
-
 cat <<EOF > "${output_path}/README.md"
 # Gold Data for Spark Tests
 
@@ -74,11 +46,6 @@ All the files in this directory, including this README file, are auto-generated.
 Please do not modify them manually.
 EOF
 
-write_grouped_tests "plan" "DDLParserSuite" "ddl_"
-write_grouped_tests "plan" "ErrorParserSuite" "error_"
-write_grouped_tests "plan" "PlanParserSuite" "plan_"
-write_grouped_tests "plan" "UnpivotParserSuite" "unpivot_"
-write_grouped_tests "expression" "ExpressionParserSuite" ""
-write_grouped_tests "function" "FunctionCollectorSuite" ""
-write_tests "data_type" "DataTypeParserSuite"
-write_tests "table_schema" "TableSchemaParserSuite"
+cargo run -p sail-gold-test --bin spark-gold-data -- \
+  --input "${logs_path}" \
+  --output "${output_path}"

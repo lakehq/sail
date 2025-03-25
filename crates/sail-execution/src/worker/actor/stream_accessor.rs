@@ -1,14 +1,11 @@
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
-use datafusion::execution::SendableRecordBatchStream;
 use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 
 use crate::id::WorkerId;
-use crate::stream::{
-    RecordBatchStreamWriter, TaskReadLocation, TaskStreamReader, TaskStreamWriter,
-    TaskWriteLocation,
-};
+use crate::stream::reader::{TaskReadLocation, TaskStreamReader, TaskStreamSource};
+use crate::stream::writer::{TaskStreamSink, TaskStreamWriter, TaskWriteLocation};
 use crate::worker::{WorkerActor, WorkerEvent};
 
 #[derive(Debug)]
@@ -29,7 +26,7 @@ impl TaskStreamReader for WorkerStreamAccessor {
         &self,
         location: &TaskReadLocation,
         schema: SchemaRef,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> Result<TaskStreamSource> {
         let (tx, rx) = oneshot::channel();
         let event = match location {
             TaskReadLocation::Worker {
@@ -76,7 +73,7 @@ impl TaskStreamWriter for WorkerStreamAccessor {
         &self,
         location: &TaskWriteLocation,
         schema: SchemaRef,
-    ) -> Result<Box<dyn RecordBatchStreamWriter>> {
+    ) -> Result<Box<dyn TaskStreamSink>> {
         let (tx, rx) = oneshot::channel();
         let event = match location {
             TaskWriteLocation::Local { channel, storage } => WorkerEvent::CreateLocalStream {

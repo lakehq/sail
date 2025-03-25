@@ -5,7 +5,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "ilike",
+            "functionName": [
+              "ilike"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -17,7 +19,9 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "all",
+                  "functionName": [
+                    "all"
+                  ],
                   "arguments": [
                     {
                       "literal": {
@@ -34,13 +38,21 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -57,7 +69,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "ilike",
+            "functionName": [
+              "ilike"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -69,7 +83,9 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "any",
+                  "functionName": [
+                    "any"
+                  ],
                   "arguments": [
                     {
                       "literal": {
@@ -86,13 +102,21 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -109,7 +133,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "ilike",
+            "functionName": [
+              "ilike"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -121,7 +147,9 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "some",
+                  "functionName": [
+                    "some"
+                  ],
                   "arguments": [
                     {
                       "literal": {
@@ -138,13 +166,21 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -161,7 +197,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "like",
+            "functionName": [
+              "like"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -179,8 +217,12 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -190,7 +232,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "like",
+            "functionName": [
+              "like"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -215,8 +259,12 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -233,7 +281,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "like",
+            "functionName": [
+              "like"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -258,8 +308,12 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -276,7 +330,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "like",
+            "functionName": [
+              "like"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -288,7 +344,9 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "all",
+                  "functionName": [
+                    "all"
+                  ],
                   "arguments": [
                     {
                       "literal": {
@@ -305,13 +363,21 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -328,7 +394,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "like",
+            "functionName": [
+              "like"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -340,7 +408,9 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "any",
+                  "functionName": [
+                    "any"
+                  ],
                   "arguments": [
                     {
                       "literal": {
@@ -357,13 +427,21 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -380,7 +458,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "like",
+            "functionName": [
+              "like"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -392,7 +472,9 @@
               },
               {
                 "unresolvedFunction": {
-                  "functionName": "some",
+                  "functionName": [
+                    "some"
+                  ],
                   "arguments": [
                     {
                       "literal": {
@@ -409,13 +491,21 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -432,11 +522,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "ilike",
+                  "functionName": [
+                    "ilike"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -448,7 +542,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "all",
+                        "functionName": [
+                          "all"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -465,18 +561,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -486,11 +594,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "ilike",
+                  "functionName": [
+                    "ilike"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -502,7 +614,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "any",
+                        "functionName": [
+                          "any"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -519,18 +633,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -540,11 +666,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "ilike",
+                  "functionName": [
+                    "ilike"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -556,7 +686,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "some",
+                        "functionName": [
+                          "some"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -573,18 +705,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -594,11 +738,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "like",
+                  "functionName": [
+                    "like"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -616,13 +764,21 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -632,11 +788,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "like",
+                  "functionName": [
+                    "like"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -661,13 +821,21 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -684,11 +852,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "like",
+                  "functionName": [
+                    "like"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -713,13 +885,21 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -736,11 +916,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "like",
+                  "functionName": [
+                    "like"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -752,7 +936,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "all",
+                        "functionName": [
+                          "all"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -769,18 +955,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -790,11 +988,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "like",
+                  "functionName": [
+                    "like"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -806,7 +1008,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "any",
+                        "functionName": [
+                          "any"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -823,18 +1027,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -844,11 +1060,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "like",
+                  "functionName": [
+                    "like"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -860,7 +1080,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "some",
+                        "functionName": [
+                          "some"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -877,18 +1099,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -898,11 +1132,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "rlike",
+                  "functionName": [
+                    "rlike"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -920,13 +1158,21 @@
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -936,7 +1182,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "rlike",
+            "functionName": [
+              "rlike"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -954,8 +1202,12 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -965,7 +1217,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "rlike",
+            "functionName": [
+              "rlike"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -983,8 +1237,12 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -994,7 +1252,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "rlike",
+            "functionName": [
+              "rlike"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -1012,8 +1272,12 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1023,7 +1287,9 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "rlike",
+            "functionName": [
+              "rlike"
+            ],
             "arguments": [
               {
                 "unresolvedAttribute": {
@@ -1041,8 +1307,12 @@
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1052,11 +1322,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "ilike",
+                  "functionName": [
+                    "ilike"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -1068,7 +1342,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "all",
+                        "functionName": [
+                          "all"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -1085,18 +1361,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1106,11 +1394,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "ilike",
+                  "functionName": [
+                    "ilike"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -1122,7 +1414,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "any",
+                        "functionName": [
+                          "any"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -1139,18 +1433,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1160,11 +1466,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "ilike",
+                  "functionName": [
+                    "ilike"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -1176,7 +1486,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "some",
+                        "functionName": [
+                          "some"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -1193,18 +1505,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1214,11 +1538,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "like",
+                  "functionName": [
+                    "like"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -1230,7 +1558,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "all",
+                        "functionName": [
+                          "all"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -1247,18 +1577,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1268,11 +1610,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "like",
+                  "functionName": [
+                    "like"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -1284,7 +1630,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "any",
+                        "functionName": [
+                          "any"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -1301,18 +1649,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }
@@ -1322,11 +1682,15 @@
       "output": {
         "success": {
           "unresolvedFunction": {
-            "functionName": "not",
+            "functionName": [
+              "not"
+            ],
             "arguments": [
               {
                 "unresolvedFunction": {
-                  "functionName": "like",
+                  "functionName": [
+                    "like"
+                  ],
                   "arguments": [
                     {
                       "unresolvedAttribute": {
@@ -1338,7 +1702,9 @@
                     },
                     {
                       "unresolvedFunction": {
-                        "functionName": "some",
+                        "functionName": [
+                          "some"
+                        ],
                         "arguments": [
                           {
                             "literal": {
@@ -1355,18 +1721,30 @@
                             }
                           }
                         ],
+                        "namedArguments": [],
                         "isDistinct": false,
-                        "isUserDefinedFunction": false
+                        "isUserDefinedFunction": false,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
                       }
                     }
                   ],
+                  "namedArguments": [],
                   "isDistinct": false,
-                  "isUserDefinedFunction": false
+                  "isUserDefinedFunction": false,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
               }
             ],
+            "namedArguments": [],
             "isDistinct": false,
-            "isUserDefinedFunction": false
+            "isUserDefinedFunction": false,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }

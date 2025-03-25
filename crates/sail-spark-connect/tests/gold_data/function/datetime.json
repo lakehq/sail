@@ -130,7 +130,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found end at 47:50 expected identifier"
+        "failure": "invalid argument: found end at 47:50 expected identifier, or '('"
       }
     },
     {
@@ -1404,7 +1404,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_utc_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -1448,7 +1448,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: last_day"
+        "success": "ok"
       }
     },
     {
@@ -1668,7 +1668,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -1690,7 +1690,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp"
+        "failure": "not implemented: make_timestamp with timezone is not yet implemented"
       }
     },
     {
@@ -1712,7 +1712,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -1734,7 +1734,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -1756,7 +1756,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -1866,7 +1866,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp_ntz"
+        "success": "ok"
       }
     },
     {
@@ -1888,7 +1888,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp_ntz"
+        "success": "ok"
       }
     },
     {
@@ -1910,7 +1910,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp_ntz"
+        "success": "ok"
       }
     },
     {
@@ -1932,7 +1932,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_ym_interval"
+        "success": "ok"
       }
     },
     {
@@ -1954,7 +1954,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_ym_interval"
+        "success": "ok"
       }
     },
     {
@@ -1976,7 +1976,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_ym_interval"
+        "success": "ok"
       }
     },
     {
@@ -1998,7 +1998,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_ym_interval"
+        "success": "ok"
       }
     },
     {
@@ -2108,7 +2108,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: next_day"
+        "success": "ok"
       }
     },
     {
@@ -2592,7 +2592,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -2614,7 +2614,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -2636,7 +2636,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_timestamp"
+        "success": "ok"
       }
     },
     {

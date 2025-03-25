@@ -3,7 +3,68 @@
     {
       "input": "insert overwrite table s partition (e = 1) if not exists select * from t",
       "output": {
-        "failure": "invalid argument: found if at 43:45 expected '(', or query"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "s"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                [
+                  "e",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 1
+                      }
+                    }
+                  }
+                ]
+              ],
+              "replace": null,
+              "ifNotExists": true,
+              "overwrite": true
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -20,6 +81,8 @@
                         "name": [
                           "t"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -50,6 +113,8 @@
               ],
               "columns": [],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": true
             },
             "planId": null,

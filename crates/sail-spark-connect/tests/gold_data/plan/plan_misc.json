@@ -12,6 +12,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -52,6 +54,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -92,6 +96,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -132,6 +138,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -172,6 +180,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -212,6 +222,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -252,6 +264,8 @@
                     "name": [
                       "a"
                     ],
+                    "temporal": null,
+                    "sample": null,
                     "options": []
                   },
                   "isStreaming": false
@@ -331,6 +345,8 @@
                         "name": [
                           "t1"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -364,6 +380,8 @@
                         "name": [
                           "t2"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -401,6 +419,48 @@
       }
     },
     {
+      "input": "-- single comment\nSELECT * FROM a",
+      "output": {
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
       "input": "-- single comment\\\nwith line continuity\nSELECT * FROM a",
       "output": {
         "failure": "invalid argument: found continuity at 29:39 expected '(', or 'AS'"
@@ -410,20 +470,38 @@
       "input": "/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\n",
       "exception": "\n[UNCLOSED_BRACKETED_COMMENT] Found an unclosed bracketed comment. Please, append */ at the end of the comment.\n== SQL ==\n/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found / at 22:23 expected ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\nselect 4 as d\n",
       "exception": "\n[UNCLOSED_BRACKETED_COMMENT] Found an unclosed bracketed comment. Please, append */ at the end of the comment.\n== SQL ==\n/*abc*/\nselect 1 as a\n/*\n\n2 as b\n/*abc */\n, 3 as c\n\n/**/\nselect 4 as d\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found / at 22:23 expected ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "TABLE testcat.db.tab",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "query": {
+            "read": {
+              "namedTable": {
+                "name": [
+                  "testcat",
+                  "db",
+                  "tab"
+                ],
+                "temporal": null,
+                "sample": null,
+                "options": []
+              },
+              "isStreaming": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -499,13 +577,46 @@
     {
       "input": "table d.t",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "query": {
+            "read": {
+              "namedTable": {
+                "name": [
+                  "d",
+                  "t"
+                ],
+                "temporal": null,
+                "sample": null,
+                "options": []
+              },
+              "isStreaming": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "table t",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "success": {
+          "query": {
+            "read": {
+              "namedTable": {
+                "name": [
+                  "t"
+                ],
+                "temporal": null,
+                "sample": null,
+                "options": []
+              },
+              "isStreaming": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {

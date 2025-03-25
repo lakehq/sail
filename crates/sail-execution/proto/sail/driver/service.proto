@@ -22,7 +22,10 @@ message ReportTaskStatusRequest {
   uint64 task_id = 1;
   TaskStatus status = 2;
   uint64 attempt = 3;
+  // An optional explanation of the task status.
   optional string message = 4;
+  // An optional JSON string that contains the cause of the task failure.
+  optional string cause = 5;
   uint64 sequence = 101;
 }
 

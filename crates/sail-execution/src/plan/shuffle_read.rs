@@ -15,7 +15,8 @@ use futures::TryStreamExt;
 use log::warn;
 
 use crate::plan::write_list_of_lists;
-use crate::stream::{MergedRecordBatchStream, TaskReadLocation, TaskStreamReader};
+use crate::stream::merge::MergedRecordBatchStream;
+use crate::stream::reader::{TaskReadLocation, TaskStreamReader};
 
 #[derive(Debug, Clone)]
 pub struct ShuffleReadExec {

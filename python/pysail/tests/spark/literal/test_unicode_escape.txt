@@ -1,0 +1,44 @@
+>>> spark.sql(r"SELECT U&'a\2014b\+002014c' AS text").show()
++-----+
+| text|
++-----+
+|a—b—c|
++-----+
+>>>
+>>> spark.sql(r"SELECT U&'a\2014b\+002014c' UESCAPE '\\' AS text").show()
++-----+
+| text|
++-----+
+|a—b—c|
++-----+
+>>>
+>>> spark.sql(r"SELECT U&'a#2014b#+002014c' UESCAPE '#' AS text").show()
++-----+
+| text|
++-----+
+|a—b—c|
++-----+
+>>>
+>>> spark.sql(r"SELECT U&'\2014' UESCAPE AS text").show()
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.IllegalArgumentException: ...
+>>> spark.sql(r"SELECT U&'##2014' UESCAPE '##'").show()
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.IllegalArgumentException: ...
+>>>
+>>> spark.sql(r"SELECT '\2014' UESCAPE '\\'").show()
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.IllegalArgumentException: ...
+>>>
+>>> spark.sql(r"SELECT U&'2014' UESCAPE '\''").show()
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.IllegalArgumentException: ...
+>>>
+>>> spark.sql(r"SELECT U&'\+02014'").show()
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.IllegalArgumentException: ...

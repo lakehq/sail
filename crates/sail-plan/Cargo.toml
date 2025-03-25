@@ -19,6 +19,7 @@ tonic = { workspace = true }
 tokio-stream = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
+async-stream = { workspace = true }
 lazy_static = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
@@ -29,12 +30,12 @@ html-escape = { workspace = true }
 chrono = { workspace = true }
 ryu = { workspace = true }
 either = { workspace = true }
-num-traits = { workspace = true }
 tokio = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
 url = { workspace = true }
+glob = { workspace = true }
 object_store = { workspace = true }
 aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
@@ -45,6 +46,12 @@ aes-gcm = { workspace = true }
 cbc = { workspace = true }
 base64 = { workspace = true }
 half = { workspace = true }
+num = { workspace = true }
+hf-hub = { workspace = true }
+reqwest = { workspace = true }
+log = { workspace = true }
+chumsky = { workspace = true }
+percent-encoding = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]

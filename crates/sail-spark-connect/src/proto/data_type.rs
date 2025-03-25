@@ -31,10 +31,15 @@ pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType>
     } else if let Ok(dt) =
         parse_data_type(format!("struct<{schema}>").as_str()).and_then(from_ast_data_type)
     {
-        // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
-        // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
-        // to parse table schema input (`name type, ...`).
-        Ok(dt)
+        match dt {
+            spec::DataType::Struct { fields } if fields.is_empty() => {
+                return Err(SparkError::invalid("empty data type"));
+            }
+            // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
+            // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
+            // to parse table schema input (`name type, ...`).
+            _ => Ok(dt),
+        }
     } else {
         parse_spark_json_data_type(schema)?.try_into()
     }

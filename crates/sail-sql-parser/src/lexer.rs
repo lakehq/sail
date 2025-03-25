@@ -1,7 +1,7 @@
 use chumsky::container::OrderedSeq;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{SliceInput, ValueInput};
-use chumsky::prelude::{any, choice, end, just, none_of, one_of, recursive, Input};
+use chumsky::prelude::{any, choice, end, just, none_of, recursive, Input};
 use chumsky::{ConfigParser, IterParser, Parser};
 
 use crate::options::ParserOptions;
@@ -12,13 +12,12 @@ where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
     E: ParserExtra<'a, I>,
 {
+    // We allow all Unicode alphanumeric characters and the underscore character to be part of a
+    // word. This implies that Unicode letters or digits are allowed in an unquoted identifier.
     any()
-        .filter(|c: &char| c.is_ascii_alphabetic() || *c == '_')
-        .ignore_then(
-            any()
-                .filter(|c: &char| c.is_ascii_alphanumeric() || *c == '_')
-                .repeated(),
-        )
+        .filter(|c: &char| c.is_alphanumeric() || *c == '_')
+        .repeated()
+        .at_least(1)
         .map_with(|(), e| {
             let keyword = Keyword::get(e.slice());
             (
@@ -29,34 +28,6 @@ where
                 e.span(),
             )
         })
-}
-
-fn number<'a, I, E>() -> impl Parser<'a, I, (Token<'a>, I::Span), E>
-where
-    I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
-{
-    let digit = any().filter(|c: &char| c.is_ascii_digit());
-    let suffix = any().filter(|c: &char| c.is_ascii_alphabetic()).repeated();
-
-    let value = digit
-        .repeated()
-        .at_least(1)
-        .then(just('.').then(digit.repeated()).or_not())
-        .ignored();
-    let decimal_only_value = just('.').then(digit.repeated().at_least(1)).ignored();
-    let exponent = one_of("eE")
-        .then(one_of("+-").or_not())
-        .then(digit.repeated().at_least(1))
-        .or_not()
-        .ignored();
-
-    value
-        .or(decimal_only_value)
-        .then(exponent)
-        .to_slice()
-        .then(suffix.to_slice())
-        .map_with(|(value, suffix), e| (Token::Number { value, suffix }, e.span()))
 }
 
 fn single_line_comment<'a, I, E>() -> impl Parser<'a, I, (Token<'a>, I::Span), E>
@@ -336,7 +307,6 @@ where
         multi_line_comment(),
         string(options),
         word(),
-        number(),
         whitespace(' ', |count| Token::Space { count }),
         whitespace('\n', |count| Token::LineFeed { count }),
         whitespace('\r', |count| Token::CarriageReturn { count }),

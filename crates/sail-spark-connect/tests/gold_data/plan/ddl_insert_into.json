@@ -3,27 +3,230 @@
     {
       "input": "\nINSERT INTO testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2)\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "invalid argument: found ) at 54:55 expected '='"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ],
+                [
+                  "p2",
+                  null
+                ]
+              ],
+              "replace": null,
+              "ifNotExists": false,
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "\nINSERT INTO testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) (a, b)\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "invalid argument: found ) at 54:55 expected '='"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [
+                "a",
+                "b"
+              ],
+              "partitionSpec": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ],
+                [
+                  "p2",
+                  null
+                ]
+              ],
+              "replace": null,
+              "ifNotExists": false,
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
       "input": "INSERT INTO TABLE t1 BY NAME (c1,c2) SELECT * FROM tmp_view",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'c1'.(line 1, pos 30)\n\n== SQL ==\nINSERT INTO TABLE t1 BY NAME (c1,c2) SELECT * FROM tmp_view\n------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found BY at 21:23 expected '.', 'PARTITION', '(', or query"
+        "failure": "invalid argument: found c1 at 30:32 expected query"
       }
     },
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3) IF NOT EXISTS\nSELECT * FROM source",
       "exception": "\nOperation not allowed: INSERT INTO ... IF NOT EXISTS.(line 1, pos 0)\n\n== SQL ==\nINSERT INTO TABLE testcat.ns1.ns2.tbl\n^^^\nPARTITION (p1 = 3) IF NOT EXISTS\nSELECT * FROM source\n",
       "output": {
-        "failure": "invalid argument: found IF at 57:59 expected '(', or query"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ]
+              ],
+              "replace": null,
+              "ifNotExists": true,
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
       }
     },
     {
@@ -40,6 +243,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -76,6 +281,8 @@
                 "b"
               ],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -86,12 +293,6 @@
     },
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
-      "output": {
-        "failure": "invalid argument: found BY at 38:40 expected '.', 'PARTITION', '(', or query"
-      }
-    },
-    {
-      "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl SELECT * FROM source",
       "output": {
         "success": {
           "command": {
@@ -104,6 +305,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -137,6 +340,67 @@
               ],
               "columns": [],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl SELECT * FROM source",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -161,6 +425,8 @@
                           "db",
                           "tbl"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -194,6 +460,8 @@
               ],
               "columns": [],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -249,6 +517,8 @@
                   }
                 ]
               ],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -302,6 +572,8 @@
                   }
                 ]
               ],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -347,6 +619,8 @@
                   }
                 ]
               ],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -396,6 +670,8 @@
                   }
                 ]
               ],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -441,6 +717,8 @@
                   }
                 ]
               ],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -490,6 +768,8 @@
                   }
                 ]
               ],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -536,6 +816,8 @@
                   }
                 ]
               ],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -558,6 +840,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -594,6 +878,8 @@
                 "b"
               ],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,
@@ -604,12 +890,6 @@
     },
     {
       "input": "INSERT INTO testcat.ns1.ns2.tbl BY NAME SELECT * FROM source",
-      "output": {
-        "failure": "invalid argument: found BY at 32:34 expected '.', 'PARTITION', '(', or query"
-      }
-    },
-    {
-      "input": "INSERT INTO testcat.ns1.ns2.tbl SELECT * FROM source",
       "output": {
         "success": {
           "command": {
@@ -622,6 +902,8 @@
                         "name": [
                           "source"
                         ],
+                        "temporal": null,
+                        "sample": null,
                         "options": []
                       },
                       "isStreaming": false
@@ -655,6 +937,67 @@
               ],
               "columns": [],
               "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
+              "overwrite": false
+            },
+            "planId": null,
+            "sourceInfo": null
+          }
+        }
+      }
+    },
+    {
+      "input": "INSERT INTO testcat.ns1.ns2.tbl SELECT * FROM source",
+      "output": {
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null,
+                    "sourceInfo": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null,
+                "sourceInfo": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": [],
+              "partitionSpec": [],
+              "replace": null,
+              "ifNotExists": false,
               "overwrite": false
             },
             "planId": null,

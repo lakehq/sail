@@ -1,5 +1,6 @@
 use either::Either;
 use sail_common::spec;
+use sail_common::spec::TableFileFormat;
 use sail_sql_parser::ast::expression::{BooleanLiteral, Expr};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
 use sail_sql_parser::ast::keywords::{Cascade, Global, Overwrite, Restrict, Temp, Temporary};
@@ -7,11 +8,15 @@ use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral
 use sail_sql_parser::ast::operator::{Minus, Plus};
 use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
-    AsQueryClause, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
-    ColumnTypeDefinition, CreateDatabaseClause, CreateTableClause, CreateViewClause, ExplainFormat,
-    FileFormat, PartitionColumn, PartitionColumnList, PartitionSpec, PartitionValue,
+    AlterTableOperation, AlterViewOperation, AnalyzeTableModifier, AsQueryClause, Assignment,
+    AssignmentList, ColumnAlteration, ColumnAlterationList, ColumnAlterationOption,
+    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition,
+    ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
+    DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
+    MergeSource, PartitionClause, PartitionColumn, PartitionColumnList, PartitionValue,
     PartitionValueList, PropertyKey, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
-    RowFormatDelimitedClause, SortColumn, SortColumnList, Statement, ViewColumn,
+    RowFormatDelimitedClause, SetClause, SortColumn, SortColumnList, Statement, UpdateTableAlias,
+    ViewColumn,
 };
 
 use crate::data_type::from_ast_data_type;
@@ -162,16 +167,26 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::RefreshTable {
+            refresh: _,
+            table: _,
+            name,
+        } => {
+            let node = spec::CommandNode::RefreshTable {
+                table: from_ast_object_name(name)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::AlterTable {
             alter: _,
             table: _,
             name,
-            operation: _,
+            operation,
         } => {
             let node = spec::CommandNode::AlterTable {
                 table: from_ast_object_name(name)?,
                 if_exists: false,
-                operation: spec::AlterTableOperation::Unknown,
+                operation: from_ast_alter_table_operation(operation)?,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -252,6 +267,19 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::AlterView {
+            alter: _,
+            view: _,
+            name,
+            operation,
+        } => {
+            let node = spec::CommandNode::AlterView {
+                view: from_ast_object_name(name)?,
+                if_exists: false,
+                operation: from_ast_alter_view_operation(operation)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::DropView {
             drop: _,
             view: _,
@@ -268,6 +296,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         Statement::ShowViews { .. } => from_ast_statement(parse_one_statement(
             "SELECT * FROM information_schema.views;",
         )?),
+        Statement::RefreshFunction {
+            refresh: _,
+            function: _,
+            name,
+        } => {
+            let node = spec::CommandNode::RefreshFunction {
+                function: from_ast_object_name(name)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::DropFunction {
             drop: _,
             temporary,
@@ -296,40 +334,210 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::Insert {
+        Statement::InsertOverwriteDirectory {
+            insert: _,
+            overwrite: _,
+            local,
+            directory: _,
+            destination,
+            query,
+        } => {
+            let (location, file_format, row_format, options) = match destination {
+                InsertDirectoryDestination::Spark {
+                    path,
+                    using: (_, format),
+                    options,
+                } => {
+                    let options = options
+                        .map(|(_, x)| from_ast_property_list(x))
+                        .transpose()?
+                        .unwrap_or_default();
+                    (
+                        path.map(from_ast_string).transpose()?,
+                        Some(TableFileFormat::General {
+                            format: format.value,
+                        }),
+                        None,
+                        options,
+                    )
+                }
+                InsertDirectoryDestination::Hive {
+                    path,
+                    row_format,
+                    stored_as,
+                } => {
+                    let path = from_ast_string(path)?;
+                    let file_format = stored_as
+                        .map(|(_, _, x)| from_ast_file_format(x))
+                        .transpose()?;
+                    let row_format = row_format
+                        .map(|(_, _, x)| from_ast_row_format(x))
+                        .transpose()?;
+                    (Some(path), file_format, row_format, vec![])
+                }
+            };
+            let node = spec::CommandNode::InsertOverwriteDirectory {
+                input: Box::new(from_ast_query(query)?),
+                local: local.is_some(),
+                location,
+                file_format,
+                row_format,
+                options,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::InsertIntoAndReplace {
+            insert: _,
+            into: _,
+            table: _,
+            name,
+            replace: _,
+            r#where,
+            query,
+        } => {
+            let query = from_ast_query(query)?;
+            let WhereClause {
+                r#where: _,
+                condition,
+            } = r#where;
+            let node = spec::CommandNode::InsertInto {
+                input: Box::new(query),
+                table: from_ast_object_name(name)?,
+                columns: vec![],
+                partition_spec: vec![],
+                replace: Some(from_ast_expression(condition)?),
+                if_not_exists: false,
+                overwrite: false,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::InsertInto {
             insert: _,
             into_or_overwrite,
             table: _,
             name,
             partition,
+            if_not_exists,
             columns,
             query,
         } => {
             let partition_spec = partition
-                .map(
-                    |PartitionSpec {
-                         partition: _,
-                         values,
-                     }| from_ast_partition_value_list(values),
-                )
+                .map(from_ast_partition)
                 .transpose()?
                 .unwrap_or_default();
-            let columns = columns
-                .map(from_ast_identifier_list)
-                .transpose()?
-                .unwrap_or_default();
+            let columns = match columns {
+                Some(Either::Right(columns)) => from_ast_identifier_list(columns)?,
+                _ => vec![],
+            };
             let query = from_ast_query(query)?;
-            let overwrite = matches!(into_or_overwrite, Some(Either::Right(Overwrite { .. })));
+            let overwrite = matches!(into_or_overwrite, Either::Right(Overwrite { .. }));
             let node = spec::CommandNode::InsertInto {
                 input: Box::new(query),
                 table: from_ast_object_name(name)?,
                 columns,
                 partition_spec,
+                replace: None,
+                if_not_exists: if_not_exists.is_some(),
                 overwrite,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::Update { .. } => Err(SqlError::todo("UPDATE")),
+        Statement::MergeInto {
+            merge: _,
+            with_schema_evolution,
+            into: _,
+            target,
+            alias: target_alias,
+            using: (_, source),
+            on: _,
+            r#match,
+        } => {
+            if target_alias.is_some_and(|alias| alias.columns.is_some()) {
+                return Err(SqlError::invalid(
+                    "column aliases are not allowed for target table in MERGE",
+                ));
+            }
+            let source_alias = match source {
+                MergeSource::Table { alias, .. } => alias,
+                MergeSource::Query { alias, .. } => alias,
+            };
+            if source_alias.is_some_and(|alias| alias.columns.is_some()) {
+                return Err(SqlError::invalid(
+                    "column aliases are not allowed for source table in MERGE",
+                ));
+            }
+            if r#match.is_empty() {
+                return Err(SqlError::invalid(
+                    "expected at least one WHEN ... MATCHED ... clause for MERGE",
+                ));
+            }
+            let node = spec::CommandNode::MergeInto {
+                target: from_ast_object_name(target)?,
+                with_schema_evolution: with_schema_evolution.is_some(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::Update {
+            update: _,
+            name,
+            alias,
+            set: SetClause {
+                set: _,
+                assignments,
+            },
+            r#where,
+        } => {
+            let table_alias = alias
+                .map(|x| {
+                    let UpdateTableAlias {
+                        r#as: _,
+                        table,
+                        columns,
+                    } = x;
+                    if columns.is_some() {
+                        return Err(SqlError::invalid(
+                            "column list must not appear in table alias for UPDATE",
+                        ));
+                    }
+                    Ok(table.value.into())
+                })
+                .transpose()?;
+            let assignments = match assignments {
+                AssignmentList::Delimited {
+                    left: _,
+                    assignments,
+                    right: _,
+                } => assignments,
+                AssignmentList::NotDelimited { assignments } => assignments,
+            };
+            let assignments = assignments
+                .into_items()
+                .map(|x| {
+                    let Assignment {
+                        target,
+                        equals: _,
+                        value,
+                    } = x;
+                    Ok((from_ast_object_name(target)?, from_ast_expression(value)?))
+                })
+                .collect::<SqlResult<_>>()?;
+            let condition = r#where
+                .map(|x| {
+                    let WhereClause {
+                        r#where: _,
+                        condition,
+                    } = x;
+                    from_ast_expression(condition)
+                })
+                .transpose()?;
+            let node = spec::CommandNode::Update {
+                table: from_ast_object_name(name)?,
+                table_alias,
+                assignments,
+                condition,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::Delete {
             delete: _,
             from: _,
@@ -337,26 +545,118 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             alias,
             r#where,
         } => {
-            if alias.is_some() {
-                return Err(SqlError::todo("table alias in DELETE"));
-            }
+            let table_alias = alias
+                .map(|x| {
+                    let DeleteTableAlias {
+                        r#as: _,
+                        table,
+                        columns,
+                    } = x;
+                    if columns.is_some() {
+                        return Err(SqlError::invalid(
+                            "column list must not appear in table alias for DELETE",
+                        ));
+                    }
+                    Ok(table.value.into())
+                })
+                .transpose()?;
             let condition = r#where
-                .map(
-                    |WhereClause {
-                         r#where: _,
-                         condition,
-                     }| { from_ast_expression(condition) },
-                )
+                .map(|x| {
+                    let WhereClause {
+                        r#where: _,
+                        condition,
+                    } = x;
+                    from_ast_expression(condition)
+                })
                 .transpose()?;
             let node = spec::CommandNode::Delete {
                 table: from_ast_object_name(name)?,
+                table_alias,
                 condition,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::CacheTable { .. } => Err(SqlError::todo("CACHE TABLE")),
-        Statement::UncacheTable { .. } => Err(SqlError::todo("UNCACHE TABLE")),
-        Statement::ClearCache { .. } => Err(SqlError::todo("CLEAR CACHE")),
+        Statement::LoadData {
+            load_data: _,
+            local,
+            path: (_, path),
+            overwrite,
+            into_table: _,
+            name,
+            partition,
+        } => {
+            let partition = partition
+                .map(from_ast_partition)
+                .transpose()?
+                .unwrap_or_default();
+            let node = spec::CommandNode::LoadData {
+                local: local.is_some(),
+                location: from_ast_string(path)?,
+                table: from_ast_object_name(name)?,
+                overwrite: overwrite.is_some(),
+                partition,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::CacheTable {
+            cache: _,
+            lazy,
+            table: _,
+            name,
+            options,
+            r#as,
+        } => {
+            let storage_level = options
+                .map(|x| {
+                    let (_, properties) = x;
+                    let properties = from_ast_property_list(properties)?;
+                    let mut output = None;
+                    for (key, value) in properties {
+                        if key.eq_ignore_ascii_case("storageLevel") {
+                            if output.replace(value).is_some() {
+                                return Err(SqlError::invalid("duplicate 'storageLevel' option"));
+                            }
+                        } else {
+                            return Err(SqlError::invalid(format!("unknown option: {key}")));
+                        }
+                    }
+                    Ok(output)
+                })
+                .transpose()?
+                .flatten()
+                .map(|x| x.parse())
+                .transpose()?;
+            let query = r#as
+                .map(|x| {
+                    let AsQueryClause { r#as: _, query } = x;
+                    from_ast_query(query)
+                })
+                .transpose()?
+                .map(Box::new);
+            let node = spec::CommandNode::CacheTable {
+                table: from_ast_object_name(name)?,
+                lazy: lazy.is_some(),
+                storage_level,
+                query,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::UncacheTable {
+            uncache: _,
+            table: _,
+            if_exists,
+            name,
+        } => {
+            let node = spec::CommandNode::UncacheTable {
+                table: from_ast_object_name(name)?,
+                if_exists: if_exists.is_some(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ClearCache { clear: _, cache: _ } => {
+            let node = spec::CommandNode::ClearCache;
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::SetTimeZone { .. } => Err(SqlError::todo("SET TIME ZONE")),
         Statement::SetProperty { set: _, property } => {
             let Some(property) = property else {
@@ -367,6 +667,160 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 return Err(SqlError::todo("show property"));
             };
             let node = spec::CommandNode::SetVariable { variable, value };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::AnalyzeTable {
+            analyze: _,
+            name,
+            partition,
+            compute: _,
+            modifier,
+        } => {
+            let partition = partition
+                .map(from_ast_partition)
+                .transpose()?
+                .unwrap_or_default();
+            let (columns, no_scan) = match modifier {
+                Some(AnalyzeTableModifier::NoScan(_)) => (vec![], true),
+                Some(AnalyzeTableModifier::ForAllColumns(_, _, _)) => (vec![], false),
+                Some(AnalyzeTableModifier::ForColumns(_, _, x)) => {
+                    let columns = x
+                        .into_items()
+                        .map(from_ast_object_name)
+                        .collect::<SqlResult<_>>()?;
+                    (columns, false)
+                }
+                None => (vec![], false),
+            };
+            let node = spec::CommandNode::AnalyzeTable {
+                table: from_ast_object_name(name)?,
+                partition,
+                columns,
+                no_scan,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::AnalyzeTables {
+            analyze: _,
+            from,
+            compute: _,
+            no_scan,
+        } => {
+            let from = from.map(|(_, x)| from_ast_object_name(x)).transpose()?;
+            let node = spec::CommandNode::AnalyzeTables {
+                from,
+                no_scan: no_scan.is_some(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::Describe { describe: _, item } => {
+            let node = match item {
+                DescribeItem::Query { query: _, item } => {
+                    let query = from_ast_query(item)?;
+                    spec::CommandNode::DescribeQuery {
+                        query: Box::new(query),
+                    }
+                }
+                DescribeItem::Function {
+                    function: _,
+                    extended,
+                    item,
+                } => {
+                    let function = match item {
+                        Either::Left(x @ ObjectName { .. }) => from_ast_object_name(x)?,
+                        Either::Right(x @ StringLiteral { .. }) => {
+                            spec::ObjectName::bare(from_ast_string(x)?)
+                        }
+                    };
+                    spec::CommandNode::DescribeFunction {
+                        function,
+                        extended: extended.is_some(),
+                    }
+                }
+                DescribeItem::Catalog {
+                    catalog: _,
+                    extended,
+                    item,
+                } => spec::CommandNode::DescribeCatalog {
+                    catalog: from_ast_object_name(item)?,
+                    extended: extended.is_some(),
+                },
+                DescribeItem::Database {
+                    database: _,
+                    extended,
+                    item,
+                } => spec::CommandNode::DescribeDatabase {
+                    database: from_ast_object_name(item)?,
+                    extended: extended.is_some(),
+                },
+                DescribeItem::Table {
+                    table: _,
+                    extended,
+                    name,
+                    partition,
+                    column,
+                } => {
+                    let partition = partition
+                        .map(from_ast_partition)
+                        .transpose()?
+                        .unwrap_or_default();
+                    let column = column.map(from_ast_object_name).transpose()?;
+                    spec::CommandNode::DescribeTable {
+                        table: from_ast_object_name(name)?,
+                        extended: extended.is_some(),
+                        partition,
+                        column,
+                    }
+                }
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::CommentOnCatalog {
+            comment: _,
+            name,
+            is: _,
+            value,
+        } => {
+            let node = spec::CommandNode::CommentOnCatalog {
+                catalog: from_ast_object_name(name)?,
+                value: from_ast_comment_value(value)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::CommentOnDatabase {
+            comment: _,
+            name,
+            is: _,
+            value,
+        } => {
+            let node = spec::CommandNode::CommentOnDatabase {
+                database: from_ast_object_name(name)?,
+                value: from_ast_comment_value(value)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::CommentOnTable {
+            comment: _,
+            name,
+            is: _,
+            value,
+        } => {
+            let node = spec::CommandNode::CommentOnTable {
+                table: from_ast_object_name(name)?,
+                value: from_ast_comment_value(value)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::CommentOnColumn {
+            comment: _,
+            name,
+            is: _,
+            value,
+        } => {
+            let node = spec::CommandNode::CommentOnColumn {
+                column: from_ast_object_name(name)?,
+                value: from_ast_comment_value(value)?,
+            };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
     }
@@ -453,7 +907,7 @@ fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::Tab
 
 fn from_ast_table_columns(
     columns: Option<ColumnDefinitionList>,
-) -> SqlResult<(spec::Schema, Vec<(String, spec::Expr)>)> {
+) -> SqlResult<(spec::Schema, Vec<(spec::Identifier, spec::Expr)>)> {
     let columns = columns.map(
         |ColumnDefinitionList {
              left: _,
@@ -484,7 +938,7 @@ fn from_ast_table_columns(
             return Err(SqlError::todo("GENERATED ALWAYS AS in CREATE TABLE column"));
         }
         if let Some(default) = default {
-            defaults.push((name.value.clone(), from_ast_expression(default)?));
+            defaults.push((name.value.as_str().into(), from_ast_expression(default)?));
         }
         let field = spec::Field {
             name: name.value,
@@ -743,7 +1197,7 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                     _,
                     IdentList {
                         left: _,
-                        columns,
+                        names,
                         right: _,
                     },
                     sort,
@@ -752,7 +1206,7 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                     _,
                 ) => {
                     let cluster_by = CreateTableClusterBy {
-                        columns: columns.into_items().collect(),
+                        columns: names.into_items().collect(),
                         sort_columns: sort.map(
                             |(
                                 _,
@@ -861,6 +1315,10 @@ fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<St
                     Some(Either::Right(Minus { .. })) => "-",
                     None => "",
                 };
+                let suffix = match suffix {
+                    None => "",
+                    Some(x) => x.as_str(),
+                };
                 format!("{sign}{value}{suffix}")
             }
             PropertyValue::Boolean(BooleanLiteral::True(_)) => "true".to_string(),
@@ -891,23 +1349,25 @@ fn from_ast_property_list(properties: PropertyList) -> SqlResult<Vec<(String, St
         .collect::<SqlResult<Vec<_>>>()
 }
 
-fn from_ast_partition_value_list(
-    values: PartitionValueList,
-) -> SqlResult<Vec<(String, spec::Expr)>> {
-    let PartitionValueList {
-        left: _,
-        values,
-        right: _,
-    } = values;
+fn from_ast_partition(
+    partition: PartitionClause,
+) -> SqlResult<Vec<(spec::Identifier, Option<spec::Expr>)>> {
+    let PartitionClause {
+        partition: _,
+        values:
+            PartitionValueList {
+                left: _,
+                values,
+                right: _,
+            },
+    } = partition;
     values
         .into_items()
-        .map(
-            |PartitionValue {
-                 column,
-                 eq: _,
-                 value,
-             }| Ok((column.value, from_ast_expression(value)?)),
-        )
+        .map(|x| {
+            let PartitionValue { column, value } = x;
+            let expr = value.map(|(_, e)| from_ast_expression(e)).transpose()?;
+            Ok((column.value.into(), expr))
+        })
         .collect::<SqlResult<Vec<_>>>()
 }
 
@@ -931,7 +1391,113 @@ fn from_ast_explain_format(format: Option<ExplainFormat>) -> SqlResult<spec::Exp
     }
 }
 
-// TODO: support table name starting with a number
+fn from_ast_comment_value(value: CommentValue) -> SqlResult<Option<String>> {
+    match value {
+        CommentValue::NotNull(x) => Ok(Some(from_ast_string(x)?)),
+        CommentValue::Null(_) => Ok(None),
+    }
+}
+
+#[derive(Default)]
+struct ColumnAlterationOptions {
+    not_null: bool,
+    default: Option<Expr>,
+    comment: Option<StringLiteral>,
+    position: Option<ColumnPosition>,
+}
+
+impl TryFrom<Vec<ColumnAlterationOption>> for ColumnAlterationOptions {
+    type Error = SqlError;
+
+    fn try_from(value: Vec<ColumnAlterationOption>) -> Result<Self, Self::Error> {
+        let mut output = Self::default();
+        for option in value {
+            match option {
+                ColumnAlterationOption::NotNull(_, _) => {
+                    if output.not_null {
+                        return Err(SqlError::invalid("duplicate NOT NULL clause"));
+                    }
+                    output.not_null = true;
+                }
+                ColumnAlterationOption::Default(_, x) => {
+                    if output.default.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate DEFAULT clause"));
+                    }
+                }
+                ColumnAlterationOption::Comment(_, x) => {
+                    if output.comment.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate COMMENT clause"));
+                    }
+                }
+                ColumnAlterationOption::Position(x) => {
+                    if output.position.replace(x).is_some() {
+                        return Err(SqlError::invalid("duplicate POSITION clause"));
+                    }
+                }
+            }
+        }
+        Ok(output)
+    }
+}
+
+fn from_ast_column_alteration_list(items: ColumnAlterationList) -> SqlResult<()> {
+    // TODO: implement the conversion properly
+    let columns = match items {
+        ColumnAlterationList::Delimited {
+            left: _,
+            columns,
+            right: _,
+        } => columns,
+        ColumnAlterationList::NotDelimited { columns } => columns,
+    };
+    let _ = columns
+        .into_items()
+        .map(|x| {
+            let ColumnAlteration {
+                name: _,
+                data_type: _,
+                options,
+            } = x;
+            let _: ColumnAlterationOptions = options.try_into()?;
+            Ok(())
+        })
+        .collect::<SqlResult<Vec<_>>>()?;
+    Ok(())
+}
+
+fn from_ast_alter_table_operation(
+    operation: AlterTableOperation,
+) -> SqlResult<spec::AlterTableOperation> {
+    // TODO: implement the conversion properly
+    match operation {
+        AlterTableOperation::RenameTable { .. } => {}
+        AlterTableOperation::RenamePartition { .. } => {}
+        AlterTableOperation::AddColumns { items, .. } => {
+            from_ast_column_alteration_list(items)?;
+        }
+        AlterTableOperation::DropColumns { .. } => {}
+        AlterTableOperation::RenameColumn { .. } => {}
+        AlterTableOperation::AlterColumn { .. } => {}
+        AlterTableOperation::ReplaceColumns { items, .. } => {
+            from_ast_column_alteration_list(items)?;
+        }
+        AlterTableOperation::AddPartitions { .. } => {}
+        AlterTableOperation::DropPartition { .. } => {}
+        AlterTableOperation::SetTableProperties { .. } => {}
+        AlterTableOperation::UnsetTableProperties { .. } => {}
+        AlterTableOperation::SetFileFormat { .. } => {}
+        AlterTableOperation::SetLocation { .. } => {}
+        AlterTableOperation::RecoverPartitions { .. } => {}
+    }
+    Ok(spec::AlterTableOperation::Unknown)
+}
+
+fn from_ast_alter_view_operation(
+    _operation: AlterViewOperation,
+) -> SqlResult<spec::AlterViewOperation> {
+    Ok(spec::AlterViewOperation::Unknown)
+}
+
 // TODO: add the following test cases as gold tests:
 //   `CREATE TABLE foo.1m(a INT)`
 //   `CREATE TABLE foo.1m(a INT) USING parquet`

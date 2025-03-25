@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'map_extract' user-defined coercion failed with Internal(\"Expected a Map type, got List(Field { name: \\\"item\\\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })\") No function matches the given name and argument types 'map_extract(List(Field { name: \"item\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tmap_extract(UserDefined)"
+        "success": "ok"
       }
     },
     {
@@ -181,7 +181,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not implemented: function: map_entries"
       }
     },
     {
@@ -208,7 +208,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_from_arrays"
+        "success": "ok"
       }
     },
     {
@@ -363,7 +363,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_element_at"
+        "success": "ok"
       }
     },
     {
@@ -385,7 +385,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_element_at"
+        "success": "ok"
       }
     }
   ]

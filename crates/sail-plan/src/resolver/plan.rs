@@ -4,18 +4,17 @@ use std::sync::Arc;
 use async_recursion::async_recursion;
 use datafusion::arrow::datatypes as adt;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
-use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
-use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
-use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
-use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
-use datafusion::datasource::file_format::{format_as_file_type, FileFormat, FileFormatFactory};
+use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
+use datafusion::datasource::file_format::avro::AvroFormatFactory;
+use datafusion::datasource::file_format::csv::CsvFormatFactory;
+use datafusion::datasource::file_format::json::JsonFormatFactory;
+use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use datafusion::prelude::coalesce;
-use datafusion_common::config::{ConfigFileType, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
@@ -23,7 +22,7 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::expr::{ScalarFunction, Sort};
+use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::utils::{
@@ -32,8 +31,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
-    DmlStatement, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
-    WriteOp,
+    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
 };
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
@@ -91,8 +89,12 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// Resolve query plan.
+    /// The resolved plan may contain hidden fields.
+    /// If the hidden fields cannot be handled,
+    /// [`Self::resolve_query_plan`] should be used instead,
     #[async_recursion]
-    pub(super) async fn resolve_query_plan(
+    pub(super) async fn resolve_query_plan_with_hidden_fields(
         &self,
         plan: spec::QueryPlan,
         state: &mut PlanResolverState,
@@ -154,9 +156,6 @@ impl PlanResolver<'_> {
                     .await?
             }
             QueryNode::Sample(sample) => self.resolve_query_sample(sample, state).await?,
-            QueryNode::Offset { input, offset } => {
-                self.resolve_query_offset(*input, offset, state).await?
-            }
             QueryNode::Deduplicate(deduplicate) => {
                 self.resolve_query_deduplicate(deduplicate, state).await?
             }
@@ -367,6 +366,7 @@ impl PlanResolver<'_> {
                 input,
                 function,
                 arguments,
+                named_arguments,
                 table_alias,
                 column_aliases,
                 outer,
@@ -375,6 +375,7 @@ impl PlanResolver<'_> {
                     input.map(|x| *x),
                     function,
                     arguments,
+                    named_arguments,
                     table_alias,
                     column_aliases,
                     outer,
@@ -386,6 +387,20 @@ impl PlanResolver<'_> {
         self.verify_query_plan(&plan, state)?;
         self.register_schema_with_plan_id(&plan, plan_id, state)?;
         Ok(plan)
+    }
+
+    /// Resolve query plan.
+    /// No hidden fields are kept in the resolved plan.
+    #[async_recursion]
+    pub(super) async fn resolve_query_plan(
+        &self,
+        plan: spec::QueryPlan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let plan = self
+            .resolve_query_plan_with_hidden_fields(plan, state)
+            .await?;
+        self.remove_hidden_fields(plan, state)
     }
 
     pub(super) fn resolve_empty_query_plan(&self) -> PlanResult<LogicalPlan> {
@@ -563,6 +578,9 @@ impl PlanResolver<'_> {
             CommandNode::RegisterTableFunction(function) => {
                 self.resolve_catalog_register_table_function(function, state)
             }
+            CommandNode::RefreshFunction { .. } => {
+                Err(PlanError::todo("CommandNode::RefreshFunction"))
+            }
             CommandNode::CreateView { view, definition } => {
                 self.resolve_catalog_create_view(view, definition, state)
                     .await
@@ -571,13 +589,24 @@ impl PlanResolver<'_> {
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
             }
+            CommandNode::InsertOverwriteDirectory { .. } => {
+                Err(PlanError::todo("CommandNode::InsertOverwriteDirectory"))
+            }
             CommandNode::InsertInto {
                 input,
                 table,
                 columns,
                 partition_spec,
+                replace,
+                if_not_exists,
                 overwrite,
             } => {
+                if replace.is_some() {
+                    return Err(PlanError::todo("INSERT INTO ... REPLACE"));
+                }
+                if if_not_exists {
+                    return Err(PlanError::todo("IF NOT EXISTS for INSERT"));
+                }
                 self.resolve_command_insert_into(
                     *input,
                     table,
@@ -588,22 +617,40 @@ impl PlanResolver<'_> {
                 )
                 .await
             }
+            CommandNode::MergeInto { .. } => Err(PlanError::todo("CommandNode::MergeInto")),
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
-            CommandNode::Update {
-                input,
-                table,
-                table_alias,
-                assignments,
-            } => {
-                self.resolve_command_update(*input, table, table_alias, assignments, state)
-                    .await
-            }
-            CommandNode::Delete { table, condition } => {
-                self.resolve_command_delete(table, condition, state).await
-            }
+            CommandNode::Update { .. } => Err(PlanError::todo("CommandNode::Update")),
+            CommandNode::Delete { .. } => Err(PlanError::todo("CommandNode::Delete")),
             CommandNode::AlterTable { .. } => Err(PlanError::todo("CommandNode::AlterTable")),
+            CommandNode::AlterView { .. } => Err(PlanError::todo("CommandNode::AlterView")),
+            CommandNode::LoadData { .. } => Err(PlanError::todo("CommandNode::LoadData")),
+            CommandNode::AnalyzeTable { .. } => Err(PlanError::todo("CommandNode::AnalyzeTable")),
+            CommandNode::AnalyzeTables { .. } => Err(PlanError::todo("CommandNode::AnalyzeTables")),
+            CommandNode::DescribeQuery { .. } => Err(PlanError::todo("CommandNode::DescribeQuery")),
+            CommandNode::DescribeFunction { .. } => {
+                Err(PlanError::todo("CommandNode::DescribeFunction"))
+            }
+            CommandNode::DescribeCatalog { .. } => {
+                Err(PlanError::todo("CommandNode::DescribeCatalog"))
+            }
+            CommandNode::DescribeDatabase { .. } => {
+                Err(PlanError::todo("CommandNode::DescribeDatabase"))
+            }
+            CommandNode::DescribeTable { .. } => Err(PlanError::todo("CommandNode::DescribeTable")),
+            CommandNode::CommentOnCatalog { .. } => {
+                Err(PlanError::todo("CommandNode::CommentOnCatalog"))
+            }
+            CommandNode::CommentOnDatabase { .. } => {
+                Err(PlanError::todo("CommandNode::CommentOnDatabase"))
+            }
+            CommandNode::CommentOnTable { .. } => {
+                Err(PlanError::todo("CommandNode::CommentOnTable"))
+            }
+            CommandNode::CommentOnColumn { .. } => {
+                Err(PlanError::todo("CommandNode::CommentOnColumn"))
+            }
         }
     }
 
@@ -612,7 +659,18 @@ impl PlanResolver<'_> {
         table: spec::ReadNamedTable,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let spec::ReadNamedTable { name, options } = table;
+        let spec::ReadNamedTable {
+            name,
+            temporal,
+            sample,
+            options,
+        } = table;
+        if temporal.is_some() {
+            return Err(PlanError::todo("read table AS OF clause"));
+        }
+        if sample.is_some() {
+            return Err(PlanError::todo("read table TABLESAMPLE clause"));
+        }
 
         let table_reference = self.resolve_table_reference(&name)?;
         if let Some(cte) = state.get_cte(&table_reference) {
@@ -627,12 +685,14 @@ impl PlanResolver<'_> {
                 view.map(|x| x.as_ref().clone())
             }
             TableReference::Partial { schema, table } => {
-                if schema.as_ref() == self.config.global_temp_database.as_str() {
+                if schema.as_ref() == self.config.global_temp_database {
                     let view = manage_temporary_views(self.ctx, true, |views| {
                         views.get_view(table.as_ref())
                     })?;
                     let view = view.ok_or_else(|| {
-                        PlanError::invalid(format!("global temporary view not found: {table}"))
+                        PlanError::AnalysisError(format!(
+                            "global temporary view not found: {table}"
+                        ))
                     })?;
                     Some(view.as_ref().clone())
                 } else {
@@ -672,28 +732,27 @@ impl PlanResolver<'_> {
         let spec::ReadUdtf {
             name,
             arguments,
+            named_arguments,
             options,
         } = udtf;
         if !options.is_empty() {
             return Err(PlanError::todo("ReadType::UDTF options"));
         }
-        let table_reference = self.resolve_table_reference(&name)?;
-        let function_name = match &table_reference {
-            TableReference::Bare { table } => table.as_ref(),
-            _ => {
-                return Err(PlanError::unsupported(format!(
-                    "qualified table function name: {table_reference}"
-                )))
-            }
+        let Ok(function_name) = <Vec<String>>::from(name).one() else {
+            return Err(PlanError::unsupported("qualified table function name"));
         };
         let canonical_function_name = function_name.to_ascii_lowercase();
         if is_built_in_generator_function(&canonical_function_name) {
-            let expr = spec::Expr::UnresolvedFunction {
-                function_name: function_name.to_string(),
+            let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name: spec::ObjectName::bare(function_name),
                 arguments,
+                named_arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
-            };
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            });
             self.resolve_query_project(None, vec![expr], state).await
         } else {
             let udf = self.ctx.udf(&canonical_function_name).ok();
@@ -714,7 +773,7 @@ impl PlanResolver<'_> {
                         .await?;
                     self.resolve_python_udtf_plan(
                         udtf,
-                        function_name,
+                        &function_name,
                         input,
                         arguments,
                         None,
@@ -762,7 +821,7 @@ impl PlanResolver<'_> {
         let spec::ReadDataSource {
             format,
             schema,
-            options: _,
+            options,
             paths,
             predicates: _,
         } = source;
@@ -770,13 +829,17 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("empty data source paths"));
         }
         let urls = self.resolve_listing_urls(paths).await?;
-        let (format, extension): (Arc<dyn FileFormat>, _) =
-            match format.map(|x| x.to_lowercase()).as_deref() {
-                Some("json") => (Arc::new(JsonFormat::default()), ".json"),
-                Some("csv") => (Arc::new(CsvFormat::default()), ".csv"),
-                Some("parquet") => (Arc::new(ParquetFormat::new()), ".parquet"),
-                Some("arrow") => (Arc::new(ArrowFormat), ".arrow"),
-                Some("avro") => (Arc::new(AvroFormat), ".avro"),
+        let Some(format) = format else {
+            return Err(PlanError::invalid("missing data source format"));
+        };
+        let options = Self::resolve_data_reader_options(&format, options)?;
+        let (format_factory, extension): (Box<dyn FileFormatFactory>, _) =
+            match format.to_lowercase().as_str() {
+                "json" => (Box::new(JsonFormatFactory::new()), ".json"),
+                "csv" => (Box::new(CsvFormatFactory::new()), ".csv"),
+                "parquet" => (Box::new(ParquetFormatFactory::new()), ".parquet"),
+                "arrow" => (Box::new(ArrowFormatFactory::new()), ".arrow"),
+                "avro" => (Box::new(AvroFormatFactory::new()), ".avro"),
                 other => {
                     return Err(PlanError::unsupported(format!(
                         "unsupported data source format: {:?}",
@@ -784,6 +847,7 @@ impl PlanResolver<'_> {
                     )))
                 }
             };
+        let format = format_factory.create(&self.ctx.state(), &options)?;
         let options = ListingOptions::new(format).with_file_extension(extension);
         let schema = self
             .resolve_listing_schema(&urls, &options, schema, state)
@@ -810,7 +874,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = match input {
-            Some(x) => self.resolve_query_plan(x, state).await?,
+            Some(x) => self.resolve_query_plan_with_hidden_fields(x, state).await?,
             None => self.resolve_empty_query_plan()?,
         };
         let schema = input.schema();
@@ -831,7 +895,7 @@ impl PlanResolver<'_> {
             self.rewrite_aggregate(input, expr, vec![], None, false, state)
         } else {
             let expr = self.rewrite_named_expressions(expr, state)?;
-            Ok(LogicalPlan::Projection(plan::Projection::try_new(
+            Ok(LogicalPlan::Projection(Projection::try_new(
                 expr,
                 Arc::new(input),
             )?))
@@ -844,7 +908,9 @@ impl PlanResolver<'_> {
         condition: spec::Expr,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let schema = input.schema();
         let predicate = self.resolve_expression(condition, schema, state).await?;
         let filter = plan::Filter::try_new(predicate, Arc::new(input))?;
@@ -856,111 +922,148 @@ impl PlanResolver<'_> {
         join: spec::Join,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use spec::JoinType;
-
         let spec::Join {
             left,
             right,
-            join_condition,
             join_type,
-            using_columns,
+            join_criteria,
             join_data_type,
         } = join;
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
-        let (join_type, is_cross_join) = match join_type {
-            JoinType::Inner => (plan::JoinType::Inner, false),
-            JoinType::LeftOuter => (plan::JoinType::Left, false),
-            JoinType::RightOuter => (plan::JoinType::Right, false),
-            JoinType::FullOuter => (plan::JoinType::Full, false),
-            JoinType::LeftSemi => (plan::JoinType::LeftSemi, false),
-            JoinType::RightSemi => (plan::JoinType::RightSemi, false),
-            JoinType::LeftAnti => (plan::JoinType::LeftAnti, false),
-            JoinType::RightAnti => (plan::JoinType::RightAnti, false),
-            // use inner join type to build the schema for cross join
-            JoinType::Cross => (plan::JoinType::Inner, true),
+        let join_type = match join_type {
+            spec::JoinType::Inner => Some(JoinType::Inner),
+            spec::JoinType::LeftOuter => Some(JoinType::Left),
+            spec::JoinType::RightOuter => Some(JoinType::Right),
+            spec::JoinType::FullOuter => Some(JoinType::Full),
+            spec::JoinType::LeftSemi => Some(JoinType::LeftSemi),
+            spec::JoinType::RightSemi => Some(JoinType::RightSemi),
+            spec::JoinType::LeftAnti => Some(JoinType::LeftAnti),
+            spec::JoinType::RightAnti => Some(JoinType::RightAnti),
+            spec::JoinType::Cross => None,
         };
 
-        if is_cross_join || (join_condition.is_none() && using_columns.is_empty()) {
-            if join_condition.is_some() {
-                return Err(PlanError::invalid("cross join with join condition"));
+        match (join_type, join_criteria) {
+            (None, Some(_)) => Err(PlanError::invalid("cross join with join criteria")),
+            // When the join criteria are not specified, any join type has the semantics of a cross join.
+            (Some(_), None) | (None, None) => {
+                if join_data_type.is_some() {
+                    return Err(PlanError::invalid("cross join with join data type"));
+                }
+                Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?)
             }
-            if !using_columns.is_empty() {
-                return Err(PlanError::invalid("cross join with using columns"));
+            (Some(join_type), Some(spec::JoinCriteria::On(condition))) => {
+                let join_schema = Arc::new(build_join_schema(
+                    left.schema(),
+                    right.schema(),
+                    &join_type,
+                )?);
+                let condition = self
+                    .resolve_expression(condition, &join_schema, state)
+                    .await?
+                    .unalias_nested()
+                    .data;
+                let plan = LogicalPlanBuilder::from(left)
+                    .join_on(right, join_type, Some(condition))?
+                    .build()?;
+                Ok(plan)
             }
-            if join_data_type.is_some() {
-                return Err(PlanError::invalid("cross join with join data type"));
+            (Some(join_type), Some(spec::JoinCriteria::Natural)) => {
+                let left_names = Self::get_field_names(left.schema(), state)?;
+                let right_names = Self::get_field_names(right.schema(), state)?;
+                let using = left_names
+                    .iter()
+                    .filter(|name| right_names.contains(name))
+                    .map(|x| x.clone().into())
+                    .collect::<Vec<_>>();
+                // We let the column resolver return errors when either plan contains
+                // duplicated columns for the natural join key.
+                let join_columns =
+                    self.resolve_query_join_using_columns(&left, &right, using, state)?;
+                self.resolve_query_join_using(left, right, join_type, join_columns, state)
             }
-            return Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?);
+            (Some(join_type), Some(spec::JoinCriteria::Using(using))) => {
+                let join_columns =
+                    self.resolve_query_join_using_columns(&left, &right, using, state)?;
+                self.resolve_query_join_using(left, right, join_type, join_columns, state)
+            }
         }
-        if join_condition.is_some() && using_columns.is_empty() {
-            let join_schema = Arc::new(build_join_schema(
-                left.schema(),
-                right.schema(),
-                &join_type,
-            )?);
-            let condition = match join_condition {
-                Some(condition) => Some(
-                    self.resolve_expression(condition, &join_schema, state)
-                        .await?
-                        .unalias_nested()
-                        .data,
-                ),
-                None => None,
-            };
-            let plan = LogicalPlanBuilder::from(left)
-                .join_on(right, join_type, condition)?
-                .build()?;
-            Ok(plan)
-        } else if join_condition.is_none() && !using_columns.is_empty() {
-            let join_columns = using_columns
-                .iter()
-                .map(|name| {
-                    let name: &str = name.into();
-                    let left_column = self.resolve_one_column(left.schema(), name, state)?;
-                    let right_column = self.resolve_one_column(right.schema(), name, state)?;
-                    Ok((left_column, right_column))
-                })
-                .collect::<PlanResult<Vec<(_, _)>>>()?;
-            let coalesced = join_columns
-                .iter()
-                .zip(using_columns)
-                .map(|((left, right), name)| {
-                    coalesce(vec![
-                        Expr::Column(left.clone()),
-                        Expr::Column(right.clone()),
-                    ])
-                    .alias(state.register_field_name(name))
-                })
-                .collect::<Vec<_>>();
-            let (left_columns, right_columns) =
-                join_columns.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
+    }
 
-            let plan = LogicalPlanBuilder::from(left)
-                .join_detailed(
-                    right,
-                    join_type,
-                    (left_columns.clone(), right_columns.clone()),
-                    None,
-                    false,
-                )?
-                .build()?;
-            let projections = coalesced.into_iter().chain(
-                plan.schema()
+    fn resolve_query_join_using_columns(
+        &self,
+        left: &LogicalPlan,
+        right: &LogicalPlan,
+        using: Vec<spec::Identifier>,
+        state: &PlanResolverState,
+    ) -> PlanResult<Vec<(String, (Column, Column))>> {
+        using
+            .into_iter()
+            .map(|name| {
+                let left_column = self.resolve_one_column(left.schema(), name.as_ref(), state)?;
+                let right_column = self.resolve_one_column(right.schema(), name.as_ref(), state)?;
+                Ok((name.into(), (left_column, right_column)))
+            })
+            .collect()
+    }
+
+    fn resolve_query_join_using(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+        join_type: JoinType,
+        join_columns: Vec<(String, (Column, Column))>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let (left_columns, right_columns) = join_columns
+            .iter()
+            .map(|(_, (left, right))| (left.clone(), right.clone()))
+            .unzip::<_, _, Vec<_>, Vec<_>>();
+
+        let builder = LogicalPlanBuilder::from(left).join_detailed(
+            right,
+            join_type,
+            (left_columns.clone(), right_columns.clone()),
+            None,
+            false,
+        )?;
+        let builder = match join_type {
+            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                let columns = builder
+                    .schema()
                     .columns()
                     .into_iter()
-                    .filter(|col| !left_columns.contains(col) && !right_columns.contains(col))
-                    .map(Expr::Column),
-            );
-            let plan = LogicalPlanBuilder::from(plan)
-                .project(projections)?
-                .build()?;
-            Ok(plan)
-        } else {
-            return Err(PlanError::invalid(
-                "expecting either join condition or using columns",
-            ));
-        }
+                    .map(|col| {
+                        if left_columns.iter().any(|x| x.name == col.name)
+                            || right_columns.iter().any(|x| x.name == col.name)
+                        {
+                            let info = state.get_field_info(col.name())?.clone();
+                            let field_id = state.register_hidden_field_name(info.name());
+                            for plan_id in info.plan_ids() {
+                                state.register_plan_id_for_field(&field_id, plan_id)?;
+                            }
+                            Ok(Expr::Column(col).alias(field_id))
+                        } else {
+                            Ok(Expr::Column(col))
+                        }
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                let projections = join_columns
+                    .into_iter()
+                    .map(|(name, (left, right))| {
+                        coalesce(vec![Expr::Column(left), Expr::Column(right)])
+                            .alias(state.register_field_name(name))
+                    })
+                    .chain(columns);
+                builder.project(projections)?
+            }
+            JoinType::LeftSemi
+            | JoinType::RightSemi
+            | JoinType::LeftAnti
+            | JoinType::RightAnti
+            | JoinType::LeftMark => builder,
+        };
+        Ok(builder.build()?)
     }
 
     async fn resolve_query_set_operation(
@@ -1054,20 +1157,12 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
-                let (left, right) = (Arc::new(left), Arc::new(right));
-                let union_schema = left.schema().clone();
                 if is_all {
-                    Ok(LogicalPlan::Union(plan::Union {
-                        inputs: vec![left, right],
-                        schema: union_schema,
-                    }))
+                    Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
                 } else {
-                    Ok(LogicalPlan::Distinct(plan::Distinct::All(Arc::new(
-                        LogicalPlan::Union(plan::Union {
-                            inputs: vec![left, right],
-                            schema: union_schema,
-                        }),
-                    ))))
+                    Ok(LogicalPlanBuilder::new(left)
+                        .union_distinct(right)?
+                        .build()?)
                 }
             }
             SetOpType::Except => Ok(LogicalPlanBuilder::except(left, right, is_all)?),
@@ -1081,7 +1176,9 @@ impl PlanResolver<'_> {
         is_global: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let sorts = self
             .resolve_query_sort_orders_by_plan(&input, &order, state)
             .await?;
@@ -1189,10 +1286,7 @@ impl PlanResolver<'_> {
                     sorts.push(sort_expr);
                 }
                 if sorts.len() != 1 {
-                    Err(PlanError::invalid(format!(
-                        "Expected one sort expression, found: {}. Sorts: {sorts:?}",
-                        sorts.len()
-                    )))
+                    Err(PlanError::invalid(format!("sort expression: {sort:?}",)))
                 } else {
                     Ok(sorts.one()?)
                 }
@@ -1203,14 +1297,29 @@ impl PlanResolver<'_> {
     async fn resolve_query_limit(
         &self,
         input: spec::QueryPlan,
-        skip: usize,
-        limit: usize,
+        skip: Option<spec::Expr>,
+        limit: Option<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let skip = if let Some(skip) = skip {
+            Some(self.resolve_expression(skip, input.schema(), state).await?)
+        } else {
+            None
+        };
+        let limit = if let Some(limit) = limit {
+            Some(
+                self.resolve_expression(limit, input.schema(), state)
+                    .await?,
+            )
+        } else {
+            None
+        };
         Ok(LogicalPlan::Limit(plan::Limit {
-            skip: Some(Box::new(lit(skip as i64))),
-            fetch: Some(Box::new(lit(limit as i64))),
+            skip: skip.map(Box::new),
+            fetch: limit.map(Box::new),
             input: Arc::new(input),
         }))
     }
@@ -1228,7 +1337,9 @@ impl PlanResolver<'_> {
             with_grouping_expressions,
         } = aggregate;
 
-        let input = self.resolve_query_plan(*input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(*input, state)
+            .await?;
         let schema = input.schema();
         let projections = self
             .resolve_named_expressions(projections, schema, state)
@@ -1258,7 +1369,9 @@ impl PlanResolver<'_> {
         named: Vec<(String, spec::Literal)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let input = if !positional.is_empty() {
             let params = positional
                 .into_iter()
@@ -1326,20 +1439,6 @@ impl PlanResolver<'_> {
         Err(PlanError::todo("sample"))
     }
 
-    async fn resolve_query_offset(
-        &self,
-        input: spec::QueryPlan,
-        offset: usize,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
-        Ok(LogicalPlan::Limit(plan::Limit {
-            skip: Some(Box::new(lit(offset as i64))),
-            fetch: None,
-            input: Arc::new(input),
-        }))
-    }
-
     async fn resolve_query_deduplicate(
         &self,
         deduplicate: spec::Deduplicate,
@@ -1351,21 +1450,17 @@ impl PlanResolver<'_> {
             all_columns_as_keys,
             within_watermark,
         } = deduplicate;
-        let input = self.resolve_query_plan(*input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(*input, state)
+            .await?;
         let schema = input.schema();
         if within_watermark {
             return Err(PlanError::todo("deduplicate within watermark"));
         }
         if !column_names.is_empty() && !all_columns_as_keys {
-            let column_names: Vec<String> = column_names.into_iter().map(|x| x.into()).collect();
-            let on_expr: Vec<Expr> = schema
-                .columns()
+            let on_expr: Vec<Expr> = self
+                .resolve_columns(schema, &column_names, state)?
                 .into_iter()
-                .filter(|column| {
-                    state
-                        .get_field_info(column.name())
-                        .is_ok_and(|info| column_names.iter().any(|c| info.matches(c, None)))
-                })
                 .map(Expr::Column)
                 .collect();
             let select_expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();
@@ -1414,9 +1509,12 @@ impl PlanResolver<'_> {
         qualifier: Vec<spec::Identifier>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
-            Arc::new(self.resolve_query_plan(input, state).await?),
-            self.resolve_table_reference(&spec::ObjectName::new_qualified(alias, qualifier))?,
+            Arc::new(input),
+            self.resolve_table_reference(&spec::ObjectName::from(qualifier).child(alias))?,
         )?))
     }
 
@@ -1426,7 +1524,9 @@ impl PlanResolver<'_> {
         num_partitions: usize,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         // TODO: handle shuffle partition
         Ok(LogicalPlan::Repartition(plan::Repartition {
             input: Arc::new(input),
@@ -1456,7 +1556,7 @@ impl PlanResolver<'_> {
             .map(|(col, name)| NamedExpr::new(vec![name.into()], Expr::Column(col)))
             .collect();
         let expr = self.rewrite_named_expressions(expr, state)?;
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
         )?))
@@ -1486,7 +1586,7 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         let expr = self.rewrite_named_expressions(expr, state)?;
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
         )?))
@@ -1534,7 +1634,7 @@ impl PlanResolver<'_> {
             .filter(|column| !excluded.contains(column))
             .map(Expr::Column)
             .collect();
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
         )?))
@@ -1543,7 +1643,7 @@ impl PlanResolver<'_> {
     async fn resolve_query_tail(
         &self,
         _input: spec::QueryPlan,
-        _limit: usize,
+        _limit: spec::Expr,
         _state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         Err(PlanError::todo("tail"))
@@ -1614,7 +1714,7 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
         )?))
@@ -1675,7 +1775,7 @@ impl PlanResolver<'_> {
             projected_exprs.push(expr);
         }
         let projected_plan =
-            LogicalPlan::Projection(plan::Projection::try_new(projected_exprs, Arc::new(input))?);
+            LogicalPlan::Projection(Projection::try_new(projected_exprs, Arc::new(input))?);
         Ok(projected_plan)
     }
 
@@ -1686,7 +1786,9 @@ impl PlanResolver<'_> {
         num_partitions: Option<usize>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let schema = input.schema();
         let expr = self
             .resolve_expressions(partition_expressions, schema, state)
@@ -1715,6 +1817,7 @@ impl PlanResolver<'_> {
             arguments,
             function,
         } = function;
+        let function_name: String = function_name.into();
         let input = self
             .resolve_query_project(Some(input), arguments, state)
             .await?;
@@ -1839,6 +1942,7 @@ impl PlanResolver<'_> {
             arguments,
             function,
         } = function;
+        let function_name: String = function_name.into();
         let function = self.resolve_python_udf(function, state)?;
         let output_fields = match function.output_type {
             adt::DataType::Struct(fields) => fields,
@@ -1891,11 +1995,13 @@ impl PlanResolver<'_> {
         );
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
             func: Arc::new(AggregateUDF::from(udaf)),
-            args,
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         });
         let output_name = agg.name_for_alias()?;
         let output_col = Column::new_unqualified(&output_name);
@@ -1973,6 +2079,7 @@ impl PlanResolver<'_> {
             arguments: _, // no arguments are passed for co-group map
             function,
         } = function;
+        let function_name: String = function_name.into();
         let function = self.resolve_python_udf(function, state)?;
         let output_fields = match function.output_type {
             adt::DataType::Struct(fields) => fields,
@@ -2073,11 +2180,13 @@ impl PlanResolver<'_> {
         let udaf = PySparkBatchCollectorUDF::new(input_types.clone(), input_names.clone());
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
             func: Arc::new(AggregateUDF::from(udaf)),
-            args,
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args,
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         });
         let agg_name = agg.name_for_alias()?;
         let agg_alias = state.register_field_name(&agg_name);
@@ -2141,7 +2250,7 @@ impl PlanResolver<'_> {
             .enumerate()
             .map(|(i, col)| Expr::Column(col).alias(state.register_field_name(format!("col{i}"))))
             .collect::<Vec<_>>();
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(plan),
         )?))
@@ -2172,7 +2281,7 @@ impl PlanResolver<'_> {
                 .zip(columns.into_iter())
                 .map(|(col, name)| Expr::Column(col.clone()).alias(state.register_field_name(name)))
                 .collect();
-            LogicalPlan::Projection(plan::Projection::try_new(expr, Arc::new(input))?)
+            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?)
         };
         Ok(LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
             Arc::new(input),
@@ -2201,8 +2310,7 @@ impl PlanResolver<'_> {
         let mut scope = state.enter_cte_scope();
         let state = scope.state();
         for (name, query) in ctes.into_iter() {
-            let reference =
-                self.resolve_table_reference(&spec::ObjectName::new_unqualified(name.clone()))?;
+            let reference = self.resolve_table_reference(&spec::ObjectName::bare(name.clone()))?;
             let plan = if recursive {
                 self.resolve_recursive_query_plan(query, state).await?
             } else {
@@ -2217,11 +2325,13 @@ impl PlanResolver<'_> {
         self.resolve_query_plan(input, state).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn resolve_query_lateral_view(
         &self,
         input: Option<spec::QueryPlan>,
         function: spec::ObjectName,
         arguments: Vec<spec::Expr>,
+        named_arguments: Vec<(spec::Identifier, spec::Expr)>,
         table_alias: Option<spec::ObjectName>,
         column_aliases: Option<Vec<spec::Identifier>>,
         outer: bool,
@@ -2285,12 +2395,16 @@ impl PlanResolver<'_> {
         } else {
             function_name
         };
-        let expression = spec::Expr::UnresolvedFunction {
-            function_name,
+        let expression = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+            function_name: spec::ObjectName::bare(function_name),
             arguments,
+            named_arguments,
             is_distinct: false,
             is_user_defined_function: false,
-        };
+            ignore_nulls: None,
+            filter: None,
+            order_by: None,
+        });
         let expression = if let Some(aliases) = column_aliases {
             spec::Expr::Alias {
                 expr: Box::new(expression),
@@ -2324,7 +2438,7 @@ impl PlanResolver<'_> {
             .map(Expr::Column)
             .chain(expr.into_iter())
             .collect::<Vec<_>>();
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             projections,
             Arc::new(input),
         )?))
@@ -2344,6 +2458,7 @@ impl PlanResolver<'_> {
             arguments,
             function,
         } = udtf;
+        let function_name: String = function_name.into();
         let function = self.resolve_python_udtf(function, state)?;
         let input = self.resolve_empty_query_plan()?;
         let arguments = self
@@ -2434,6 +2549,7 @@ impl PlanResolver<'_> {
         let schema = schema.to_dfschema_ref()?;
         Ok(LogicalPlan::Explain(plan::Explain {
             verbose: matches!(mode, spec::ExplainMode::Verbose),
+            explain_format: ExplainFormat::Indent,
             plan: Arc::new(input),
             stringified_plans,
             schema,
@@ -2469,12 +2585,9 @@ impl PlanResolver<'_> {
         if bucket_by.is_some() {
             return Err(PlanError::unsupported("bucketing"));
         }
-        let options: HashMap<_, _> = options.into_iter().collect();
         let partitioning_columns: Vec<String> =
             partitioning_columns.into_iter().map(String::from).collect();
 
-        let mut table_options =
-            TableOptions::default_from_session_config(self.ctx.state().config_options());
         let plan = self.resolve_query_plan(*input, state).await?;
         let fields = Self::get_field_names(plan.schema(), state)?;
         let plan = rename_logical_plan(plan, &fields)?;
@@ -2486,34 +2599,17 @@ impl PlanResolver<'_> {
                 } else {
                     format!("{}{}", path, object_store::path::DELIMITER)
                 };
-                let source = source.ok_or_else(|| PlanError::invalid("missing source"))?;
-                // FIXME: option compatibility
+                let Some(source) = source else {
+                    return Err(PlanError::invalid("missing source"));
+                };
+                let options = Self::resolve_data_writer_options(&source, options)?;
                 let format_factory: Arc<dyn FileFormatFactory> = match source.as_str() {
-                    "json" => {
-                        table_options.set_config_format(ConfigFileType::JSON);
-                        table_options.alter_with_string_hash_map(&options)?;
-                        Arc::new(JsonFormatFactory::new_with_options(table_options.json))
-                    }
-                    "parquet" => {
-                        table_options.set_config_format(ConfigFileType::PARQUET);
-                        table_options.alter_with_string_hash_map(&options)?;
-                        Arc::new(ParquetFormatFactory::new_with_options(
-                            table_options.parquet,
-                        ))
-                    }
-                    "csv" => {
-                        table_options.set_config_format(ConfigFileType::CSV);
-                        table_options.alter_with_string_hash_map(&options)?;
-                        Arc::new(CsvFormatFactory::new_with_options(table_options.csv))
-                    }
+                    "json" => Arc::new(JsonFormatFactory::new()),
+                    "parquet" => Arc::new(ParquetFormatFactory::new()),
+                    "csv" => Arc::new(CsvFormatFactory::new()),
                     "arrow" => Arc::new(ArrowFormatFactory::new()),
                     "avro" => Arc::new(AvroFormatFactory::new()),
-                    _ => {
-                        return Err(PlanError::invalid(format!(
-                            "unsupported source: {}",
-                            source
-                        )))
-                    }
+                    _ => return Err(PlanError::invalid(format!("unsupported source: {source}"))),
                 };
                 LogicalPlanBuilder::copy_to(
                     plan,
@@ -2557,7 +2653,7 @@ impl PlanResolver<'_> {
                         LogicalPlanBuilder::insert_into(
                             plan,
                             table_ref,
-                            &table_provider.schema(),
+                            provider_as_source(table_provider),
                             insert_op,
                         )?
                         .build()?
@@ -2604,8 +2700,8 @@ impl PlanResolver<'_> {
 
         let (schema, query_logical_plan) = if let Some(query) = query {
             // FIXME: Query plan has cols renamed to #1, #2, etc. So I think there's more work here.
-            let logical_plan = self.resolve_query_plan(*query, state).await?;
-            (logical_plan.schema().clone(), Some(logical_plan))
+            let plan = self.resolve_query_plan(*query, state).await?;
+            (plan.schema().clone(), Some(plan))
         } else {
             let fields = self.resolve_fields(&schema.fields, state)?;
             let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
@@ -2614,10 +2710,9 @@ impl PlanResolver<'_> {
 
         let column_defaults: Vec<(String, Expr)> = async {
             let mut results: Vec<(String, Expr)> = Vec::with_capacity(column_defaults.len());
-            for column_default in column_defaults {
-                let (name, expr) = column_default;
+            for (name, expr) in column_defaults {
                 let expr = self.resolve_expression(expr, &schema, state).await?;
-                results.push((name, expr));
+                results.push((name.into(), expr));
             }
             Ok(results) as PlanResult<_>
         }
@@ -2669,40 +2764,19 @@ impl PlanResolver<'_> {
             Ok(results) as PlanResult<_>
         }
         .await?;
-        let options: Vec<(String, String)> = options
-            .into_iter()
-            .map(|(k, v)| Ok((k, v)))
-            .collect::<PlanResult<Vec<(String, String)>>>()?;
 
         let copy_to_plan = if let Some(query_logical_plan) = query_logical_plan {
-            let mut table_options =
-                TableOptions::default_from_session_config(self.ctx.state().config_options());
-            let options_map = options.clone().into_iter().collect();
+            let options = Self::resolve_data_writer_options(&file_format, options.clone())?;
             let format_factory: Arc<dyn FileFormatFactory> =
                 match file_format.to_lowercase().as_str() {
-                    "json" => {
-                        table_options.set_config_format(ConfigFileType::JSON);
-                        table_options.alter_with_string_hash_map(&options_map)?;
-                        Arc::new(JsonFormatFactory::new_with_options(table_options.json))
-                    }
-                    "parquet" => {
-                        table_options.set_config_format(ConfigFileType::PARQUET);
-                        table_options.alter_with_string_hash_map(&options_map)?;
-                        Arc::new(ParquetFormatFactory::new_with_options(
-                            table_options.parquet,
-                        ))
-                    }
-                    "csv" => {
-                        table_options.set_config_format(ConfigFileType::CSV);
-                        table_options.alter_with_string_hash_map(&options_map)?;
-                        Arc::new(CsvFormatFactory::new_with_options(table_options.csv))
-                    }
+                    "json" => Arc::new(JsonFormatFactory::new()),
+                    "parquet" => Arc::new(ParquetFormatFactory::new()),
+                    "csv" => Arc::new(CsvFormatFactory::new()),
                     "arrow" => Arc::new(ArrowFormatFactory::new()),
                     "avro" => Arc::new(AvroFormatFactory::new()),
                     _ => {
                         return Err(PlanError::invalid(format!(
-                            "unsupported file_format: {}",
-                            file_format
+                            "unsupported file format: {file_format}",
                         )))
                     }
                 };
@@ -2711,7 +2785,7 @@ impl PlanResolver<'_> {
                     query_logical_plan,
                     location.clone(),
                     format_as_file_type(format_factory),
-                    options_map,
+                    options,
                     table_partition_cols.clone(),
                 )?
                 .build()?,
@@ -2762,11 +2836,13 @@ impl PlanResolver<'_> {
         self.resolve_catalog_command(command)
     }
 
-    fn resolve_view_name(view: spec::ObjectName) -> PlanResult<String> {
-        let names: Vec<String> = view.into();
-        names
-            .one()
-            .map_err(|_| PlanError::invalid("multi-part view name"))
+    fn resolve_view_name(view: TableReference) -> PlanResult<String> {
+        match view {
+            TableReference::Bare { table } => Ok(table.as_ref().to_string()),
+            TableReference::Partial { .. } | TableReference::Full { .. } => {
+                Err(PlanError::invalid("qualified view name"))
+            }
+        }
     }
 
     async fn resolve_catalog_drop_view(
@@ -2777,37 +2853,32 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         use spec::ViewKind;
 
-        let kind = match kind {
-            None => {
-                let view = self.resolve_table_reference(&view)?;
-                match view {
-                    TableReference::Bare { table } => {
-                        let temporary = manage_temporary_views(self.ctx, false, |views| {
-                            Ok(views.get_view(&table)?.is_some())
-                        })?;
-                        if temporary {
-                            ViewKind::Temporary
-                        } else {
-                            ViewKind::Default
-                        }
+        let view = self.resolve_table_reference(&view)?;
+        let (kind, view) = match kind {
+            None => match view {
+                TableReference::Bare { ref table } => {
+                    let temporary = manage_temporary_views(self.ctx, false, |views| {
+                        Ok(views.get_view(table)?.is_some())
+                    })?;
+                    if temporary {
+                        (ViewKind::Temporary, view)
+                    } else {
+                        (ViewKind::Default, view)
                     }
-                    TableReference::Partial { schema, .. } => {
-                        if schema.as_ref() == self.config.global_temp_database.as_str() {
-                            ViewKind::GlobalTemporary
-                        } else {
-                            ViewKind::Default
-                        }
-                    }
-                    TableReference::Full { .. } => ViewKind::Default,
                 }
-            }
-            Some(x) => x,
+                TableReference::Partial { schema, table } => {
+                    if schema.as_ref() == self.config.global_temp_database {
+                        (ViewKind::GlobalTemporary, TableReference::bare(table))
+                    } else {
+                        (ViewKind::Default, TableReference::partial(schema, table))
+                    }
+                }
+                TableReference::Full { .. } => (ViewKind::Default, view),
+            },
+            Some(x) => (x, view),
         };
         let command = match kind {
-            ViewKind::Default => CatalogCommand::DropView {
-                view: self.resolve_table_reference(&view)?,
-                if_exists,
-            },
+            ViewKind::Default => CatalogCommand::DropView { view, if_exists },
             ViewKind::Temporary => CatalogCommand::DropTemporaryView {
                 view_name: Self::resolve_view_name(view)?,
                 is_global: false,
@@ -2847,10 +2918,11 @@ impl PlanResolver<'_> {
             None => Self::get_field_names(input.schema(), state)?,
         };
         let input = rename_logical_plan(input, &fields)?;
+        let view = self.resolve_table_reference(&view)?;
         let command = match kind {
             ViewKind::Default => CatalogCommand::CreateView {
                 input: Arc::new(input),
-                view: self.resolve_table_reference(&view)?,
+                view,
                 replace,
                 definition,
             },
@@ -2887,6 +2959,7 @@ impl PlanResolver<'_> {
             function,
         } = function;
 
+        let function_name: String = function_name.into();
         let function_name = function_name.to_ascii_lowercase();
         let function = self.resolve_python_udf(function, state)?;
         let udf = PySparkUnresolvedUDF::new(
@@ -2918,6 +2991,7 @@ impl PlanResolver<'_> {
             arguments: _,
             function,
         } = function;
+        let function_name: String = function_name.into();
         let function_name = function_name.to_ascii_lowercase();
         let function = self.resolve_python_udtf(function, state)?;
         let udtf = PySparkUnresolvedUDF::new(
@@ -2941,7 +3015,7 @@ impl PlanResolver<'_> {
         input: spec::QueryPlan,
         table: spec::ObjectName,
         columns: Vec<spec::Identifier>,
-        partition_spec: Vec<(String, spec::Expr)>,
+        partition_spec: Vec<(spec::Identifier, Option<spec::Expr>)>,
         overwrite: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
@@ -2994,108 +3068,9 @@ impl PlanResolver<'_> {
             false => InsertOp::Append,
         };
         let plan =
-            LogicalPlanBuilder::insert_into(input, table_reference, schema.as_ref(), insert_op)?
+            LogicalPlanBuilder::insert_into(input, table_reference, table_source, insert_op)?
                 .build()?;
         Ok(plan)
-    }
-
-    async fn resolve_command_update(
-        &self,
-        input: spec::QueryPlan,
-        table: spec::ObjectName,
-        _table_alias: Option<spec::Identifier>, // We don't need table alias, leaving it here in case we need it in the future.
-        assignments: Vec<(spec::ObjectName, spec::Expr)>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        // TODO:
-        //  1. Implement `ExecutionPlan` for `WriteOp::Update`.
-        //  2. Support UPDATE using Column values.
-        let input = self.resolve_query_plan(input, state).await?;
-        let table_reference = self.resolve_table_reference(&table)?;
-        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
-        let table_schema = table_provider.schema();
-        let fields = table_schema
-            .fields
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>();
-        let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
-            table_reference.clone(),
-            &table_schema,
-        )?);
-
-        let mut assignments_map: HashMap<String, Expr> = HashMap::with_capacity(assignments.len());
-        for (column, expr) in assignments {
-            let expr = self.resolve_expression(expr, &table_schema, state).await?;
-            let column_parts: Vec<String> = column.into();
-            let column = column_parts
-                .last()
-                .ok_or_else(|| PlanError::invalid("Expected at least one column in assignment"))?;
-            assignments_map.insert(column.into(), expr);
-        }
-
-        let exprs: Vec<Expr> = table_schema
-            .iter()
-            .map(|(_qualifier, field)| {
-                let expr = match assignments_map.remove(field.name()) {
-                    Some(mut expr) => {
-                        if let Expr::Placeholder(placeholder) = &mut expr {
-                            placeholder.data_type = placeholder
-                                .data_type
-                                .take()
-                                .or_else(|| Some(field.data_type().clone()));
-                        }
-                        expr.cast_to(field.data_type(), &input.schema())?
-                    }
-                    None => Expr::Column(Column::from_name(field.name())),
-                };
-                Ok(expr.alias(field.name()))
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
-
-        Ok(LogicalPlan::Dml(DmlStatement::new(
-            table_reference,
-            table_schema,
-            WriteOp::Update,
-            Arc::new(project(rename_logical_plan(input, &fields)?, exprs)?),
-        )))
-    }
-
-    async fn resolve_command_delete(
-        &self,
-        table: spec::ObjectName,
-        condition: Option<spec::Expr>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        // TODO:
-        //  1. Implement `ExecutionPlan` for `WriteOp::Delete`.
-        //  2. Filter condition not working (unable to resolve column name).
-        let table_reference = self.resolve_table_reference(&table)?;
-        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
-        let table_schema = Arc::new(DFSchema::try_from_qualified_schema(
-            table_reference.clone(),
-            &table_provider.schema(),
-        )?);
-        let table_source = provider_as_source(table_provider);
-
-        let input =
-            LogicalPlanBuilder::scan(table_reference.clone(), table_source, None)?.build()?;
-        let input = match condition {
-            Some(condition) => {
-                let condition = self
-                    .resolve_expression(condition, input.schema(), state)
-                    .await?;
-                LogicalPlan::Filter(plan::Filter::try_new(condition, Arc::new(input))?)
-            }
-            None => input,
-        };
-
-        Ok(LogicalPlan::Dml(DmlStatement::new(
-            table_reference,
-            table_schema,
-            WriteOp::Delete,
-            Arc::new(input),
-        )))
     }
 
     async fn resolve_query_fill_na(
@@ -3173,7 +3148,7 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
 
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             self.rewrite_named_expressions(fill_na_exprs, state)?,
             Arc::new(input),
         )?))
@@ -3299,7 +3274,7 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
 
-        Ok(LogicalPlan::Projection(plan::Projection::try_new(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             self.rewrite_named_expressions(replace_exprs, state)?,
             Arc::new(input),
         )?))
@@ -3320,6 +3295,31 @@ impl PlanResolver<'_> {
         let statement = plan::Statement::SetVariable(plan::SetVariable { variable, value });
 
         Ok(LogicalPlan::Statement(statement))
+    }
+
+    fn remove_hidden_fields(
+        &self,
+        plan: LogicalPlan,
+        state: &PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let mut columns = vec![];
+        let mut has_hidden_columns = false;
+        for column in plan.schema().columns() {
+            let info = state.get_field_info(column.name())?;
+            if info.is_hidden() {
+                has_hidden_columns = true;
+            } else {
+                columns.push(column);
+            }
+        }
+        if has_hidden_columns {
+            let plan = LogicalPlanBuilder::new(plan)
+                .project(columns.into_iter().map(Expr::Column))?
+                .build()?;
+            Ok(plan)
+        } else {
+            Ok(plan)
+        }
     }
 
     /// All resolved plans must have "resolved columns".
@@ -3403,22 +3403,24 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(input, state).await?;
         let covar_samp = Expr::AggregateFunction(expr::AggregateFunction {
             func: datafusion::functions_aggregate::covariance::covar_samp_udaf(),
-            args: vec![
-                Expr::Column(self.resolve_one_column(
-                    input.schema(),
-                    (&left_column).into(),
-                    state,
-                )?),
-                Expr::Column(self.resolve_one_column(
-                    input.schema(),
-                    (&right_column).into(),
-                    state,
-                )?),
-            ],
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args: vec![
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        left_column.as_ref(),
+                        state,
+                    )?),
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        right_column.as_ref(),
+                        state,
+                    )?),
+                ],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         })
         .alias(state.register_field_name("cov"));
         Ok(LogicalPlanBuilder::from(input)
@@ -3442,22 +3444,24 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(input, state).await?;
         let corr = Expr::AggregateFunction(expr::AggregateFunction {
             func: datafusion::functions_aggregate::correlation::corr_udaf(),
-            args: vec![
-                Expr::Column(self.resolve_one_column(
-                    input.schema(),
-                    (&left_column).into(),
-                    state,
-                )?),
-                Expr::Column(self.resolve_one_column(
-                    input.schema(),
-                    (&right_column).into(),
-                    state,
-                )?),
-            ],
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args: vec![
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        left_column.as_ref(),
+                        state,
+                    )?),
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        right_column.as_ref(),
+                        state,
+                    )?),
+                ],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         })
         .alias(state.register_field_name("corr"));
         Ok(LogicalPlanBuilder::from(input)
@@ -3571,6 +3575,22 @@ impl PlanResolver<'_> {
         expr: Vec<NamedExpr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
+        fn to_named_expr(expr: Expr, state: &PlanResolverState) -> PlanResult<Option<NamedExpr>> {
+            let Expr::Column(column) = expr else {
+                return Err(PlanError::invalid(
+                    "column expected for expanded wildcard expression",
+                ));
+            };
+            let info = state.get_field_info(column.name())?;
+            if info.is_hidden() {
+                return Ok(None);
+            }
+            Ok(Some(NamedExpr::new(
+                vec![info.name().to_string()],
+                Expr::Column(column),
+            )))
+        }
+
         let schema = input.schema();
         let mut projected = vec![];
         for e in expr {
@@ -3579,21 +3599,24 @@ impl PlanResolver<'_> {
                 expr,
                 metadata,
             } = e;
+            // FIXME: wildcard options do not take into account opaque field IDs
             match expr {
+                #[allow(deprecated)]
                 Expr::Wildcard {
                     qualifier: None,
                     options,
                 } => {
                     for e in expand_wildcard(schema, &input, Some(&options))? {
-                        projected.push(NamedExpr::try_from_column_expr(e, state)?)
+                        projected.extend(to_named_expr(e, state)?)
                     }
                 }
+                #[allow(deprecated)]
                 Expr::Wildcard {
                     qualifier: Some(qualifier),
                     options,
                 } => {
                     for e in expand_qualified_wildcard(&qualifier, schema, Some(&options))? {
-                        projected.push(NamedExpr::try_from_column_expr(e, state)?)
+                        projected.extend(to_named_expr(e, state)?)
                     }
                 }
                 _ => projected.push(NamedExpr {
