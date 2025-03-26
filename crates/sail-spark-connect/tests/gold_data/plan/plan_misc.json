@@ -508,70 +508,70 @@
       "input": "from (from a union all from b) c select *",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'union'.(line 1, pos 13)\n\n== SQL ==\nfrom (from a union all from b) c select *\n-------------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {
       "input": "from a",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 6)\n\n== SQL ==\nfrom a\n------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {
       "input": "from a insert into tbl1 select * insert into tbl2 select * where s < 10",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {
       "input": "from a select * from b",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 16)\n\n== SQL ==\nfrom a select * from b\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {
       "input": "from a select * select * from x where a.s < 10",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 25)\n\n== SQL ==\nfrom a select * select * from x where a.s < 10\n-------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {
       "input": "from a select * select * where s < 10",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {
       "input": "from a select b, c",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {
       "input": "from a select distinct b, c",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {
       "input": "from db.a select b, c where d < 1",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {
       "input": "from t insert into s select * limit 1 insert into u select * where x > 5",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {
       "input": "from t1\nlateral view explode(x) expl as x\ninsert into t2\nselect *\nlateral view json_tuple(x, y) jtup q, z\ninsert into t3\nselect *\nwhere s < 10\n      ",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 0:4 expected something else"
       }
     },
     {

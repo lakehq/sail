@@ -87,7 +87,15 @@ where
             RichReason::ExpectedFound { expected, found } => {
                 write!(f, "found ")?;
                 match found {
-                    None => write!(f, "end of input")?,
+                    None if span.is_empty() => {
+                        write!(f, "end of input")?;
+                    }
+                    // It is unclear why the found token can be `None` when
+                    // the span is not empty. But we take care of this case here.
+                    None => {
+                        write!(f, "something")?;
+                        write_span(f, &span)?;
+                    }
                     Some(x) => {
                         write!(f, "{}", **x)?;
                         write_span(f, &span)?;
