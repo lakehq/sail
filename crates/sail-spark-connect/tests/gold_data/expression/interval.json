@@ -6039,7 +6039,7 @@
       "input": "interval '10' month to second",
       "exception": "\nIntervals FROM month TO second are not supported.(line 1, pos 9)\n\n== SQL ==\ninterval '10' month to second\n---------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 23:29 expected something else"
       }
     },
     {
@@ -7199,7 +7199,7 @@
       "input": "interval 10 nanoseconds",
       "exception": "\nError parsing ' 10 nanoseconds' to interval, invalid unit 'nanoseconds'.(line 1, pos 9)\n\n== SQL ==\ninterval 10 nanoseconds\n---------^^^\n",
       "output": {
-        "failure": "invalid argument: found end of input expected something else"
+        "failure": "invalid argument: found something at 12:23 expected something else"
       }
     },
     {
