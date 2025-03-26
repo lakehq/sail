@@ -25,11 +25,18 @@ sail spark mcp-server
 The steps above can be inconvenient if you are only making changes to the MCP server Python script.
 In these steps, the Python script is embedded in the Sail binary. Changing the Python script requires rebuilding the binary for the change to take effect, but building the binary is known to be slow.
 
-To work around this, you can run the Python script directly, using the following command in the `default` Hatch environment.
+To work around this, you can run the Python script directly.
 
-```bash
-python crates/sail-cli/src/spark/mcp_server.py
-```
+1. Run the following command in a terminal to start a Spark Connect server.
+   ```bash
+   scripts/spark-tests/run-server.sh
+   ```
+2. In another terminal, run `hatch shell` to enter the `default` Hatch environment. Then run the following command to start the MCP server.
+   ```bash
+   env FASTMCP_LOG_LEVEL=INFO \
+     python crates/sail-cli/src/python/spark_mcp_server.py \
+     --spark-remote sc://127.0.0.1:50051
+   ```
 
 ## Using the MCP Inspector
 

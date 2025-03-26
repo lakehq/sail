@@ -1,7 +1,11 @@
 import json
+import logging
+import os
+import sys
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Literal
+from typing import AsyncIterator
 
+import uvicorn.server
 from mcp.server.fastmcp import Context, FastMCP
 from pyspark.sql import SparkSession
 
@@ -23,14 +27,51 @@ def _describe_column(column):
     }
 
 
-def run_spark_mcp_server(transport: Literal["stdio", "sse"], host: str, port: int, spark_port: int):
+def configure_logging():
+    """Configure logging for the MCP server.
+    We modify the default Uvicorn logging configuration directly,
+    since we cannot override the configuration of the underlying Uvicorn server
+    when creating the MCP server.
+    """
+    uvicorn.config.LOGGING_CONFIG["handlers"]["default"] = {
+        "class": "_sail_cli_native_logging.NativeHandler",
+        "formatter": "default",
+    }
+    uvicorn.config.LOGGING_CONFIG["handlers"]["access"] = {
+        "class": "_sail_cli_native_logging.NativeHandler",
+        "formatter": "default",
+    }
+
+
+def override_default_logging_config():
+    """Override the default logging configuration."""
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(message)s",
+        handlers=[sys.modules["_sail_cli_native_logging"].NativeHandler()],
+        force=True,
+    )
+
+
+def configure_fastmcp_log_level():
+    """Set the default log level of the MCP server to "DEBUG",
+    so that all log records are emitted from Python to Rust.
+    The Rust logger can then filter the records based on the Rust log level.
+    """
+    if "FASTMCP_LOG_LEVEL" not in os.environ:
+        os.environ["FASTMCP_LOG_LEVEL"] = "DEBUG"
+
+
+def create_spark_mcp_server(host: str, port: int, spark_remote: str):
     @asynccontextmanager
-    async def spark_lifespan(server: FastMCP) -> AsyncIterator[SparkSession]:  # noqa: ARG001
-        spark = SparkSession.builder.remote(f"sc://127.0.0.1:{spark_port}").getOrCreate()
+    async def lifespan(server: FastMCP) -> AsyncIterator[SparkSession]:  # noqa: ARG001
+        logging.info("Creating Spark session")
+        spark = SparkSession.builder.remote(spark_remote).getOrCreate()
         yield spark
+        logging.info("Stopping Spark session")
         spark.stop()
 
-    mcp = FastMCP("PySpark MCP server powered by Sail", lifespan=spark_lifespan, host=host, port=port)
+    mcp = FastMCP("Sail MCP server for Spark SQL", lifespan=lifespan, host=host, port=port)
 
     @mcp.tool()
     def create_parquet_view(name: str, path: str, ctx: Context) -> str:
@@ -115,7 +156,7 @@ def run_spark_mcp_server(transport: Literal["stdio", "sse"], host: str, port: in
         df = spark.sql(query).limit(limit)
         return df.toPandas().to_json(orient="records")
 
-    mcp.run(transport)
+    return mcp
 
 
 def main():
@@ -126,20 +167,15 @@ def main():
     """
     import argparse
 
-    from pysail.spark import SparkConnectServer
-
     parser = argparse.ArgumentParser(description="Spark MCP server")
     parser.add_argument("--transport", default="sse", help="The transport for the MCP server", choices=["stdio", "sse"])
     parser.add_argument("--host", default="127.0.0.1", help="The host for the MCP server to bind to")
     parser.add_argument("--port", default=8000, type=int, help="The port for the MCP server to listen on")
+    parser.add_argument("--spark-remote", required=True, help="The Spark remote address to connect to")
     args = parser.parse_args()
 
-    server = SparkConnectServer()
-    server.start()
-    server.init_telemetry()
-    _, port = server.listening_address
-
-    run_spark_mcp_server(args.transport, args.host, args.port, port)
+    mcp = create_spark_mcp_server(args.host, args.port, args.spark_remote)
+    mcp.run(args.transport)
 
 
 if __name__ == "__main__":
