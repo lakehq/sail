@@ -129,24 +129,26 @@ where
         &'a self,
         locations: BoxStream<'a, Result<Path>>,
     ) -> BoxStream<'a, Result<Path>> {
-        let stream = futures::stream::once(async {
+        futures::stream::once(async {
             match self.inner().await {
                 Ok(inner) => inner.delete_stream(locations),
-                Err(e) => Box::pin(futures::stream::once(async { Err(e) })),
+                Err(e) => futures::stream::once(async { Err(e) }).boxed(),
             }
-        });
-        Box::pin(stream.flatten())
+        })
+        .flatten()
+        .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
-        let stream = futures::stream::once(async move {
+        futures::stream::once(async move {
             match self.inner().await {
                 Ok(inner) => inner.list(prefix.as_ref()),
-                Err(e) => Box::pin(futures::stream::once(async { Err(e) })),
+                Err(e) => futures::stream::once(async { Err(e) }).boxed(),
             }
-        });
-        Box::pin(stream.flatten())
+        })
+        .flatten()
+        .boxed()
     }
 
     fn list_with_offset(
@@ -156,13 +158,14 @@ where
     ) -> BoxStream<'_, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
         let offset = offset.clone();
-        let stream = futures::stream::once(async move {
+        futures::stream::once(async move {
             match self.inner().await {
                 Ok(inner) => inner.list_with_offset(prefix.as_ref(), &offset),
-                Err(e) => Box::pin(futures::stream::once(async { Err(e) })),
+                Err(e) => futures::stream::once(async { Err(e) }).boxed(),
             }
-        });
-        Box::pin(stream.flatten())
+        })
+        .flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
