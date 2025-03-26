@@ -10,7 +10,7 @@ use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
 use crate::tree::TreeParser;
-use crate::utils::{labelled_error, skip_whitespace};
+use crate::utils::skip_whitespace;
 
 #[derive(Debug, Clone)]
 pub struct NumberLiteral {
@@ -186,7 +186,7 @@ where
                     state = s.clone();
                     if let Some((value, suffix)) = s.finalize() {
                         let literal = NumberLiteral {
-                            span: input.span_since(marker.offset()).into(),
+                            span: input.span_since(marker.cursor()).into(),
                             value,
                             suffix,
                         };
@@ -201,10 +201,10 @@ where
                 skip_whitespace(input);
                 return Ok(literal);
             }
-            Err(labelled_error::<I, E>(
-                token,
-                input.span_since(marker.offset()),
-                TokenLabel::Number,
+            Err(E::Error::expected_found(
+                vec![TokenLabel::Number],
+                token.map(Into::into),
+                input.span_since(marker.cursor()),
             ))
         })
     }
@@ -232,7 +232,7 @@ where
                     true
                 }
                 _ => {
-                    input.rewind(marker);
+                    input.rewind(marker.clone());
                     false
                 }
             };
@@ -241,17 +241,17 @@ where
                 let value = format!("{}{}", if negative { "-" } else { "" }, raw);
                 if let Ok(value) = value.parse() {
                     let literal = IntegerLiteral {
-                        span: input.span_since(marker.offset()).into(),
+                        span: input.span_since(marker.cursor()).into(),
                         value,
                     };
                     skip_whitespace(input);
                     return Ok(literal);
                 }
             }
-            Err(labelled_error::<I, E>(
-                token,
-                input.span_since(marker.offset()),
-                TokenLabel::Integer,
+            Err(E::Error::expected_found(
+                vec![TokenLabel::Integer],
+                token.map(Into::into),
+                input.span_since(marker.cursor()),
             ))
         })
     }
@@ -314,7 +314,7 @@ where
 {
     fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
         custom(move |input: &mut InputRef<'a, '_, I, E>| {
-            let before = input.offset();
+            let before = input.cursor();
             let token = input.next();
             match &token {
                 Some(Token::String { raw, style }) if !is_identifier_string(style, options) => {
@@ -324,7 +324,7 @@ where
                         Err(e) => StringValue::Invalid { reason: e },
                     };
                     let literal = StringLiteral {
-                        span: input.span_since(before).into(),
+                        span: input.span_since(&before).into(),
                         value,
                     };
                     skip_whitespace(input);
@@ -332,10 +332,10 @@ where
                 }
                 _ => {}
             }
-            Err(labelled_error::<I, E>(
-                token,
-                input.span_since(before),
-                TokenLabel::String,
+            Err(E::Error::expected_found(
+                vec![TokenLabel::String],
+                token.map(Into::into),
+                input.span_since(&before),
             ))
         })
     }

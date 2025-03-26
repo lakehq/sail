@@ -60,14 +60,14 @@
       "input": "SELECT cast('a' as Varchar)",
       "exception": "\n[DATATYPE_MISSING_SIZE] DataType \"VARCHAR\" requires a length parameter, for example \"VARCHAR\"(10). Please specify the length.(line 1, pos 19)\n\n== SQL ==\nSELECT cast('a' as Varchar)\n-------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found ) at 26:27 expected '('"
+        "failure": "invalid argument: found 'a' at 12:15 expected identifier"
       }
     },
     {
       "input": "SELECT cast(1 as badtype)",
       "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"BADTYPE\".(line 1, pos 17)\n\n== SQL ==\nSELECT cast(1 as badtype)\n-----------------^^^\n",
       "output": {
-        "failure": "invalid argument: found badtype at 17:24 expected data type"
+        "failure": "invalid argument: found as at 14:16 expected ',', or ')'"
       }
     }
   ]

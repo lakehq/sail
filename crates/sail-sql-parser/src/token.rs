@@ -1,5 +1,8 @@
+use std::borrow::Cow;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+
+use chumsky::error::RichPattern;
 
 /// A SQL token.
 #[derive(Debug, Clone, PartialEq)]
@@ -113,26 +116,22 @@ pub enum TokenLabel {
     DataType,
 }
 
-impl Display for TokenLabel {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Keyword(k) => write!(f, "'{}'", k.as_str()),
-            Self::Operator(op) => {
-                write!(f, "'")?;
-                for p in op.iter() {
-                    write!(f, "{}", p.to_char())?;
-                }
-                write!(f, "'")
+impl<'a> From<TokenLabel> for RichPattern<'a, Token<'a>> {
+    fn from(value: TokenLabel) -> RichPattern<'a, Token<'a>> {
+        match value {
+            TokenLabel::Keyword(k) => RichPattern::Identifier(k.as_str().to_string()),
+            TokenLabel::Operator(op) => {
+                RichPattern::Identifier(op.iter().map(|x| x.to_char()).collect())
             }
-            Self::Identifier => write!(f, "identifier"),
-            Self::Variable => write!(f, "variable"),
-            Self::Number => write!(f, "number"),
-            Self::Integer => write!(f, "integer"),
-            Self::String => write!(f, "string"),
-            Self::Statement => write!(f, "statement"),
-            Self::Query => write!(f, "query"),
-            Self::Expression => write!(f, "expression"),
-            Self::DataType => write!(f, "data type"),
+            TokenLabel::Identifier => RichPattern::Label(Cow::from("identifier")),
+            TokenLabel::Variable => RichPattern::Label(Cow::from("variable")),
+            TokenLabel::Number => RichPattern::Label(Cow::from("number")),
+            TokenLabel::Integer => RichPattern::Label(Cow::from("integer")),
+            TokenLabel::String => RichPattern::Label(Cow::from("string")),
+            TokenLabel::Statement => RichPattern::Label(Cow::from("statement")),
+            TokenLabel::Query => RichPattern::Label(Cow::from("query")),
+            TokenLabel::Expression => RichPattern::Label(Cow::from("expression")),
+            TokenLabel::DataType => RichPattern::Label(Cow::from("data type")),
         }
     }
 }

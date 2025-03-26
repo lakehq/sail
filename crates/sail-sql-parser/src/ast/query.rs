@@ -111,7 +111,7 @@ where
                 Intersect::parser((), options)
                     .map(SetOperator::Intersect)
                     .then(quantifier.clone()),
-                |left, (operator, quantifier), right| QueryBody::SetOperation {
+                |left, (operator, quantifier), right, _| QueryBody::SetOperation {
                     left: Box::new(left),
                     operator,
                     quantifier,
@@ -126,7 +126,7 @@ where
                     Minus::parser((), options).map(SetOperator::Minus),
                 ))
                 .then(quantifier),
-                |left, (operator, quantifier), right| QueryBody::SetOperation {
+                |left, (operator, quantifier), right, _| QueryBody::SetOperation {
                     left: Box::new(left),
                     operator,
                     quantifier,
