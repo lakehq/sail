@@ -67,6 +67,8 @@ enum SparkCommand {
             help = "The transport to use for the MCP server"
         )]
         transport: McpTransport,
+        #[arg(long, help = "The Spark remote address to connect to (if specified)")]
+        spark_remote: Option<String>,
         #[arg(
             short = 'C',
             long,
@@ -101,6 +103,7 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                 host,
                 port,
                 transport,
+                spark_remote,
                 directory,
             } => {
                 if let Some(directory) = directory {
@@ -110,6 +113,7 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
                     transport,
                     host,
                     port,
+                    spark_remote,
                 })
             }
         },
