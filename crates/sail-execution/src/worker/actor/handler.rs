@@ -314,7 +314,10 @@ impl WorkerActor {
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)
         };
-        let state = SessionStateBuilder::new().with_runtime_env(runtime).build();
+        let state = SessionStateBuilder::new()
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
         let context = SessionContext::new_with_state(state);
         Ok(Arc::new(context))
     }
