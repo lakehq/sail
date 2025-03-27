@@ -5094,6 +5094,7 @@ dependencies = [
  "log",
  "mimalloc",
  "pyo3",
+ "rustls",
  "sail-common",
  "sail-execution",
  "sail-spark-connect",

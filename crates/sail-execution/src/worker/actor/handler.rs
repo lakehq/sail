@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::{SendableRecordBatchStream, SessionStateBuilder};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -12,6 +13,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_plan::object_store::DynamicObjectStoreRegistry;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -305,12 +307,19 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
-    fn session_context(&self) -> Arc<SessionContext> {
-        Arc::new(SessionContext::default())
-    }
-
-    fn task_context(&self) -> Arc<TaskContext> {
-        Arc::new(TaskContext::default())
+    fn session_context(&self) -> ExecutionResult<Arc<SessionContext>> {
+        let runtime = {
+            let registry = DynamicObjectStoreRegistry::new();
+            let builder =
+                RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
+            Arc::new(builder.build()?)
+        };
+        let state = SessionStateBuilder::new()
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
+        let context = SessionContext::new_with_state(state);
+        Ok(Arc::new(context))
     }
 
     fn execute_plan(
@@ -321,7 +330,7 @@ impl WorkerActor {
         plan: Vec<u8>,
         partition: usize,
     ) -> ExecutionResult<SendableRecordBatchStream> {
-        let session_ctx = self.session_context();
+        let session_ctx = self.session_context()?;
         let plan = PhysicalPlanNode::decode(plan.as_slice())?;
         let plan = plan.try_into_physical_plan(
             session_ctx.as_ref(),
@@ -335,7 +344,7 @@ impl WorkerActor {
             attempt,
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
-        let stream = plan.execute(partition, self.task_context())?;
+        let stream = plan.execute(partition, session_ctx.task_ctx())?;
         Ok(stream)
     }
 
