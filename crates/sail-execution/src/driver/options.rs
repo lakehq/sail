@@ -50,6 +50,10 @@ impl TryFrom<&AppConfig> for DriverOptions {
                     namespace: config.kubernetes.namespace.clone(),
                     driver_pod_name: config.kubernetes.driver_pod_name.clone(),
                     worker_pod_name_prefix: config.kubernetes.worker_pod_name_prefix.clone(),
+                    worker_service_account_name: config
+                        .kubernetes
+                        .worker_service_account_name
+                        .clone(),
                 })
             }
         };
