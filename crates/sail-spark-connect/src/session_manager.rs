@@ -122,10 +122,9 @@ impl SessionManager {
             .set_bool("datafusion.catalog.has_header", false);
         let runtime = {
             let registry = DynamicObjectStoreRegistry::new();
-            let config = RuntimeEnvBuilder::default()
-                .with_object_store_registry(Arc::new(registry))
-                .build()?;
-            Arc::new(config)
+            let builder =
+                RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
+            Arc::new(builder.build()?)
         };
         let state = SessionStateBuilder::new()
             .with_config(session_config)
