@@ -2,7 +2,6 @@ use std::future::Future;
 use std::sync::Arc;
 
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
-use sail_plan::object_store::ObjectStoreConfig;
 use sail_server::ServerBuilder;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
@@ -15,7 +14,6 @@ pub async fn serve<F>(listener: TcpListener, signal: F) -> Result<(), Box<dyn st
 where
     F: Future<Output = ()>,
 {
-    ObjectStoreConfig::initialize().await;
     let config = AppConfig::load()?;
     let session_manager = SessionManager::new(Arc::new(config));
     let server = SparkConnectServer::new(session_manager);

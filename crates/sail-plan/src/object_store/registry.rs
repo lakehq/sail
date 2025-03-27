@@ -5,14 +5,13 @@ use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
 #[cfg(feature = "hdfs")]
 use hdfs_native_object_store::HdfsObjectStore;
-use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
 use url::Url;
 
-use crate::object_store::config::OBJECT_STORE_CONFIG;
 use crate::object_store::hugging_face::HuggingFaceObjectStore;
-use crate::object_store::s3::S3CredentialProvider;
+use crate::object_store::layers::lazy::LazyObjectStore;
+use crate::object_store::s3::get_s3_object_store;
 
 #[derive(Debug, Eq, PartialEq, Hash)]
 struct ObjectStoreKey {
@@ -59,28 +58,16 @@ impl DynamicObjectStoreRegistry {
         let key = ObjectStoreKey::new(url);
         match key.scheme.as_str() {
             "s3" => {
-                let config = OBJECT_STORE_CONFIG.get().map(|x| &x.aws).ok_or_else(|| {
-                    plan_datafusion_err!("AWS configuration is required for S3 object store")
-                })?;
-                let mut builder = AmazonS3Builder::from_env().with_bucket_name(key.authority);
-                if let Some(region) = config.region() {
-                    builder = builder.with_region(region.to_string());
-                }
-                let credentials = config.credentials_provider().ok_or_else(|| {
-                    plan_datafusion_err!("AWS credentials are required for S3 object store")
-                })?;
-                let credentials = S3CredentialProvider::new(credentials);
-                builder = builder.with_credentials(Arc::new(credentials));
-                Ok(Arc::new(builder.build()?))
+                let url = url.clone();
+                let store = LazyObjectStore::new(move || {
+                    let url = url.clone();
+                    async move { get_s3_object_store(&url).await }
+                });
+                Ok(Arc::new(store))
             }
             #[cfg(feature = "hdfs")]
             "hdfs" => {
-                let store = match OBJECT_STORE_CONFIG.get() {
-                    Some(config) => {
-                        HdfsObjectStore::with_config(url.as_str(), config.hdfs.clone())?
-                    }
-                    None => HdfsObjectStore::with_url(url.as_str())?,
-                };
+                let store = HdfsObjectStore::with_url(url.as_str())?;
                 Ok(Arc::new(store))
             }
             "hf" => {

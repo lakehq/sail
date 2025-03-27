@@ -1,7 +1,6 @@
-mod config;
 mod hugging_face;
+mod layers;
 mod registry;
 mod s3;
 
-pub use config::ObjectStoreConfig;
 pub use registry::DynamicObjectStoreRegistry;
