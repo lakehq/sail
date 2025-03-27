@@ -8,6 +8,8 @@ use sail_common::config::{CliConfig, CliConfigEnv};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    rustls::crypto::aws_lc_rs::default_provider().install_default()?;
+
     let config = CliConfig::load()?;
     if config.run_python {
         // When the environment variable is set, we are the forked child process.
