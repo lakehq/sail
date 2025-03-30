@@ -161,4 +161,4 @@ overflow-checks = false
 lto = true
 panic = 'unwind'
 incremental = false
-codegen-units = 16
+codegen-units = 1
