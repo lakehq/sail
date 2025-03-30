@@ -63,6 +63,9 @@ url = "2.5.4"
 lexical-core = { version = "1.0.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 aws-config = "1.6.0"
 aws-credential-types = "1.2.2"
+aws-smithy-runtime-api = "1.7.4"
+aws-smithy-types = "1.3.0"
+aws-smithy-async = "1.2.5"
 clap = { version = "4.5.32", features = ["derive"] }
 num_enum = "0.7.3"
 log = "0.4.27"
