@@ -61,16 +61,16 @@ rand_chacha = "0.9.0"
 rand_distr = "0.5.1"
 url = "2.5.4"
 lexical-core = { version = "1.0.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-aws-config = "1.6.0"
+aws-config = "1.6.1"
 aws-credential-types = "1.2.2"
 aws-smithy-runtime-api = "1.7.4"
 aws-smithy-types = "1.3.0"
 aws-smithy-async = "1.2.5"
-clap = { version = "4.5.32", features = ["derive"] }
+clap = { version = "4.5.34", features = ["derive"] }
 num_enum = "0.7.3"
 log = "0.4.27"
 env_logger = "0.11.7"
-fastrace = { version = "0.7.8", features = ["enable"] }
+fastrace = { version = "0.7.9", features = ["enable"] }
 fastrace-opentelemetry = "0.9.0"
 opentelemetry = "0.28.0"
 opentelemetry_sdk = "0.28.0"
@@ -86,7 +86,7 @@ cbc = { version = "0.1.2", features = ["std"] }
 base64 = "0.22.1"
 md-5 = "0.10.6"
 half = { version = "2.5.0", features = ["serde", "num-traits", "zerocopy"] }
-iana-time-zone = "0.1.62"
+iana-time-zone = "0.1.63"
 chumsky = { version = "0.10.0", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.2", default-features = false, features = ["tokio"] }
