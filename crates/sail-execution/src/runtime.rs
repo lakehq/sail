@@ -253,7 +253,7 @@ impl ExecutionPlan for RuntimeAwareExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let (tx, rx) = mpsc::channel(1);
+        let (tx, rx) = mpsc::channel(128);
         let inner = self.input.clone();
         let schema = inner.schema();
         let task = async move {
