@@ -1,12 +1,17 @@
+use std::sync::Arc;
+
 use sail_common::config::AppConfig;
 use sail_server::actor::ActorSystem;
 
-use crate::worker::WorkerActor;
+use crate::runtime::RuntimeExtension;
+use crate::worker::{WorkerActor, WorkerOptions};
 
-pub async fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_worker(
+    runtime_extension: Arc<RuntimeExtension>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let config = AppConfig::load()?;
     let mut system = ActorSystem::new();
-    let options = (&config).try_into()?;
+    let options = WorkerOptions::try_new(&config, runtime_extension)?;
     let _handle = system.spawn::<WorkerActor>(options);
     system.join().await;
     Ok(())

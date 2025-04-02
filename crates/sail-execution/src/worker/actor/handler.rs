@@ -7,7 +7,7 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SendableRecordBatchStream, SessionStateBuilder};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
@@ -21,6 +21,7 @@ use crate::driver::state::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskAttempt, TaskId, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
+use crate::runtime::RuntimeExtension;
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
@@ -314,7 +315,10 @@ impl WorkerActor {
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)
         };
+        let config =
+            SessionConfig::default().with_extension(self.options().runtime_extension.clone());
         let state = SessionStateBuilder::new()
+            .with_config(config)
             .with_runtime_env(runtime)
             .with_default_features()
             .build();
@@ -338,6 +342,7 @@ impl WorkerActor {
             self.physical_plan_codec.as_ref(),
         )?;
         let plan = self.rewrite_shuffle(ctx, plan)?;
+        let plan = RuntimeExtension::rewrite_compute_intensive_plan(&session_ctx, plan)?;
         debug!(
             "task {} attempt {} execution plan\n{}",
             task_id,

@@ -1,8 +1,11 @@
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{PyResult, Python};
-use sail_spark_connect::entrypoint::serve;
+use sail_common::config::AppConfig;
+use sail_execution::runtime::RuntimeExtension;
+use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
@@ -12,6 +15,13 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+    let secondary_runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let options = SessionManagerOptions {
+        config: Arc::new(AppConfig::load()?),
+        runtime_extension: Arc::new(RuntimeExtension::new(secondary_runtime.handle().clone())),
+    };
     let (_tx, rx) = oneshot::channel::<()>();
     let (server_port, server_task) = runtime.block_on(async move {
         // Listen on only the loopback interface for security.
@@ -25,7 +35,7 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
             let _ = rx.await;
         };
         let task = async {
-            let _ = serve(listener, shutdown).await;
+            let _ = serve(listener, shutdown, options).await;
         };
         <Result<_, Box<dyn std::error::Error>>>::Ok((port, task))
     })?;

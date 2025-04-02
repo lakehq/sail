@@ -5242,6 +5242,8 @@ dependencies = [
  "log",
  "pyo3",
  "sail-cli",
+ "sail-common",
+ "sail-execution",
  "sail-spark-connect",
  "sail-telemetry",
  "tokio",

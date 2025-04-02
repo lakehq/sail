@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::Mutex;
 
 use crate::error::ExecutionResult;
 use crate::id::WorkerId;
+use crate::runtime::RuntimeExtension;
 use crate::worker::{WorkerActor, WorkerOptions};
 use crate::worker_manager::{WorkerLaunchOptions, WorkerManager};
 
@@ -24,12 +26,14 @@ impl LocalWorkerManagerState {
 
 pub struct LocalWorkerManager {
     state: Mutex<LocalWorkerManagerState>,
+    runtime_extension: Arc<RuntimeExtension>,
 }
 
 impl LocalWorkerManager {
-    pub fn new() -> Self {
+    pub fn new(runtime_extension: Arc<RuntimeExtension>) -> Self {
         Self {
             state: Mutex::new(LocalWorkerManagerState::new()),
+            runtime_extension,
         }
     }
 }
@@ -53,6 +57,7 @@ impl WorkerManager for LocalWorkerManager {
             worker_heartbeat_interval: options.worker_heartbeat_interval,
             worker_stream_buffer: options.worker_stream_buffer,
             rpc_retry_strategy: options.rpc_retry_strategy,
+            runtime_extension: self.runtime_extension.clone(),
         };
         let mut state = self.state.lock().await;
         let handle = state.system.spawn(options);

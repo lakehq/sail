@@ -8,6 +8,7 @@ mod tests {
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
     use sail_common::config::AppConfig;
     use sail_common::tests::test_gold_set;
+    use sail_execution::runtime::RuntimeExtension;
     use sail_plan::resolve_and_execute_plan;
     use sail_server::actor::ActorSystem;
     use serde::{Deserialize, Serialize};
@@ -16,7 +17,7 @@ mod tests {
     use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
     use crate::session::SparkExtension;
-    use crate::session_manager::{SessionKey, SessionManager};
+    use crate::session_manager::{SessionKey, SessionManager, SessionManagerOptions};
     use crate::spark::connect::relation::RelType;
     use crate::spark::connect::{Relation, Sql};
 
@@ -65,7 +66,14 @@ mod tests {
             // We create the session inside an async context, even though the
             // `create_session_context` function itself is sync. This is because the actor system
             // may need to spawn actors when the session runs in cluster mode.
-            SessionManager::create_session_context(config, system, session_key)
+            SessionManager::create_session_context(
+                system,
+                session_key,
+                SessionManagerOptions {
+                    config,
+                    runtime_extension: Arc::new(RuntimeExtension::default()),
+                },
+            )
         })?;
         Ok(test_gold_set(
             "tests/gold_data/function/*.json",

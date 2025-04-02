@@ -5,6 +5,7 @@ mod id;
 pub mod job;
 pub(crate) mod plan;
 mod rpc;
+pub mod runtime;
 pub(crate) mod stream;
 mod worker;
 mod worker_manager;
