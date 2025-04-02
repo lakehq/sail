@@ -1,18 +1,24 @@
 use std::any::Any;
 use std::fmt::{Display, Formatter};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{plan_err, Result, Statistics};
 use datafusion::config::ConfigOptions;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::datasource::memory::DataSourceExec;
+use datafusion::datasource::physical_plan::{AvroExec, CsvExec, NdJsonExec, ParquetExec};
+use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{Distribution, LexRequirement};
 use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, InvariantLevel};
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::insert::DataSinkExec;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
 };
@@ -22,28 +28,29 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::UnnestExec;
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion::prelude::SessionContext;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
+use tokio::task::JoinSet;
+
+use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum RuntimeKind {
     Default,
-    Compute,
+    Secondary,
 }
 
 impl Display for RuntimeKind {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             RuntimeKind::Default => write!(f, "default"),
-            RuntimeKind::Compute => write!(f, "compute"),
+            RuntimeKind::Secondary => write!(f, "secondary"),
         }
     }
 }
@@ -60,7 +67,7 @@ impl RuntimeExtension {
         }
     }
 
-    fn get_compute_intensive_runtime(ctx: &SessionContext) -> Option<Handle> {
+    fn get_secondary_runtime(ctx: &SessionContext) -> Option<Handle> {
         ctx.state_ref()
             .read()
             .config()
@@ -68,34 +75,20 @@ impl RuntimeExtension {
             .and_then(|x| x.handle.clone())
     }
 
-    pub fn rewrite_compute_intensive_plan(
-        ctx: &SessionContext,
+    fn build_runtime_aware_plan(
         plan: Arc<dyn ExecutionPlan>,
+        handle: Handle,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let Some(handle) = Self::get_compute_intensive_runtime(ctx) else {
-            return Ok(plan);
-        };
         let result = plan.transform(|plan| {
             let any = plan.as_any();
-            if any.is::<RepartitionExec>()
-                || any.is::<AggregateExec>()
-                || any.is::<BoundedWindowAggExec>()
-                || any.is::<CoalesceBatchesExec>()
-                || any.is::<CoalescePartitionsExec>()
-                || any.is::<CrossJoinExec>()
-                || any.is::<FilterExec>()
-                || any.is::<HashJoinExec>()
-                || any.is::<InterleaveExec>()
-                || any.is::<NestedLoopJoinExec>()
-                || any.is::<PartialSortExec>()
-                || any.is::<ProjectionExec>()
-                || any.is::<RepartitionExec>()
-                || any.is::<SortExec>()
-                || any.is::<SortMergeJoinExec>()
-                || any.is::<SortPreservingMergeExec>()
-                || any.is::<UnionExec>()
-                || any.is::<UnnestExec>()
-                || any.is::<WindowAggExec>()
+            if any.is::<ShuffleReadExec>()
+                || any.is::<ShuffleWriteExec>()
+                || any.is::<ParquetExec>()
+                || any.is::<NdJsonExec>()
+                || any.is::<AvroExec>()
+                || any.is::<CsvExec>()
+                || any.is::<DataSourceExec>()
+                || any.is::<DataSinkExec>()
             {
                 let children = plan
                     .children()
@@ -115,14 +108,17 @@ impl RuntimeExtension {
                 Ok(Transformed::yes(Arc::new(RuntimeAwareExec::new(
                     plan.with_new_children(children)?,
                     handle.clone(),
-                    RuntimeKind::Compute,
+                    RuntimeKind::Secondary,
                 ))))
             } else {
                 Ok(Transformed::no(plan))
             }
         });
-        let result = result.data()?;
-        let result = result.transform(|plan| {
+        result.data()
+    }
+
+    fn simplify_runtime_aware_plan(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let result = plan.transform(|plan| {
             if let Some(exec) = plan.as_any().downcast_ref::<RuntimeAwareExec>() {
                 let children = exec
                     .input
@@ -143,6 +139,18 @@ impl RuntimeExtension {
             }
         });
         result.data()
+    }
+
+    pub fn rewrite_runtime_aware_plan(
+        ctx: &SessionContext,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let Some(handle) = Self::get_secondary_runtime(ctx) else {
+            return Ok(plan);
+        };
+        let plan = Self::build_runtime_aware_plan(plan, handle)?;
+        let plan = Self::simplify_runtime_aware_plan(plan)?;
+        Ok(plan)
     }
 }
 
@@ -248,7 +256,9 @@ impl ExecutionPlan for RuntimeAwareExec {
         let (tx, rx) = mpsc::channel(1);
         let inner = self.input.clone();
         let schema = inner.schema();
-        self.handle.spawn(async move {
+        let task = async move {
+            // The `execute()` method is not async, but we call it inside the async task
+            // in case its implementation requires access to the Tokio runtime.
             let mut stream = match inner.execute(partition, context) {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -261,9 +271,15 @@ impl ExecutionPlan for RuntimeAwareExec {
                     break;
                 }
             }
-        });
-        let stream = ReceiverStream::new(rx);
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        };
+        let mut join_set = JoinSet::new();
+        join_set.spawn_on(task, &self.handle);
+        let stream = RuntimeAwareStream {
+            rx,
+            schema: schema.clone(),
+            join_set,
+        };
+        Ok(Box::pin(stream))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -300,5 +316,28 @@ impl ExecutionPlan for RuntimeAwareExec {
             .input
             .try_swapping_with_projection(projection)?
             .map(|x| -> Arc<dyn ExecutionPlan> { Arc::new(self.with_input(x)) }))
+    }
+}
+
+struct RuntimeAwareStream {
+    rx: mpsc::Receiver<Result<RecordBatch>>,
+    schema: SchemaRef,
+    /// The join set stores the handle to the task for the stream.
+    /// The task is aborted when the stream is dropped.
+    #[expect(unused)]
+    join_set: JoinSet<()>,
+}
+
+impl Stream for RuntimeAwareStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.rx.poll_recv(cx)
+    }
+}
+
+impl RecordBatchStream for RuntimeAwareStream {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 }

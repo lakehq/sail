@@ -342,7 +342,7 @@ impl WorkerActor {
             self.physical_plan_codec.as_ref(),
         )?;
         let plan = self.rewrite_shuffle(ctx, plan)?;
-        let plan = RuntimeExtension::rewrite_compute_intensive_plan(&session_ctx, plan)?;
+        let plan = RuntimeExtension::rewrite_runtime_aware_plan(&session_ctx, plan)?;
         debug!(
             "task {} attempt {} execution plan\n{}",
             task_id,

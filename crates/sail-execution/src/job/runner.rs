@@ -52,7 +52,7 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
-        let plan = RuntimeExtension::rewrite_compute_intensive_plan(ctx, plan)?;
+        let plan = RuntimeExtension::rewrite_runtime_aware_plan(ctx, plan)?;
         Ok(execute_stream(plan, ctx.task_ctx())?)
     }
 
