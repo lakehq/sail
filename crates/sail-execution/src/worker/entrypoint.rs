@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use sail_common::config::AppConfig;
+use sail_plan::runtime::RuntimeExtension;
 use sail_server::actor::ActorSystem;
 
-use crate::runtime::RuntimeExtension;
 use crate::worker::{WorkerActor, WorkerOptions};
 
 pub async fn run_worker(

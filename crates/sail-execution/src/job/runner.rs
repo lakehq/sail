@@ -9,7 +9,6 @@ use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::runtime::RuntimeExtension;
 
 #[tonic::async_trait]
 pub trait JobRunner: Send + Sync + 'static {
@@ -52,7 +51,6 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
-        let plan = RuntimeExtension::rewrite_runtime_aware_plan(ctx, plan)?;
         Ok(execute_stream(plan, ctx.task_ctx())?)
     }
 

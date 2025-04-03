@@ -21,7 +21,6 @@ use crate::driver::state::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskAttempt, TaskId, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
-use crate::runtime::RuntimeExtension;
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
@@ -310,13 +309,13 @@ impl WorkerActor {
 
     fn session_context(&self) -> ExecutionResult<Arc<SessionContext>> {
         let runtime = {
-            let registry = DynamicObjectStoreRegistry::new();
+            let registry =
+                DynamicObjectStoreRegistry::new(self.options().runtime_extension.clone());
             let builder =
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)
         };
-        let config =
-            SessionConfig::default().with_extension(self.options().runtime_extension.clone());
+        let config = SessionConfig::default();
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -342,7 +341,6 @@ impl WorkerActor {
             self.physical_plan_codec.as_ref(),
         )?;
         let plan = self.rewrite_shuffle(ctx, plan)?;
-        let plan = RuntimeExtension::rewrite_runtime_aware_plan(&session_ctx, plan)?;
         debug!(
             "task {} attempt {} execution plan\n{}",
             task_id,

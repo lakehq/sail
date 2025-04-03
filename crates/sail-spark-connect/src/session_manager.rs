@@ -12,12 +12,12 @@ use log::info;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
-use sail_execution::runtime::RuntimeExtension;
 use sail_plan::function::{
     BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
 };
 use sail_plan::new_query_planner;
 use sail_plan::object_store::DynamicObjectStoreRegistry;
+use sail_plan::runtime::RuntimeExtension;
 use sail_plan::temp_view::TemporaryViewManager;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
@@ -101,7 +101,6 @@ impl SessionManager {
             .with_information_schema(true)
             .with_extension(Arc::new(TemporaryViewManager::default()))
             .with_extension(Arc::new(spark))
-            .with_extension(options.runtime_extension)
             .set_usize(
                 "datafusion.execution.batch_size",
                 options.config.execution.batch_size,
@@ -125,7 +124,7 @@ impl SessionManager {
             //  https://spark.apache.org/docs/latest/sql-data-sources-csv.html
             .set_bool("datafusion.catalog.has_header", false);
         let runtime = {
-            let registry = DynamicObjectStoreRegistry::new();
+            let registry = DynamicObjectStoreRegistry::new(options.runtime_extension.clone());
             let builder =
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)

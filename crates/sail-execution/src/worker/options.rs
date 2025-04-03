@@ -2,11 +2,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sail_common::config::AppConfig;
+use sail_plan::runtime::RuntimeExtension;
 use sail_server::RetryStrategy;
 
 use crate::error::ExecutionResult;
 use crate::id::WorkerId;
-use crate::runtime::RuntimeExtension;
 
 #[derive(Debug)]
 pub struct WorkerOptions {

@@ -8,7 +8,7 @@ use log::info;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{PyResult, Python};
 use sail_common::config::AppConfig;
-use sail_execution::runtime::RuntimeExtension;
+use sail_plan::runtime::RuntimeExtension;
 use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
 use sail_telemetry::telemetry::init_telemetry;
 use tokio::net::TcpListener;

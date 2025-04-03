@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use datafusion::execution::object_store::ObjectStoreRegistry;
-use datafusion_common::{plan_datafusion_err, plan_err, Result};
+use datafusion_common::{plan_datafusion_err, Result};
 #[cfg(feature = "hdfs")]
 use hdfs_native_object_store::HdfsObjectStore;
 use object_store::local::LocalFileSystem;
@@ -11,7 +11,9 @@ use url::Url;
 
 use crate::object_store::hugging_face::HuggingFaceObjectStore;
 use crate::object_store::layers::lazy::LazyObjectStore;
+use crate::object_store::layers::runtime::RuntimeAwareObjectStore;
 use crate::object_store::s3::get_s3_object_store;
+use crate::runtime::RuntimeExtension;
 
 #[derive(Debug, Eq, PartialEq, Hash)]
 struct ObjectStoreKey {
@@ -31,16 +33,11 @@ impl ObjectStoreKey {
 #[derive(Debug)]
 pub struct DynamicObjectStoreRegistry {
     stores: RwLock<HashMap<ObjectStoreKey, Arc<dyn ObjectStore>>>,
-}
-
-impl Default for DynamicObjectStoreRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
+    runtime_extension: Arc<RuntimeExtension>,
 }
 
 impl DynamicObjectStoreRegistry {
-    pub fn new() -> Self {
+    pub fn new(runtime_extension: Arc<RuntimeExtension>) -> Self {
         let mut stores: HashMap<_, Arc<dyn ObjectStore>> = HashMap::new();
         stores.insert(
             ObjectStoreKey {
@@ -51,37 +48,7 @@ impl DynamicObjectStoreRegistry {
         );
         Self {
             stores: RwLock::new(stores),
-        }
-    }
-
-    fn get_dynamic_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        let key = ObjectStoreKey::new(url);
-        match key.scheme.as_str() {
-            "s3" => {
-                let url = url.clone();
-                let store = LazyObjectStore::new(move || {
-                    let url = url.clone();
-                    async move { get_s3_object_store(&url).await }
-                });
-                Ok(Arc::new(store))
-            }
-            #[cfg(feature = "hdfs")]
-            "hdfs" => {
-                let store = HdfsObjectStore::with_url(url.as_str())?;
-                Ok(Arc::new(store))
-            }
-            "hf" => {
-                if key.authority != "datasets" {
-                    return plan_err!(
-                        "unsupported Hugging Face repository type: {}",
-                        key.authority
-                    );
-                }
-                Ok(Arc::new(HuggingFaceObjectStore::try_new()?))
-            }
-            _ => {
-                plan_err!("unsupported object store URL: {url}")
-            }
+            runtime_extension,
         }
     }
 }
@@ -108,8 +75,46 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
             .map_err(|e| plan_datafusion_err!("failed to get object store: {e}"))?;
         if let Some(store) = stores.get(&key) {
             Ok(Arc::clone(store))
+        } else if let Some(handle) = self.runtime_extension.handle() {
+            let store = RuntimeAwareObjectStore::try_new(|| get_dynamic_object_store(url), handle)?;
+            Ok(Arc::new(store))
         } else {
-            self.get_dynamic_object_store(url)
+            Ok(get_dynamic_object_store(url)?)
         }
+    }
+}
+
+fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectStore>> {
+    let key = ObjectStoreKey::new(url);
+    match key.scheme.as_str() {
+        "s3" => {
+            let url = url.clone();
+            let store = LazyObjectStore::new(move || {
+                let url = url.clone();
+                async move { get_s3_object_store(&url).await }
+            });
+            Ok(Arc::new(store))
+        }
+        #[cfg(feature = "hdfs")]
+        "hdfs" => {
+            let store = HdfsObjectStore::with_url(url.as_str())?;
+            Ok(Arc::new(store))
+        }
+        "hf" => {
+            if key.authority != "datasets" {
+                return Err(object_store::Error::Generic {
+                    store: "Hugging Face",
+                    source: Box::new(plan_datafusion_err!(
+                        "unsupported repository type: {}",
+                        key.authority
+                    )),
+                });
+            }
+            Ok(Arc::new(HuggingFaceObjectStore::try_new()?))
+        }
+        _ => Err(object_store::Error::Generic {
+            store: "unknown",
+            source: Box::new(plan_datafusion_err!("unsupported object store URL: {url}")),
+        }),
     }
 }

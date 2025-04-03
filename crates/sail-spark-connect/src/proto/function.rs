@@ -8,8 +8,8 @@ mod tests {
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
     use sail_common::config::AppConfig;
     use sail_common::tests::test_gold_set;
-    use sail_execution::runtime::RuntimeExtension;
     use sail_plan::resolve_and_execute_plan;
+    use sail_plan::runtime::RuntimeExtension;
     use sail_server::actor::ActorSystem;
     use serde::{Deserialize, Serialize};
 

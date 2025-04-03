@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use sail_plan::runtime::RuntimeExtension;
 use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::Mutex;
 
 use crate::error::ExecutionResult;
 use crate::id::WorkerId;
-use crate::runtime::RuntimeExtension;
 use crate::worker::{WorkerActor, WorkerOptions};
 use crate::worker_manager::{WorkerLaunchOptions, WorkerManager};
 

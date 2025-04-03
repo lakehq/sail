@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sail_execution::runtime::RuntimeExtension;
+use sail_plan::runtime::RuntimeExtension;
 use sail_telemetry::telemetry::init_telemetry;
 
 pub fn run_worker() -> Result<(), Box<dyn std::error::Error>> {

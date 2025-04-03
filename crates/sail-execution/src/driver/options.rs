@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sail_common::config::{AppConfig, ExecutionMode};
+use sail_plan::runtime::RuntimeExtension;
 use sail_server::RetryStrategy;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::runtime::RuntimeExtension;
 use crate::worker_manager::KubernetesWorkerManagerOptions;
 
 #[derive(Debug)]
