@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use sail_plan::runtime::RuntimeExtension;
 use sail_server::actor::{ActorHandle, ActorSystem};

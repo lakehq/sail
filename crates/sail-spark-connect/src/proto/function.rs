@@ -71,7 +71,7 @@ mod tests {
                 session_key,
                 SessionManagerOptions {
                     config,
-                    runtime_extension: Arc::new(RuntimeExtension::default()),
+                    runtime_extension: RuntimeExtension::default(),
                 },
             )
         })?;

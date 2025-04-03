@@ -51,7 +51,7 @@ fn run_spark_connect_server(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let options = SessionManagerOptions {
         config: Arc::new(AppConfig::load()?),
-        runtime_extension: Arc::new(RuntimeExtension::new(secondary_runtime.handle().clone())),
+        runtime_extension: RuntimeExtension::new(secondary_runtime.handle().clone()),
     };
     let (server_port, server_task) = runtime.block_on(async move {
         // Listen on only the loopback interface for security.

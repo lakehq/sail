@@ -41,7 +41,7 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
         .build()?;
     let options = SessionManagerOptions {
         config: Arc::new(AppConfig::load()?),
-        runtime_extension: Arc::new(RuntimeExtension::new(secondary_runtime.handle().clone())),
+        runtime_extension: RuntimeExtension::new(secondary_runtime.handle().clone()),
     };
 
     runtime.block_on(async {

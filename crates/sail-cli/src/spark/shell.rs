@@ -20,7 +20,7 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let options = SessionManagerOptions {
         config: Arc::new(AppConfig::load()?),
-        runtime_extension: Arc::new(RuntimeExtension::new(secondary_runtime.handle().clone())),
+        runtime_extension: RuntimeExtension::new(secondary_runtime.handle().clone()),
     };
     let (_tx, rx) = oneshot::channel::<()>();
     let (server_port, server_task) = runtime.block_on(async move {

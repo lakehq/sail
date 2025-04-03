@@ -164,9 +164,7 @@ impl SparkConnectServer {
         })?;
         let options = SessionManagerOptions {
             config: Arc::new(config),
-            runtime_extension: Arc::new(RuntimeExtension::new(
-                self.secondary_runtime.handle().clone(),
-            )),
+            runtime_extension: RuntimeExtension::new(self.secondary_runtime.handle().clone()),
         };
         // Get the actual listener address.
         // A port is assigned by the OS if the port is 0 when creating the listener.

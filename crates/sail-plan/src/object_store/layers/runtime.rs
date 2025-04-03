@@ -194,6 +194,7 @@ impl ObjectStore for RuntimeAwareObjectStore {
         &'a self,
         locations: BoxStream<'a, Result<Path>>,
     ) -> BoxStream<'a, Result<Path>> {
+        // FIXME: run `delete_stream` in the correct runtime
         self.inner.delete_stream(locations)
     }
 
