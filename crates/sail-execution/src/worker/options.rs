@@ -21,13 +21,13 @@ pub struct WorkerOptions {
     pub worker_heartbeat_interval: Duration,
     pub worker_stream_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
-    pub runtime_extension: Arc<RuntimeExtension>,
+    pub runtime_extension: RuntimeExtension,
 }
 
 impl WorkerOptions {
     pub fn try_new(
         config: &AppConfig,
-        runtime_extension: Arc<RuntimeExtension>,
+        runtime_extension: RuntimeExtension,
     ) -> ExecutionResult<Self> {
         Ok(Self {
             worker_id: config.cluster.worker_id.into(),

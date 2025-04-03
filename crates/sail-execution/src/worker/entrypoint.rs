@@ -7,7 +7,7 @@ use sail_server::actor::ActorSystem;
 use crate::worker::{WorkerActor, WorkerOptions};
 
 pub async fn run_worker(
-    runtime_extension: Arc<RuntimeExtension>,
+    runtime_extension: RuntimeExtension,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = AppConfig::load()?;
     let mut system = ActorSystem::new();

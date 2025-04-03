@@ -26,11 +26,11 @@ impl LocalWorkerManagerState {
 
 pub struct LocalWorkerManager {
     state: Mutex<LocalWorkerManagerState>,
-    runtime_extension: Arc<RuntimeExtension>,
+    runtime_extension: RuntimeExtension,
 }
 
 impl LocalWorkerManager {
-    pub fn new(runtime_extension: Arc<RuntimeExtension>) -> Self {
+    pub fn new(runtime_extension: RuntimeExtension) -> Self {
         Self {
             state: Mutex::new(LocalWorkerManagerState::new()),
             runtime_extension,

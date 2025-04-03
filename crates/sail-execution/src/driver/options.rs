@@ -27,7 +27,7 @@ pub struct DriverOptions {
     pub job_output_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
     pub worker_manager: WorkerManagerOptions,
-    pub runtime_extension: Arc<RuntimeExtension>,
+    pub runtime_extension: RuntimeExtension,
 }
 
 #[derive(Debug)]
@@ -39,7 +39,7 @@ pub enum WorkerManagerOptions {
 impl DriverOptions {
     pub fn try_new(
         config: &AppConfig,
-        runtime_extension: Arc<RuntimeExtension>,
+        runtime_extension: RuntimeExtension,
     ) -> ExecutionResult<Self> {
         let worker_manager = match config.mode {
             ExecutionMode::Local => {

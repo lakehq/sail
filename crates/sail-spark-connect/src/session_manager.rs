@@ -157,7 +157,7 @@ impl SessionManager {
 #[derive(Debug, Clone)]
 pub struct SessionManagerOptions {
     pub config: Arc<AppConfig>,
-    pub runtime_extension: Arc<RuntimeExtension>,
+    pub runtime_extension: RuntimeExtension,
 }
 
 enum SessionManagerEvent {

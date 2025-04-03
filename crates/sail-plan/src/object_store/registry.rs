@@ -33,11 +33,11 @@ impl ObjectStoreKey {
 #[derive(Debug)]
 pub struct DynamicObjectStoreRegistry {
     stores: RwLock<HashMap<ObjectStoreKey, Arc<dyn ObjectStore>>>,
-    runtime_extension: Arc<RuntimeExtension>,
+    runtime_extension: RuntimeExtension,
 }
 
 impl DynamicObjectStoreRegistry {
-    pub fn new(runtime_extension: Arc<RuntimeExtension>) -> Self {
+    pub fn new(runtime_extension: RuntimeExtension) -> Self {
         let mut stores: HashMap<_, Arc<dyn ObjectStore>> = HashMap::new();
         stores.insert(
             ObjectStoreKey {

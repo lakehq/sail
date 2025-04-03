@@ -1,6 +1,6 @@
 use tokio::runtime::Handle;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RuntimeExtension {
     handle: Option<Handle>,
 }
