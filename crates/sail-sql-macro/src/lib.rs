@@ -8,6 +8,7 @@ mod attribute;
 mod tree;
 pub(crate) mod utils;
 
+#[allow(clippy::doc_overindented_list_items)]
 /// Derives the `TreeParser` trait by generating a recursive descent parser for the type.
 ///
 /// The type can be an enum with struct or tuple variants, or a struct with named or unnamed fields.
