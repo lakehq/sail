@@ -73,9 +73,7 @@ impl RetryStrategy {
                 }
                 .take(*max_count),
             ),
-            Self::Fixed { max_count, delay } => {
-                Box::new(std::iter::repeat(*delay).take(*max_count))
-            }
+            Self::Fixed { max_count, delay } => Box::new(std::iter::repeat_n(*delay, *max_count)),
         }
     }
 }

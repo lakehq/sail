@@ -7,7 +7,7 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SendableRecordBatchStream, SessionStateBuilder};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
@@ -309,12 +309,15 @@ impl WorkerActor {
 
     fn session_context(&self) -> ExecutionResult<Arc<SessionContext>> {
         let runtime = {
-            let registry = DynamicObjectStoreRegistry::new();
+            let registry =
+                DynamicObjectStoreRegistry::new(self.options().runtime_extension.clone());
             let builder =
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)
         };
+        let config = SessionConfig::default();
         let state = SessionStateBuilder::new()
+            .with_config(config)
             .with_runtime_env(runtime)
             .with_default_features()
             .build();

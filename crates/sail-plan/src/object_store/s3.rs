@@ -34,7 +34,7 @@ impl std::fmt::Display for IdentityDataError {
 impl std::error::Error for IdentityDataError {}
 
 /// Provide AWS credentials for S3.
-/// Cached credentials used when available.
+/// Cached credentials are used when available.
 ///
 /// See also: <https://github.com/awslabs/aws-sdk-rust/discussions/923>
 #[derive(Debug)]
@@ -109,10 +109,10 @@ pub(super) async fn get_s3_object_store(url: &Url) -> Result<AmazonS3> {
         Some(_) | None => resolve_bucket_region(bucket, &ClientOptions::default()).await?,
     };
     builder = builder.with_region(region);
-    let cache = config
-        .identity_cache()
-        .unwrap_or_else(|| IdentityCache::lazy().build());
     if let Some(provider) = config.credentials_provider() {
+        let cache = config
+            .identity_cache()
+            .unwrap_or_else(|| IdentityCache::lazy().build());
         let credentials = S3CredentialProvider::try_new(provider, cache)?;
         builder = builder.with_credentials(Arc::new(credentials));
     }

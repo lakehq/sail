@@ -33,7 +33,7 @@ impl ArrayEmptyToNull {
         let non_nulls = array
             .iter()
             .map(|x| match x {
-                Some(a) => a.len() != 0,
+                Some(a) => !a.is_empty(),
                 None => false,
             })
             .collect::<Vec<_>>();

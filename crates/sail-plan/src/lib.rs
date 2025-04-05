@@ -23,6 +23,7 @@ pub mod function;
 pub mod literal;
 pub mod object_store;
 pub mod resolver;
+pub mod runtime;
 pub mod temp_view;
 mod utils;
 

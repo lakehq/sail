@@ -300,7 +300,7 @@ impl TryFrom<&str> for LiteralValue<Vec<u8>> {
         }
 
         let hex_bytes = value.as_bytes();
-        let mut decoded_bytes = Vec::with_capacity((hex_bytes.len() + 1) / 2);
+        let mut decoded_bytes = Vec::with_capacity(hex_bytes.len().div_ceil(2));
 
         let start_idx = hex_bytes.len() % 2;
         if start_idx > 0 {
