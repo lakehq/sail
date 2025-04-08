@@ -5,7 +5,7 @@ use datafusion::arrow::array::{Array, ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_struct_array;
 use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct DropStructField {
@@ -122,15 +122,15 @@ impl ScalarUDFImpl for DropStructField {
         Self::drop_nested_field(&arg_types[0], &self.field_names)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 1 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let args = ColumnarValue::values_to_arrays(&args)?;
+        let [array] = args.as_slice() else {
             return exec_err!(
                 "drop_struct_field function requires 1 argument, got {}",
                 args.len()
             );
-        }
-        let arrays = ColumnarValue::values_to_arrays(args)?;
-        let array = &arrays[0];
+        };
         let new_array = Self::drop_nested_field_from_array(array, &self.field_names)?;
         Ok(ColumnarValue::Array(new_array))
     }

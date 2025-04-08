@@ -6,6 +6,8 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion::common::cast::as_map_array;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::exec_err;
+use datafusion_expr::ScalarFunctionArgs;
 
 #[derive(Debug)]
 pub struct MapToArray {
@@ -70,15 +72,15 @@ impl ScalarUDFImpl for MapToArray {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
-        if args.len() != 1 {
-            return Err(DataFusionError::Internal(format!(
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let args = ColumnarValue::values_to_arrays(&args)?;
+        let [arg] = args.as_slice() else {
+            return exec_err!(
                 "{} should only be called with a single argument",
                 self.name()
-            )));
-        }
-        let arg = &args[0];
+            );
+        };
         let out = match arg.data_type() {
             DataType::Map(field, _) => {
                 let array = as_map_array(arg)?;

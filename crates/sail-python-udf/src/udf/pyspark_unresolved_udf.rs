@@ -3,7 +3,7 @@ use std::any::Any;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion_common::internal_err;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common::spec;
 
 #[derive(Debug, Clone)]
@@ -78,7 +78,7 @@ impl ScalarUDFImpl for PySparkUnresolvedUDF {
         Ok(self.output_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("unresolved UDF {} cannot be invoked", self.name())
     }
 }

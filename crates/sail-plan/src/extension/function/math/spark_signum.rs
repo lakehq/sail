@@ -7,7 +7,9 @@ use datafusion::arrow::datatypes::{
     IntervalUnit, IntervalYearMonthType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 use half::f16;
 
 #[derive(Debug)]
@@ -52,14 +54,15 @@ impl ScalarUDFImpl for SparkSignum {
         Ok(DataType::Float64)
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-        if args.len() != 1 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [arg] = args.as_slice() else {
             return exec_err!(
                 "Spark `signum` function requires 1 argument, got {}",
                 args.len()
             );
-        }
-        match &args[0] {
+        };
+        match arg {
             ColumnarValue::Scalar(ScalarValue::UInt8(val)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
                     if x == 0_u8 {

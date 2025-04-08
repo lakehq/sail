@@ -7,7 +7,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
-use datafusion_expr::ScalarUDFImpl;
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
@@ -57,22 +57,23 @@ impl ScalarUDFImpl for SparkEncode {
         }
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-        if args.len() != 2 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [first, second] = args.as_slice() else {
             return exec_err!(
                 "Spark `encode` function requires 2 arguments, got {}",
                 args.len()
             );
-        }
+        };
 
         if matches!(
-            args[0],
+            first,
             ColumnarValue::Scalar(ScalarValue::Null)
                 | ColumnarValue::Scalar(ScalarValue::Utf8(None))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
                 | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
         ) || matches!(
-            args[1],
+            second,
             ColumnarValue::Scalar(ScalarValue::Null)
                 | ColumnarValue::Scalar(ScalarValue::Utf8(None))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
@@ -81,7 +82,7 @@ impl ScalarUDFImpl for SparkEncode {
             return Ok(ColumnarValue::Scalar(ScalarValue::Binary(None)));
         }
 
-        match (&args[0], &args[1]) {
+        match (first, second) {
             (ColumnarValue::Scalar(scalar_string), ColumnarValue::Scalar(char_set)) => {
                 match (scalar_string, char_set) {
                     (
@@ -296,22 +297,23 @@ impl ScalarUDFImpl for SparkDecode {
         }
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-        if args.len() != 2 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [first, second] = args.as_slice() else {
             return exec_err!(
                 "Spark `decode` function requires 2 arguments, got {}",
                 args.len()
             );
-        }
+        };
 
         if matches!(
-            args[0],
+            first,
             ColumnarValue::Scalar(ScalarValue::Null)
                 | ColumnarValue::Scalar(ScalarValue::Binary(None))
                 | ColumnarValue::Scalar(ScalarValue::LargeBinary(None))
                 | ColumnarValue::Scalar(ScalarValue::BinaryView(None))
         ) || matches!(
-            args[1],
+            second,
             ColumnarValue::Scalar(ScalarValue::Null)
                 | ColumnarValue::Scalar(ScalarValue::Utf8(None))
                 | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
@@ -320,7 +322,7 @@ impl ScalarUDFImpl for SparkDecode {
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
         }
 
-        match (&args[0], &args[1]) {
+        match (first, second) {
             (ColumnarValue::Scalar(scalar_bytes), ColumnarValue::Scalar(char_set)) => {
                 match (scalar_bytes, char_set) {
                     (

@@ -8,7 +8,7 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, Signature, Volatility};
 use datafusion_common::arrow::array::make_array;
 use datafusion_common::exec_err;
-use datafusion_expr::ScalarUDFImpl;
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use pyo3::{PyObject, Python};
 
 use crate::array::{build_list_array, get_list_field, get_struct_array_type};
@@ -151,8 +151,9 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
         Ok(self.output_type.clone())
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-        let mut args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let mut args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args)?;
         let (Some(right), Some(left), true) = (args.pop(), args.pop(), args.is_empty()) else {
             return exec_err!("co-group map expects exactly two arguments");
         };

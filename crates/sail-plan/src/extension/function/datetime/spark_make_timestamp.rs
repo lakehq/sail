@@ -10,7 +10,7 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct SparkMakeTimestampNtz {
@@ -48,7 +48,10 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
         Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs {
+            args, number_rows, ..
+        } = args;
         if args.len() != 6 {
             return exec_err!(
                 "Spark `make_timestamp_ntz` function requires 6 arguments, got {}",

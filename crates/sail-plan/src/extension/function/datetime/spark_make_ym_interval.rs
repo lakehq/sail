@@ -5,7 +5,7 @@ use datafusion::arrow::array::{ArrayRef, AsArray, IntervalYearMonthArray};
 use datafusion::arrow::datatypes::{DataType, Int32Type, IntervalUnit};
 use datafusion_common::types::NativeType;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct SparkMakeYmInterval {
@@ -43,14 +43,15 @@ impl ScalarUDFImpl for SparkMakeYmInterval {
         Ok(DataType::Interval(IntervalUnit::YearMonth))
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-        if args.len() != 2 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [year, month] = args.as_slice() else {
             return exec_err!(
                 "Spark `make_ym_interval` function requires 2 arguments, got {}",
                 args.len()
             );
-        }
-        match (&args[0], &args[1]) {
+        };
+        match (year, month) {
             (
                 ColumnarValue::Scalar(ScalarValue::Int32(years)),
                 ColumnarValue::Scalar(ScalarValue::Int32(months)),

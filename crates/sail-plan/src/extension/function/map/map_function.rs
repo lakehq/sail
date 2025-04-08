@@ -6,7 +6,7 @@ use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::interleave;
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 trait KeyValue<T>
 where
@@ -134,8 +134,9 @@ impl ScalarUDFImpl for MapFunction {
         ))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let arrays = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let arrays = ColumnarValue::values_to_arrays(&args)?;
         Ok(ColumnarValue::Array(to_map_array(arrays.as_slice())?))
     }
 }

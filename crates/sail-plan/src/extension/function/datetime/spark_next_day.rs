@@ -6,7 +6,7 @@ use datafusion::arrow::array::{new_null_array, ArrayRef, AsArray, Date32Array, S
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::types::NativeType;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct SparkNextDay {
@@ -44,15 +44,16 @@ impl ScalarUDFImpl for SparkNextDay {
         Ok(DataType::Date32)
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-        if args.len() != 2 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [date, day_of_week] = args.as_slice() else {
             return exec_err!(
                 "Spark `next_day` function requires 2 arguments, got {}",
                 args.len()
             );
-        }
+        };
 
-        match (&args[0], &args[1]) {
+        match (date, day_of_week) {
             (ColumnarValue::Scalar(date), ColumnarValue::Scalar(day_of_week)) => {
                 match (date, day_of_week) {
                     (ScalarValue::Date32(days), ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {

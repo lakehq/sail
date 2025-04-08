@@ -15,7 +15,7 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::arrow::temporal_conversions::as_datetime_with_timezone;
 use datafusion_common::{exec_datafusion_err, exec_err, internal_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::extension::function::functions_nested_utils::make_scalar_function;
 
@@ -62,18 +62,19 @@ impl ScalarUDFImpl for SparkSequence {
         }
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
         if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Scalar(ScalarValue::Null));
         }
         match args[0].data_type() {
-            DataType::Int8 => make_scalar_function(gen_sequence_i8)(args),
-            DataType::Int16 => make_scalar_function(gen_sequence_i16)(args),
-            DataType::Int32 => make_scalar_function(gen_sequence_i32)(args),
-            DataType::Int64 => make_scalar_function(gen_sequence_i64)(args),
-            DataType::Date32 => make_scalar_function(gen_sequence_date)(args),
+            DataType::Int8 => make_scalar_function(gen_sequence_i8)(&args),
+            DataType::Int16 => make_scalar_function(gen_sequence_i16)(&args),
+            DataType::Int32 => make_scalar_function(gen_sequence_i32)(&args),
+            DataType::Int64 => make_scalar_function(gen_sequence_i64)(&args),
+            DataType::Date32 => make_scalar_function(gen_sequence_date)(&args),
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                make_scalar_function(gen_sequence_timestamp)(args)
+                make_scalar_function(gen_sequence_timestamp)(&args)
             }
             other => {
                 exec_err!(

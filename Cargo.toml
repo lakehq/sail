@@ -40,7 +40,7 @@ serde_json = "1.0.140"
 monostate = "0.1.14"
 regex = "1.11.1"
 glob = "0.3.2"
-chrono = "=0.4.39" # TODO: 0.4.40 won't compile, so we fully specify the version of chrono.
+chrono = "0.4.40"
 chrono-tz = "0.10.3"
 futures = "0.3.31"
 comfy-table = "7.1.4"
@@ -104,12 +104,12 @@ datafusion-expr = { version = "46.0.1" }
 datafusion-expr-common = { version = "46.0.1" }
 datafusion-proto = { version = "46.0.1" }
 datafusion-functions-nested = { version = "46.0.1" }
-datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "f8bc055" }
+datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "2520f53" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.23.5", features = ["auto-initialize", "serde"] }
-arrow-buffer = { version = "54.2.1" }
-arrow-schema = { version = "54.2.1", features = ["serde"] }
-arrow-flight = { version = "54.2.1" }
+arrow-buffer = { version = "54.3.0" }
+arrow-schema = { version = "54.3.0", features = ["serde"] }
+arrow-flight = { version = "54.3.0" }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
 
@@ -121,36 +121,36 @@ object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] 
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
-datafusion = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-catalog = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-common-runtime = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-datasource-avro = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-datasource-csv = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-datasource-json = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-datasource-parquet = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-doc = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-# datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-functions-aggregate-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-functions-table = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-functions-window = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-functions-window-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-macros = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-physical-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-physical-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-proto-common = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
-datafusion-sql = { git = "https://github.com/apache/datafusion.git", rev = "e4bf951" }
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-catalog = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-common-runtime = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-datasource-avro = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-datasource-csv = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-datasource-json = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-datasource-parquet = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-doc = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+# datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-functions-aggregate-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-functions-table = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-functions-window = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-functions-window-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-macros = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-physical-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-physical-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-proto-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
+datafusion-sql = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release

@@ -13,6 +13,7 @@ use datafusion_common::cast::{
     as_string_view_array,
 };
 use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::ScalarFunctionArgs;
 use datafusion_expr_common::signature::TypeSignature;
 
 #[derive(Debug)]
@@ -51,15 +52,14 @@ impl ScalarUDFImpl for SparkHex {
         Ok(DataType::Utf8)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 1 {
-            return Err(DataFusionError::Internal(
-                "spark_hex expects exactly one argument".to_string(),
-            ));
-        }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [arg] = args.as_slice() else {
+            return exec_err!("`spark_hex` expects exactly one argument");
+        };
 
-        match &args[0] {
-            ColumnarValue::Array(_) => spark_hex(args),
+        match arg {
+            ColumnarValue::Array(_) => spark_hex(&args),
             ColumnarValue::Scalar(scalar) => {
                 let scalar = if let ScalarValue::Int32(value) = scalar {
                     &ScalarValue::Int64(value.map(|v| v as i64))
@@ -67,8 +67,7 @@ impl ScalarUDFImpl for SparkHex {
                     scalar
                 };
                 let array = scalar.to_array()?;
-                let array_args = [ColumnarValue::Array(array)];
-                spark_hex(&array_args)
+                spark_hex(&[ColumnarValue::Array(array)])
             }
         }
     }
@@ -117,8 +116,9 @@ impl ScalarUDFImpl for SparkUnHex {
         Ok(DataType::Binary)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        spark_unhex(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        spark_unhex(&args)
     }
 }
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 fn to_struct_array(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
     if args.is_empty() {
@@ -70,8 +70,9 @@ impl ScalarUDFImpl for StructFunction {
         Ok(DataType::Struct(Fields::from(fields)))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let arrays = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let arrays = ColumnarValue::values_to_arrays(&args)?;
         Ok(ColumnarValue::Array(to_struct_array(
             arrays.as_slice(),
             self.field_names.as_slice(),

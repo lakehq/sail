@@ -3,7 +3,10 @@ use std::any::Any;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_common::ScalarValue;
+use datafusion_common::{internal_err, ScalarValue};
+use datafusion_expr::ScalarFunctionArgs;
+
+use crate::utils::ItemTaker;
 
 #[derive(Debug, Clone)]
 pub struct RaiseError {
@@ -45,22 +48,18 @@ impl ScalarUDFImpl for RaiseError {
         Ok(DataType::Null)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 1 {
-            return Err(DataFusionError::Internal(format!(
-                "raise_error should only be called with one argument, got {}",
-                args.len()
-            )));
-        }
-        match &args[0] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(msg)))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(msg)))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(msg))) => {
-                Err(DataFusionError::Execution(msg.to_string()))
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let Ok(arg) = args.one() else {
+            return internal_err!("raise_error should only be called with one argument");
+        };
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(message)))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(message)))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(message))) => {
+                Err(DataFusionError::Execution(message))
             }
-            _ => Err(DataFusionError::Internal(
-                "raise_error expects a single UTF-8 string argument".to_string(),
-            )),
+            _ => internal_err!("raise_error expects a single UTF-8 string argument"),
         }
     }
 }

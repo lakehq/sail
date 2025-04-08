@@ -2277,8 +2277,12 @@ impl PlanResolver<'_> {
         let output_name = mapping.name_for_alias()?;
         let output_col = Column::new_unqualified(&output_name);
 
-        let plan = LogicalPlanBuilder::new(left.plan)
-            .join_on(right.plan, JoinType::Full, on)?
+        let builder = if on.is_empty() {
+            LogicalPlanBuilder::new(left.plan).cross_join(right.plan)?
+        } else {
+            LogicalPlanBuilder::new(left.plan).join_on(right.plan, JoinType::Full, on)?
+        };
+        let plan = builder
             .project(vec![mapping])?
             .unnest_column(output_col.clone())?
             .project(

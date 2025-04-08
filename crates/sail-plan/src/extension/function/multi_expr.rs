@@ -2,7 +2,7 @@ use std::any::Any;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 /// A placeholder UDF used to represent a list of expressions that come from the output
 /// of generator expressions or wildcard expressions.
@@ -47,7 +47,7 @@ impl ScalarUDFImpl for MultiExpr {
         )
     }
 
-    fn invoke(&self, _: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {
         plan_err!(
             "{} should be rewritten during logical plan analysis",
             self.name()

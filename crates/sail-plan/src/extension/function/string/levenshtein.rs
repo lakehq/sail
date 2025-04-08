@@ -10,7 +10,7 @@ use datafusion_common::types::{
 };
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignature, TypeSignatureClass};
 
 use crate::extension::function::functions_utils::{make_scalar_function, utf8_to_int_type};
@@ -71,17 +71,30 @@ impl ScalarUDFImpl for Levenshtein {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "levenshtein")
+        let [first, _, ..] = arg_types else {
+            return exec_err!(
+                "`levenshtein` function requires two or three arguments, got {}",
+                arg_types.len()
+            );
+        };
+        utf8_to_int_type(first, "levenshtein")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [first, _, ..] = args.as_slice() else {
+            return exec_err!(
+                "`levenshtein` function requires two or three arguments, got {}",
+                args.len()
+            );
+        };
+        match first.data_type() {
             DataType::Utf8 | DataType::Utf8View => {
-                make_scalar_function(levenshtein::<i32>, vec![])(args)
+                make_scalar_function(levenshtein::<i32>, vec![])(&args)
             }
-            DataType::LargeUtf8 => make_scalar_function(levenshtein::<i64>, vec![])(args),
+            DataType::LargeUtf8 => make_scalar_function(levenshtein::<i64>, vec![])(&args),
             other => {
-                exec_err!("Unsupported data type {other:?} for function levenshtein")
+                exec_err!("unsupported data type {other:?} for function `levenshtein`")
             }
         }
     }

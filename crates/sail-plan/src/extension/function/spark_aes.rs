@@ -131,7 +131,8 @@ impl ScalarUDFImpl for SparkAESEncrypt {
         Ok(DataType::Binary)
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
         if args.len() < 2 || args.len() > 6 {
             return exec_err!(
                 "Spark `aes_encrypt` function requires 2 to 6 arguments, got {}",
@@ -582,11 +583,7 @@ impl ScalarUDFImpl for SparkAESDecrypt {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs {
-            args,
-            number_rows: _,
-            return_type: _,
-        } = args;
+        let ScalarFunctionArgs { args, .. } = args;
         if args.len() < 2 || args.len() > 5 {
             return exec_err!(
                 "Spark `aes_decrypt` function requires 2 to 5 arguments, got {}",

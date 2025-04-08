@@ -9,10 +9,11 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
-    ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 
 use crate::extension::function::functions_nested_utils::make_scalar_function;
@@ -82,12 +83,9 @@ impl ScalarUDFImpl for SparkArray {
         Ok(ReturnInfo::new_non_nullable(return_type))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(args)
-    }
-
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(&[])
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        make_scalar_function(make_array_inner)(args.as_slice())
     }
 
     fn aliases(&self) -> &[String] {
@@ -108,7 +106,7 @@ impl ScalarUDFImpl for SparkArray {
                     if let Some(coerced_type) = coerced_type {
                         Ok(coerced_type)
                     } else {
-                        internal_err!("Coercion from {acc:?} to {x:?} failed.")
+                        plan_err!("Coercion from {acc:?} to {x:?} failed.")
                     }
                 })?;
         Ok(vec![new_type; arg_types.len()])
