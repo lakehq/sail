@@ -309,8 +309,7 @@ impl WorkerActor {
 
     fn session_context(&self) -> ExecutionResult<Arc<SessionContext>> {
         let runtime = {
-            let registry =
-                DynamicObjectStoreRegistry::new(self.options().runtime_extension.clone());
+            let registry = DynamicObjectStoreRegistry::new(self.options().runtime.clone());
             let builder =
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)

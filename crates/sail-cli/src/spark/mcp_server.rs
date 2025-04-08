@@ -8,11 +8,10 @@ use log::info;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{PyResult, Python};
 use sail_common::config::AppConfig;
-use sail_plan::runtime::RuntimeExtension;
+use sail_common::runtime::RuntimeManager;
 use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
 use sail_telemetry::telemetry::init_telemetry;
 use tokio::net::TcpListener;
-use tokio::runtime::Runtime;
 
 use crate::python::Modules;
 
@@ -46,14 +45,10 @@ pub struct McpSettings {
 }
 
 fn run_spark_connect_server(
-    runtime: &Runtime,
-    secondary_runtime: &Runtime,
+    options: SessionManagerOptions,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let options = SessionManagerOptions {
-        config: Arc::new(AppConfig::load()?),
-        runtime_extension: RuntimeExtension::new(secondary_runtime.handle().clone()),
-    };
-    let (server_port, server_task) = runtime.block_on(async move {
+    let handle = options.runtime.primary().clone();
+    let (server_port, server_task) = handle.block_on(async move {
         // Listen on only the loopback interface for security.
         let listener = TcpListener::bind((Ipv4Addr::new(127, 0, 0, 1), 0)).await?;
         let port = listener.local_addr()?.port();
@@ -64,22 +59,21 @@ fn run_spark_connect_server(
         };
         <Result<_, Box<dyn std::error::Error>>>::Ok((port, task))
     })?;
-    runtime.spawn(server_task);
+    handle.spawn(server_task);
     Ok(format!("sc://127.0.0.1:{server_port}"))
 }
 
 pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry()?;
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    let secondary_runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-
+    let config = Arc::new(AppConfig::load()?);
+    let runtime = RuntimeManager::try_new(&config.runtime)?;
+    let options = SessionManagerOptions {
+        config: Arc::clone(&config),
+        runtime: runtime.handle(),
+    };
     let spark_remote = match settings.spark_remote {
-        None => run_spark_connect_server(&runtime, &secondary_runtime)?,
+        None => run_spark_connect_server(options)?,
         Some(x) => x,
     };
 

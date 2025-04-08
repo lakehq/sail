@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sail_common::config::{AppConfig, ExecutionMode};
-use sail_plan::runtime::RuntimeExtension;
+use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -26,7 +26,7 @@ pub struct DriverOptions {
     pub job_output_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
     pub worker_manager: WorkerManagerOptions,
-    pub runtime_extension: RuntimeExtension,
+    pub runtime: RuntimeHandle,
 }
 
 #[derive(Debug)]
@@ -36,10 +36,7 @@ pub enum WorkerManagerOptions {
 }
 
 impl DriverOptions {
-    pub fn try_new(
-        config: &AppConfig,
-        runtime_extension: RuntimeExtension,
-    ) -> ExecutionResult<Self> {
+    pub fn try_new(config: &AppConfig, runtime: RuntimeHandle) -> ExecutionResult<Self> {
         let worker_manager = match config.mode {
             ExecutionMode::Local => {
                 return Err(ExecutionError::InvalidArgument(
@@ -83,7 +80,7 @@ impl DriverOptions {
             task_launch_timeout: Duration::from_secs(config.cluster.task_launch_timeout_secs),
             job_output_buffer: config.cluster.job_output_buffer,
             worker_manager,
-            runtime_extension,
+            runtime,
         })
     }
 }

@@ -7,13 +7,13 @@ use datafusion_common::{plan_datafusion_err, Result};
 use hdfs_native_object_store::HdfsObjectStore;
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
+use sail_common::runtime::RuntimeHandle;
 use url::Url;
 
 use crate::object_store::hugging_face::HuggingFaceObjectStore;
 use crate::object_store::layers::lazy::LazyObjectStore;
 use crate::object_store::layers::runtime::RuntimeAwareObjectStore;
 use crate::object_store::s3::get_s3_object_store;
-use crate::runtime::RuntimeExtension;
 
 #[derive(Debug, Eq, PartialEq, Hash)]
 struct ObjectStoreKey {
@@ -33,11 +33,11 @@ impl ObjectStoreKey {
 #[derive(Debug)]
 pub struct DynamicObjectStoreRegistry {
     stores: RwLock<HashMap<ObjectStoreKey, Arc<dyn ObjectStore>>>,
-    runtime_extension: RuntimeExtension,
+    runtime: RuntimeHandle,
 }
 
 impl DynamicObjectStoreRegistry {
-    pub fn new(runtime_extension: RuntimeExtension) -> Self {
+    pub fn new(runtime: RuntimeHandle) -> Self {
         let mut stores: HashMap<_, Arc<dyn ObjectStore>> = HashMap::new();
         stores.insert(
             ObjectStoreKey {
@@ -48,7 +48,7 @@ impl DynamicObjectStoreRegistry {
         );
         Self {
             stores: RwLock::new(stores),
-            runtime_extension,
+            runtime,
         }
     }
 }
@@ -75,8 +75,9 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
             .map_err(|e| plan_datafusion_err!("failed to get object store: {e}"))?;
         if let Some(store) = stores.get(&key) {
             Ok(Arc::clone(store))
-        } else if let Some(handle) = self.runtime_extension.handle() {
-            let store = RuntimeAwareObjectStore::try_new(|| get_dynamic_object_store(url), handle)?;
+        } else if let Some(handle) = self.runtime.secondary() {
+            let store =
+                RuntimeAwareObjectStore::try_new(|| get_dynamic_object_store(url), handle.clone())?;
             Ok(Arc::new(store))
         } else {
             Ok(get_dynamic_object_store(url)?)

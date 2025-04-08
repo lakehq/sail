@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sail_common::config::AppConfig;
-use sail_plan::runtime::RuntimeExtension;
+use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
 use crate::error::ExecutionResult;
@@ -20,14 +20,11 @@ pub struct WorkerOptions {
     pub worker_heartbeat_interval: Duration,
     pub worker_stream_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
-    pub runtime_extension: RuntimeExtension,
+    pub runtime: RuntimeHandle,
 }
 
 impl WorkerOptions {
-    pub fn try_new(
-        config: &AppConfig,
-        runtime_extension: RuntimeExtension,
-    ) -> ExecutionResult<Self> {
+    pub fn try_new(config: &AppConfig, runtime: RuntimeHandle) -> ExecutionResult<Self> {
         Ok(Self {
             worker_id: config.cluster.worker_id.into(),
             enable_tls: config.cluster.enable_tls,
@@ -46,7 +43,7 @@ impl WorkerOptions {
             ),
             worker_stream_buffer: config.cluster.worker_stream_buffer,
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
-            runtime_extension,
+            runtime,
         })
     }
 }

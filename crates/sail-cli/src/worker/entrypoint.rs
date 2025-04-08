@@ -1,18 +1,16 @@
-use sail_plan::runtime::RuntimeExtension;
+use sail_common::config::AppConfig;
+use sail_common::runtime::RuntimeManager;
 use sail_telemetry::telemetry::init_telemetry;
 
 pub fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry()?;
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    let secondary_runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    let runtime_extension = RuntimeExtension::new(secondary_runtime.handle().clone());
-
-    runtime.block_on(sail_execution::run_worker(runtime_extension))?;
+    let config = AppConfig::load()?;
+    let runtime = RuntimeManager::try_new(&config.runtime)?;
+    runtime
+        .handle()
+        .primary()
+        .block_on(sail_execution::run_worker(&config, runtime.handle()))?;
 
     fastrace::flush();
 

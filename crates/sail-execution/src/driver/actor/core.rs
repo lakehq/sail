@@ -40,7 +40,7 @@ impl Actor for DriverActor {
     fn new(options: DriverOptions) -> Self {
         let worker_manager: Arc<dyn WorkerManager> = match &options.worker_manager {
             WorkerManagerOptions::Local => {
-                Arc::new(LocalWorkerManager::new(options.runtime_extension.clone()))
+                Arc::new(LocalWorkerManager::new(options.runtime.clone()))
             }
             WorkerManagerOptions::Kubernetes(options) => {
                 Arc::new(KubernetesWorkerManager::new(options.clone()))
