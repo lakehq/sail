@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
+use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
+use datafusion::arrow::datatypes::Int64Type;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::avro::AvroFormatFactory;
@@ -13,16 +15,20 @@ use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion::functions_aggregate::count::count_udaf;
+use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion::logical_expr::sqlparser::ast::NullTreatment;
 use datafusion::logical_expr::{logical_plan as plan, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use datafusion::prelude::coalesce;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, JoinType, ParamValues, ScalarValue, TableReference, ToDFSchema,
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort};
+use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort, WindowFunctionParams};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::utils::{
@@ -32,6 +38,7 @@ use datafusion_expr::utils::{
 use datafusion_expr::{
     build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
     ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
+    WindowFrame, WindowFunctionDefinition,
 };
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
@@ -1165,7 +1172,102 @@ impl PlanResolver<'_> {
                         .build()?)
                 }
             }
-            SetOpType::Except => Ok(LogicalPlanBuilder::except(left, right, is_all)?),
+            SetOpType::Except => {
+                let left_len = left.schema().fields().len();
+                let right_len = right.schema().fields().len();
+
+                if left_len != right_len {
+                    return Err(PlanError::invalid(format!(
+                        "`EXCEPT ALL` must have the same number of columns. Left has {left_len} columns, right has {right_len} columns."
+                    )));
+                }
+
+                let mut join_keys = left
+                    .schema()
+                    .fields()
+                    .iter()
+                    .zip(right.schema().fields().iter())
+                    .map(|(left_field, right_field)| {
+                        (
+                            Column::from_name(left_field.name()),
+                            Column::from_name(right_field.name()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                let plan = if is_all {
+                    let left_row_number_alias = state.register_field_name("row_num");
+                    let right_row_number_alias = state.register_field_name("row_num");
+                    let left_row_number_window = Expr::WindowFunction(expr::WindowFunction {
+                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                        params: WindowFunctionParams {
+                            args: vec![],
+                            partition_by: left
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|field| Expr::Column(Column::from_name(field.name())))
+                                .collect::<Vec<_>>(),
+                            order_by: vec![],
+                            window_frame: WindowFrame::new(None),
+                            null_treatment: Some(NullTreatment::RespectNulls),
+                        },
+                    })
+                    .alias(left_row_number_alias.as_str());
+                    let right_row_number_window = Expr::WindowFunction(expr::WindowFunction {
+                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                        params: WindowFunctionParams {
+                            args: vec![],
+                            partition_by: right
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|field| Expr::Column(Column::from_name(field.name())))
+                                .collect::<Vec<_>>(),
+                            order_by: vec![],
+                            window_frame: WindowFrame::new(None),
+                            null_treatment: Some(NullTreatment::RespectNulls),
+                        },
+                    })
+                    .alias(right_row_number_alias.as_str());
+                    let left = LogicalPlanBuilder::from(left)
+                        .window(vec![left_row_number_window])?
+                        .build()?;
+                    let right = LogicalPlanBuilder::from(right)
+                        .window(vec![right_row_number_window])?
+                        .build()?;
+                    let left_join_columns = join_keys
+                        .iter()
+                        .map(|(left_col, _)| left_col.clone())
+                        .collect::<Vec<_>>();
+                    join_keys.push((
+                        Column::from_name(left_row_number_alias),
+                        Column::from_name(right_row_number_alias),
+                    ));
+                    LogicalPlanBuilder::from(left)
+                        .join_detailed(
+                            right,
+                            JoinType::LeftAnti,
+                            join_keys.into_iter().unzip(),
+                            None,
+                            true,
+                        )?
+                        .project(left_join_columns)?
+                        .build()
+                } else {
+                    LogicalPlanBuilder::from(left)
+                        .distinct()?
+                        .join_detailed(
+                            right,
+                            JoinType::LeftAnti,
+                            join_keys.into_iter().unzip(),
+                            None,
+                            true,
+                        )?
+                        .build()
+                }?;
+                Ok(plan)
+            }
         }
     }
 
@@ -1642,11 +1744,63 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_tail(
         &self,
-        _input: spec::QueryPlan,
-        _limit: spec::Expr,
-        _state: &mut PlanResolverState,
+        input: spec::QueryPlan,
+        limit: spec::Expr,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("tail"))
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let limit = self
+            .resolve_expression(limit, input.schema(), state)
+            .await?;
+        let limit_num = match limit {
+            Expr::Literal(ScalarValue::Int8(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::Int16(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::Int32(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
+            Expr::Literal(ScalarValue::UInt8(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::UInt16(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::UInt32(Some(value))) => Ok(value as i64),
+            Expr::Literal(ScalarValue::UInt64(Some(value))) => Ok(value as i64),
+            _ => Err(PlanError::invalid("`tail` limit must be an integer")),
+        }?;
+        // TODO: This can be expensive for large input datasets
+        //  According to Spark's docs:
+        //    Running tail requires moving data into the application's driver process, and doing so
+        //    with a very large `num` can crash the driver process with OutOfMemoryError.
+        let count_alias = state.register_field_name("COUNT(*)");
+        let count_expr = Expr::AggregateFunction(expr::AggregateFunction {
+            func: count_udaf(),
+            params: AggregateFunctionParams {
+                args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
+        })
+        .alias(count_alias);
+        let count_plan = LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(input.clone()),
+            vec![],
+            vec![count_expr],
+        )?);
+        let count_batches = self
+            .ctx
+            .execute_logical_plan(count_plan)
+            .await?
+            .collect()
+            .await?;
+        let count = count_batches[0]
+            .column(0)
+            .as_primitive::<Int64Type>()
+            .value(0);
+        Ok(LogicalPlan::Limit(plan::Limit {
+            skip: Some(Box::new(lit(0i64.max(count - limit_num)))),
+            fetch: Some(Box::new(limit)),
+            input: Arc::new(input),
+        }))
     }
 
     async fn resolve_query_with_columns(
