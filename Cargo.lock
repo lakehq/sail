@@ -5112,6 +5112,7 @@ dependencies = [
  "rustls",
  "sail-common",
  "sail-execution",
+ "sail-plan",
  "sail-spark-connect",
  "sail-telemetry",
  "tokio",
@@ -5134,6 +5135,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.12",
+ "tokio",
 ]
 
 [[package]]
@@ -5257,6 +5259,8 @@ dependencies = [
  "log",
  "pyo3",
  "sail-cli",
+ "sail-common",
+ "sail-plan",
  "sail-spark-connect",
  "sail-telemetry",
  "tokio",

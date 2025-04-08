@@ -1,5 +1,9 @@
 mode = "local"
 
+[runtime]
+stack_size = 8388608
+enable_secondary = false
+
 [cluster]
 enable_tls = false
 driver_listen_host = "127.0.0.1"

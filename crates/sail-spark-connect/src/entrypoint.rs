@@ -1,21 +1,24 @@
 use std::future::Future;
-use std::sync::Arc;
 
-use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
+use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
 use sail_server::ServerBuilder;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
 
 use crate::server::SparkConnectServer;
 use crate::session_manager::SessionManager;
+pub use crate::session_manager::SessionManagerOptions;
 use crate::spark::connect::spark_connect_service_server::SparkConnectServiceServer;
 
-pub async fn serve<F>(listener: TcpListener, signal: F) -> Result<(), Box<dyn std::error::Error>>
+pub async fn serve<F>(
+    listener: TcpListener,
+    signal: F,
+    options: SessionManagerOptions,
+) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Future<Output = ()>,
 {
-    let config = AppConfig::load()?;
-    let session_manager = SessionManager::new(Arc::new(config));
+    let session_manager = SessionManager::new(options);
     let server = SparkConnectServer::new(session_manager);
     let service = SparkConnectServiceServer::new(server)
         // The original Spark Connect server seems to have configuration for inbound (decoding) message size only.

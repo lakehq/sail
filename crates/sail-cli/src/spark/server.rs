@@ -1,11 +1,12 @@
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use log::info;
-use sail_spark_connect::entrypoint::serve;
+use sail_common::config::AppConfig;
+use sail_common::runtime::RuntimeManager;
+use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
 use sail_telemetry::telemetry::init_telemetry;
 use tokio::net::TcpListener;
-
-const SERVER_STACK_SIZE: usize = 1024 * 1024 * 8;
 
 /// Handles graceful shutdown by waiting for a `SIGINT` signal in [tokio].
 ///
@@ -28,19 +29,21 @@ async fn shutdown() {
 pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry()?;
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .thread_stack_size(SERVER_STACK_SIZE)
-        .enable_all()
-        .build()?;
+    let config = Arc::new(AppConfig::load()?);
+    let runtime = RuntimeManager::try_new(&config.runtime)?;
+    let options = SessionManagerOptions {
+        config: Arc::clone(&config),
+        runtime: runtime.handle(),
+    };
 
-    runtime.block_on(async {
+    runtime.handle().primary().block_on(async {
         // A secure connection can be handled by a gateway in production.
         let listener = TcpListener::bind((ip, port)).await?;
         info!(
             "Starting the Spark Connect server on {}...",
             listener.local_addr()?
         );
-        serve(listener, shutdown()).await?;
+        serve(listener, shutdown(), options).await?;
         info!("The Spark Connect server has stopped.");
         <Result<(), Box<dyn std::error::Error>>>::Ok(())
     })?;
