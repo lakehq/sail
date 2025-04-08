@@ -53,21 +53,21 @@ impl ScalarUDFImpl for SparkWeekOfYear {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.len() != 1 {
+        let [arg] = args.args.as_slice() else {
             return exec_err!(
                 "Spark `weekofyear` function requires 1 argument, got {}",
                 args.args.len()
             );
-        }
+        };
 
-        let timestamp_nanos = match args.args[0].data_type() {
-            DataType::Int32 | DataType::Int64 => args.args[0]
+        let timestamp_nanos = match arg.data_type() {
+            DataType::Int32 | DataType::Int64 => arg
                 .cast_to(
                     &DataType::Timestamp(TimeUnit::Nanosecond, Some(self.timezone.clone())),
                     None,
                 )?
                 .cast_to(&DataType::Int64, None),
-            DataType::Date64 | DataType::Date32 | DataType::Timestamp(_, None) => args.args[0]
+            DataType::Date64 | DataType::Date32 | DataType::Timestamp(_, None) => arg
                 .cast_to(
                     &DataType::Timestamp(TimeUnit::Nanosecond, Some(self.timezone.clone())),
                     None,

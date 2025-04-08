@@ -7,7 +7,8 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ArrayFunctionSignature, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_expr_common::signature::ArrayFunctionArgument;
 
@@ -74,8 +75,9 @@ impl ScalarUDFImpl for SparkSize {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(size_inner)(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        make_scalar_function(size_inner)(&args)
     }
 }
 

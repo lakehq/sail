@@ -6,7 +6,7 @@ use datafusion::arrow::array::{ArrayRef, AsArray, Date32Array};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::types::NativeType;
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct SparkLastDay {
@@ -44,14 +44,15 @@ impl ScalarUDFImpl for SparkLastDay {
         Ok(DataType::Date32)
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-        if args.len() != 1 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [arg] = args.as_slice() else {
             return exec_err!(
                 "Spark `last_day` function requires 1 argument, got {}",
                 args.len()
             );
-        }
-        match &args[0] {
+        };
+        match arg {
             ColumnarValue::Scalar(ScalarValue::Date32(days)) => {
                 if let Some(days) = days {
                     Ok(ColumnarValue::Scalar(ScalarValue::Date32(Some(

@@ -9,7 +9,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct SparkBase64 {
@@ -65,15 +65,16 @@ impl ScalarUDFImpl for SparkBase64 {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 1 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [arg] = args.as_slice() else {
             return exec_err!(
-                "Spark `base64` function requires 1 argument, got {:?}",
-                args
+                "Spark `base64` function requires 1 argument, got {}",
+                args.len()
             );
-        }
+        };
 
-        let results = match &args[0] {
+        let results = match arg {
             ColumnarValue::Scalar(ScalarValue::Binary(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::BinaryView(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, Some(expr)))
@@ -192,29 +193,30 @@ impl ScalarUDFImpl for SparkUnbase64 {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 1 {
+        let [arg_type] = arg_types else {
             return plan_err!(
                 "{} expects 1 argument, but got {}",
                 self.name(),
                 arg_types.len()
             );
-        }
-        match arg_types[0] {
+        };
+        match arg_type {
             DataType::Utf8 | DataType::Utf8View => Ok(DataType::Binary),
             DataType::LargeUtf8 => Ok(DataType::LargeBinary),
             _ => plan_err!("1st argument should be String, got {}", arg_types[0]),
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 1 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [arg] = args.as_slice() else {
             return exec_err!(
-                "Spark `unbase64` function requires 1 argument, got {:?}",
-                args
+                "Spark `unbase64` function requires 1 argument, got {}",
+                args.len()
             );
-        }
+        };
 
-        let results = match &args[0] {
+        let results = match arg {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(expr)))
             | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(expr))) => {
