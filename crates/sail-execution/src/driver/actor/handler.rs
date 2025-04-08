@@ -15,8 +15,6 @@ use futures::TryStreamExt;
 use log::{debug, error, info, warn};
 use prost::bytes::BytesMut;
 use prost::Message;
-use rand::prelude::SliceRandom;
-use rand::rng;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::{mpsc, oneshot};
@@ -1025,7 +1023,6 @@ impl TaskSlotAssigner {
     }
 
     pub fn next(&mut self) -> Option<WorkerId> {
-        self.slots.shuffle(&mut rng());
         self.slots.iter_mut().find_map(|(worker_id, slots)| {
             if *slots > 0 {
                 *slots -= 1;

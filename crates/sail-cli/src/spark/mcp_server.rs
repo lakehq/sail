@@ -68,12 +68,15 @@ pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::er
 
     let config = Arc::new(AppConfig::load()?);
     let runtime = RuntimeManager::try_new(&config.runtime)?;
-    let options = SessionManagerOptions {
-        config: Arc::clone(&config),
-        runtime: runtime.handle(),
-    };
+
     let spark_remote = match settings.spark_remote {
-        None => run_spark_connect_server(options)?,
+        None => {
+            let options = SessionManagerOptions {
+                config: Arc::clone(&config),
+                runtime: runtime.handle(),
+            };
+            run_spark_connect_server(options)?
+        }
         Some(x) => x,
     };
 

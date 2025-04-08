@@ -98,7 +98,6 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
 }
 
-#[allow(clippy::doc_overindented_list_items)]
 /// Arguments:
 ///   - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
 ///   - right: The accepted type depends on the type of expr:
