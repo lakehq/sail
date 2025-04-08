@@ -13,24 +13,29 @@ use sail_sql_parser::parser::{
     create_named_expression_parser, create_object_name_parser, create_parser,
     create_qualified_wildcard_parser,
 };
-use sail_sql_parser::token::TokenLabel;
+use sail_sql_parser::token::Token;
 
 use crate::error::{SqlError, SqlResult};
+
+fn map_parser_input<'a, C>(
+    (t, s): &'a (Token<'a>, SimpleSpan<usize, C>),
+) -> (&'a Token<'a>, &'a SimpleSpan<usize, C>) {
+    (t, s)
+}
 
 macro_rules! parse {
     ($input:ident, $parser:ident $(,)?) => {{
         let options = ParserOptions::default();
         let length = $input.len();
-        let lexer = create_lexer::<_, chumsky::extra::Err<chumsky::error::Rich<_, _, TokenLabel>>>(
-            &options,
-        );
+        let lexer = create_lexer::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(&options);
         let tokens = lexer
             .parse($input)
             .into_result()
             .map_err(SqlError::parser)?;
-        let tokens = tokens.as_slice().spanned(SimpleSpan::new(length, length));
-        let parser =
-            $parser::<_, chumsky::extra::Err<chumsky::error::Rich<_, _, TokenLabel>>>(&options);
+        let tokens = tokens
+            .as_slice()
+            .map((length..length).into(), map_parser_input);
+        let parser = $parser::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(&options);
         parser.parse(tokens).into_result().map_err(SqlError::parser)
     }};
 }

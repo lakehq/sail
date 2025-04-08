@@ -24,6 +24,7 @@ pub struct KubernetesWorkerManagerOptions {
     pub namespace: String,
     pub driver_pod_name: String,
     pub worker_pod_name_prefix: String,
+    pub worker_service_account_name: String,
 }
 
 pub struct KubernetesWorkerManager {
@@ -225,6 +226,7 @@ impl WorkerManager for KubernetesWorkerManager {
                     ..Default::default()
                 }],
                 restart_policy: Some("Never".to_string()),
+                service_account_name: Some(self.options.worker_service_account_name.clone()),
                 ..Default::default()
             }),
             status: None,

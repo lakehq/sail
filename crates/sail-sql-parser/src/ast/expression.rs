@@ -1,8 +1,7 @@
-use chumsky::error::Error;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, MapExtra, ValueInput};
 use chumsky::label::LabelError;
-use chumsky::pratt::{infix, left, postfix, prefix};
+use chumsky::pratt::{infix, left, postfix, prefix, Operator};
 use chumsky::prelude::{any, choice};
 use chumsky::Parser;
 use either::Either;
@@ -922,11 +921,11 @@ where
     ) -> impl Parser<'a, I, Self, E> + Clone {
         let atom = AtomExpr::parser((expr.clone(), query.clone(), data_type.clone()), options)
             .map(|atom| <ExprFragment<Token<'a>, I::Span>>::Singleton(Expr::Atom(atom)));
-        atom.pratt((
+        let operator = (
             postfix(
                 26,
                 ExprModifier::parser((expr.clone(), data_type.clone()), options),
-                |e, op| ExprFragment::Modifier {
+                |e, op, _| ExprFragment::Modifier {
                     expr: Box::new(e),
                     modifier: op,
                 },
@@ -938,7 +937,7 @@ where
                     operator::Minus::parser((), options).map(UnaryOperator::Minus),
                     operator::Tilde::parser((), options).map(UnaryOperator::BitwiseNot),
                 )),
-                |op, e| ExprFragment::UnaryOperator {
+                |op, e, _| ExprFragment::UnaryOperator {
                     op,
                     expr: Box::new(e),
                 },
@@ -951,7 +950,7 @@ where
                     operator::Percent::parser((), options).map(BinaryOperator::Modulo),
                     Div::parser((), options).map(BinaryOperator::IntegerDivide),
                 )),
-                |l, op, r| ExprFragment::BinaryOperator {
+                |l, op, r, _| ExprFragment::BinaryOperator {
                     left: Box::new(l),
                     op,
                     right: Box::new(r),
@@ -965,7 +964,7 @@ where
                     operator::DoubleVerticalBar::parser((), options)
                         .map(BinaryOperator::StringConcat),
                 )),
-                |l, op, r| ExprFragment::BinaryOperator {
+                |l, op, r, _| ExprFragment::BinaryOperator {
                     left: Box::new(l),
                     op,
                     right: Box::new(r),
@@ -981,7 +980,7 @@ where
                     operator::DoubleLessThan::parser((), options)
                         .map(BinaryOperator::BitwiseShiftLeft),
                 )),
-                |l, op, r| ExprFragment::BinaryOperator {
+                |l, op, r, _| ExprFragment::BinaryOperator {
                     left: Box::new(l),
                     op,
                     right: Box::new(r),
@@ -990,7 +989,7 @@ where
             infix(
                 left(21),
                 operator::Ampersand::parser((), options).map(BinaryOperator::BitwiseAnd),
-                |l, op, r| ExprFragment::BinaryOperator {
+                |l, op, r, _| ExprFragment::BinaryOperator {
                     left: Box::new(l),
                     op,
                     right: Box::new(r),
@@ -999,7 +998,7 @@ where
             infix(
                 left(20),
                 operator::Caret::parser((), options).map(BinaryOperator::BitwiseXor),
-                |l, op, r| ExprFragment::BinaryOperator {
+                |l, op, r, _| ExprFragment::BinaryOperator {
                     left: Box::new(l),
                     op,
                     right: Box::new(r),
@@ -1008,7 +1007,7 @@ where
             infix(
                 left(19),
                 operator::VerticalBar::parser((), options).map(BinaryOperator::BitwiseOr),
-                |l, op, r| ExprFragment::BinaryOperator {
+                |l, op, r, _| ExprFragment::BinaryOperator {
                     left: Box::new(l),
                     op,
                     right: Box::new(r),
@@ -1029,7 +1028,7 @@ where
                     operator::LessThanGreaterThan::parser((), options).map(BinaryOperator::LtGt),
                     operator::LessThan::parser((), options).map(BinaryOperator::Lt),
                 )),
-                |l, op, r| ExprFragment::BinaryOperator {
+                |l, op, r, _| ExprFragment::BinaryOperator {
                     left: Box::new(l),
                     op,
                     right: Box::new(r),
@@ -1041,7 +1040,7 @@ where
                     Not::parser((), options).map(UnaryOperator::Not),
                     operator::ExclamationMark::parser((), options).map(UnaryOperator::LogicalNot),
                 )),
-                |op, e| ExprFragment::UnaryOperator {
+                |op, e, _| ExprFragment::UnaryOperator {
                     op,
                     expr: Box::new(e),
                 },
@@ -1052,7 +1051,7 @@ where
                     .map_with(|t, extra: &mut MapExtra<'a, '_, _, _>| (t, extra.span()))
                     .rewind()
                     .then(PatternEscape::parser((), options)),
-                |e, ((token, span), op)| ExprFragment::Escape {
+                |e, ((token, span), op), _| ExprFragment::Escape {
                     token,
                     span,
                     expr: Box::new(e),
@@ -1063,7 +1062,7 @@ where
             postfix(
                 15,
                 ExprPostfixPredicate::parser((expr.clone(), query.clone()), options),
-                |e, op| ExprFragment::PostfixPredicate {
+                |e, op, _| ExprFragment::PostfixPredicate {
                     expr: Box::new(e),
                     predicate: op,
                 },
@@ -1074,7 +1073,7 @@ where
                     .map_with(|t, extra: &mut MapExtra<'a, '_, _, _>| (t, extra.span()))
                     .rewind()
                     .then(ExprInfixPredicate::parser((), options)),
-                |l, ((token, span), op), r| ExprFragment::InfixPredicate {
+                |l, ((token, span), op), r, _| ExprFragment::InfixPredicate {
                     token,
                     span,
                     left: Box::new(l),
@@ -1085,7 +1084,7 @@ where
             infix(
                 left(14),
                 And::parser((), options).map(BinaryOperator::And),
-                |l, op, r| ExprFragment::BinaryOperator {
+                |l, op, r, _| ExprFragment::BinaryOperator {
                     left: Box::new(l),
                     op,
                     right: Box::new(r),
@@ -1094,14 +1093,15 @@ where
             infix(
                 left(13),
                 Or::parser((), options).map(BinaryOperator::Or),
-                |l, op, r| ExprFragment::BinaryOperator {
+                |l, op, r, _| ExprFragment::BinaryOperator {
                     left: Box::new(l),
                     op,
                     right: Box::new(r),
                 },
             ),
-        ))
-        .try_map(|e, _| e.build::<I, E>())
-        .labelled(TokenLabel::Expression)
+        );
+        atom.pratt(operator.boxed())
+            .try_map(|e, _| e.build::<I, E>())
+            .labelled(TokenLabel::Expression)
     }
 }

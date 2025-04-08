@@ -36,7 +36,9 @@ Relative file paths
 
 :::
 
-## Configuring AWS Credentials
+## AWS Configuration
+
+### AWS Credentials
 
 You can configure AWS credentials using standard methods supported by the AWS tools and SDKs.
 These methods include AWS `config` and `credentials` files,
@@ -47,23 +49,24 @@ You can refer to the [AWS documentation](https://docs.aws.amazon.com/sdkref/late
 for more details about the credential providers.
 :::
 
-## Accessing Public Data on AWS S3
+### AWS Region
+
+If the AWS region is configured, all S3 buckets must be in the same region.
+Otherwise, an error will be returned when accessing the data.
+
+To allow inferring regions for S3 buckets and accessing S3 data in all regions, you can set the `AWS_REGION` environment variable to an empty string.
+
+### Accessing Public Data on AWS S3
 
 Some datasets on S3 allow public access without an AWS account.
-You can skip retrieving AWS credentials using the following environment variables.
-Note that `AWS_REGION` must match the region of the S3 bucket containing the data.
-
-```text
-AWS_SKIP_SIGNATURE=true
-AWS_REGION=us-east-1
-```
+You can skip retrieving AWS credentials by setting the environment variable `AWS_SKIP_SIGNATURE=true`.
 
 ::: info
 `AWS_SKIP_SIGNATURE` is not a standard environment variable used by AWS SDKs.
 It is an environment variable recognized by Sail.
 :::
 
-## Configuring Hugging Face
+## Hugging Face Configuration
 
 Files in Hugging Face datasets are cached locally once downloaded.
 The cache is shared with other Hugging Face Python tools.

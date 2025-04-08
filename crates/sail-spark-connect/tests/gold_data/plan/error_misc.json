@@ -11,7 +11,7 @@
       "input": "\nFROM test-table\nSELECT a\nSELECT b\n        ",
       "exception": "\n[INVALID_IDENTIFIER] The identifier test-table is invalid. Please, consider quoting it with back-quotes as `test-table`.(line 2, pos 9)\n\n== SQL ==\n\nFROM test-table\n---------^^^\nSELECT a\nSELECT b\n        \n",
       "output": {
-        "failure": "invalid argument: found FROM at 1:5 expected statement, or end of input"
+        "failure": "invalid argument: found something at 1:5 expected something else"
       }
     },
     {

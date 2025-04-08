@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.2.2"
+version = "0.2.3"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -33,6 +33,9 @@ classifiers = [
 spark = [
     "pyspark[connect]>=3.5,<4.0",
     "duckdb>=1.0,<2.0",
+]
+mcp = [
+    "mcp>=1.0.0,<2",
 ]
 
 [project.urls]
@@ -71,13 +74,14 @@ dependencies = [
     "rich>=12.4.4,<14", # (required by Ibis PySpark)
     "pytest~=8.3",
     "duckdb~=1.1",
+    "mcp>=1.0.0,<2",
 ]
 
 [tool.hatch.envs.default.overrides]
 env.CI.installer = "uv"
 
 [tool.hatch.envs.default.scripts]
-install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"
+install-pysail = "\"{env:HATCH_UV}\" pip install pysail --no-index -f target/wheels --force-reinstall"
 
 [tool.hatch.envs.docs]
 detached = true
@@ -89,7 +93,7 @@ dependencies = [
 ]
 
 [tool.hatch.envs.docs.scripts]
-install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"
+install-pysail = "\"{env:HATCH_UV}\" pip install pysail --no-index -f target/wheels --force-reinstall"
 build = "sphinx-build python/pysail/docs python/pysail/docs/_build -b json"
 
 [tool.hatch.envs.docs.overrides]
@@ -141,8 +145,8 @@ PYTHONPATH = "{root}/scripts/spark-tests"
 IBIS_TESTING_DATA_DIR = "{root}/opt/ibis-testing-data"
 
 [tool.hatch.envs.test.scripts]
-install-pyspark = "{env:HATCH_UV} pip install opt/spark/python/dist/pyspark-3.5.4.tar.gz"
-install-pysail = "{env:HATCH_UV} pip install pysail --no-index -f target/wheels --force-reinstall"
+install-pyspark = "\"{env:HATCH_UV}\" pip install opt/spark/python/dist/pyspark-3.5.4.tar.gz"
+install-pysail = "\"{env:HATCH_UV}\" pip install pysail --no-index -f target/wheels --force-reinstall"
 
 [tool.hatch.envs.test.overrides]
 env.CI.installer = "uv"

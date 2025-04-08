@@ -124,6 +124,7 @@ pub struct KubernetesConfig {
     /// The prefix of the name of worker pods.
     /// This should usually end with a hyphen (`-`).
     pub worker_pod_name_prefix: String,
+    pub worker_service_account_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

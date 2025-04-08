@@ -4827,7 +4827,7 @@
       "input": "select * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'.(line 1, pos 60)\n\n== SQL ==\nselect * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1\n------------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found on at 60:62 expected '->', '.', '(', '[', '::', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', 'ESCAPE', 'IS', 'NOT', 'IN', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found on at 60:62 expected 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {

@@ -101,9 +101,9 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
 /// Arguments:
 ///   - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
 ///   - right: The accepted type depends on the type of expr:
-///            - If left is a numeric right must be numeric expression.
-///            - If left is a year-month or day-time interval, right must be the same class.
-///            - Otherwise right must be a DATE or TIMESTAMP.
+///     - If left is a numeric right must be numeric expression.
+///     - If left is a year-month or day-time interval, right must be the same class.
+///     - Otherwise right must be a DATE or TIMESTAMP.
 ///
 /// Returns:
 ///   - If left is a numeric, the result is common maximum type of the arguments.
