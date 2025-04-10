@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.4
+
+_April 10, 2025_
+
+- Improved MCP server logging ([#421](https://github.com/lakehq/sail/pull/421)).
+- Improved AWS S3 data access ([#426](https://github.com/lakehq/sail/pull/426)).
+- Supported AWS credential caching ([#430](https://github.com/lakehq/sail/pull/430)).
+- Fixed issues with cluster mode task execution ([#429](https://github.com/lakehq/sail/pull/429)).
+- Supported `exceptAll()` and `tail()` in the Spark DataFrame API ([#417](https://github.com/lakehq/sail/pull/417)).
+
 ## 0.2.3
 
 _March 21, 2025_
