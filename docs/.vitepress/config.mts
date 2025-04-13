@@ -109,7 +109,7 @@ class TransformPageData {
       ["meta", { property: "og:url", content: canonicalUrl }],
       ["meta", { property: "og:title", content: pageData.title }],
       ["meta", { property: "og:description", content: pageData.description }],
-      ["meta", { property: "og:image", content: `${Site.url()}logo.png` }],
+      ["meta", { property: "og:image", content: `${Site.url()}banner.png` }],
       ["meta", { property: "og:type", content: "article" }],
       ["meta", { property: "og:site_name", content: "Sail Documentation" }],
     );
