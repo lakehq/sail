@@ -79,8 +79,6 @@ enum SparkCommand {
 }
 
 pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
-    console_subscriber::init();
-
     let cli = Cli::parse_from(args);
 
     match cli.command {

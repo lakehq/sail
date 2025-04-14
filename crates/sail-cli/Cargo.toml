@@ -14,7 +14,6 @@ default = ["mimalloc"]
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-execution = { path = "../sail-execution" }
-sail-plan = { path = "../sail-plan" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 
@@ -25,4 +24,3 @@ log = { workspace = true }
 fastrace = { workspace = true }
 pyo3 = { workspace = true }
 rustls = { workspace = true }
-console-subscriber = { workspace = true }
