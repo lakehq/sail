@@ -25,3 +25,4 @@ log = { workspace = true }
 fastrace = { workspace = true }
 pyo3 = { workspace = true }
 rustls = { workspace = true }
+console-subscriber = { workspace = true }

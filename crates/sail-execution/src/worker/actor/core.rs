@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use std::mem;
+use std::sync::Arc;
 
-use datafusion::prelude::SessionContext;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::SessionStateBuilder;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::info;
+use sail_plan::object_store::DynamicObjectStoreRegistry;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -25,6 +29,7 @@ pub struct WorkerActor {
     worker_clients: HashMap<WorkerId, WorkerClient>,
     pub(super) task_signals: HashMap<TaskAttempt, oneshot::Sender<()>>,
     pub(super) local_streams: HashMap<ChannelName, Box<dyn LocalStream>>,
+    pub(super) session_context: Option<Arc<SessionContext>>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
     /// A monotonically increasing sequence number for ordered events.
     pub(super) sequence: u64,
@@ -48,6 +53,7 @@ impl Actor for WorkerActor {
             worker_clients: HashMap::new(),
             task_signals: HashMap::new(),
             local_streams: HashMap::new(),
+            session_context: None,
             physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
             sequence: 42,
         }
@@ -153,5 +159,33 @@ impl WorkerActor {
             .entry(id)
             .or_insert_with(|| WorkerClient::new(options));
         Ok(client.clone())
+    }
+
+    pub(super) fn session_context(&mut self) -> ExecutionResult<Arc<SessionContext>> {
+        match &self.session_context {
+            Some(context) => Ok(context.clone()),
+            None => {
+                let context = Arc::new(self.create_session_context()?);
+                self.session_context = Some(context.clone());
+                Ok(context)
+            }
+        }
+    }
+
+    fn create_session_context(&self) -> ExecutionResult<SessionContext> {
+        let runtime = {
+            let registry = DynamicObjectStoreRegistry::new(self.options().runtime.clone());
+            let builder =
+                RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
+            Arc::new(builder.build()?)
+        };
+        let config = SessionConfig::default();
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
+        let context = SessionContext::new_with_state(state);
+        Ok(context)
     }
 }

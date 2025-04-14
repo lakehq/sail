@@ -307,23 +307,6 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
-    fn session_context(&self) -> ExecutionResult<Arc<SessionContext>> {
-        let runtime = {
-            let registry = DynamicObjectStoreRegistry::new(self.options().runtime.clone());
-            let builder =
-                RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
-            Arc::new(builder.build()?)
-        };
-        let config = SessionConfig::default();
-        let state = SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_default_features()
-            .build();
-        let context = SessionContext::new_with_state(state);
-        Ok(Arc::new(context))
-    }
-
     fn execute_plan(
         &mut self,
         ctx: &mut ActorContext<Self>,
