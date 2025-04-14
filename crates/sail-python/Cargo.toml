@@ -5,7 +5,6 @@ edition = { workspace = true }
 
 [dependencies]
 sail-common = { path = "../sail-common" }
-sail-plan = { path = "../sail-plan" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 sail-cli = { path = "../sail-cli" }

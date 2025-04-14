@@ -5259,7 +5259,6 @@ dependencies = [
  "pyo3",
  "sail-cli",
  "sail-common",
- "sail-plan",
  "sail-spark-connect",
  "sail-telemetry",
  "tokio",
@@ -5960,7 +5959,6 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
- "tracing",
  "windows-sys 0.52.0",
 ]
 

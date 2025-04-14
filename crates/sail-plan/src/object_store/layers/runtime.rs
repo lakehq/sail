@@ -13,6 +13,7 @@ use object_store::{
 };
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, Mutex};
+use tokio_stream::once;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::Bytes;
 
@@ -33,6 +34,38 @@ impl RuntimeAwareObjectStore {
         // ensure that the resources are managed by the correct runtime.
         let inner = initializer()?;
         Ok(Self { inner, handle })
+    }
+
+    fn wrap_multipart_upload(
+        &self,
+        multipart: Box<dyn MultipartUpload>,
+    ) -> Box<dyn MultipartUpload> {
+        Box::new(RuntimeAwareMultipartUpload::new(
+            multipart,
+            self.handle.clone(),
+        ))
+    }
+
+    fn wrap_get_result(&self, result: GetResult) -> GetResult {
+        match result {
+            GetResult {
+                payload: GetResultPayload::File { .. },
+                ..
+            } => result,
+            GetResult {
+                payload: GetResultPayload::Stream(stream),
+                meta,
+                range,
+                attributes,
+            } => GetResult {
+                payload: GetResultPayload::Stream(
+                    RuntimeAwareStream::new(move |_| stream, (), self.handle.clone()).boxed(),
+                ),
+                meta,
+                range,
+                attributes,
+            },
+        }
     }
 }
 
@@ -72,10 +105,7 @@ impl ObjectStore for RuntimeAwareObjectStore {
             .handle
             .spawn(async move { inner.put_multipart(&location).await })
             .await??;
-        Ok(Box::new(RuntimeAwareMultipartUpload::new(
-            multipart,
-            self.handle.clone(),
-        )))
+        Ok(self.wrap_multipart_upload(multipart))
     }
 
     async fn put_multipart_opts(
@@ -89,10 +119,7 @@ impl ObjectStore for RuntimeAwareObjectStore {
             .handle
             .spawn(async move { inner.put_multipart_opts(&location, opts).await })
             .await??;
-        Ok(Box::new(RuntimeAwareMultipartUpload::new(
-            multipart,
-            self.handle.clone(),
-        )))
+        Ok(self.wrap_multipart_upload(multipart))
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
@@ -101,29 +128,8 @@ impl ObjectStore for RuntimeAwareObjectStore {
         let result = self
             .handle
             .spawn(async move { inner.get(&location).await })
-            .await?;
-        match result {
-            Ok(
-                x @ GetResult {
-                    payload: GetResultPayload::File { .. },
-                    ..
-                },
-            ) => Ok(x),
-            Ok(GetResult {
-                payload: GetResultPayload::Stream(stream),
-                meta,
-                range,
-                attributes,
-            }) => Ok(GetResult {
-                payload: GetResultPayload::Stream(
-                    RuntimeAwareStream::from_stream(stream, self.handle.clone()).boxed(),
-                ),
-                meta,
-                range,
-                attributes,
-            }),
-            Err(e) => Err(e),
-        }
+            .await??;
+        Ok(self.wrap_get_result(result))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -132,29 +138,8 @@ impl ObjectStore for RuntimeAwareObjectStore {
         let result = self
             .handle
             .spawn(async move { inner.get_opts(&location, options).await })
-            .await?;
-        match result {
-            Ok(
-                x @ GetResult {
-                    payload: GetResultPayload::File { .. },
-                    ..
-                },
-            ) => Ok(x),
-            Ok(GetResult {
-                payload: GetResultPayload::Stream(stream),
-                meta,
-                range,
-                attributes,
-            }) => Ok(GetResult {
-                payload: GetResultPayload::Stream(
-                    RuntimeAwareStream::from_stream(stream, self.handle.clone()).boxed(),
-                ),
-                meta,
-                range,
-                attributes,
-            }),
-            Err(e) => Err(e),
-        }
+            .await??;
+        Ok(self.wrap_get_result(result))
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
@@ -192,25 +177,22 @@ impl ObjectStore for RuntimeAwareObjectStore {
 
     fn delete_stream<'a>(
         &'a self,
-        locations: BoxStream<'a, Result<Path>>,
+        _locations: BoxStream<'a, Result<Path>>,
     ) -> BoxStream<'a, Result<Path>> {
-        // FIXME: run `delete_stream` in the correct runtime
-        self.inner.delete_stream(locations)
+        // We cannot run `delete_stream` in a runtime-aware manner because
+        // the input and output streams are expected to have the lifetime `'a`,
+        // while tasks spawned by the runtime handle must be `'static`.
+        once(Err(object_store::Error::NotImplemented)).boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
-        let (tx, rx) = mpsc::channel(1);
-        let inner = self.inner.clone();
         let prefix = prefix.cloned();
-        self.handle.spawn(async move {
-            let mut stream = inner.list(prefix.as_ref());
-            while let Some(item) = stream.next().await {
-                if tx.send(item).await.is_err() {
-                    break;
-                }
-            }
-        });
-        RuntimeAwareStream::new(rx).boxed()
+        RuntimeAwareStream::new(
+            move |x| x.list(prefix.as_ref()),
+            self.inner.clone(),
+            self.handle.clone(),
+        )
+        .boxed()
     }
 
     fn list_with_offset(
@@ -218,19 +200,14 @@ impl ObjectStore for RuntimeAwareObjectStore {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'_, Result<ObjectMeta>> {
-        let (tx, rx) = mpsc::channel(1);
-        let inner = self.inner.clone();
         let prefix = prefix.cloned();
         let offset = offset.clone();
-        self.handle.spawn(async move {
-            let mut stream = inner.list_with_offset(prefix.as_ref(), &offset);
-            while let Some(item) = stream.next().await {
-                if tx.send(item).await.is_err() {
-                    break;
-                }
-            }
-        });
-        RuntimeAwareStream::new(rx).boxed()
+        RuntimeAwareStream::new(
+            move |x| x.list_with_offset(prefix.as_ref(), &offset),
+            self.inner.clone(),
+            self.handle.clone(),
+        )
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -331,16 +308,14 @@ impl<T> RuntimeAwareStream<T>
 where
     T: Send + 'static,
 {
-    pub fn new(rx: mpsc::Receiver<T>) -> Self {
-        Self {
-            inner: ReceiverStream::new(rx),
-        }
-    }
-
-    pub fn from_stream(stream: BoxStream<'static, T>, handle: Handle) -> Self {
+    pub fn new<F, A>(initializer: F, args: A, handle: Handle) -> Self
+    where
+        A: Send + 'static,
+        F: FnOnce(&A) -> BoxStream<'_, T> + Send + 'static,
+    {
         let (tx, rx) = mpsc::channel(1);
         handle.spawn(async move {
-            let mut stream = stream;
+            let mut stream = initializer(&args);
             while let Some(item) = stream.next().await {
                 if tx.send(item).await.is_err() {
                     break;
