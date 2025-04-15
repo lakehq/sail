@@ -92,7 +92,6 @@ impl SessionManager {
                 Box::new(ClusterJobRunner::new(system.deref_mut(), options))
             }
         };
-        let spark = SparkExtension::new(key.user_id, key.session_id, job_runner);
         // TODO: support more systematic configuration
         // TODO: return error on invalid environment variables
         let session_config = SessionConfig::new()
@@ -100,7 +99,11 @@ impl SessionManager {
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
             .with_information_schema(true)
             .with_extension(Arc::new(TemporaryViewManager::default()))
-            .with_extension(Arc::new(spark))
+            .with_extension(Arc::new(SparkExtension::try_new(
+                key.user_id,
+                key.session_id,
+                job_runner,
+            )?))
             .set_usize(
                 "datafusion.execution.batch_size",
                 config.execution.batch_size,

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sail_common::datetime::warn_if_spark_session_timezone_mismatches_local_timezone;
 use sail_plan::config::{PlanConfig, TimestampType};
 use sail_plan::formatter::DefaultPlanFormatter;
 use sail_python_udf::config::PySparkUdfConfig;
@@ -178,10 +177,6 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .map(|x| x.to_string())
         {
             output.session_timezone = value;
-            warn_if_spark_session_timezone_mismatches_local_timezone(
-                output.session_timezone.as_str(),
-                output.system_timezone.as_str(),
-            )?;
         }
 
         if let Some(value) = config
