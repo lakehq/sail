@@ -10,6 +10,7 @@ const DEFAULT_CONFIG: &str = include_str!("default.toml");
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub mode: ExecutionMode,
+    pub runtime: RuntimeConfig,
     pub cluster: ClusterConfig,
     pub execution: ExecutionConfig,
     pub kubernetes: KubernetesConfig,
@@ -65,6 +66,12 @@ pub enum ExecutionMode {
         alias = "kube_cluster"
     )]
     KubernetesCluster,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    pub stack_size: usize,
+    pub enable_secondary: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

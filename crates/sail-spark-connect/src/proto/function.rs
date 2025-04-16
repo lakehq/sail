@@ -7,6 +7,7 @@ mod tests {
     use datafusion::arrow::error::ArrowError;
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
     use sail_common::config::AppConfig;
+    use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
     use sail_plan::resolve_and_execute_plan;
     use sail_server::actor::ActorSystem;
@@ -16,7 +17,7 @@ mod tests {
     use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
     use crate::session::SparkExtension;
-    use crate::session_manager::{SessionKey, SessionManager};
+    use crate::session_manager::{SessionKey, SessionManager, SessionManagerOptions};
     use crate::spark::connect::relation::RelType;
     use crate::spark::connect::{Relation, Sql};
 
@@ -52,22 +53,28 @@ mod tests {
 
     #[test]
     fn test_sql_function() -> Result<(), Box<dyn std::error::Error>> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
         let config = Arc::new(AppConfig::load()?);
+        let runtime = RuntimeManager::try_new(&config.runtime)?;
         let system = Arc::new(Mutex::new(ActorSystem::new()));
         let session_key = SessionKey {
             user_id: None,
             session_id: "test".to_string(),
         };
-        let context = rt.block_on(async {
+        let handle = runtime.handle();
+        let context = handle.primary().block_on(async {
             // We create the session inside an async context, even though the
             // `create_session_context` function itself is sync. This is because the actor system
             // may need to spawn actors when the session runs in cluster mode.
-            SessionManager::create_session_context(config, system, session_key)
+            SessionManager::create_session_context(
+                system,
+                session_key,
+                SessionManagerOptions {
+                    config,
+                    runtime: runtime.handle(),
+                },
+            )
         })?;
-        Ok(test_gold_set(
+        test_gold_set(
             "tests/gold_data/function/*.json",
             |example: FunctionExample| -> SparkResult<String> {
                 let relation = Relation {
@@ -79,7 +86,7 @@ mod tests {
                     })),
                 };
                 let plan = relation.try_into()?;
-                let result = rt.block_on(async {
+                let result = handle.primary().block_on(async {
                     let spark = SparkExtension::get(&context)?;
                     let plan =
                         resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
@@ -95,6 +102,7 @@ mod tests {
                 }
             },
             SparkError::internal,
-        )?)
+        )
+        .map_err(|e| e.into())
     }
 }

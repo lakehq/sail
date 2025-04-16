@@ -10,6 +10,8 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use log::info;
 use sail_common::config::{AppConfig, ExecutionMode};
+use sail_common::runtime::RuntimeHandle;
+use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
 use sail_plan::function::{
     BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
@@ -43,7 +45,6 @@ impl Display for SessionKey {
 pub struct SessionManager {
     system: Arc<Mutex<ActorSystem>>,
     handle: ActorHandle<SessionManagerActor>,
-    config: Arc<AppConfig>,
 }
 
 impl Debug for SessionManager {
@@ -53,13 +54,12 @@ impl Debug for SessionManager {
 }
 
 impl SessionManager {
-    pub fn new(config: Arc<AppConfig>) -> Self {
+    pub fn new(options: SessionManagerOptions) -> Self {
         let mut system = ActorSystem::new();
-        let handle = system.spawn::<SessionManagerActor>(config.as_ref().into());
+        let handle = system.spawn::<SessionManagerActor>(options);
         Self {
             system: Arc::new(Mutex::new(system)),
             handle,
-            config,
         }
     }
 
@@ -71,7 +71,6 @@ impl SessionManager {
         let event = SessionManagerEvent::GetOrCreateSession {
             key,
             system: self.system.clone(),
-            config: self.config.clone(),
             result: tx,
         };
         self.handle.send(event).await?;
@@ -80,14 +79,14 @@ impl SessionManager {
     }
 
     pub fn create_session_context(
-        config: Arc<AppConfig>,
         system: Arc<Mutex<ActorSystem>>,
         key: SessionKey,
+        options: SessionManagerOptions,
     ) -> SparkResult<SessionContext> {
-        let job_runner: Box<dyn JobRunner> = match config.mode {
+        let job_runner: Box<dyn JobRunner> = match options.config.mode {
             ExecutionMode::Local => Box::new(LocalJobRunner::new()),
             ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
-                let options = config.as_ref().try_into()?;
+                let options = DriverOptions::try_new(&options.config, options.runtime.clone())?;
                 let mut system = system.lock()?;
                 Box::new(ClusterJobRunner::new(system.deref_mut(), options))
             }
@@ -103,15 +102,18 @@ impl SessionManager {
             .with_extension(Arc::new(spark))
             .set_usize(
                 "datafusion.execution.batch_size",
-                config.execution.batch_size,
+                options.config.execution.batch_size,
             )
             .set_usize(
                 "datafusion.execution.parquet.maximum_parallel_row_group_writers",
-                config.parquet.maximum_parallel_row_group_writers,
+                options.config.parquet.maximum_parallel_row_group_writers,
             )
             .set_usize(
                 "datafusion.execution.parquet.maximum_buffered_record_batches_per_stream",
-                config.parquet.maximum_buffered_record_batches_per_stream,
+                options
+                    .config
+                    .parquet
+                    .maximum_buffered_record_batches_per_stream,
             )
             .set_bool(
                 "datafusion.execution.listing_table_ignore_subdirectory",
@@ -121,7 +123,7 @@ impl SessionManager {
             //  https://spark.apache.org/docs/latest/sql-data-sources-csv.html
             .set_bool("datafusion.catalog.has_header", false);
         let runtime = {
-            let registry = DynamicObjectStoreRegistry::new();
+            let registry = DynamicObjectStoreRegistry::new(options.runtime.clone());
             let builder =
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)
@@ -151,23 +153,16 @@ impl SessionManager {
     }
 }
 
-struct SessionManagerOptions {
-    pub session_timeout: Duration,
-}
-
-impl From<&AppConfig> for SessionManagerOptions {
-    fn from(config: &AppConfig) -> Self {
-        Self {
-            session_timeout: Duration::from_secs(config.spark.session_timeout_secs),
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct SessionManagerOptions {
+    pub config: Arc<AppConfig>,
+    pub runtime: RuntimeHandle,
 }
 
 enum SessionManagerEvent {
     GetOrCreateSession {
         key: SessionKey,
         system: Arc<Mutex<ActorSystem>>,
-        config: Arc<AppConfig>,
         result: oneshot::Sender<SparkResult<SessionContext>>,
     },
     ProbeIdleSession {
@@ -199,9 +194,8 @@ impl Actor for SessionManagerActor {
             SessionManagerEvent::GetOrCreateSession {
                 key,
                 system,
-                config,
                 result,
-            } => self.handle_get_or_create_session(ctx, key, system, config, result),
+            } => self.handle_get_or_create_session(ctx, key, system, result),
             SessionManagerEvent::ProbeIdleSession { key, instant } => {
                 self.handle_probe_idle_session(ctx, key, instant)
             }
@@ -215,7 +209,6 @@ impl SessionManagerActor {
         ctx: &mut ActorContext<Self>,
         key: SessionKey,
         system: Arc<Mutex<ActorSystem>>,
-        config: Arc<AppConfig>,
         result: oneshot::Sender<SparkResult<SessionContext>>,
     ) -> ActorAction {
         let entry = self.sessions.entry(key.clone());
@@ -224,7 +217,7 @@ impl SessionManagerActor {
             Entry::Vacant(v) => {
                 let key = v.key().clone();
                 info!("creating session {}", key);
-                match SessionManager::create_session_context(config, system, key) {
+                match SessionManager::create_session_context(system, key, self.options.clone()) {
                     Ok(context) => Ok(v.insert(context).clone()),
                     Err(e) => Err(e),
                 }
@@ -239,7 +232,7 @@ impl SessionManagerActor {
                         key,
                         instant: active_at,
                     },
-                    self.options.session_timeout,
+                    Duration::from_secs(self.options.config.spark.session_timeout_secs),
                 );
             }
         }
