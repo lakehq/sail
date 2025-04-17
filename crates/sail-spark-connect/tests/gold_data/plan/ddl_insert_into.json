@@ -564,10 +564,8 @@
                 [
                   "part",
                   {
-                    "literal": {
-                      "date32": {
-                        "days": 17898
-                      }
+                    "unresolvedDate": {
+                      "value": "2019-01-02"
                     }
                   }
                 ]
@@ -611,10 +609,8 @@
                 [
                   "part",
                   {
-                    "literal": {
-                      "date32": {
-                        "days": 17898
-                      }
+                    "unresolvedDate": {
+                      "value": "2019-01-02"
                     }
                   }
                 ]
@@ -807,11 +803,9 @@
                 [
                   "part",
                   {
-                    "literal": {
-                      "timestampMicrosecond": {
-                        "microseconds": 1546427471000000,
-                        "timezoneInfo": "sQLConfigured"
-                      }
+                    "unresolvedTimestamp": {
+                      "value": "2019-01-02 11:11:11",
+                      "timestampType": "configured"
                     }
                   }
                 ]

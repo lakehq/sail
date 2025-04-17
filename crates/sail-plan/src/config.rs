@@ -18,7 +18,7 @@ pub enum DefaultTimestampType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     /// The time zone of the session.
-    pub session_timezone: String,
+    pub session_timezone: Arc<str>,
     /// The default timestamp type.
     pub default_timestamp_type: DefaultTimestampType,
     /// Whether to use large variable types in Arrow.
@@ -51,7 +51,7 @@ impl PlanConfig {
 impl Default for PlanConfig {
     fn default() -> Self {
         Self {
-            session_timezone: "UTC".to_string(),
+            session_timezone: Arc::from("UTC"),
             default_timestamp_type: DefaultTimestampType::TimestampLtz,
             arrow_use_large_var_types: false,
             plan_formatter: Arc::new(DefaultPlanFormatter),

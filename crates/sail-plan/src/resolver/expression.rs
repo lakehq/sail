@@ -4,7 +4,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::DataType;
+use chrono::{TimeZone, Utc};
+use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
@@ -25,6 +26,10 @@ use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::datetime::spark_date::parse_date;
+use crate::extension::function::datetime::spark_timestamp::{
+    parse_timestamp, parse_timezone, TimestampValue,
+};
 use crate::extension::function::drop_struct_field::DropStructField;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::function::table_input::TableInput;
@@ -1883,16 +1888,43 @@ impl PlanResolver<'_> {
         ))
     }
 
-    async fn resolve_expression_date(&self, _value: String) -> PlanResult<NamedExpr> {
-        todo!()
+    async fn resolve_expression_date(&self, value: String) -> PlanResult<NamedExpr> {
+        let date = parse_date(&value)?;
+        Ok(NamedExpr::new(
+            vec![format!("DATE '{}'", date.to_string())],
+            expr::Expr::Literal(ScalarValue::Date32(Some(Date32Type::from_naive_date(date)))),
+        ))
     }
 
     async fn resolve_expression_timestamp(
         &self,
-        _value: String,
-        _timestamp_type: spec::TimestampType,
+        value: String,
+        timestamp_type: spec::TimestampType,
     ) -> PlanResult<NamedExpr> {
-        todo!()
+        let tz = self
+            .resolve_timezone(&timestamp_type)?
+            .map(|x| parse_timezone(&x))
+            .transpose()?;
+        let timestamp = parse_timestamp(&value)?;
+        let (ntz, datetime) = match timestamp {
+            TimestampValue::WithTimeZone(x) => (false, x),
+            TimestampValue::WithoutTimeZone(x) => {
+                if let Some(tz) = tz {
+                    (false, tz.localize_with_fallback(&x)?)
+                } else {
+                    (true, Utc.from_utc_datetime(&x))
+                }
+            }
+        };
+        let prefix = if ntz { "TIMESTAMP_NTZ" } else { "TIMESTAMP" };
+        let tz = if ntz { None } else { Some(Arc::from("UTC")) };
+        Ok(NamedExpr::new(
+            vec![format!("{} '{}'", prefix, datetime.naive_utc())],
+            expr::Expr::Literal(ScalarValue::TimestampMicrosecond(
+                Some(datetime.timestamp_micros()),
+                tz,
+            )),
+        ))
     }
 
     fn generate_qualified_field_candidates<T: AsRef<str>>(

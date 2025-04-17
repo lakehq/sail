@@ -506,12 +506,12 @@ impl PlanResolver<'_> {
         match timestamp_type {
             spec::TimestampType::Configured => match self.config.default_timestamp_type {
                 DefaultTimestampType::TimestampLtz => {
-                    Ok(Some(Arc::from(self.config.session_timezone.clone())))
+                    Ok(Some(Arc::clone(&self.config.session_timezone)))
                 }
                 DefaultTimestampType::TimestampNtz => Ok(None),
             },
             spec::TimestampType::WithLocalTimeZone => {
-                Ok(Some(Arc::from(self.config.session_timezone.clone())))
+                Ok(Some(Arc::clone(&self.config.session_timezone)))
             }
             spec::TimestampType::WithoutTimeZone => Ok(None),
             spec::TimestampType::WithTimeZone(timezone) => Ok(Some(Arc::clone(timezone))),

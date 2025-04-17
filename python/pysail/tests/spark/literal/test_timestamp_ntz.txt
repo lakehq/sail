@@ -49,3 +49,19 @@
 |timestamp|2025-01-01 08:00:00|
 |timestamp|2025-01-01 00:00:00|
 +---------+-------------------+
+
+>>> spark.sql("SELECT TIMESTAMP '2025-01-01 00:00:00'").printSchema()
+root
+ |-- TIMESTAMP_NTZ '2025-01-01 00:00:00': timestamp_ntz (nullable = false)
+
+>>> spark.sql("SELECT TIMESTAMP('2025-01-01 00:00:00')").printSchema()
+root
+ |-- 2025-01-01 00:00:00: timestamp (nullable = true)
+
+>>> spark.sql("SELECT CAST(TIMESTAMP '2025-01-01 00:00:00' AS LONG)")
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.IllegalArgumentException: ...
+
+>>> spark.sql("SELECT CAST(TIMESTAMP('2025-01-01 00:00:00') AS LONG)")
+DataFrame[CAST(2025-01-01 00:00:00 AS BIGINT): bigint]

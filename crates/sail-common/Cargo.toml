@@ -14,11 +14,8 @@ arrow-schema = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
-chrono-tz = { workspace = true }
 glob = { workspace = true }
 num_enum = { workspace = true }
 figment = { workspace = true }
 half = { workspace = true }
-log = { workspace = true }
 iana-time-zone = { workspace = true }

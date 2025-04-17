@@ -4,10 +4,8 @@
       "input": "DATE '2019'",
       "output": {
         "success": {
-          "literal": {
-            "date32": {
-              "days": 17897
-            }
+          "unresolvedDate": {
+            "value": "2019"
           }
         }
       }
@@ -16,10 +14,8 @@
       "input": "DATE '2019-01'",
       "output": {
         "success": {
-          "literal": {
-            "date32": {
-              "days": 17897
-            }
+          "unresolvedDate": {
+            "value": "2019-01"
           }
         }
       }
@@ -28,10 +24,8 @@
       "input": "DATE '2019-01-14'",
       "output": {
         "success": {
-          "literal": {
-            "date32": {
-              "days": 17910
-            }
+          "unresolvedDate": {
+            "value": "2019-01-14"
           }
         }
       }
@@ -40,17 +34,19 @@
       "input": "DAtE 'mar 11 2016'",
       "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"DATE\" is invalid: 'mar 11 2016'.(line 1, pos 0)\n\n== SQL ==\nDAtE 'mar 11 2016'\n^^^\n",
       "output": {
-        "failure": "invalid argument: date: mar 11 2016"
+        "success": {
+          "unresolvedDate": {
+            "value": "mar 11 2016"
+          }
+        }
       }
     },
     {
       "input": "dAte '2016-03-11'",
       "output": {
         "success": {
-          "literal": {
-            "date32": {
-              "days": 16871
-            }
+          "unresolvedDate": {
+            "value": "2016-03-11"
           }
         }
       }

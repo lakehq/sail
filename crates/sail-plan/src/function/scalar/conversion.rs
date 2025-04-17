@@ -1,26 +1,38 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
-use datafusion_expr::{Expr, ExprSchemable};
+use datafusion_expr::{expr, ExprSchemable, ScalarUDF};
 
 use crate::error::PlanResult;
+use crate::extension::function::datetime::spark_date::SparkDate;
+use crate::extension::function::datetime::spark_timestamp::SparkTimestamp;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
-fn date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+fn date(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = input.arguments.one()?;
     let (data_type, _) = arg.data_type_and_nullable(input.function_context.schema)?;
     if matches!(data_type, DataType::Utf8) {
-        todo!()
+        Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkDate::new())),
+            args: vec![arg],
+        }))
     } else {
         Ok(expr_fn::to_date(vec![arg]))
     }
 }
 
-fn timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
+fn timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = input.arguments.one()?;
     let (data_type, _) = arg.data_type_and_nullable(input.function_context.schema)?;
     if matches!(data_type, DataType::Utf8) {
-        todo!()
+        Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkTimestamp::new(
+                input.function_context.plan_config.session_timezone.clone(),
+            ))),
+            args: vec![arg],
+        }))
     } else {
         Ok(expr_fn::to_timestamp_micros(vec![arg]))
     }
