@@ -491,6 +491,14 @@ impl PlanResolver<'_> {
                 .await
             }
             Expr::Table { expr } => self.resolve_expression_table(*expr, state).await,
+            Expr::UnresolvedDate { value } => self.resolve_expression_date(value).await,
+            Expr::UnresolvedTimestamp {
+                value,
+                timestamp_type,
+            } => {
+                self.resolve_expression_timestamp(value, timestamp_type)
+                    .await
+            }
         }
     }
 
@@ -559,11 +567,7 @@ impl PlanResolver<'_> {
         literal: spec::Literal,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let name = self.config.plan_formatter.literal_to_string(
-            &literal,
-            self.config.system_timezone.as_str(),
-            &self.config.timestamp_type,
-        )?;
+        let name = self.config.plan_formatter.literal_to_string(&literal)?;
         let literal = self.resolve_literal(literal, state)?;
         Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
     }
@@ -929,7 +933,7 @@ impl PlanResolver<'_> {
             let data_type_string = self
                 .config
                 .plan_formatter
-                .data_type_to_simple_string(&cast_to_type)?;
+                .data_type_to_simple_string(&cast_to_type, &self.config)?;
             vec![format!(
                 "CAST({} AS {})",
                 name.one()?,
@@ -1375,11 +1379,7 @@ impl PlanResolver<'_> {
         let spec::Expr::Literal(extraction) = extraction else {
             return Err(PlanError::invalid("extraction must be a literal"));
         };
-        let extraction_name = self.config.plan_formatter.literal_to_string(
-            &extraction,
-            self.config.system_timezone.as_str(),
-            &self.config.timestamp_type,
-        )?;
+        let extraction_name = self.config.plan_formatter.literal_to_string(&extraction)?;
         let extraction = self.resolve_literal(extraction, state)?;
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
@@ -1881,6 +1881,18 @@ impl PlanResolver<'_> {
                 case_insensitive,
             )),
         ))
+    }
+
+    async fn resolve_expression_date(&self, _value: String) -> PlanResult<NamedExpr> {
+        todo!()
+    }
+
+    async fn resolve_expression_timestamp(
+        &self,
+        _value: String,
+        _timestamp_type: spec::TimestampType,
+    ) -> PlanResult<NamedExpr> {
+        todo!()
     }
 
     fn generate_qualified_field_candidates<T: AsRef<str>>(

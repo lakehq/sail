@@ -2,14 +2,13 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use sail_common::datetime::get_system_timezone;
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::PlanResult;
 use crate::formatter::{DefaultPlanFormatter, PlanFormatter};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
-pub enum TimestampType {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
+pub enum DefaultTimestampType {
     TimestampLtz,
     TimestampNtz,
 }
@@ -20,10 +19,8 @@ pub enum TimestampType {
 pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
     /// The time zone of the session.
     pub session_timezone: String,
-    /// The time zone of the system.
-    pub system_timezone: String,
     /// The default timestamp type.
-    pub timestamp_type: TimestampType,
+    pub default_timestamp_type: DefaultTimestampType,
     /// Whether to use large variable types in Arrow.
     pub arrow_use_large_var_types: bool,
     /// The plan formatter.
@@ -45,7 +42,6 @@ pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
 impl PlanConfig {
     pub fn new() -> PlanResult<Self> {
         Ok(Self {
-            system_timezone: get_system_timezone()?,
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
             ..Default::default()
         })
@@ -56,8 +52,7 @@ impl Default for PlanConfig {
     fn default() -> Self {
         Self {
             session_timezone: "UTC".to_string(),
-            system_timezone: "UTC".to_string(),
-            timestamp_type: TimestampType::TimestampLtz,
+            default_timestamp_type: DefaultTimestampType::TimestampLtz,
             arrow_use_large_var_types: false,
             plan_formatter: Arc::new(DefaultPlanFormatter),
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),

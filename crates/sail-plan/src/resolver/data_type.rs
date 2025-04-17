@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes as adt;
 use sail_common::spec;
 
-use crate::config::TimestampType;
+use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -52,14 +52,10 @@ impl PlanResolver<'_> {
             DataType::Float64 => Ok(adt::DataType::Float64),
             DataType::Timestamp {
                 time_unit,
-                timezone_info,
+                timestamp_type,
             } => Ok(adt::DataType::Timestamp(
                 Self::resolve_time_unit(time_unit)?,
-                Self::resolve_timezone(
-                    timezone_info,
-                    self.config.system_timezone.as_str(),
-                    &self.config.timestamp_type,
-                )?,
+                self.resolve_timezone(timestamp_type)?,
             )),
             DataType::Date32 => Ok(adt::DataType::Date32),
             DataType::Date64 => Ok(adt::DataType::Date64),
@@ -223,9 +219,13 @@ impl PlanResolver<'_> {
             adt::DataType::Float16 => Ok(DataType::Float16),
             adt::DataType::Float32 => Ok(DataType::Float32),
             adt::DataType::Float64 => Ok(DataType::Float64),
-            adt::DataType::Timestamp(time_unit, timezone) => Ok(DataType::Timestamp {
+            adt::DataType::Timestamp(time_unit, None) => Ok(DataType::Timestamp {
                 time_unit: Self::unresolve_time_unit(time_unit)?,
-                timezone_info: Self::unresolve_timezone(timezone)?,
+                timestamp_type: spec::TimestampType::WithoutTimeZone,
+            }),
+            adt::DataType::Timestamp(time_unit, Some(timezone)) => Ok(DataType::Timestamp {
+                time_unit: Self::unresolve_time_unit(time_unit)?,
+                timestamp_type: spec::TimestampType::WithTimeZone(Arc::clone(timezone)),
             }),
             adt::DataType::Date32 => Ok(DataType::Date32),
             adt::DataType::Date64 => Ok(DataType::Date64),
@@ -460,15 +460,6 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn unresolve_optional_time_unit(
-        time_unit: &Option<adt::TimeUnit>,
-    ) -> PlanResult<spec::TimeUnit> {
-        match time_unit {
-            None => Ok(spec::TimeUnit::Microsecond),
-            Some(unit) => Self::unresolve_time_unit(unit),
-        }
-    }
-
     pub fn unresolve_time_unit(time_unit: &adt::TimeUnit) -> PlanResult<spec::TimeUnit> {
         match time_unit {
             adt::TimeUnit::Second => Ok(spec::TimeUnit::Second),
@@ -509,55 +500,21 @@ impl PlanResolver<'_> {
     }
 
     pub fn resolve_timezone(
-        timezone: &spec::TimeZoneInfo,
-        config_system_timezone: &str,
-        config_timestamp_type: &TimestampType,
+        &self,
+        timestamp_type: &spec::TimestampType,
     ) -> PlanResult<Option<Arc<str>>> {
-        let system_timezone = Some(config_system_timezone.into());
-        let resolved_timezone = match timezone {
-            spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
-                // FIXME:
-                //  This should be:
-                //    1. TimestampType::TimestampLtz => config_session_timezone
-                //         - With the timestamp parsed in `sail-sql-analyzer` adjusted accordingly.
-                //  The reason we are not doing this is because the tests fail if we do.
-                //  The Spark client has inconsistent behavior when applying timezones, where
-                //  sometimes the local client timezone is used, while other times the session
-                //  timezone is used.
-                //  There is also a known bug in Spark that has been unresolved for several years:
-                //    - https://github.com/apache/spark/pull/28946
-                //  A temporary workaround that leads to the most tests passing is the following:
-                //    1. Set timezone to None when parsing timestamps in `sail-sql-analyzer`.
-                //    2. When receiving a timestamp from the client (TimeZoneInfo::LocalTimeZone):
-                //      - Adjust the timestamp (PlanResolver::local_datetime_to_utc_datetime),
-                //      - Set timezone to None (get_adjusted_timezone in `literal.rs`).
-                //  More time needs to be spent looking through the Spark codebase to replicate the
-                //  exact behavior of the Spark server.
-                TimestampType::TimestampLtz => None,
-                TimestampType::TimestampNtz => None,
-            },
-            spec::TimeZoneInfo::LocalTimeZone => system_timezone,
-            spec::TimeZoneInfo::NoTimeZone => None,
-            spec::TimeZoneInfo::TimeZone { timezone } => match timezone {
-                None => None,
-                Some(timezone) => {
-                    if timezone.is_empty() {
-                        None
-                    } else {
-                        Some(Arc::clone(timezone))
-                    }
+        match timestamp_type {
+            spec::TimestampType::Configured => match self.config.default_timestamp_type {
+                DefaultTimestampType::TimestampLtz => {
+                    Ok(Some(Arc::from(self.config.session_timezone.clone())))
                 }
+                DefaultTimestampType::TimestampNtz => Ok(None),
             },
-        };
-        Ok(resolved_timezone)
-    }
-
-    pub fn unresolve_timezone(timezone: &Option<Arc<str>>) -> PlanResult<spec::TimeZoneInfo> {
-        match timezone {
-            None => Ok(spec::TimeZoneInfo::NoTimeZone),
-            Some(timezone) => Ok(spec::TimeZoneInfo::TimeZone {
-                timezone: Some(Arc::clone(timezone)),
-            }),
+            spec::TimestampType::WithLocalTimeZone => {
+                Ok(Some(Arc::from(self.config.session_timezone.clone())))
+            }
+            spec::TimestampType::WithoutTimeZone => Ok(None),
+            spec::TimestampType::WithTimeZone(timezone) => Ok(Some(Arc::clone(timezone))),
         }
     }
 }

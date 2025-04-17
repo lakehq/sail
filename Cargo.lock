@@ -5335,7 +5335,6 @@ name = "sail-sql-analyzer"
 version = "0.2.4"
 dependencies = [
  "chrono",
- "chrono-tz",
  "chumsky",
  "either",
  "lazy_static",
