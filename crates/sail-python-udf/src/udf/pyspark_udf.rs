@@ -6,7 +6,7 @@ use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use pyo3::{PyObject, Python};
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
@@ -126,8 +126,11 @@ impl ScalarUDFImpl for PySparkUDF {
         Ok(self.output_type.clone())
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
-        let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs {
+            args, number_rows, ..
+        } = args;
+        let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args)?;
         let udf = Python::with_gil(|py| self.udf(py))?;
         let data = Python::with_gil(|py| -> PyUdfResult<_> {
             let output = udf.call1(py, (args.try_to_py(py)?, number_rows))?;

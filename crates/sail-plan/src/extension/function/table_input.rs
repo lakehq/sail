@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{plan_err, Result};
-use datafusion_expr::{ColumnarValue, LogicalPlan, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, LogicalPlan, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 /// A placeholder UDF used to represent a table input in UDTF arguments.
 #[derive(Debug)]
@@ -45,7 +47,7 @@ impl ScalarUDFImpl for TableInput {
         )
     }
 
-    fn invoke(&self, _: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {
         plan_err!(
             "{} should be rewritten during logical plan analysis",
             self.name()

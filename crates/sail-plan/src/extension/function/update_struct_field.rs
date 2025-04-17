@@ -5,7 +5,7 @@ use datafusion::arrow::array::{Array, ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_struct_array;
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct UpdateStructField {
@@ -172,20 +172,18 @@ impl ScalarUDFImpl for UpdateStructField {
         Self::update_nested_field(data_type, &self.field_names, &new_field)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        if args.len() != 2 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let args = ColumnarValue::values_to_arrays(&args)?;
+        let [struct_array, new_field_array] = args.as_slice() else {
             return exec_err!(
                 "update_struct_field function requires 2 arguments, got {}",
                 args.len()
             );
-        }
-        if args[0].data_type().is_null() {
+        };
+        if struct_array.data_type().is_null() {
             return Ok(ColumnarValue::Scalar(ScalarValue::Null));
         }
-
-        let arrays = ColumnarValue::values_to_arrays(args)?;
-        let struct_array = &arrays[0];
-        let new_field_array = &arrays[1];
         let new_array =
             Self::update_nested_field_from_array(struct_array, &self.field_names, new_field_array)?;
         Ok(ColumnarValue::Array(new_array))

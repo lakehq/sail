@@ -45,15 +45,14 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.is_empty() {
+        let [first, ..] = args.args.as_slice() else {
             return exec_err!("spark_unix_timestamp function requires 1 or more arguments");
-        }
-
+        };
         if args.args.len() > 1 {
             validate_data_types(&args.args, "spark_unix_timestamp", 1)?;
         }
 
-        match args.args[0].data_type() {
+        match first.data_type() {
             DataType::Int32 | DataType::Int64 => args.args[0]
                 .cast_to(
                     &DataType::Timestamp(TimeUnit::Second, Some(self.timezone.clone())),

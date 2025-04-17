@@ -4,6 +4,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::plan_err;
+use datafusion_expr::ScalarFunctionArgs;
 
 pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
     match name {
@@ -72,7 +73,7 @@ impl ScalarUDFImpl for Explode {
         }
     }
 
-    fn invoke(&self, _: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {
         plan_err!(
             "{} should be rewritten during logical plan analysis",
             self.name()

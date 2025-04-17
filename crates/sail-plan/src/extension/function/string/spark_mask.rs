@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{new_null_array, ArrayRef, AsArray, GenericStringBuilder};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::ScalarUDFImpl;
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
@@ -74,7 +74,8 @@ impl ScalarUDFImpl for SparkMask {
         }
     }
 
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
         if args.is_empty() || args.len() > 5 {
             return exec_err!(
                 "Spark `mask` function requires 1 to 5 arguments, got {}",

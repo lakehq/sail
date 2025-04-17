@@ -15,7 +15,9 @@ use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::utils::ItemTaker;
 
@@ -63,14 +65,15 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     // TODO: ANSI mode
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-        if args.len() != 1 {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let [arg] = args.as_slice() else {
             return exec_err!(
                 "Spark `abs` function requires 1 argument, got {}",
                 args.len()
             );
-        }
-        match &args[0] {
+        };
+        match arg {
             ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(interval)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(
                     interval.map(|x| x.wrapping_abs()),

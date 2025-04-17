@@ -6,7 +6,9 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions_aggregate::min_max;
 use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
-use datafusion_expr::{Accumulator, ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::extension::function::functions_nested_utils::make_scalar_function;
 
@@ -56,8 +58,9 @@ impl ScalarUDFImpl for ArrayMin {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_min_inner)(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        make_scalar_function(array_min_inner)(&args)
     }
 }
 
@@ -102,8 +105,9 @@ impl ScalarUDFImpl for ArrayMax {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        make_scalar_function(array_max_inner)(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        make_scalar_function(array_max_inner)(&args)
     }
 }
 

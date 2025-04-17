@@ -6,6 +6,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::{internal_err, DataFusionError, ScalarValue};
+use datafusion_expr::ScalarFunctionArgs;
 
 use crate::extension::function::spark_hash_utils::create_xxhash64_hashes;
 
@@ -45,7 +46,8 @@ impl ScalarUDFImpl for SparkXxhash64 {
         Ok(DataType::Int64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { mut args, .. } = args;
         let length = args.len();
         if length < 1 {
             return Err(DataFusionError::Internal(
@@ -53,7 +55,6 @@ impl ScalarUDFImpl for SparkXxhash64 {
             ));
         }
         let seed = &args[length - 1];
-        let mut args = args.to_vec();
         match seed {
             ColumnarValue::Scalar(ScalarValue::Int32(Some(seed))) => {
                 let new_scalar = ScalarValue::Int64(Some(*seed as i64));
