@@ -28,9 +28,9 @@ fn timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (data_type, _) = arg.data_type_and_nullable(input.function_context.schema)?;
     if matches!(data_type, DataType::Utf8) {
         Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkTimestamp::new(
+            func: Arc::new(ScalarUDF::from(SparkTimestamp::try_new(
                 input.function_context.plan_config.session_timezone.clone(),
-            ))),
+            )?)),
             args: vec![arg],
         }))
     } else {

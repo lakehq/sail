@@ -9,7 +9,7 @@ use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use sail_common_datafusion::datetime::timestamp::{
-    parse_timestamp, parse_timezone, TimestampValue,
+    parse_timestamp, parse_timezone, TimeZoneValue, TimestampValue,
 };
 
 use crate::utils::ItemTaker;
@@ -17,31 +17,30 @@ use crate::utils::ItemTaker;
 #[derive(Debug)]
 pub struct SparkTimestamp {
     timezone: Arc<str>,
+    timezone_value: TimeZoneValue,
     signature: Signature,
 }
 
 impl SparkTimestamp {
-    pub fn new(timezone: Arc<str>) -> Self {
-        Self {
+    pub fn try_new(timezone: Arc<str>) -> Result<Self> {
+        let timezone_value = parse_timezone(timezone.as_ref())?;
+        Ok(Self {
             timezone,
+            timezone_value,
             signature: Signature::coercible(
                 vec![Coercion::new_exact(TypeSignatureClass::Native(
                     logical_string(),
                 ))],
                 Volatility::Immutable,
             ),
-        }
+        })
     }
 
     fn string_to_timestamp_microseconds<T: AsRef<str>>(&self, value: T) -> Result<i64> {
         let timestamp = parse_timestamp(value.as_ref())?;
         let datetime = match timestamp {
             TimestampValue::WithTimeZone(x) => x,
-            TimestampValue::WithoutTimeZone(x) => {
-                // FIXME: avoid expensive time zone parsing
-                let tz = parse_timezone(&self.timezone)?;
-                tz.localize_with_fallback(&x)?
-            }
+            TimestampValue::WithoutTimeZone(x) => self.timezone_value.localize_with_fallback(&x)?,
         };
         Ok(datetime.timestamp_micros())
     }
@@ -96,6 +95,7 @@ impl ScalarUDFImpl for SparkTimestamp {
                         .collect::<Result<_>>()?,
                     _ => return exec_err!("expected string array for `timestamp`"),
                 };
+                let array = array.with_timezone(Arc::clone(&self.timezone));
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             ColumnarValue::Scalar(scalar) => {
@@ -109,7 +109,7 @@ impl ScalarUDFImpl for SparkTimestamp {
                 };
                 Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
                     value,
-                    Some(Arc::from("UTC")),
+                    Some(Arc::clone(&self.timezone)),
                 )))
             }
         }

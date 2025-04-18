@@ -7,11 +7,13 @@ use chrono::{
 use chrono_tz::Tz;
 use datafusion_common::{exec_datafusion_err, exec_err, Result};
 
+#[derive(Debug)]
 pub enum TimestampValue {
     WithTimeZone(DateTime<Utc>),
     WithoutTimeZone(NaiveDateTime),
 }
 
+#[derive(Debug)]
 pub enum TimeZoneValue {
     Fixed(FixedOffset),
     Tz(Tz),
