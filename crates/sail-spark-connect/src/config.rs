@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sail_common::datetime::warn_if_spark_session_timezone_mismatches_local_timezone;
-use sail_plan::config::{PlanConfig, TimestampType};
+use sail_plan::config::{DefaultTimestampType, PlanConfig};
 use sail_plan::formatter::DefaultPlanFormatter;
 use sail_python_udf::config::PySparkUdfConfig;
 
@@ -177,11 +176,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .get(SPARK_SQL_SESSION_TIME_ZONE)?
             .map(|x| x.to_string())
         {
-            output.session_timezone = value;
-            warn_if_spark_session_timezone_mismatches_local_timezone(
-                output.session_timezone.as_str(),
-                output.system_timezone.as_str(),
-            )?;
+            output.session_timezone = Arc::from(value);
         }
 
         if let Some(value) = config
@@ -210,9 +205,9 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         if let Some(value) = config.get(SPARK_SQL_TIMESTAMP_TYPE)? {
             let value = value.to_uppercase().trim().to_string();
             if value == "TIMESTAMP_NTZ" {
-                output.timestamp_type = TimestampType::TimestampNtz;
+                output.default_timestamp_type = DefaultTimestampType::TimestampNtz;
             } else if value.is_empty() || value == "TIMESTAMP_LTZ" {
-                output.timestamp_type = TimestampType::TimestampLtz;
+                output.default_timestamp_type = DefaultTimestampType::TimestampLtz;
             } else {
                 return Err(SparkError::invalid(format!(
                     "invalid timestamp type: {value}"

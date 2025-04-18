@@ -5159,13 +5159,10 @@ version = "0.2.4"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
- "chrono",
- "chrono-tz",
  "figment",
  "glob",
  "half",
  "iana-time-zone",
- "log",
  "num_enum",
  "serde",
  "serde_json",
@@ -5178,6 +5175,7 @@ name = "sail-common-datafusion"
 version = "0.2.4"
 dependencies = [
  "chrono",
+ "chrono-tz",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -5247,6 +5245,7 @@ dependencies = [
  "base64 0.22.1",
  "cbc",
  "chrono",
+ "chrono-tz",
  "chumsky",
  "comfy-table",
  "datafusion",
@@ -5373,7 +5372,6 @@ name = "sail-sql-analyzer"
 version = "0.2.4"
 dependencies = [
  "chrono",
- "chrono-tz",
  "chumsky",
  "either",
  "lazy_static",

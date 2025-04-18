@@ -1,10 +1,10 @@
 use std::fmt::Debug;
 use std::iter::once;
-use std::ops::{Add, Neg};
+use std::ops::Neg;
 use std::str::FromStr;
 
-use chrono::{TimeDelta, Utc};
-use chrono_tz::Tz;
+use chrono;
+use chrono::TimeDelta;
 use lazy_static::lazy_static;
 use sail_common::spec;
 use sail_common::spec::{
@@ -17,7 +17,6 @@ use sail_sql_parser::ast::expression::{
     IntervalValueWithUnit, UnaryOperator,
 };
 use sail_sql_parser::ast::literal::NumberLiteral;
-use {chrono, chrono_tz};
 
 use crate::error::{SqlError, SqlResult};
 use crate::parser::parse_interval_literal;
@@ -30,18 +29,6 @@ lazy_static! {
         regex::Regex::new(r"^(?P<sign>[+-]?)(?P<whole>\d{1,38})[.]?(?P<fraction>\d{0,38})([eE](?P<exponent>[+-]?\d+))?$").unwrap();
     static ref DECIMAL_FRACTION_REGEX: regex::Regex =
         regex::Regex::new(r"^(?P<sign>[+-]?)[.](?P<fraction>\d{1,38})([eE](?P<exponent>[+-]?\d+))?$").unwrap();
-    static ref DATE_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<year>\d{4})(-(?P<month>\d{1,2})(-(?P<day>\d{1,2})T?)?)?\s*$")
-            .unwrap();
-    static ref TIMESTAMP_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<year>\d{4})(-(?P<month>\d{1,2})(-(?P<day>\d{1,2})((\s+|T)(?P<hour>\d{1,2})(:(?P<minute>\d{1,2})(:(?P<second>\d{1,2})(\.(?P<fraction>\d{1,9}))?(?P<tz>.*)?)?)?)?)?)?\s*$")
-            .unwrap();
-    static ref TIMEZONE_OFFSET_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(UTC|UT|GMT)?(?P<sign>[+-]?)(?P<hour>\d{1,2})(:(?P<minute>\d{1,2})(:(?P<second>\d{1,2}))?)?\s*$")
-            .unwrap();
-    static ref TIMEZONE_OFFSET_COMPACT_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(UTC|UT|GMT)?(?P<sign>[+-]?)(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})?\s*$")
-            .unwrap();
     static ref INTERVAL_YEAR_REGEX: regex::Regex =
         regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<year>\d+)\s*$").unwrap();
     static ref INTERVAL_YEAR_TO_MONTH_REGEX: regex::Regex =
@@ -183,50 +170,6 @@ impl TryFrom<LiteralValue<chrono::NaiveDate>> for spec::Literal {
         let days = i32::try_from(days)
             .map_err(|_| SqlError::invalid(format!("date literal: {:?}", literal.0)))?;
         Ok(spec::Literal::Date32 { days: Some(days) })
-    }
-}
-
-impl TryFrom<LiteralValue<(chrono::DateTime<Utc>, TimeZoneVariant)>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(
-        literal: LiteralValue<(chrono::DateTime<Utc>, TimeZoneVariant)>,
-    ) -> SqlResult<spec::Literal> {
-        let (dt, ref tz) = literal.0;
-        let (delta, timezone_info) = match tz {
-            TimeZoneVariant::FixedOffset(tz) => (
-                TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?,
-                spec::TimeZoneInfo::TimeZone {
-                    timezone: Some("UTC".into()),
-                },
-            ),
-            TimeZoneVariant::Named(tz) => (
-                TimeZoneVariant::time_delta_from_unix_epoch(&dt, tz)?,
-                spec::TimeZoneInfo::TimeZone {
-                    timezone: Some("UTC".into()),
-                },
-            ),
-            TimeZoneVariant::Utc => (
-                dt - chrono::DateTime::UNIX_EPOCH,
-                spec::TimeZoneInfo::TimeZone {
-                    timezone: Some("UTC".into()),
-                },
-            ),
-            TimeZoneVariant::None => (
-                // FIXME: See FIXME in `PlanResolver::resolve_timezone` for more details.
-                dt - chrono::DateTime::UNIX_EPOCH,
-                spec::TimeZoneInfo::SQLConfigured,
-            ),
-        };
-        let microseconds = delta.num_microseconds().ok_or_else(|| {
-            SqlError::invalid(format!(
-                "TryFrom<LiteralValue<(chrono::NaiveDateTime, TimeZoneVariant)>> {literal:?}"
-            ))
-        })?;
-        Ok(spec::Literal::TimestampMicrosecond {
-            microseconds: Some(microseconds),
-            timezone_info,
-        })
     }
 }
 
@@ -619,96 +562,6 @@ pub fn parse_decimal_string(s: &str) -> SqlResult<spec::Literal> {
             scale,
             value: Some(value),
         })
-    }
-}
-
-pub fn parse_date_string(s: &str) -> SqlResult<spec::Literal> {
-    let error = || SqlError::invalid(format!("date: {s}"));
-    let captures = DATE_REGEX.captures(s).ok_or_else(error)?;
-    let year = extract_match(&captures, "year", error)?.ok_or_else(error)?;
-    let month = extract_match(&captures, "month", error)?.unwrap_or(1);
-    let day = extract_match(&captures, "day", error)?.unwrap_or(1);
-    let date = chrono::NaiveDate::from_ymd_opt(year, month, day)
-        .ok_or_else(|| SqlError::invalid(format!("date: {s}")))?;
-    spec::Literal::try_from(LiteralValue(date))
-}
-
-pub fn parse_timestamp_string(s: &str) -> SqlResult<spec::Literal> {
-    let error = |msg: &str| SqlError::invalid(format!("{msg} error when parsing timestamp: {s}"));
-    let captures = TIMESTAMP_REGEX
-        .captures(s)
-        .ok_or_else(|| error("Invalid format"))?;
-    let year = extract_match(&captures, "year", || error("Invalid year"))?
-        .ok_or_else(|| error("Missing year"))?;
-    let month = extract_match(&captures, "month", || error("Invalid month"))?.unwrap_or(1);
-    let day = extract_match(&captures, "day", || error("Invalid day"))?.unwrap_or(1);
-    let hour = extract_match(&captures, "hour", || error("Invalid hour"))?.unwrap_or(0);
-    let minute = extract_match(&captures, "minute", || error("Invalid minute"))?.unwrap_or(0);
-    let second = extract_match(&captures, "second", || error("Invalid second"))?.unwrap_or(0);
-    let fraction =
-        extract_second_fraction_match(&captures, "fraction", 6, || error("Invalid fraction"))?
-            .unwrap_or(0);
-    let tz = captures.name("tz").map(|tz| tz.as_str());
-    let tz = parse_timezone_string(tz)?;
-    let dt = chrono::NaiveDate::from_ymd_opt(year, month, day)
-        .and_then(|d| d.and_hms_opt(hour, minute, second))
-        .and_then(|d| d.checked_add_signed(chrono::Duration::microseconds(fraction)))
-        .ok_or_else(|| error("Invalid date/time values"))?;
-    let dt = chrono::DateTime::from_naive_utc_and_offset(dt, Utc);
-    spec::Literal::try_from(LiteralValue((dt, tz)))
-}
-
-#[derive(Debug)]
-pub(crate) enum TimeZoneVariant {
-    None,
-    Utc,
-    FixedOffset(chrono::FixedOffset),
-    Named(Tz),
-}
-
-impl TimeZoneVariant {
-    fn time_delta_from_unix_epoch<Tz, O>(
-        dt: &chrono::DateTime<Utc>,
-        tz: &Tz,
-    ) -> SqlResult<TimeDelta>
-    where
-        Tz: chrono::TimeZone<Offset = O> + Debug,
-        O: chrono::Offset,
-    {
-        let offset_seconds = tz
-            .offset_from_utc_datetime(&dt.naive_utc())
-            .fix()
-            .local_minus_utc() as i64;
-        let adjusted_dt = dt.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
-            SqlError::invalid("time_delta_from_unix_epoch: Invalid offset seconds")
-        })?);
-        Ok(adjusted_dt - chrono::DateTime::UNIX_EPOCH)
-    }
-}
-
-fn parse_timezone_string(tz: Option<&str>) -> SqlResult<TimeZoneVariant> {
-    match tz {
-        None => Ok(TimeZoneVariant::None),
-        Some(tz) if tz.trim().is_empty() => Ok(TimeZoneVariant::None),
-        Some(tz) if tz.to_uppercase().trim() == "Z" => Ok(TimeZoneVariant::Utc),
-        Some(tz) => {
-            let error = || SqlError::invalid(format!("timezone in parse_timezone_string: {tz}"));
-            let captures = TIMEZONE_OFFSET_REGEX
-                .captures(tz)
-                .or_else(|| TIMEZONE_OFFSET_COMPACT_REGEX.captures(tz));
-            if let Some(captures) = captures {
-                let negated = captures.name("sign").map(|s| s.as_str()) == Some("-");
-                let hour: u32 = extract_match(&captures, "hour", error)?.ok_or_else(error)?;
-                let minute: u32 = extract_match(&captures, "minute", error)?.unwrap_or(0);
-                let second: u32 = extract_match(&captures, "second", error)?.unwrap_or(0);
-                let n = (hour * 3600 + minute * 60 + second) as i32 * if negated { -1 } else { 1 };
-                let offset = chrono::FixedOffset::east_opt(n).ok_or_else(error)?;
-                Ok(TimeZoneVariant::FixedOffset(offset))
-            } else {
-                let tz = tz.parse::<Tz>().map_err(|_| error())?;
-                Ok(TimeZoneVariant::Named(tz))
-            }
-        }
     }
 }
 

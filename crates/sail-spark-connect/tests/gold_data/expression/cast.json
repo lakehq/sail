@@ -59,7 +59,7 @@
             "castToType": {
               "timestamp": {
                 "timeUnit": "microsecond",
-                "timezoneInfo": "sQLConfigured"
+                "timestampType": "configured"
               }
             },
             "rename": true

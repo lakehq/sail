@@ -8,6 +8,7 @@ from py4j.protocol import Py4JError
 
 KEYS_WITH_DYNAMIC_DEFAULT = [
     "spark.driver.host",
+    "spark.sql.session.timeZone",
     "spark.sql.warehouse.dir",
 ]
 

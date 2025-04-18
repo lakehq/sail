@@ -174,7 +174,11 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
 fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     input.arguments.zero()?;
     Ok(Expr::Literal(ScalarValue::Utf8(Some(
-        input.function_context.plan_config.session_timezone.clone(),
+        input
+            .function_context
+            .plan_config
+            .session_timezone
+            .to_string(),
     ))))
 }
 
@@ -203,12 +207,7 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let timezone: Arc<str> = input
-        .function_context
-        .plan_config
-        .session_timezone
-        .clone()
-        .into();
+    let timezone = input.function_context.plan_config.session_timezone.clone();
     if input.arguments.is_empty() {
         let expr = Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(TimestampNow::new(
@@ -294,12 +293,7 @@ fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
         ));
     }?;
 
-    let timezone: Arc<str> = input
-        .function_context
-        .plan_config
-        .session_timezone
-        .clone()
-        .into();
+    let timezone = input.function_context.plan_config.session_timezone.clone();
     let format = to_chrono_fmt(format)?;
     let expr = Expr::Cast(expr::Cast::new(
         Box::new(expr),
@@ -310,12 +304,7 @@ fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
 fn weekofyear(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
-        let timezone: Arc<str> = input
-            .function_context
-            .plan_config
-            .session_timezone
-            .clone()
-            .into();
+        let timezone = input.function_context.plan_config.session_timezone.clone();
         Ok(Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(SparkWeekOfYear::new(timezone))),
             args: input.arguments,
@@ -335,14 +324,7 @@ fn unix_time_unit(input: ScalarFunctionInput, time_unit: TimeUnit) -> PlanResult
             Box::new(arg),
             DataType::Timestamp(
                 time_unit,
-                Some(
-                    input
-                        .function_context
-                        .plan_config
-                        .session_timezone
-                        .clone()
-                        .into(),
-                ),
+                Some(input.function_context.plan_config.session_timezone.clone()),
             ),
         ))),
         DataType::Int64,
@@ -351,12 +333,7 @@ fn unix_time_unit(input: ScalarFunctionInput, time_unit: TimeUnit) -> PlanResult
 
 fn current_timestamp_microseconds(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.is_empty() {
-        let timezone: Arc<str> = input
-            .function_context
-            .plan_config
-            .session_timezone
-            .clone()
-            .into();
+        let timezone = input.function_context.plan_config.session_timezone.clone();
         Ok(Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(TimestampNow::new(
                 timezone,

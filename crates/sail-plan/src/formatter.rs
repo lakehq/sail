@@ -2,28 +2,28 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
-use chrono::{TimeZone, Utc};
+use chrono::{TimeZone, Timelike, Utc};
 use half::f16;
 use sail_common::object::DynObject;
 use sail_common::{impl_dyn_object_traits, spec};
+use sail_common_datafusion::datetime::timestamp::parse_timezone;
 
-use crate::config::TimestampType;
+use crate::config::{DefaultTimestampType, PlanConfig};
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 /// Utilities to format various data structures in the plan specification.
 pub trait PlanFormatter: DynObject + Debug + Send + Sync {
     /// Returns a human-readable simple string for the data type.
-    fn data_type_to_simple_string(&self, data_type: &spec::DataType) -> PlanResult<String>;
+    fn data_type_to_simple_string(
+        &self,
+        data_type: &spec::DataType,
+        config: &PlanConfig,
+    ) -> PlanResult<String>;
 
     /// Returns a human-readable string for the literal.
-    fn literal_to_string(
-        &self,
-        literal: &spec::Literal,
-        config_system_timezone: &str,
-        config_timestamp_type: &TimestampType,
-    ) -> PlanResult<String>;
+    fn literal_to_string(&self, literal: &spec::Literal, config: &PlanConfig)
+        -> PlanResult<String>;
 
     /// Returns a human-readable string for the function call.
     fn function_to_string(
@@ -62,7 +62,11 @@ impl DefaultPlanFormatter {
 }
 
 impl PlanFormatter for DefaultPlanFormatter {
-    fn data_type_to_simple_string(&self, data_type: &spec::DataType) -> PlanResult<String> {
+    fn data_type_to_simple_string(
+        &self,
+        data_type: &spec::DataType,
+        config: &PlanConfig,
+    ) -> PlanResult<String> {
         use spec::DataType;
         match data_type {
             DataType::Null => Ok("void".to_string()),
@@ -115,19 +119,22 @@ impl PlanFormatter for DefaultPlanFormatter {
             )),
             DataType::Timestamp {
                 time_unit: _,
-                timezone_info: spec::TimeZoneInfo::SQLConfigured,
+                timestamp_type: spec::TimestampType::Configured,
+            } => match config.default_timestamp_type {
+                DefaultTimestampType::TimestampLtz => Ok("timestamp".to_string()),
+                DefaultTimestampType::TimestampNtz => Ok("timestamp_ntz".to_string()),
+            },
+            DataType::Timestamp {
+                time_unit: _,
+                timestamp_type: spec::TimestampType::WithLocalTimeZone,
             }
             | DataType::Timestamp {
                 time_unit: _,
-                timezone_info: spec::TimeZoneInfo::LocalTimeZone,
-            }
-            | DataType::Timestamp {
-                time_unit: _,
-                timezone_info: spec::TimeZoneInfo::TimeZone { timezone: _ },
+                timestamp_type: spec::TimestampType::WithTimeZone(_),
             } => Ok("timestamp".to_string()),
             DataType::Timestamp {
                 time_unit: _,
-                timezone_info: spec::TimeZoneInfo::NoTimeZone,
+                timestamp_type: spec::TimestampType::WithoutTimeZone,
             } => Ok("timestamp_ntz".to_string()),
             DataType::Interval {
                 interval_unit: spec::IntervalUnit::MonthDayNano,
@@ -216,7 +223,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 nullable: _,
             } => Ok(format!(
                 "array<{}>",
-                self.data_type_to_simple_string(data_type)?
+                self.data_type_to_simple_string(data_type, config)?
             )),
             DataType::Struct { fields } => {
                 let fields = fields
@@ -225,7 +232,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                         Ok(format!(
                             "{}:{}",
                             field.name,
-                            self.data_type_to_simple_string(&field.data_type)?
+                            self.data_type_to_simple_string(&field.data_type, config)?
                         ))
                     })
                     .collect::<PlanResult<Vec<String>>>()?;
@@ -238,11 +245,11 @@ impl PlanFormatter for DefaultPlanFormatter {
                 keys_sorted: _,
             } => Ok(format!(
                 "map<{},{}>",
-                self.data_type_to_simple_string(key_type.as_ref())?,
-                self.data_type_to_simple_string(value_type.as_ref())?
+                self.data_type_to_simple_string(key_type.as_ref(), config)?,
+                self.data_type_to_simple_string(value_type.as_ref(), config)?
             )),
             DataType::UserDefined { sql_type, .. } => {
-                self.data_type_to_simple_string(sql_type.as_ref())
+                self.data_type_to_simple_string(sql_type.as_ref(), config)
             }
             DataType::Union {
                 union_fields: _,
@@ -256,8 +263,8 @@ impl PlanFormatter for DefaultPlanFormatter {
                 value_type,
             } => Ok(format!(
                 "dictionary<{},{}>",
-                self.data_type_to_simple_string(key_type)?,
-                self.data_type_to_simple_string(value_type)?
+                self.data_type_to_simple_string(key_type, config)?,
+                self.data_type_to_simple_string(value_type, config)?
             )),
         }
     }
@@ -265,15 +272,14 @@ impl PlanFormatter for DefaultPlanFormatter {
     fn literal_to_string(
         &self,
         literal: &spec::Literal,
-        config_system_timezone: &str,
-        config_timestamp_type: &TimestampType,
+        config: &PlanConfig,
     ) -> PlanResult<String> {
         use spec::Literal;
 
         let literal_list_to_string = |name: &str, values: &Vec<Literal>| -> PlanResult<String> {
             let values = values
                 .iter()
-                .map(|x| self.literal_to_string(x, config_system_timezone, config_timestamp_type))
+                .map(|x| self.literal_to_string(x, config))
                 .collect::<PlanResult<Vec<String>>>()?;
             Ok(format!("{name}({})", values.join(", ")))
         };
@@ -338,103 +344,73 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::TimestampSecond {
-                seconds,
-                timezone_info,
-            } => match seconds {
+            // For timestamp values with no time zone, we use UTC as the time zone for formatting.
+            Literal::TimestampSecond { seconds, timezone } => match seconds {
                 Some(seconds) => {
                     let datetime = Utc.timestamp_opt(*seconds, 0).earliest().ok_or_else(|| {
-                        PlanError::invalid(format!("Literal to string TimestampSecond: {seconds}"))
+                        PlanError::invalid(format!("timestamp second: {seconds}"))
                     })?;
-                    let utc_datetime = PlanResolver::local_datetime_to_utc_datetime(
-                        datetime,
-                        timezone_info,
-                        config_timestamp_type,
-                        config_system_timezone,
-                    )?;
-                    format_timestamp(
-                        utc_datetime,
-                        "%Y-%m-%d %H:%M:%S",
-                        timezone_info,
-                        config_timestamp_type,
-                    )
+                    let timezone = if timezone.is_some() {
+                        Some(config.session_timezone.as_ref())
+                    } else {
+                        None
+                    };
+                    format_timestamp(datetime, timezone)
                 }
                 None => Ok("NULL".to_string()),
             },
             Literal::TimestampMillisecond {
                 milliseconds,
-                timezone_info,
+                timezone,
             } => match milliseconds {
                 Some(milliseconds) => {
                     let datetime = Utc
                         .timestamp_millis_opt(*milliseconds)
                         .earliest()
                         .ok_or_else(|| {
-                            PlanError::invalid(format!(
-                                "Literal to string TimestampMillisecond: {milliseconds}"
-                            ))
+                            PlanError::invalid(format!("timestamp millisecond: {milliseconds}"))
                         })?;
-                    let utc_datetime = PlanResolver::local_datetime_to_utc_datetime(
-                        datetime,
-                        timezone_info,
-                        config_timestamp_type,
-                        config_system_timezone,
-                    )?;
-                    format_timestamp(
-                        utc_datetime,
-                        "%Y-%m-%d %H:%M:%S",
-                        timezone_info,
-                        config_timestamp_type,
-                    )
+                    let timezone = if timezone.is_some() {
+                        Some(config.session_timezone.as_ref())
+                    } else {
+                        None
+                    };
+                    format_timestamp(datetime, timezone)
                 }
                 None => Ok("NULL".to_string()),
             },
             Literal::TimestampMicrosecond {
                 microseconds,
-                timezone_info,
+                timezone,
             } => match microseconds {
                 Some(microseconds) => {
                     let datetime =
                         Utc.timestamp_micros(*microseconds)
                             .earliest()
                             .ok_or_else(|| {
-                                PlanError::invalid(format!(
-                                    "Literal to string TimestampMicrosecond: {microseconds}"
-                                ))
+                                PlanError::invalid(format!("timestamp microsecond: {microseconds}"))
                             })?;
-                    let utc_datetime = PlanResolver::local_datetime_to_utc_datetime(
-                        datetime,
-                        timezone_info,
-                        config_timestamp_type,
-                        config_system_timezone,
-                    )?;
-                    format_timestamp(
-                        utc_datetime,
-                        "%Y-%m-%d %H:%M:%S",
-                        timezone_info,
-                        config_timestamp_type,
-                    )
+                    let timezone = if timezone.is_some() {
+                        Some(config.session_timezone.as_ref())
+                    } else {
+                        None
+                    };
+                    format_timestamp(datetime, timezone)
                 }
                 None => Ok("NULL".to_string()),
             },
             Literal::TimestampNanosecond {
                 nanoseconds,
-                timezone_info,
+                timezone,
             } => match nanoseconds {
                 Some(nanoseconds) => {
                     let datetime = Utc.timestamp_nanos(*nanoseconds);
-                    let utc_datetime = PlanResolver::local_datetime_to_utc_datetime(
-                        datetime,
-                        timezone_info,
-                        config_timestamp_type,
-                        config_system_timezone,
-                    )?;
-                    format_timestamp(
-                        utc_datetime,
-                        "%Y-%m-%d %H:%M:%S",
-                        timezone_info,
-                        config_timestamp_type,
-                    )
+                    let timezone = if timezone.is_some() {
+                        Some(config.session_timezone.as_ref())
+                    } else {
+                        None
+                    };
+                    format_timestamp(datetime, timezone)
                 }
                 None => Ok("NULL".to_string()),
             },
@@ -681,11 +657,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                         .map(|(field, value)| {
                             Ok(format!(
                                 "{} AS {}",
-                                self.literal_to_string(
-                                    value,
-                                    config_system_timezone,
-                                    config_timestamp_type
-                                )?,
+                                self.literal_to_string(value, config)?,
                                 field.name
                             ))
                         })
@@ -700,11 +672,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 value,
             } => match value {
                 Some((id, value)) => {
-                    let value = self.literal_to_string(
-                        value,
-                        config_system_timezone,
-                        config_timestamp_type,
-                    )?;
+                    let value = self.literal_to_string(value, config)?;
                     Ok(format!("{id}:{value}"))
                 }
                 None => Ok("NULL".to_string()),
@@ -715,11 +683,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 value,
             } => match value {
                 Some(value) => {
-                    let value = self.literal_to_string(
-                        value,
-                        config_system_timezone,
-                        config_timestamp_type,
-                    )?;
+                    let value = self.literal_to_string(value, config)?;
                     Ok(format!("dictionary({value})"))
                 }
                 None => Ok("NULL".to_string()),
@@ -817,6 +781,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 result.push_str(" END");
                 Ok(result)
             }
+            "timestamp" | "date" => Ok(arguments.one()?.to_string()),
             "dateadd" => {
                 let arguments = arguments.join(", ");
                 Ok(format!("date_add({arguments})"))
@@ -938,42 +903,37 @@ fn format_decimal(value: &str, scale: i8) -> String {
     result
 }
 
-fn format_timestamp(
-    utc_datetime: chrono::DateTime<Utc>,
-    format: &str,
-    timezone_info: &spec::TimeZoneInfo,
-    config_timestamp_type: &TimestampType,
-) -> PlanResult<String> {
-    let formatted_time = utc_datetime.format(format).to_string();
-    let prefix = match timezone_info {
-        spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
-            TimestampType::TimestampLtz => "TIMESTAMP",
-            TimestampType::TimestampNtz => "TIMESTAMP_NTZ",
-        },
-        spec::TimeZoneInfo::LocalTimeZone => "TIMESTAMP",
-        spec::TimeZoneInfo::NoTimeZone => "TIMESTAMP_NTZ",
-        spec::TimeZoneInfo::TimeZone { timezone: _ } => "TIMESTAMP",
+fn format_timestamp(datetime: chrono::DateTime<Utc>, timezone: Option<&str>) -> PlanResult<String> {
+    let (prefix, datetime) = if let Some(timezone) = timezone {
+        let tz = parse_timezone(timezone)?;
+        ("TIMESTAMP", tz.from_utc(&datetime))
+    } else {
+        ("TIMESTAMP_NTZ", datetime.naive_utc())
     };
-    Ok(format!("{prefix} '{formatted_time}'"))
+    let value = datetime.format("%Y-%m-%d %H:%M:%S");
+    if datetime.nanosecond() > 0 {
+        let fraction = datetime.format("%.f").to_string();
+        let fraction = fraction.trim_end_matches('0');
+        Ok(format!("{prefix} '{value}{fraction}'"))
+    } else {
+        Ok(format!("{prefix} '{value}'"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use datafusion::arrow::datatypes::i256;
     use sail_common::spec::Literal;
 
     use super::*;
-    use crate::config::PlanConfig;
 
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {
         let plan_config = PlanConfig::new()?;
-        let config_system_timezone = plan_config.system_timezone.as_str();
-        let config_timestamp_type = plan_config.timestamp_type;
         let formatter = DefaultPlanFormatter;
-        let to_string = |literal| {
-            formatter.literal_to_string(&literal, config_system_timezone, &config_timestamp_type)
-        };
+        let to_string = |literal| formatter.literal_to_string(&literal, &plan_config);
 
         assert_eq!(to_string(Literal::Null)?, "NULL");
         assert_eq!(
@@ -1106,16 +1066,16 @@ mod tests {
         assert_eq!(
             to_string(Literal::TimestampMicrosecond {
                 microseconds: Some(123_000_000),
-                timezone_info: spec::TimeZoneInfo::TimeZone { timezone: None },
+                timezone: Some(Arc::from("UTC")),
             })?,
             "TIMESTAMP '1970-01-01 00:02:03'",
         );
         assert_eq!(
             to_string(Literal::TimestampMicrosecond {
                 microseconds: Some(-1),
-                timezone_info: spec::TimeZoneInfo::NoTimeZone,
+                timezone: None,
             })?,
-            "TIMESTAMP_NTZ '1969-12-31 23:59:59'",
+            "TIMESTAMP_NTZ '1969-12-31 23:59:59.999999'",
         );
         assert_eq!(
             to_string(Literal::IntervalMonthDayNano {

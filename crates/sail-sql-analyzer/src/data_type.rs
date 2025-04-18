@@ -132,30 +132,34 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
         }),
         DataType::Text(_) => Ok(spec::DataType::LargeUtf8),
         DataType::Timestamp(_, precision, tz) => {
-            let timezone_info = match tz {
-                Some(TimezoneType::WithoutTimeZone(_, _, _)) => spec::TimeZoneInfo::NoTimeZone,
+            let timestamp_type = match tz {
+                Some(TimezoneType::WithoutTimeZone(_, _, _)) => {
+                    spec::TimestampType::WithoutTimeZone
+                }
                 Some(TimezoneType::WithLocalTimeZone(_, _, _, _))
-                | Some(TimezoneType::WithTimeZone(_, _, _)) => spec::TimeZoneInfo::LocalTimeZone,
-                None => spec::TimeZoneInfo::SQLConfigured,
+                | Some(TimezoneType::WithTimeZone(_, _, _)) => {
+                    spec::TimestampType::WithLocalTimeZone
+                }
+                None => spec::TimestampType::Configured,
             };
             let time_unit = from_ast_timestamp_precision(precision)?;
             Ok(spec::DataType::Timestamp {
                 time_unit,
-                timezone_info,
+                timestamp_type,
             })
         }
         DataType::TimestampNtz(_, precision) => {
             let time_unit = from_ast_timestamp_precision(precision)?;
             Ok(spec::DataType::Timestamp {
                 time_unit,
-                timezone_info: spec::TimeZoneInfo::NoTimeZone,
+                timestamp_type: spec::TimestampType::WithoutTimeZone,
             })
         }
         DataType::TimestampLtz(_, precision) => {
             let time_unit = from_ast_timestamp_precision(precision)?;
             Ok(spec::DataType::Timestamp {
                 time_unit,
-                timezone_info: spec::TimeZoneInfo::LocalTimeZone,
+                timestamp_type: spec::TimestampType::WithLocalTimeZone,
             })
         }
         DataType::Date(_) | DataType::Date32(_) => Ok(spec::DataType::Date32),

@@ -3,6 +3,7 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 
 use datafusion::prelude::SessionContext;
+use sail_common::datetime::get_system_timezone;
 use sail_execution::job::JobRunner;
 use sail_plan::config::PlanConfig;
 use tokio::time::Instant;
@@ -10,6 +11,7 @@ use tokio::time::Instant;
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult};
 use crate::executor::Executor;
+use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
 
 pub(crate) const DEFAULT_SPARK_SCHEMA: &str = "default";
 pub(crate) const DEFAULT_SPARK_CATALOG: &str = "spark_catalog";
@@ -32,17 +34,22 @@ impl Debug for SparkExtension {
 }
 
 impl SparkExtension {
-    pub(crate) fn new(
+    pub(crate) fn try_new(
         user_id: Option<String>,
         session_id: String,
         job_runner: Box<dyn JobRunner>,
-    ) -> Self {
-        Self {
+    ) -> SparkResult<Self> {
+        let extension = Self {
             user_id,
             session_id,
             job_runner,
             state: Mutex::new(SparkExtensionState::new()),
-        }
+        };
+        extension.set_config(vec![ConfigKeyValue {
+            key: SPARK_SQL_SESSION_TIME_ZONE.to_string(),
+            value: Some(get_system_timezone()?),
+        }])?;
+        Ok(extension)
     }
 
     /// Get the Spark extension from the DataFusion [SessionContext].

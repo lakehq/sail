@@ -207,9 +207,6 @@ pub enum AtomExpr {
         Option<(LeftParenthesis, RightParenthesis)>,
     ),
     CurrentDate(CurrentDate, Option<(LeftParenthesis, RightParenthesis)>),
-    // TODO: handle `timestamp(value)` and `date(value)` as normal functions in the plan resolver
-    Timestamp(Timestamp, LeftParenthesis, StringLiteral, RightParenthesis),
-    Date(Date, LeftParenthesis, StringLiteral, RightParenthesis),
     Function(#[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<FunctionExpr>),
     Wildcard(operator::Asterisk),
     StringLiteral(StringLiteral, Vec<StringLiteral>),

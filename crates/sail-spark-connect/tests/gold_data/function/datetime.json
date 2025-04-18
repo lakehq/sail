@@ -2680,7 +2680,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: invalid time zone: Z"
       }
     },
     {
@@ -2702,7 +2702,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: invalid time zone: Z"
       }
     },
     {
@@ -2724,7 +2724,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: invalid time zone: Z"
       }
     },
     {

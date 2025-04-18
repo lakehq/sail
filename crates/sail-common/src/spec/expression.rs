@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::CommonError;
 use crate::spec::data_type::DataType;
 use crate::spec::literal::Literal;
-use crate::spec::QueryPlan;
+use crate::spec::{QueryPlan, TimestampType};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -113,6 +113,13 @@ pub enum Expr {
     },
     Table {
         expr: Box<Expr>,
+    },
+    UnresolvedDate {
+        value: String,
+    },
+    UnresolvedTimestamp {
+        value: String,
+        timestamp_type: TimestampType,
     },
 }
 

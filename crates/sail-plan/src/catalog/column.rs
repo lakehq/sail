@@ -48,7 +48,7 @@ impl CatalogManager<'_> {
                 let data_type = self
                     .config
                     .plan_formatter
-                    .data_type_to_simple_string(&data_type)?;
+                    .data_type_to_simple_string(&data_type, &self.config)?;
                 Ok(TableColumnMetadata::new(
                     column.name().clone(),
                     data_type,
