@@ -2,10 +2,11 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
-use chrono::{TimeZone, Utc};
+use chrono::{TimeZone, Timelike, Utc};
 use half::f16;
 use sail_common::object::DynObject;
 use sail_common::{impl_dyn_object_traits, spec};
+use sail_common_datafusion::datetime::timestamp::parse_timezone;
 
 use crate::config::{DefaultTimestampType, PlanConfig};
 use crate::error::{PlanError, PlanResult};
@@ -21,7 +22,8 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
     ) -> PlanResult<String>;
 
     /// Returns a human-readable string for the literal.
-    fn literal_to_string(&self, literal: &spec::Literal) -> PlanResult<String>;
+    fn literal_to_string(&self, literal: &spec::Literal, config: &PlanConfig)
+        -> PlanResult<String>;
 
     /// Returns a human-readable string for the function call.
     fn function_to_string(
@@ -267,13 +269,17 @@ impl PlanFormatter for DefaultPlanFormatter {
         }
     }
 
-    fn literal_to_string(&self, literal: &spec::Literal) -> PlanResult<String> {
+    fn literal_to_string(
+        &self,
+        literal: &spec::Literal,
+        config: &PlanConfig,
+    ) -> PlanResult<String> {
         use spec::Literal;
 
         let literal_list_to_string = |name: &str, values: &Vec<Literal>| -> PlanResult<String> {
             let values = values
                 .iter()
-                .map(|x| self.literal_to_string(x))
+                .map(|x| self.literal_to_string(x, config))
                 .collect::<PlanResult<Vec<String>>>()?;
             Ok(format!("{name}({})", values.join(", ")))
         };
@@ -344,7 +350,12 @@ impl PlanFormatter for DefaultPlanFormatter {
                     let datetime = Utc.timestamp_opt(*seconds, 0).earliest().ok_or_else(|| {
                         PlanError::invalid(format!("timestamp second: {seconds}"))
                     })?;
-                    format_timestamp(datetime, timezone.as_deref())
+                    let timezone = if timezone.is_some() {
+                        Some(config.session_timezone.as_ref())
+                    } else {
+                        None
+                    };
+                    format_timestamp(datetime, timezone)
                 }
                 None => Ok("NULL".to_string()),
             },
@@ -359,7 +370,12 @@ impl PlanFormatter for DefaultPlanFormatter {
                         .ok_or_else(|| {
                             PlanError::invalid(format!("timestamp millisecond: {milliseconds}"))
                         })?;
-                    format_timestamp(datetime, timezone.as_deref())
+                    let timezone = if timezone.is_some() {
+                        Some(config.session_timezone.as_ref())
+                    } else {
+                        None
+                    };
+                    format_timestamp(datetime, timezone)
                 }
                 None => Ok("NULL".to_string()),
             },
@@ -374,7 +390,12 @@ impl PlanFormatter for DefaultPlanFormatter {
                             .ok_or_else(|| {
                                 PlanError::invalid(format!("timestamp microsecond: {microseconds}"))
                             })?;
-                    format_timestamp(datetime, timezone.as_deref())
+                    let timezone = if timezone.is_some() {
+                        Some(config.session_timezone.as_ref())
+                    } else {
+                        None
+                    };
+                    format_timestamp(datetime, timezone)
                 }
                 None => Ok("NULL".to_string()),
             },
@@ -384,7 +405,12 @@ impl PlanFormatter for DefaultPlanFormatter {
             } => match nanoseconds {
                 Some(nanoseconds) => {
                     let datetime = Utc.timestamp_nanos(*nanoseconds);
-                    format_timestamp(datetime, timezone.as_deref())
+                    let timezone = if timezone.is_some() {
+                        Some(config.session_timezone.as_ref())
+                    } else {
+                        None
+                    };
+                    format_timestamp(datetime, timezone)
                 }
                 None => Ok("NULL".to_string()),
             },
@@ -631,7 +657,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                         .map(|(field, value)| {
                             Ok(format!(
                                 "{} AS {}",
-                                self.literal_to_string(value)?,
+                                self.literal_to_string(value, config)?,
                                 field.name
                             ))
                         })
@@ -646,7 +672,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 value,
             } => match value {
                 Some((id, value)) => {
-                    let value = self.literal_to_string(value)?;
+                    let value = self.literal_to_string(value, config)?;
                     Ok(format!("{id}:{value}"))
                 }
                 None => Ok("NULL".to_string()),
@@ -657,7 +683,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 value,
             } => match value {
                 Some(value) => {
-                    let value = self.literal_to_string(value)?;
+                    let value = self.literal_to_string(value, config)?;
                     Ok(format!("dictionary({value})"))
                 }
                 None => Ok("NULL".to_string()),
@@ -878,13 +904,20 @@ fn format_decimal(value: &str, scale: i8) -> String {
 }
 
 fn format_timestamp(datetime: chrono::DateTime<Utc>, timezone: Option<&str>) -> PlanResult<String> {
-    let value = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
-    let prefix = if timezone.is_some() {
-        "TIMESTAMP"
+    let (prefix, datetime) = if let Some(timezone) = timezone {
+        let tz = parse_timezone(timezone)?;
+        ("TIMESTAMP", tz.from_utc(&datetime))
     } else {
-        "TIMESTAMP_NTZ"
+        ("TIMESTAMP_NTZ", datetime.naive_utc())
     };
-    Ok(format!("{prefix} '{value}'"))
+    let value = datetime.format("%Y-%m-%d %H:%M:%S");
+    if datetime.nanosecond() > 0 {
+        let fraction = datetime.format("%.f").to_string();
+        let fraction = fraction.trim_end_matches('0');
+        Ok(format!("{prefix} '{value}{fraction}'"))
+    } else {
+        Ok(format!("{prefix} '{value}'"))
+    }
 }
 
 #[cfg(test)]
@@ -898,8 +931,9 @@ mod tests {
 
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {
+        let plan_config = PlanConfig::new()?;
         let formatter = DefaultPlanFormatter;
-        let to_string = |literal| formatter.literal_to_string(&literal);
+        let to_string = |literal| formatter.literal_to_string(&literal, &plan_config);
 
         assert_eq!(to_string(Literal::Null)?, "NULL");
         assert_eq!(
@@ -1041,7 +1075,7 @@ mod tests {
                 microseconds: Some(-1),
                 timezone: None,
             })?,
-            "TIMESTAMP_NTZ '1969-12-31 23:59:59'",
+            "TIMESTAMP_NTZ '1969-12-31 23:59:59.999999'",
         );
         assert_eq!(
             to_string(Literal::IntervalMonthDayNano {

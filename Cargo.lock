@@ -5138,6 +5138,7 @@ name = "sail-common-datafusion"
 version = "0.2.4"
 dependencies = [
  "chrono",
+ "chrono-tz",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",

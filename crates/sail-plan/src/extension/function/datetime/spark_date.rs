@@ -1,15 +1,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use chrono::format::{parse_and_remainder, Item, Numeric, Pad, Parsed};
-use chrono::{NaiveDate, ParseError};
 use datafusion::arrow::array::Date32Array;
-use datafusion::arrow::datatypes::{DataType, Date32Type};
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use sail_common_datafusion::datetime::date::string_to_date;
 
 use crate::utils::ItemTaker;
 
@@ -87,26 +86,4 @@ impl ScalarUDFImpl for SparkDate {
             }
         }
     }
-}
-
-pub fn parse_date(s: &str) -> Result<NaiveDate> {
-    const DATE_ITEMS: &[Item<'static>] = &[
-        Item::Numeric(Numeric::Year, Pad::Zero),
-        Item::Space(""),
-        Item::Literal("-"),
-        Item::Numeric(Numeric::Month, Pad::Zero),
-        Item::Space(""),
-        Item::Literal("-"),
-        Item::Numeric(Numeric::Day, Pad::Zero),
-    ];
-
-    let error = |e: ParseError| exec_datafusion_err!("invalid date: {e}: {s}");
-    let mut parsed = Parsed::new();
-    let _ = parse_and_remainder(&mut parsed, s, DATE_ITEMS.iter()).map_err(error)?;
-    parsed.to_naive_date().map_err(error)
-}
-
-fn string_to_date(value: &str) -> Result<i32> {
-    let date = parse_date(value)?;
-    Ok(Date32Type::from_naive_date(date))
 }
