@@ -37,11 +37,11 @@ impl SparkTimestamp {
     }
 
     fn string_to_timestamp_microseconds<T: AsRef<str>>(&self, value: T) -> Result<i64> {
-        let timestamp = parse_timestamp(value.as_ref())?;
-        let datetime = match timestamp {
-            TimestampValue::WithTimeZone(x) => x,
-            TimestampValue::WithoutTimeZone(x) => self.timezone_value.localize_with_fallback(&x)?,
-        };
+        let TimestampValue { datetime, timezone } = parse_timestamp(value.as_ref())?;
+        let datetime = timezone
+            .as_ref()
+            .unwrap_or(&self.timezone_value)
+            .localize_with_fallback(&datetime)?;
         Ok(datetime.timestamp_micros())
     }
 }

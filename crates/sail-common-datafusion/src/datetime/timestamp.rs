@@ -8,9 +8,9 @@ use chrono_tz::Tz;
 use datafusion_common::{exec_datafusion_err, exec_err, Result};
 
 #[derive(Debug)]
-pub enum TimestampValue {
-    WithTimeZone(DateTime<Utc>),
-    WithoutTimeZone(NaiveDateTime),
+pub struct TimestampValue {
+    pub datetime: NaiveDateTime,
+    pub timezone: Option<TimeZoneValue>,
 }
 
 #[derive(Debug)]
@@ -89,17 +89,11 @@ pub fn parse_timestamp(s: &str) -> Result<TimestampValue> {
         None => return exec_err!("missing time part in timestamp: {s}"),
     };
     let suffix = parse_and_remainder(&mut parsed, suffix, TIME_ITEMS.iter()).map_err(error)?;
-    let tz = if suffix.is_empty() {
+    let timezone = if suffix.is_empty() {
         None
     } else {
         Some(parse_timezone(suffix)?)
     };
-    if let Some(tz) = tz {
-        let datetime = parsed.to_naive_datetime_with_offset(0).map_err(error)?;
-        let datetime = tz.localize_with_fallback(&datetime)?;
-        Ok(TimestampValue::WithTimeZone(datetime))
-    } else {
-        let datetime = parsed.to_naive_datetime_with_offset(0).map_err(error)?;
-        Ok(TimestampValue::WithoutTimeZone(datetime))
-    }
+    let datetime = parsed.to_naive_datetime_with_offset(0).map_err(error)?;
+    Ok(TimestampValue { datetime, timezone })
 }

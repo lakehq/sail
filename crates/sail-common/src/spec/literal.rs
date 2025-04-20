@@ -1,5 +1,4 @@
 use std::str::FromStr;
-use std::sync::Arc;
 
 pub use arrow_buffer::i256;
 use half::f16;
@@ -53,19 +52,19 @@ pub enum Literal {
     },
     TimestampSecond {
         seconds: Option<i64>,
-        timezone: Option<Arc<str>>,
+        timestamp_type: TimestampType,
     },
     TimestampMillisecond {
         milliseconds: Option<i64>,
-        timezone: Option<Arc<str>>,
+        timestamp_type: TimestampType,
     },
     TimestampMicrosecond {
         microseconds: Option<i64>,
-        timezone: Option<Arc<str>>,
+        timestamp_type: TimestampType,
     },
     TimestampNanosecond {
         nanoseconds: Option<i64>,
-        timezone: Option<Arc<str>>,
+        timestamp_type: TimestampType,
     },
     Date32 {
         days: Option<i32>,
@@ -235,35 +234,26 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         spec::DataType::Float32 => Ok(Literal::Float32 { value: None }),
         spec::DataType::Float64 => Ok(Literal::Float64 { value: None }),
         spec::DataType::Timestamp {
-            ref time_unit,
-            ref timestamp_type,
-        } => {
-            let timezone = match timestamp_type {
-                TimestampType::Configured | TimestampType::WithLocalTimeZone => {
-                    return Err(error(&data_type));
-                }
-                TimestampType::WithTimeZone(tz) => Some(Arc::clone(tz)),
-                TimestampType::WithoutTimeZone => None,
-            };
-            match time_unit {
-                spec::TimeUnit::Second => Ok(Literal::TimestampSecond {
-                    seconds: None,
-                    timezone,
-                }),
-                spec::TimeUnit::Millisecond => Ok(Literal::TimestampMillisecond {
-                    milliseconds: None,
-                    timezone,
-                }),
-                spec::TimeUnit::Microsecond => Ok(Literal::TimestampMicrosecond {
-                    microseconds: None,
-                    timezone,
-                }),
-                spec::TimeUnit::Nanosecond => Ok(Literal::TimestampNanosecond {
-                    nanoseconds: None,
-                    timezone,
-                }),
-            }
-        }
+            time_unit,
+            timestamp_type,
+        } => match time_unit {
+            spec::TimeUnit::Second => Ok(Literal::TimestampSecond {
+                seconds: None,
+                timestamp_type,
+            }),
+            spec::TimeUnit::Millisecond => Ok(Literal::TimestampMillisecond {
+                milliseconds: None,
+                timestamp_type,
+            }),
+            spec::TimeUnit::Microsecond => Ok(Literal::TimestampMicrosecond {
+                microseconds: None,
+                timestamp_type,
+            }),
+            spec::TimeUnit::Nanosecond => Ok(Literal::TimestampNanosecond {
+                nanoseconds: None,
+                timestamp_type,
+            }),
+        },
         spec::DataType::Date32 => Ok(Literal::Date32 { days: None }),
         spec::DataType::Date64 => Ok(Literal::Date64 { milliseconds: None }),
         spec::DataType::Time32 { time_unit } => match time_unit {

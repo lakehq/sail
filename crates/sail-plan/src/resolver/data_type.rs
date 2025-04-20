@@ -223,9 +223,9 @@ impl PlanResolver<'_> {
                 time_unit: Self::unresolve_time_unit(time_unit)?,
                 timestamp_type: spec::TimestampType::WithoutTimeZone,
             }),
-            adt::DataType::Timestamp(time_unit, Some(timezone)) => Ok(DataType::Timestamp {
+            adt::DataType::Timestamp(time_unit, Some(_)) => Ok(DataType::Timestamp {
                 time_unit: Self::unresolve_time_unit(time_unit)?,
-                timestamp_type: spec::TimestampType::WithTimeZone(Arc::clone(timezone)),
+                timestamp_type: spec::TimestampType::WithLocalTimeZone,
             }),
             adt::DataType::Date32 => Ok(DataType::Date32),
             adt::DataType::Date64 => Ok(DataType::Date64),
@@ -514,7 +514,6 @@ impl PlanResolver<'_> {
                 Ok(Some(Arc::clone(&self.config.session_timezone)))
             }
             spec::TimestampType::WithoutTimeZone => Ok(None),
-            spec::TimestampType::WithTimeZone(timezone) => Ok(Some(Arc::clone(timezone))),
         }
     }
 }

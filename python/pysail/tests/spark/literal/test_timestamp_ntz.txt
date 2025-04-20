@@ -1,4 +1,12 @@
 >>> spark.conf.set("spark.sql.session.timeZone", "Asia/Shanghai")
+>>> spark.conf.set("spark.sql.timestampType", "TIMESTAMP_LTZ")
+>>> spark.sql("SELECT TIMESTAMP_NTZ '2025-01-01 00:00:00-08:00'").show(truncate=False)
++-----------------------------------+
+|TIMESTAMP_NTZ '2025-01-01 00:00:00'|
++-----------------------------------+
+|2025-01-01 00:00:00                |
++-----------------------------------+
+
 >>> spark.conf.set("spark.sql.timestampType", "TIMESTAMP_NTZ")
 >>> spark.sql("SELECT TIMESTAMP '2025-01-01 00:00:00'").show(truncate=False)
 +-----------------------------------+

@@ -214,7 +214,6 @@ pub enum DataType {
 pub enum TimestampType {
     Configured,
     WithLocalTimeZone,
-    WithTimeZone(Arc<str>),
     WithoutTimeZone,
 }
 

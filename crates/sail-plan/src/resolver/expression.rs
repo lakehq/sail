@@ -4,7 +4,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use chrono::{TimeZone, Utc};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
@@ -19,7 +18,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_nested::expr_fn::array_element;
 use sail_common::spec;
-use sail_common::spec::PySparkUdfType;
+use sail_common::spec::{PySparkUdfType, TimestampType};
 use sail_common_datafusion::datetime::date::parse_date;
 use sail_common_datafusion::datetime::timestamp::{
     parse_timestamp, parse_timezone, TimestampValue,
@@ -29,6 +28,7 @@ use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
+use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::drop_struct_field::DropStructField;
 use crate::extension::function::multi_expr::MultiExpr;
@@ -572,11 +572,11 @@ impl PlanResolver<'_> {
         literal: spec::Literal,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let literal = self.resolve_literal(literal, state)?;
         let name = self
             .config
             .plan_formatter
             .literal_to_string(&literal, &self.config)?;
-        let literal = self.resolve_literal(literal, state)?;
         Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
     }
 
@@ -1387,11 +1387,11 @@ impl PlanResolver<'_> {
         let spec::Expr::Literal(extraction) = extraction else {
             return Err(PlanError::invalid("extraction must be a literal"));
         };
+        let extraction = self.resolve_literal(extraction, state)?;
         let extraction_name = self
             .config
             .plan_formatter
             .literal_to_string(&extraction, &self.config)?;
-        let extraction = self.resolve_literal(extraction, state)?;
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;
@@ -1912,25 +1912,28 @@ impl PlanResolver<'_> {
         timestamp_type: spec::TimestampType,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let tz = self
-            .resolve_timezone(&timestamp_type)?
-            .map(|x| parse_timezone(&x))
-            .transpose()?;
-        let timestamp = parse_timestamp(&value)?;
-        let (ntz, datetime) = match timestamp {
-            TimestampValue::WithTimeZone(x) => (false, x),
-            TimestampValue::WithoutTimeZone(x) => {
-                if let Some(tz) = tz {
-                    (false, tz.localize_with_fallback(&x)?)
-                } else {
-                    (true, Utc.from_utc_datetime(&x))
+        let TimestampValue { datetime, timezone } = parse_timestamp(&value)?;
+        let (datetime, timestamp_type) =
+            match (timestamp_type, timezone, self.config.default_timestamp_type) {
+                (TimestampType::Configured, None, DefaultTimestampType::TimestampLtz)
+                | (TimestampType::WithLocalTimeZone, None, _) => {
+                    let tz = parse_timezone(&self.config.session_timezone)?;
+                    let datetime = tz.localize_with_fallback(&datetime)?;
+                    (datetime, TimestampType::WithLocalTimeZone)
                 }
-            }
-        };
-        let timezone = if ntz { None } else { Some(Arc::from("UTC")) };
+                (TimestampType::Configured, Some(tz), _)
+                | (TimestampType::WithLocalTimeZone, Some(tz), _) => {
+                    let datetime = tz.localize_with_fallback(&datetime)?;
+                    (datetime, TimestampType::WithLocalTimeZone)
+                }
+                (TimestampType::Configured, None, DefaultTimestampType::TimestampNtz)
+                | (TimestampType::WithoutTimeZone, _, _) => {
+                    (datetime.and_utc(), TimestampType::WithoutTimeZone)
+                }
+            };
         let literal = spec::Literal::TimestampMicrosecond {
             microseconds: Some(datetime.timestamp_micros()),
-            timezone,
+            timestamp_type,
         };
         self.resolve_expression_literal(literal, state)
     }

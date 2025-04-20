@@ -3,6 +3,8 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
 use chrono::{TimeZone, Timelike, Utc};
+use datafusion::arrow::array::Array;
+use datafusion_common::ScalarValue;
 use half::f16;
 use sail_common::object::DynObject;
 use sail_common::{impl_dyn_object_traits, spec};
@@ -22,8 +24,7 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
     ) -> PlanResult<String>;
 
     /// Returns a human-readable string for the literal.
-    fn literal_to_string(&self, literal: &spec::Literal, config: &PlanConfig)
-        -> PlanResult<String>;
+    fn literal_to_string(&self, literal: &ScalarValue, config: &PlanConfig) -> PlanResult<String>;
 
     /// Returns a human-readable string for the function call.
     fn function_to_string(
@@ -127,10 +128,6 @@ impl PlanFormatter for DefaultPlanFormatter {
             DataType::Timestamp {
                 time_unit: _,
                 timestamp_type: spec::TimestampType::WithLocalTimeZone,
-            }
-            | DataType::Timestamp {
-                time_unit: _,
-                timestamp_type: spec::TimestampType::WithTimeZone(_),
             } => Ok("timestamp".to_string()),
             DataType::Timestamp {
                 time_unit: _,
@@ -269,60 +266,58 @@ impl PlanFormatter for DefaultPlanFormatter {
         }
     }
 
-    fn literal_to_string(
-        &self,
-        literal: &spec::Literal,
-        config: &PlanConfig,
-    ) -> PlanResult<String> {
-        use spec::Literal;
-
-        let literal_list_to_string = |name: &str, values: &Vec<Literal>| -> PlanResult<String> {
-            let values = values
-                .iter()
-                .map(|x| self.literal_to_string(x, config))
+    fn literal_to_string(&self, literal: &ScalarValue, config: &PlanConfig) -> PlanResult<String> {
+        let literal_list_to_string = |name: &str,
+                                      values: Option<&dyn Array>|
+         -> PlanResult<String> {
+            let Some(values) = values else {
+                return Ok("NULL".to_string());
+            };
+            let values = (0..values.len())
+                .map(|i| self.literal_to_string(&ScalarValue::try_from_array(values, i)?, config))
                 .collect::<PlanResult<Vec<String>>>()?;
             Ok(format!("{name}({})", values.join(", ")))
         };
 
         match literal {
-            Literal::Null => Ok("NULL".to_string()),
-            Literal::Boolean { value } => match value {
+            ScalarValue::Null => Ok("NULL".to_string()),
+            ScalarValue::Boolean(value) => match value {
                 Some(value) => Ok(format!("{value}")),
                 None => Ok("NULL".to_string()),
             },
-            Literal::Int8 { value } => match value {
+            ScalarValue::Int8(value) => match value {
                 Some(value) => Ok(format!("{value}")),
                 None => Ok("NULL".to_string()),
             },
-            Literal::Int16 { value } => match value {
+            ScalarValue::Int16(value) => match value {
                 Some(value) => Ok(format!("{value}")),
                 None => Ok("NULL".to_string()),
             },
-            Literal::Int32 { value } => match value {
+            ScalarValue::Int32(value) => match value {
                 Some(value) => Ok(format!("{value}")),
                 None => Ok("NULL".to_string()),
             },
-            Literal::Int64 { value } => match value {
+            ScalarValue::Int64(value) => match value {
                 Some(value) => Ok(format!("{value}")),
                 None => Ok("NULL".to_string()),
             },
-            Literal::UInt8 { value } => match value {
+            ScalarValue::UInt8(value) => match value {
                 Some(value) => Ok(format!("{value}")),
                 None => Ok("NULL".to_string()),
             },
-            Literal::UInt16 { value } => match value {
+            ScalarValue::UInt16(value) => match value {
                 Some(value) => Ok(format!("{value}")),
                 None => Ok("NULL".to_string()),
             },
-            Literal::UInt32 { value } => match value {
+            ScalarValue::UInt32(value) => match value {
                 Some(value) => Ok(format!("{value}")),
                 None => Ok("NULL".to_string()),
             },
-            Literal::UInt64 { value } => match value {
+            ScalarValue::UInt64(value) => match value {
                 Some(value) => Ok(format!("{value}")),
                 None => Ok("NULL".to_string()),
             },
-            Literal::Float16 { value } => match value {
+            ScalarValue::Float16(value) => match value {
                 Some(value) => {
                     let value = f16::to_f32(*value);
                     let mut buffer = ryu::Buffer::new();
@@ -330,14 +325,14 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Float32 { value } => match value {
+            ScalarValue::Float32(value) => match value {
                 Some(value) => {
                     let mut buffer = ryu::Buffer::new();
                     Ok(buffer.format(*value).to_string())
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Float64 { value } => match value {
+            ScalarValue::Float64(value) => match value {
                 Some(value) => {
                     let mut buffer = ryu::Buffer::new();
                     Ok(buffer.format(*value).to_string())
@@ -345,7 +340,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 None => Ok("NULL".to_string()),
             },
             // For timestamp values with no time zone, we use UTC as the time zone for formatting.
-            Literal::TimestampSecond { seconds, timezone } => match seconds {
+            ScalarValue::TimestampSecond(seconds, timezone) => match seconds {
                 Some(seconds) => {
                     let datetime = Utc.timestamp_opt(*seconds, 0).earliest().ok_or_else(|| {
                         PlanError::invalid(format!("timestamp second: {seconds}"))
@@ -359,10 +354,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::TimestampMillisecond {
-                milliseconds,
-                timezone,
-            } => match milliseconds {
+            ScalarValue::TimestampMillisecond(milliseconds, timezone) => match milliseconds {
                 Some(milliseconds) => {
                     let datetime = Utc
                         .timestamp_millis_opt(*milliseconds)
@@ -379,10 +371,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::TimestampMicrosecond {
-                microseconds,
-                timezone,
-            } => match microseconds {
+            ScalarValue::TimestampMicrosecond(microseconds, timezone) => match microseconds {
                 Some(microseconds) => {
                     let datetime =
                         Utc.timestamp_micros(*microseconds)
@@ -399,10 +388,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::TimestampNanosecond {
-                nanoseconds,
-                timezone,
-            } => match nanoseconds {
+            ScalarValue::TimestampNanosecond(nanoseconds, timezone) => match nanoseconds {
                 Some(nanoseconds) => {
                     let datetime = Utc.timestamp_nanos(*nanoseconds);
                     let timezone = if timezone.is_some() {
@@ -414,7 +400,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Date32 { days } => match days {
+            ScalarValue::Date32(days) => match days {
                 Some(days) => {
                     let date =
                         chrono::NaiveDateTime::UNIX_EPOCH + chrono::Duration::days(*days as i64);
@@ -422,7 +408,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Date64 { milliseconds } => match milliseconds {
+            ScalarValue::Date64(milliseconds) => match milliseconds {
                 Some(milliseconds) => {
                     let date = chrono::NaiveDateTime::UNIX_EPOCH
                         + chrono::Duration::milliseconds(*milliseconds);
@@ -430,7 +416,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Time32Second { seconds } => match seconds {
+            ScalarValue::Time32Second(seconds) => match seconds {
                 Some(seconds) => {
                     let secs = *seconds as u32;
                     let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, 0)
@@ -441,7 +427,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Time32Millisecond { milliseconds } => match milliseconds {
+            ScalarValue::Time32Millisecond(milliseconds) => match milliseconds {
                 Some(milliseconds) => {
                     let secs = (*milliseconds / 1000) as u32;
                     let nanos = ((*milliseconds % 1000) * 1_000_000) as u32;
@@ -453,7 +439,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Time64Microsecond { microseconds } => match microseconds {
+            ScalarValue::Time64Microsecond(microseconds) => match microseconds {
                 Some(microseconds) => {
                     let secs = (*microseconds / 1_000_000) as u32;
                     let nanos = ((*microseconds % 1_000_000) * 1000) as u32;
@@ -465,7 +451,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Time64Nanosecond { nanoseconds } => match nanoseconds {
+            ScalarValue::Time64Nanosecond(nanoseconds) => match nanoseconds {
                 Some(nanoseconds) => {
                     let secs = (*nanoseconds / 1_000_000_000) as u32;
                     let nanos = (*nanoseconds % 1_000_000_000) as u32;
@@ -477,7 +463,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::DurationSecond { seconds } => match seconds {
+            ScalarValue::DurationSecond(seconds) => match seconds {
                 Some(seconds) => {
                     let days = *seconds / 86_400;
                     let prepend = if days < 0 {
@@ -496,7 +482,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::DurationMillisecond { milliseconds } => match milliseconds {
+            ScalarValue::DurationMillisecond(milliseconds) => match milliseconds {
                 Some(milliseconds) => {
                     let days = *milliseconds / 86_400_000;
                     let prepend = if days < 0 {
@@ -516,7 +502,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::DurationMicrosecond { microseconds } => match microseconds {
+            ScalarValue::DurationMicrosecond(microseconds) => match microseconds {
                 Some(microseconds) => {
                     let days = *microseconds / 86_400_000_000;
                     let prepend = if days < 0 {
@@ -536,7 +522,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::DurationNanosecond { nanoseconds } => match nanoseconds {
+            ScalarValue::DurationNanosecond(nanoseconds) => match nanoseconds {
                 Some(nanoseconds) => {
                     let days = *nanoseconds / 86_400_000_000_000;
                     let prepend = if days < 0 {
@@ -556,7 +542,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::IntervalYearMonth { months } => match months {
+            ScalarValue::IntervalYearMonth(months) => match months {
                 Some(months) => {
                     let years = *months / 12;
                     let prepend = if years < 0 {
@@ -573,7 +559,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::IntervalDayTime { value } => match value {
+            ScalarValue::IntervalDayTime(value) => match value {
                 Some(value) => {
                     let (days, milliseconds) = (value.days, value.milliseconds);
                     let total_days = days + (milliseconds / 86_400_000); // Add days from milliseconds
@@ -595,7 +581,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::IntervalMonthDayNano { value } => match value {
+            ScalarValue::IntervalMonthDayNano(value) => match value {
                 Some(value) => {
                     let (months, days, nanoseconds) = (value.months, value.days, value.nanoseconds);
                     let years = months / 12;
@@ -612,117 +598,89 @@ impl PlanFormatter for DefaultPlanFormatter {
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Binary { value }
-            | Literal::FixedSizeBinary { size: _, value }
-            | Literal::LargeBinary { value }
-            | Literal::BinaryView { value } => match value {
+            ScalarValue::Binary(value)
+            | ScalarValue::FixedSizeBinary(_, value)
+            | ScalarValue::LargeBinary(value)
+            | ScalarValue::BinaryView(value) => match value {
                 Some(value) => Ok(BinaryDisplay(value).to_string()),
                 None => Ok("NULL".to_string()),
             },
-            Literal::Utf8 { value }
-            | Literal::LargeUtf8 { value }
-            | Literal::Utf8View { value } => match value {
+            ScalarValue::Utf8(value)
+            | ScalarValue::LargeUtf8(value)
+            | ScalarValue::Utf8View(value) => match value {
                 Some(value) => Ok(value.clone()),
                 None => Ok("NULL".to_string()),
             },
-            Literal::List {
-                data_type: _,
-                values,
+            ScalarValue::List(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
             }
-            | Literal::FixedSizeList {
-                length: _,
-                data_type: _,
-                values,
+            ScalarValue::FixedSizeList(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
             }
-            | Literal::LargeList {
-                data_type: _,
-                values,
-            } => match values {
-                Some(values) => literal_list_to_string("array", values),
-                None => Ok("NULL".to_string()),
-            },
-            Literal::Struct { data_type, values } => match values {
-                Some(values) => {
-                    let fields = match data_type {
-                        spec::DataType::Struct { fields } => fields,
-                        other => {
-                            return Err(PlanError::invalid(format!(
-                                "literal to string: expected Struct type, got {other:?}"
-                            )))
+            ScalarValue::LargeList(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
+            }
+            ScalarValue::Struct(values) => {
+                let fields = values
+                    .fields()
+                    .iter()
+                    .zip(values.columns())
+                    .map(|(field, array)| {
+                        if array.len() != 1 {
+                            return Err(PlanError::invalid(
+                                "expected struct literal with one value",
+                            ));
                         }
-                    };
-                    let fields = fields
-                        .iter()
-                        .zip(values.iter())
-                        .map(|(field, value)| {
-                            Ok(format!(
-                                "{} AS {}",
-                                self.literal_to_string(value, config)?,
-                                field.name
-                            ))
-                        })
-                        .collect::<PlanResult<Vec<String>>>()?;
-                    Ok(format!("struct({})", fields.join(", ")))
-                }
-                None => Ok("NULL".to_string()),
-            },
-            Literal::Union {
-                union_fields: _,
-                union_mode: _,
-                value,
-            } => match value {
+                        let value = ScalarValue::try_from_array(array, 0)?;
+                        Ok(format!(
+                            "{} AS {}",
+                            self.literal_to_string(&value, config)?,
+                            field.name()
+                        ))
+                    })
+                    .collect::<PlanResult<Vec<String>>>()?;
+                Ok(format!("struct({})", fields.join(", ")))
+            }
+            ScalarValue::Union(value, _union_fields, _union_mode) => match value {
                 Some((id, value)) => {
                     let value = self.literal_to_string(value, config)?;
                     Ok(format!("{id}:{value}"))
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Dictionary {
-                key_type: _,
-                value_type: _,
-                value,
-            } => match value {
-                Some(value) => {
-                    let value = self.literal_to_string(value, config)?;
-                    Ok(format!("dictionary({value})"))
-                }
-                None => Ok("NULL".to_string()),
-            },
-            Literal::Decimal128 {
-                precision: _,
-                scale,
-                value,
-            } => match value {
+            ScalarValue::Dictionary(_, value) => {
+                let value = self.literal_to_string(value, config)?;
+                Ok(format!("dictionary({value})"))
+            }
+            ScalarValue::Decimal128(value, _precision, scale) => match value {
                 Some(value) => {
                     let value = format!("{value}");
                     Ok(format_decimal(value.as_str(), *scale))
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Decimal256 {
-                precision: _,
-                scale,
-                value,
-            } => match value {
+            ScalarValue::Decimal256(value, _precision, scale) => match value {
                 Some(value) => {
                     let value = format!("{value}");
                     Ok(format_decimal(value.as_str(), *scale))
                 }
                 None => Ok("NULL".to_string()),
             },
-            Literal::Map {
-                key_type: _,
-                value_type: _,
-                keys,
-                values,
-                ..
-            } => match (keys, values) {
-                (Some(keys), Some(values)) => {
-                    let k = literal_list_to_string("array", keys)?;
-                    let v = literal_list_to_string("array", values)?;
+            ScalarValue::Map(array) => match array.iter().collect::<Vec<_>>().one()? {
+                Some(value) => {
+                    let [keys, values] = value.columns() else {
+                        return Err(PlanError::invalid(
+                            "expected map literal with keys and values",
+                        ));
+                    };
+                    let k = literal_list_to_string("array", Some(keys))?;
+                    let v = literal_list_to_string("array", Some(values))?;
                     Ok(format!("map({k}, {v})"))
                 }
-                _ => Ok("NULL".to_string()),
+                None => Ok("NULL".to_string()),
             },
         }
     }
@@ -924,8 +882,15 @@ fn format_timestamp(datetime: chrono::DateTime<Utc>, timezone: Option<&str>) -> 
 mod tests {
     use std::sync::Arc;
 
-    use datafusion::arrow::datatypes::i256;
-    use sail_common::spec::Literal;
+    use datafusion::arrow::array::{
+        FixedSizeListArray, Float64Array, LargeListArray, ListArray, MapArray, StringArray,
+        StructArray,
+    };
+    use datafusion::arrow::buffer::OffsetBuffer;
+    use datafusion::arrow::datatypes::{
+        i256, DataType, Field, Int32Type, IntervalDayTime, IntervalMonthDayNano,
+    };
+    use datafusion_common::arrow::array::ArrayRef;
 
     use super::*;
 
@@ -935,304 +900,213 @@ mod tests {
         let formatter = DefaultPlanFormatter;
         let to_string = |literal| formatter.literal_to_string(&literal, &plan_config);
 
-        assert_eq!(to_string(Literal::Null)?, "NULL");
+        assert_eq!(to_string(ScalarValue::Null)?, "NULL");
         assert_eq!(
-            to_string(Literal::Binary {
-                value: Some(vec![16, 0x20, 0xff])
-            })?,
+            to_string(ScalarValue::Binary(Some(vec![16, 0x20, 0xff])))?,
             "X'1020FF'",
         );
-        assert_eq!(to_string(Literal::Boolean { value: Some(true) })?, "true");
-        assert_eq!(to_string(Literal::Int8 { value: Some(10) })?, "10");
-        assert_eq!(to_string(Literal::Int16 { value: Some(-20) })?, "-20");
-        assert_eq!(to_string(Literal::Int32 { value: Some(30) })?, "30");
-        assert_eq!(to_string(Literal::Int64 { value: Some(-40) })?, "-40");
-        assert_eq!(to_string(Literal::Float32 { value: Some(1.0) })?, "1.0");
-        assert_eq!(to_string(Literal::Float64 { value: Some(-0.1) })?, "-0.1");
+        assert_eq!(to_string(ScalarValue::Boolean(Some(true)))?, "true");
+        assert_eq!(to_string(ScalarValue::Int8(Some(10)))?, "10");
+        assert_eq!(to_string(ScalarValue::Int16(Some(-20)))?, "-20");
+        assert_eq!(to_string(ScalarValue::Int32(Some(30)))?, "30");
+        assert_eq!(to_string(ScalarValue::Int64(Some(-40)))?, "-40");
+        assert_eq!(to_string(ScalarValue::Float32(Some(1.0)))?, "1.0");
+        assert_eq!(to_string(ScalarValue::Float64(Some(-0.1)))?, "-0.1");
+        assert_eq!(to_string(ScalarValue::Decimal128(Some(123), 3, 0))?, "123",);
         assert_eq!(
-            to_string(Literal::Decimal128 {
-                precision: 3,
-                scale: 0,
-                value: Some(123),
-            })?,
-            "123",
-        );
-        assert_eq!(
-            to_string(Literal::Decimal128 {
-                precision: 3,
-                scale: 0,
-                value: Some(-123),
-            })?,
+            to_string(ScalarValue::Decimal128(Some(-123), 3, 0))?,
             "-123",
         );
+        assert_eq!(to_string(ScalarValue::Decimal128(Some(123), 3, 2))?, "1.23",);
         assert_eq!(
-            to_string(Literal::Decimal128 {
-                precision: 3,
-                scale: 2,
-                value: Some(123),
-            })?,
-            "1.23",
-        );
-        assert_eq!(
-            to_string(Literal::Decimal128 {
-                precision: 3,
-                scale: 5,
-                value: Some(123),
-            })?,
+            to_string(ScalarValue::Decimal128(Some(123), 3, 5))?,
             "0.00123",
         );
         assert_eq!(
-            to_string(Literal::Decimal128 {
-                precision: 3,
-                scale: -2,
-                value: Some(12300),
-            })?,
+            to_string(ScalarValue::Decimal128(Some(12300), 3, -2))?,
             "12300",
         );
         assert_eq!(
-            to_string(Literal::Decimal256 {
-                precision: 3,
-                scale: 0,
-                value: Some(i256::from(123)),
-            })?,
+            to_string(ScalarValue::Decimal256(Some(i256::from(123)), 3, 0))?,
             "123",
         );
         assert_eq!(
-            to_string(Literal::Decimal256 {
-                precision: 3,
-                scale: 0,
-                value: Some(i256::from(-123)),
-            })?,
+            to_string(ScalarValue::Decimal256(Some(i256::from(-123)), 3, 0))?,
             "-123",
         );
         assert_eq!(
-            to_string(Literal::Decimal256 {
-                precision: 3,
-                scale: 2,
-                value: Some(i256::from(123)),
-            })?,
+            to_string(ScalarValue::Decimal256(Some(i256::from(123)), 3, 2))?,
             "1.23",
         );
         assert_eq!(
-            to_string(Literal::Decimal256 {
-                precision: 3,
-                scale: 5,
-                value: Some(i256::from(123)),
-            })?,
+            to_string(ScalarValue::Decimal256(Some(i256::from(123)), 3, 5))?,
             "0.00123",
         );
         assert_eq!(
-            to_string(Literal::Decimal256 {
-                precision: 3,
-                scale: -2,
-                value: Some(i256::from(12300)),
-            })?,
+            to_string(ScalarValue::Decimal256(Some(i256::from(12300)), 3, -2))?,
             "12300",
         );
         assert_eq!(
-            to_string(Literal::Decimal256 {
-                precision: 42,
-                scale: 5,
-                value: i256::from_string("120000000000000000000000000000000000000000"),
-            })?,
+            to_string(ScalarValue::Decimal256(
+                i256::from_string("120000000000000000000000000000000000000000"),
+                42,
+                5,
+            ))?,
             "1200000000000000000000000000000000000.00000",
         );
         assert_eq!(
-            to_string(Literal::Utf8 {
-                value: Some("abc".to_string())
-            })?,
+            to_string(ScalarValue::Utf8(Some("abc".to_string())))?,
             "abc",
         );
         assert_eq!(
-            to_string(Literal::LargeUtf8 {
-                value: Some("abc".to_string())
-            })?,
+            to_string(ScalarValue::LargeUtf8(Some("abc".to_string())))?,
             "abc",
         );
         assert_eq!(
-            to_string(Literal::Utf8View {
-                value: Some("abc".to_string())
-            })?,
+            to_string(ScalarValue::Utf8View(Some("abc".to_string())))?,
             "abc",
         );
         assert_eq!(
-            to_string(Literal::Date32 { days: Some(10) })?,
+            to_string(ScalarValue::Date32(Some(10)))?,
             "DATE '1970-01-11'",
         );
         assert_eq!(
-            to_string(Literal::Date32 { days: Some(-5) })?,
+            to_string(ScalarValue::Date32(Some(-5)))?,
             "DATE '1969-12-27'",
         );
         assert_eq!(
-            to_string(Literal::TimestampMicrosecond {
-                microseconds: Some(123_000_000),
-                timezone: Some(Arc::from("UTC")),
-            })?,
+            to_string(ScalarValue::TimestampMicrosecond(
+                Some(123_000_000),
+                Some(Arc::from("UTC")),
+            ))?,
             "TIMESTAMP '1970-01-01 00:02:03'",
         );
         assert_eq!(
-            to_string(Literal::TimestampMicrosecond {
-                microseconds: Some(-1),
-                timezone: None,
-            })?,
+            to_string(ScalarValue::TimestampMicrosecond(Some(-1), None))?,
             "TIMESTAMP_NTZ '1969-12-31 23:59:59.999999'",
         );
         assert_eq!(
-            to_string(Literal::IntervalMonthDayNano {
-                value: Some(spec::IntervalMonthDayNano {
+            to_string(ScalarValue::IntervalMonthDayNano (
+                Some(IntervalMonthDayNano {
                     months: 15,
                     days: -20,
                     nanoseconds: 123_456_789_000,
                 })
-            })?,
+            ))?,
             "INTERVAL 1 YEAR 3 MONTH -20 DAY 0 HOUR 2 MINUTE 3 SECOND 456 MILLISECOND 789 MICROSECOND 0 NANOSECOND",
         );
         assert_eq!(
-            to_string(Literal::IntervalMonthDayNano {
-                value: Some(spec::IntervalMonthDayNano {
+            to_string(ScalarValue::IntervalMonthDayNano (
+                Some(IntervalMonthDayNano {
                     months: -15,
                     days: 10,
                     nanoseconds: -1_001_000,
                 })
-            })?,
+            ))?,
             "INTERVAL -1 YEAR -3 MONTH 10 DAY 0 HOUR 0 MINUTE 0 SECOND -1 MILLISECOND -1 MICROSECOND 0 NANOSECOND",
         );
         assert_eq!(
-            to_string(Literal::IntervalYearMonth { months: Some(15) })?,
+            to_string(ScalarValue::IntervalYearMonth(Some(15)))?,
             "INTERVAL '1-3' YEAR TO MONTH",
         );
         assert_eq!(
-            to_string(Literal::IntervalYearMonth { months: Some(-15) })?,
+            to_string(ScalarValue::IntervalYearMonth(Some(-15)))?,
             "INTERVAL '-1-3' YEAR TO MONTH",
         );
         assert_eq!(
-            to_string(Literal::IntervalDayTime {
-                value: Some(spec::IntervalDayTime {
-                    days: 0,
-                    milliseconds: 123_456_000,
-                })
-            })?,
+            to_string(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: 123_456_000,
+            })))?,
             "INTERVAL '1 10:17:36.000' DAY TO SECOND",
         );
         assert_eq!(
-            to_string(Literal::IntervalDayTime {
-                value: Some(spec::IntervalDayTime {
-                    days: 0,
-                    milliseconds: -123_456_000,
-                })
-            })?,
+            to_string(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 0,
+                milliseconds: -123_456_000,
+            })))?,
             "INTERVAL '-1 10:17:36.000' DAY TO SECOND",
         );
         assert_eq!(
-            to_string(Literal::DurationMicrosecond {
-                microseconds: Some(123_456_789),
-            })?,
+            to_string(ScalarValue::DurationMicrosecond(Some(123_456_789)))?,
             "INTERVAL '0 00:02:03.456789' DAY TO SECOND",
         );
         assert_eq!(
-            to_string(Literal::DurationMicrosecond {
-                microseconds: Some(-123_456_789),
-            })?,
+            to_string(ScalarValue::DurationMicrosecond(Some(-123_456_789)))?,
             "INTERVAL '-0 00:02:03.456789' DAY TO SECOND",
         );
         assert_eq!(
-            to_string(Literal::List {
-                data_type: spec::DataType::Int32,
-                values: Some(vec![
-                    Literal::Int32 { value: Some(1) },
-                    Literal::Int32 { value: Some(-2) },
-                ]),
-            })?,
+            to_string(ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(-2)
+                ])])
+            )))?,
             "array(1, -2)",
         );
         assert_eq!(
-            to_string(Literal::LargeList {
-                data_type: spec::DataType::Int32,
-                values: Some(vec![
-                    Literal::Int32 { value: Some(1) },
-                    Literal::Int32 { value: Some(-2) },
-                ]),
-            })?,
+            to_string(ScalarValue::LargeList(Arc::new(
+                LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                    Some(1),
+                    Some(-2),
+                ])])
+            )))?,
             "array(1, -2)",
         );
         assert_eq!(
-            to_string(Literal::FixedSizeList {
-                length: 2,
-                data_type: spec::DataType::Int32,
-                values: Some(vec![
-                    Literal::Int32 { value: Some(1) },
-                    Literal::Int32 { value: Some(-2) },
-                ]),
-            })?,
+            to_string(ScalarValue::FixedSizeList(Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    vec![Some(vec![Some(1), Some(-2),])],
+                    2
+                )
+            )))?,
             "array(1, -2)",
         );
         assert_eq!(
-            to_string(Literal::Map {
-                key_type: spec::DataType::Utf8,
-                value_type: spec::DataType::Float64,
-                keys: Some(vec![
-                    Literal::Utf8 {
-                        value: Some("a".to_string())
-                    },
-                    Literal::Utf8 {
-                        value: Some("b".to_string())
-                    },
-                ]),
-                values: Some(vec![
-                    Literal::Float64 { value: Some(1.0) },
-                    Literal::Float64 { value: Some(2.0) },
-                ]),
-            })?,
-            "map(array(a, b), array(1.0, 2.0))",
+            to_string(ScalarValue::Map(Arc::new(MapArray::new(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Arc::new(Field::new("keys", DataType::Utf8, false)),
+                            Arc::new(Field::new("values", DataType::Float64, true)),
+                        ]
+                        .into()
+                    ),
+                    false
+                )),
+                OffsetBuffer::new(vec![0, 2].into()),
+                StructArray::try_from(vec![
+                    (
+                        "keys",
+                        Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef
+                    ),
+                    (
+                        "values",
+                        Arc::new(Float64Array::from(vec![Some(1.0), None])) as ArrayRef
+                    )
+                ])?,
+                None,
+                false
+            ))))?,
+            "map(array(a, b), array(1.0, NULL))",
         );
         assert_eq!(
-            to_string(Literal::Struct {
-                data_type: spec::DataType::Struct {
-                    fields: spec::Fields::from(vec![
-                        spec::Field {
-                            name: "foo".to_string(),
-                            data_type: spec::DataType::List {
-                                data_type: Box::new(spec::DataType::Int64),
-                                nullable: true,
-                            },
-                            nullable: false,
-                            metadata: vec![],
-                        },
-                        spec::Field {
-                            name: "bar".to_string(),
-                            data_type: spec::DataType::Struct {
-                                fields: spec::Fields::from(vec![spec::Field {
-                                    name: "baz".to_string(),
-                                    data_type: spec::DataType::Utf8,
-                                    nullable: false,
-                                    metadata: vec![],
-                                }])
-                            },
-                            nullable: true,
-                            metadata: vec![],
-                        },
-                    ])
-                },
-                values: Some(vec![
-                    Literal::List {
-                        data_type: spec::DataType::Int64,
-                        values: Some(vec![Literal::Int64 { value: Some(1) }, Literal::Null]),
-                    },
-                    Literal::Struct {
-                        data_type: spec::DataType::Struct {
-                            fields: spec::Fields::from(vec![spec::Field {
-                                name: "baz".to_string(),
-                                data_type: spec::DataType::Utf8,
-                                nullable: false,
-                                metadata: vec![],
-                            }])
-                        },
-                        values: Some(vec![Literal::Utf8 {
-                            value: Some("hello".to_string())
-                        }]),
-                    },
-                ])
-            })?,
+            to_string(ScalarValue::Struct(Arc::new(StructArray::try_from(vec![
+                (
+                    "foo",
+                    Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                        Some(vec![Some(1), None])
+                    ])) as ArrayRef
+                ),
+                (
+                    "bar",
+                    Arc::new(StructArray::try_from(vec![(
+                        "baz",
+                        Arc::new(StringArray::from(vec![Some("hello")])) as ArrayRef
+                    )])?) as ArrayRef
+                )
+            ])?)))?,
             "struct(array(1, NULL) AS foo, struct(hello AS baz) AS bar)",
         );
         Ok(())

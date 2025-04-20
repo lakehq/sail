@@ -35,21 +35,34 @@ impl PlanResolver<'_> {
             Literal::Float16 { value } => Ok(ScalarValue::Float16(value)),
             Literal::Float32 { value } => Ok(ScalarValue::Float32(value)),
             Literal::Float64 { value } => Ok(ScalarValue::Float64(value)),
-            Literal::TimestampSecond { seconds, timezone } => {
+            Literal::TimestampSecond {
+                seconds,
+                timestamp_type,
+            } => {
+                let timezone = self.resolve_timezone(&timestamp_type)?;
                 Ok(ScalarValue::TimestampSecond(seconds, timezone))
             }
             Literal::TimestampMillisecond {
                 milliseconds,
-                timezone,
-            } => Ok(ScalarValue::TimestampMillisecond(milliseconds, timezone)),
+                timestamp_type,
+            } => {
+                let timezone = self.resolve_timezone(&timestamp_type)?;
+                Ok(ScalarValue::TimestampMillisecond(milliseconds, timezone))
+            }
             Literal::TimestampMicrosecond {
                 microseconds,
-                timezone,
-            } => Ok(ScalarValue::TimestampMicrosecond(microseconds, timezone)),
+                timestamp_type,
+            } => {
+                let timezone = self.resolve_timezone(&timestamp_type)?;
+                Ok(ScalarValue::TimestampMicrosecond(microseconds, timezone))
+            }
             Literal::TimestampNanosecond {
                 nanoseconds,
-                timezone,
-            } => Ok(ScalarValue::TimestampNanosecond(nanoseconds, timezone)),
+                timestamp_type,
+            } => {
+                let timezone = self.resolve_timezone(&timestamp_type)?;
+                Ok(ScalarValue::TimestampNanosecond(nanoseconds, timezone))
+            }
             Literal::Date32 { days } => Ok(ScalarValue::Date32(days)),
             Literal::Date64 { milliseconds } => Ok(ScalarValue::Date64(milliseconds)),
             Literal::Time32Second { seconds } => Ok(ScalarValue::Time32Second(seconds)),
