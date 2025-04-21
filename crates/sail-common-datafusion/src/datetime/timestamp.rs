@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use chrono::format::{parse_and_remainder, Fixed, Item, Numeric, Pad, Parsed};
 use chrono::{
-    DateTime, Days, FixedOffset, MappedLocalTime, NaiveDateTime, ParseError, TimeZone, Utc,
+    DateTime, Days, FixedOffset, MappedLocalTime, NaiveDateTime, Offset, ParseError, TimeZone, Utc,
 };
 use chrono_tz::Tz;
 use datafusion_common::{exec_datafusion_err, exec_err, Result};
@@ -37,9 +37,16 @@ impl TimeZoneValue {
         }
     }
 
+    /// Localize the naive datetime to the time zone.
+    /// 1. If the datatime is mapped to exactly one datetime in the time zone, the local datetime
+    ///    is returned.
+    /// 1. If the datetime is ambiguous in the time zone, the earliest local datetime is returned.
+    /// 1. If the datetime is invalid in the time zone, the next valid local datetime is returned.
     pub fn localize_with_fallback(&self, datetime: &NaiveDateTime) -> Result<DateTime<Utc>> {
         match self.localize(datetime).earliest() {
             Some(x) => Ok(x),
+            // FIXME: The logic here may not work in all cases.
+            //   The correct solution requires access to offset transition rules for the time zone.
             None => datetime
                 .checked_sub_days(Days::new(1))
                 .and_then(|x| self.localize(&x).earliest())
@@ -91,6 +98,8 @@ pub fn parse_timestamp(s: &str) -> Result<TimestampValue> {
     let suffix = parse_and_remainder(&mut parsed, suffix, TIME_ITEMS.iter()).map_err(error)?;
     let timezone = if suffix.is_empty() {
         None
+    } else if suffix.eq_ignore_ascii_case("Z") {
+        Some(TimeZoneValue::Fixed(Utc.fix()))
     } else {
         Some(parse_timezone(suffix)?)
     };

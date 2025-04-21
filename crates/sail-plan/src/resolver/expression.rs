@@ -1913,8 +1913,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let TimestampValue { datetime, timezone } = parse_timestamp(&value)?;
-        let (datetime, timestamp_type) =
-            match (timestamp_type, timezone, self.config.default_timestamp_type) {
+        let (datetime, timestamp_type) = match (timestamp_type, timezone, self.config.default_timestamp_type) {
                 (TimestampType::Configured, None, DefaultTimestampType::TimestampLtz)
                 | (TimestampType::WithLocalTimeZone, None, _) => {
                     let tz = parse_timezone(&self.config.session_timezone)?;
@@ -1927,6 +1926,8 @@ impl PlanResolver<'_> {
                     (datetime, TimestampType::WithLocalTimeZone)
                 }
                 (TimestampType::Configured, None, DefaultTimestampType::TimestampNtz)
+                // If the timestamp type is explicitly `TIMESTAMP_NTZ`, the time zone in the literal
+                // is simply ignored.
                 | (TimestampType::WithoutTimeZone, _, _) => {
                     (datetime.and_utc(), TimestampType::WithoutTimeZone)
                 }

@@ -2,13 +2,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::Date32Array;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
-use sail_common_datafusion::datetime::date::string_to_date;
+use sail_common_datafusion::datetime::date::parse_date;
 
 use crate::utils::ItemTaker;
 
@@ -33,6 +33,11 @@ impl SparkDate {
                 Volatility::Immutable,
             ),
         }
+    }
+
+    fn string_to_date32(value: &str) -> Result<i32> {
+        let date = parse_date(value)?;
+        Ok(Date32Type::from_naive_date(date))
     }
 }
 
@@ -61,15 +66,15 @@ impl ScalarUDFImpl for SparkDate {
                 let array = match array.data_type() {
                     DataType::Utf8 => as_string_array(&array)?
                         .iter()
-                        .map(|x| x.map(string_to_date).transpose())
+                        .map(|x| x.map(Self::string_to_date32).transpose())
                         .collect::<Result<Date32Array>>()?,
                     DataType::LargeUtf8 => as_large_string_array(&array)?
                         .iter()
-                        .map(|x| x.map(string_to_date).transpose())
+                        .map(|x| x.map(Self::string_to_date32).transpose())
                         .collect::<Result<Date32Array>>()?,
                     DataType::Utf8View => as_string_view_array(&array)?
                         .iter()
-                        .map(|x| x.map(string_to_date).transpose())
+                        .map(|x| x.map(Self::string_to_date32).transpose())
                         .collect::<Result<Date32Array>>()?,
                     _ => return exec_err!("expected string array for `date`"),
                 };
@@ -77,7 +82,7 @@ impl ScalarUDFImpl for SparkDate {
             }
             ColumnarValue::Scalar(scalar) => {
                 let value = match scalar.try_as_str() {
-                    Some(x) => x.map(string_to_date).transpose()?,
+                    Some(x) => x.map(Self::string_to_date32).transpose()?,
                     _ => {
                         return exec_err!("expected string scalar for `date`");
                     }

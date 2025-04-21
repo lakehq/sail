@@ -36,6 +36,10 @@ impl SparkTimestamp {
         })
     }
 
+    pub fn timezone(&self) -> &str {
+        self.timezone.as_ref()
+    }
+
     fn string_to_timestamp_microseconds<T: AsRef<str>>(&self, value: T) -> Result<i64> {
         let TimestampValue { datetime, timezone } = parse_timestamp(value.as_ref())?;
         let datetime = timezone

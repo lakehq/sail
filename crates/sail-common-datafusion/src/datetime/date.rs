@@ -1,6 +1,5 @@
 use chrono::format::{parse_and_remainder, Item, Numeric, Pad, Parsed};
 use chrono::{NaiveDate, ParseError};
-use datafusion::arrow::datatypes::Date32Type;
 use datafusion_common::{exec_datafusion_err, Result};
 
 pub fn parse_date(s: &str) -> Result<NaiveDate> {
@@ -18,9 +17,4 @@ pub fn parse_date(s: &str) -> Result<NaiveDate> {
     let mut parsed = Parsed::new();
     let _ = parse_and_remainder(&mut parsed, s, DATE_ITEMS.iter()).map_err(error)?;
     parsed.to_naive_date().map_err(error)
-}
-
-pub fn string_to_date(value: &str) -> Result<i32> {
-    let date = parse_date(value)?;
-    Ok(Date32Type::from_naive_date(date))
 }

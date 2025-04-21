@@ -350,6 +350,7 @@ impl TryFrom<spec::DataType> for DataType {
                 timestamp_type: spec::TimestampType::WithLocalTimeZone,
             }
             // FIXME: return error for nanosecond time unit once Parquet INT96 data type
+            //   is handled properly
             | spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Nanosecond,
                 timestamp_type: _,
