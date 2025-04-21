@@ -1,5 +1,3 @@
-import os
-import time
 from datetime import datetime, timezone
 
 import pytest
@@ -7,27 +5,6 @@ from pyspark.sql.functions import lit
 from pyspark.sql.types import Row
 
 from pysail.tests.spark.utils import strict
-
-
-@pytest.fixture
-def session_timezone(sail, request):
-    tz = sail.conf.get("spark.sql.session.timeZone")
-    sail.conf.set("spark.sql.session.timeZone", request.param)
-    yield
-    sail.conf.set("spark.sql.session.timeZone", tz)
-
-
-@pytest.fixture
-def local_timezone(request):
-    tz = os.environ.get("TZ")
-    os.environ["TZ"] = request.param
-    time.tzset()
-    yield
-    if tz is None:
-        os.environ.pop("TZ")
-    else:
-        os.environ["TZ"] = tz
-    time.tzset()
 
 
 @pytest.mark.parametrize(

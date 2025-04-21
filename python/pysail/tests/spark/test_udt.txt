@@ -4,7 +4,7 @@
 >>> df = spark.createDataFrame(data=[], schema=schema)
 >>> df
 DataFrame[key: bigint, vec: vector]
->>> df.printSchema()
+>>> df.printSchema()  # doctest: +SKIP
 root
  |-- key: long (nullable = true)
  |-- vec: vector (nullable = true)

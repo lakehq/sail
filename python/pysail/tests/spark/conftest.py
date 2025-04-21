@@ -1,4 +1,5 @@
 import os
+import time
 
 import pyspark.sql.connect.session
 import pytest
@@ -73,3 +74,24 @@ def sail_doctest(doctest_namespace, sail):
     # The Spark session is scoped to each module, so that the registered
     # temporary views and UDFs do not interfere with each other.
     doctest_namespace["spark"] = sail
+
+
+@pytest.fixture
+def session_timezone(sail, request):
+    tz = sail.conf.get("spark.sql.session.timeZone")
+    sail.conf.set("spark.sql.session.timeZone", request.param)
+    yield
+    sail.conf.set("spark.sql.session.timeZone", tz)
+
+
+@pytest.fixture
+def local_timezone(request):
+    tz = os.environ.get("TZ")
+    os.environ["TZ"] = request.param
+    time.tzset()
+    yield
+    if tz is None:
+        os.environ.pop("TZ")
+    else:
+        os.environ["TZ"] = tz
+    time.tzset()
