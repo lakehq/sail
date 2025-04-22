@@ -129,11 +129,14 @@ impl TryFrom<adt::DataType> for DataType {
             | adt::DataType::FixedSizeList(field, _)
             | adt::DataType::LargeList(field)
             | adt::DataType::ListView(field)
-            | adt::DataType::LargeListView(field) => Ok(Kind::Array(Box::new(sdt::Array {
-                element_type: Some(Box::new(field.data_type().clone().try_into()?)),
-                contains_null: field.is_nullable(),
-                type_variation_reference: 0,
-            }))),
+            | adt::DataType::LargeListView(field) => {
+                let field = sdt::StructField::try_from(field.as_ref().clone())?;
+                Ok(Kind::Array(Box::new(sdt::Array {
+                    element_type: field.data_type.map(Box::new),
+                    contains_null: field.nullable,
+                    type_variation_reference: 0,
+                })))
+            }
             adt::DataType::Struct(fields) => Ok(Kind::Struct(sdt::Struct {
                 fields: fields
                     .into_iter()
@@ -142,16 +145,20 @@ impl TryFrom<adt::DataType> for DataType {
                 type_variation_reference: 0,
             })),
             adt::DataType::Map(ref field, ref _keys_sorted) => {
-                let adt::DataType::Struct(fields) = field.data_type() else {
+                let field = sdt::StructField::try_from(field.as_ref().clone())?;
+                let Some(DataType {
+                    kind: Some(Kind::Struct(sdt::Struct { fields, .. })),
+                }) = field.data_type
+                else {
                     return Err(error(&data_type));
                 };
-                let [key_field, value_field] = fields.as_ref() else {
+                let [key_field, value_field] = fields.as_slice() else {
                     return Err(error(&data_type));
                 };
                 Ok(Kind::Map(Box::new(sdt::Map {
-                    key_type: Some(Box::new(key_field.data_type().clone().try_into()?)),
-                    value_type: Some(Box::new(value_field.data_type().clone().try_into()?)),
-                    value_contains_null: value_field.is_nullable(),
+                    key_type: key_field.data_type.clone().map(Box::new),
+                    value_type: value_field.data_type.clone().map(Box::new),
+                    value_contains_null: value_field.nullable,
                     type_variation_reference: 0,
                 })))
             }
