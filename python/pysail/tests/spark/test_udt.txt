@@ -1,0 +1,38 @@
+>>> from pyspark.ml.linalg import VectorUDT
+>>> from pyspark.sql.types import StringType, LongType, StructType, UserDefinedType
+>>> schema = StructType().add("key", LongType()).add("vec", VectorUDT())
+>>> df = spark.createDataFrame(data=[], schema=schema)
+>>> df
+DataFrame[key: bigint, vec: vector]
+>>> df.printSchema()  # doctest: +SKIP
+root
+ |-- key: long (nullable = true)
+ |-- vec: vector (nullable = true)
+>>> class UnnamedPythonUDT(UserDefinedType):
+...     @classmethod
+...     def sqlType(cls):
+...         return StringType()
+...     @classmethod
+...     def module(cls):
+...         return "__main__"
+...
+>>> schema = StructType().add("key", LongType()).add("a", UnnamedPythonUDT())
+>>> df = spark.createDataFrame(data=[], schema=schema)
+>>> df
+DataFrame[key: bigint, a: udt]
+>>> df.printSchema()
+root
+ |-- key: long (nullable = true)
+ |-- a: pythonuserdefined (nullable = true)
+>>> class NamedPythonUDT(UnnamedPythonUDT):
+...     def simpleString(cls):
+...         return "foo"
+...
+>>> schema = StructType().add("key", LongType()).add("b", NamedPythonUDT())
+>>> df = spark.createDataFrame(data=[], schema=schema)
+>>> df
+DataFrame[key: bigint, b: foo]
+>>> df.printSchema()
+root
+ |-- key: long (nullable = true)
+ |-- b: pythonuserdefined (nullable = true)

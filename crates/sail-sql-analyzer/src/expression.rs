@@ -16,7 +16,7 @@ use sail_sql_parser::ast::query::{
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
-use crate::literal::{parse_date_string, parse_timestamp_string, LiteralValue, Signed};
+use crate::literal::{LiteralValue, Signed};
 use crate::query::{from_ast_named_expression, from_ast_query};
 use crate::value::{
     from_ast_boolean_literal, from_ast_number_literal, from_ast_string, from_ast_string_literal,
@@ -758,18 +758,21 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 order_by: None,
             }))
         }
-        AtomExpr::Timestamp(_, _, value, _)
-        | AtomExpr::TimestampLiteral(_, value)
-        | AtomExpr::TimestampLtzLiteral(_, value)
-        | AtomExpr::TimestampNtzLiteral(_, value) => {
-            // FIXME: timezone information is lost
-            Ok(spec::Expr::Literal(parse_timestamp_string(
-                &from_ast_string(value)?,
-            )?))
-        }
-        AtomExpr::Date(_, _, value, _) | AtomExpr::DateLiteral(_, value) => Ok(
-            spec::Expr::Literal(parse_date_string(&from_ast_string(value)?)?),
-        ),
+        AtomExpr::TimestampLiteral(_, value) => Ok(spec::Expr::UnresolvedTimestamp {
+            value: from_ast_string(value)?,
+            timestamp_type: spec::TimestampType::Configured,
+        }),
+        AtomExpr::TimestampLtzLiteral(_, value) => Ok(spec::Expr::UnresolvedTimestamp {
+            value: from_ast_string(value)?,
+            timestamp_type: spec::TimestampType::WithLocalTimeZone,
+        }),
+        AtomExpr::TimestampNtzLiteral(_, value) => Ok(spec::Expr::UnresolvedTimestamp {
+            value: from_ast_string(value)?,
+            timestamp_type: spec::TimestampType::WithoutTimeZone,
+        }),
+        AtomExpr::DateLiteral(_, value) => Ok(spec::Expr::UnresolvedDate {
+            value: from_ast_string(value)?,
+        }),
         AtomExpr::Function(function) => {
             let FunctionExpr {
                 name,

@@ -1,35 +1,46 @@
-use datafusion::arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
-use datafusion_common::ScalarValue;
-use datafusion_expr::Expr;
+use datafusion_expr::{expr, ExprSchemable, ScalarUDF};
 
 use crate::error::PlanResult;
+use crate::extension::function::datetime::spark_date::SparkDate;
+use crate::extension::function::datetime::spark_timestamp::SparkTimestamp;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
-fn timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 1 {
-        let arg = input.arguments.one()?;
-        match arg {
-            Expr::Literal(ScalarValue::Utf8(Some(timestamp_string))) => {
-                let timestamp_micros =
-                    string_to_timestamp_nanos(&timestamp_string).map(|x| x / 1_000)?;
-                let timezone = PlanResolver::resolve_timezone(
-                    &sail_common::spec::TimeZoneInfo::SQLConfigured,
-                    input.function_context.plan_config.system_timezone.as_str(),
-                    &input.function_context.plan_config.timestamp_type,
-                )?;
-                Ok(Expr::Literal(ScalarValue::TimestampMicrosecond(
-                    Some(timestamp_micros),
-                    timezone,
-                )))
-            }
-            _ => Ok(expr_fn::to_timestamp_micros(vec![arg])),
-        }
+fn date(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arg = input.arguments.one()?;
+    let (data_type, _) = arg.data_type_and_nullable(input.function_context.schema)?;
+    if matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkDate::new())),
+            args: vec![arg],
+        }))
     } else {
-        Ok(expr_fn::to_timestamp_micros(input.arguments))
+        Ok(expr_fn::to_date(vec![arg]))
+    }
+}
+
+fn timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arg = input.arguments.one()?;
+    let (data_type, _) = arg.data_type_and_nullable(input.function_context.schema)?;
+    if matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkTimestamp::try_new(
+                input.function_context.plan_config.session_timezone.clone(),
+            )?)),
+            args: vec![arg],
+        }))
+    } else {
+        Ok(expr_fn::to_timestamp_micros(vec![arg]))
     }
 }
 
@@ -41,7 +52,7 @@ pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, ScalarF
         ("binary", F::cast(DataType::Binary)),
         ("boolean", F::cast(DataType::Boolean)),
         ("cast", F::unknown("cast")),
-        ("date", F::cast(DataType::Date32)),
+        ("date", F::custom(date)),
         ("decimal", F::cast(DataType::Decimal128(10, 0))),
         ("double", F::cast(DataType::Float64)),
         ("float", F::cast(DataType::Float32)),

@@ -7,8 +7,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::{CommonError, CommonResult};
 use crate::spec;
+use crate::spec::TimestampType;
 
-/// See [`spec::DataType`] for details on datatypes
+/// See [`spec::DataType`] for details on data types.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Literal {
@@ -51,19 +52,19 @@ pub enum Literal {
     },
     TimestampSecond {
         seconds: Option<i64>,
-        timezone_info: spec::TimeZoneInfo,
+        timestamp_type: TimestampType,
     },
     TimestampMillisecond {
         milliseconds: Option<i64>,
-        timezone_info: spec::TimeZoneInfo,
+        timestamp_type: TimestampType,
     },
     TimestampMicrosecond {
         microseconds: Option<i64>,
-        timezone_info: spec::TimeZoneInfo,
+        timestamp_type: TimestampType,
     },
     TimestampNanosecond {
         nanoseconds: Option<i64>,
-        timezone_info: spec::TimeZoneInfo,
+        timestamp_type: TimestampType,
     },
     Date32 {
         days: Option<i32>,
@@ -216,6 +217,8 @@ where
 }
 
 pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Literal> {
+    let error = |x: &spec::DataType| CommonError::unsupported(format!("null literal for {x:?}"));
+
     match data_type {
         spec::DataType::Null => Ok(Literal::Null),
         spec::DataType::Boolean => Ok(Literal::Boolean { value: None }),
@@ -232,46 +235,34 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         spec::DataType::Float64 => Ok(Literal::Float64 { value: None }),
         spec::DataType::Timestamp {
             time_unit,
-            timezone_info,
-        } => Ok({
-            match time_unit {
-                spec::TimeUnit::Second => Literal::TimestampSecond {
-                    seconds: None,
-                    timezone_info,
-                },
-                spec::TimeUnit::Millisecond => Literal::TimestampMillisecond {
-                    milliseconds: None,
-                    timezone_info,
-                },
-                spec::TimeUnit::Microsecond => Literal::TimestampMicrosecond {
-                    microseconds: None,
-                    timezone_info,
-                },
-                spec::TimeUnit::Nanosecond => Literal::TimestampNanosecond {
-                    nanoseconds: None,
-                    timezone_info,
-                },
-            }
-        }),
+            timestamp_type,
+        } => match time_unit {
+            spec::TimeUnit::Second => Ok(Literal::TimestampSecond {
+                seconds: None,
+                timestamp_type,
+            }),
+            spec::TimeUnit::Millisecond => Ok(Literal::TimestampMillisecond {
+                milliseconds: None,
+                timestamp_type,
+            }),
+            spec::TimeUnit::Microsecond => Ok(Literal::TimestampMicrosecond {
+                microseconds: None,
+                timestamp_type,
+            }),
+            spec::TimeUnit::Nanosecond => Ok(Literal::TimestampNanosecond {
+                nanoseconds: None,
+                timestamp_type,
+            }),
+        },
         spec::DataType::Date32 => Ok(Literal::Date32 { days: None }),
         spec::DataType::Date64 => Ok(Literal::Date64 { milliseconds: None }),
         spec::DataType::Time32 { time_unit } => match time_unit {
             spec::TimeUnit::Second => Ok(Literal::Time32Second { seconds: None }),
             spec::TimeUnit::Millisecond => Ok(Literal::Time32Millisecond { milliseconds: None }),
-            spec::TimeUnit::Microsecond => Err(CommonError::invalid(
-                "DataType::Time32 to Literal::Time32 with TimeUnit::Microsecond",
-            )),
-            spec::TimeUnit::Nanosecond => Err(CommonError::invalid(
-                "DataType::Time32 to Literal::Time32 with TimeUnit::Nanosecond",
-            )),
+            spec::TimeUnit::Microsecond | spec::TimeUnit::Nanosecond => Err(error(&data_type)),
         },
         spec::DataType::Time64 { time_unit } => match time_unit {
-            spec::TimeUnit::Second => Err(CommonError::invalid(
-                "DataType::Time64 to Literal::Time64 with TimeUnit::Second",
-            )),
-            spec::TimeUnit::Millisecond => Err(CommonError::invalid(
-                "DataType::Time64 to Literal::Time64 with TimeUnit::Millisecond",
-            )),
+            spec::TimeUnit::Second | spec::TimeUnit::Millisecond => Err(error(&data_type)),
             spec::TimeUnit::Microsecond => Ok(Literal::Time64Microsecond { microseconds: None }),
             spec::TimeUnit::Nanosecond => Ok(Literal::Time64Nanosecond { nanoseconds: None }),
         },
@@ -365,8 +356,6 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         }),
         spec::DataType::ConfiguredUtf8 { .. } => Ok(Literal::Utf8 { value: None }),
         spec::DataType::ConfiguredBinary => Ok(Literal::Binary { value: None }),
-        spec::DataType::UserDefined { .. } => Err(CommonError::NotSupported(
-            "DataType::UserDefined to Literal".to_string(),
-        )),
+        spec::DataType::UserDefined { sql_type, .. } => data_type_to_null_literal(*sql_type),
     }
 }

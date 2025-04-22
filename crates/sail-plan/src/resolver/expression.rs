@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
@@ -18,12 +18,17 @@ use datafusion_expr::{
 };
 use datafusion_functions_nested::expr_fn::array_element;
 use sail_common::spec;
-use sail_common::spec::PySparkUdfType;
+use sail_common::spec::{PySparkUdfType, TimestampType};
+use sail_common_datafusion::datetime::date::parse_date;
+use sail_common_datafusion::datetime::timestamp::{
+    parse_timestamp, parse_timezone, TimestampValue,
+};
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
+use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::drop_struct_field::DropStructField;
 use crate::extension::function::multi_expr::MultiExpr;
@@ -491,6 +496,14 @@ impl PlanResolver<'_> {
                 .await
             }
             Expr::Table { expr } => self.resolve_expression_table(*expr, state).await,
+            Expr::UnresolvedDate { value } => self.resolve_expression_date(value, state).await,
+            Expr::UnresolvedTimestamp {
+                value,
+                timestamp_type,
+            } => {
+                self.resolve_expression_timestamp(value, timestamp_type, state)
+                    .await
+            }
         }
     }
 
@@ -559,12 +572,11 @@ impl PlanResolver<'_> {
         literal: spec::Literal,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let name = self.config.plan_formatter.literal_to_string(
-            &literal,
-            self.config.system_timezone.as_str(),
-            &self.config.timestamp_type,
-        )?;
         let literal = self.resolve_literal(literal, state)?;
+        let name = self
+            .config
+            .plan_formatter
+            .literal_to_string(&literal, &self.config)?;
         Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
     }
 
@@ -929,7 +941,7 @@ impl PlanResolver<'_> {
             let data_type_string = self
                 .config
                 .plan_formatter
-                .data_type_to_simple_string(&cast_to_type)?;
+                .data_type_to_simple_string(&cast_to_type, &self.config)?;
             vec![format!(
                 "CAST({} AS {})",
                 name.one()?,
@@ -1375,12 +1387,11 @@ impl PlanResolver<'_> {
         let spec::Expr::Literal(extraction) = extraction else {
             return Err(PlanError::invalid("extraction must be a literal"));
         };
-        let extraction_name = self.config.plan_formatter.literal_to_string(
-            &extraction,
-            self.config.system_timezone.as_str(),
-            &self.config.timestamp_type,
-        )?;
         let extraction = self.resolve_literal(extraction, state)?;
+        let extraction_name = self
+            .config
+            .plan_formatter
+            .literal_to_string(&extraction, &self.config)?;
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;
@@ -1881,6 +1892,51 @@ impl PlanResolver<'_> {
                 case_insensitive,
             )),
         ))
+    }
+
+    async fn resolve_expression_date(
+        &self,
+        value: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let date = parse_date(&value)?;
+        let literal = spec::Literal::Date32 {
+            days: Some(Date32Type::from_naive_date(date)),
+        };
+        self.resolve_expression_literal(literal, state)
+    }
+
+    async fn resolve_expression_timestamp(
+        &self,
+        value: String,
+        timestamp_type: spec::TimestampType,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let TimestampValue { datetime, timezone } = parse_timestamp(&value)?;
+        let (datetime, timestamp_type) = match (timestamp_type, timezone, self.config.default_timestamp_type) {
+                (TimestampType::Configured, None, DefaultTimestampType::TimestampLtz)
+                | (TimestampType::WithLocalTimeZone, None, _) => {
+                    let tz = parse_timezone(&self.config.session_timezone)?;
+                    let datetime = tz.localize_with_fallback(&datetime)?;
+                    (datetime, TimestampType::WithLocalTimeZone)
+                }
+                (TimestampType::Configured, Some(tz), _)
+                | (TimestampType::WithLocalTimeZone, Some(tz), _) => {
+                    let datetime = tz.localize_with_fallback(&datetime)?;
+                    (datetime, TimestampType::WithLocalTimeZone)
+                }
+                (TimestampType::Configured, None, DefaultTimestampType::TimestampNtz)
+                // If the timestamp type is explicitly `TIMESTAMP_NTZ`, the time zone in the literal
+                // is simply ignored.
+                | (TimestampType::WithoutTimeZone, _, _) => {
+                    (datetime.and_utc(), TimestampType::WithoutTimeZone)
+                }
+            };
+        let literal = spec::Literal::TimestampMicrosecond {
+            microseconds: Some(datetime.timestamp_micros()),
+            timestamp_type,
+        };
+        self.resolve_expression_literal(literal, state)
     }
 
     fn generate_qualified_field_candidates<T: AsRef<str>>(

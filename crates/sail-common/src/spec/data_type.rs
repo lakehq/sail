@@ -64,11 +64,11 @@ pub enum DataType {
     /// A 64-bit floating point number.
     /// Corresponds to [`arrow_schema::DataType::Float64`].
     Float64,
-    /// A timestamp with an optional timezone.
+    /// A timestamp with an optional time zone.
     /// Corresponds to [`arrow_schema::DataType::Timestamp`].
     Timestamp {
         time_unit: TimeUnit,
-        timezone_info: TimeZoneInfo,
+        timestamp_type: TimestampType,
     },
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01) in days.
     /// Corresponds to [`arrow_schema::DataType::Date32`].
@@ -207,6 +207,14 @@ pub enum DataType {
         utf8_type: Utf8Type,
     },
     ConfiguredBinary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TimestampType {
+    Configured,
+    WithLocalTimeZone,
+    WithoutTimeZone,
 }
 
 impl DataType {
@@ -562,13 +570,4 @@ pub enum Utf8Type {
     Char {
         length: u32,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TimeZoneInfo {
-    SQLConfigured,
-    LocalTimeZone,
-    NoTimeZone,
-    TimeZone { timezone: Option<Arc<str>> },
 }

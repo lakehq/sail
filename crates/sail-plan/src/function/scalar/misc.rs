@@ -85,7 +85,10 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let type_of = function_context
         .plan_config
         .plan_formatter
-        .data_type_to_simple_string(&PlanResolver::unresolve_data_type(&data_type)?)?;
+        .data_type_to_simple_string(
+            &PlanResolver::unresolve_data_type(&data_type)?,
+            function_context.plan_config,
+        )?;
     Ok(lit(type_of))
 }
 

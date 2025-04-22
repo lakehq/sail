@@ -15,4 +15,4 @@ def pytest_configure(config):
     # In common cases, plugins only access the configuration for the first time after this hook,
     # so the cache is not a problem.
 
-    config.inicfg["doctest_optionflags"] = "ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL NUMBER"
+    config.inicfg["doctest_optionflags"] = "ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL"

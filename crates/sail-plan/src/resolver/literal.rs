@@ -1,8 +1,5 @@
-use std::ops::Add;
 use std::sync::Arc;
 
-use chrono::{Offset, TimeDelta, TimeZone, Utc};
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{
     new_empty_array, new_null_array, ArrayData, AsArray, FixedSizeListArray, LargeListArray,
     MapArray, StructArray,
@@ -14,7 +11,6 @@ use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::ScalarValue;
 use sail_common::spec::{self, Literal};
 
-use crate::config::TimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -41,132 +37,31 @@ impl PlanResolver<'_> {
             Literal::Float64 { value } => Ok(ScalarValue::Float64(value)),
             Literal::TimestampSecond {
                 seconds,
-                timezone_info,
+                timestamp_type,
             } => {
-                let timezone = Self::resolve_timezone(
-                    &timezone_info,
-                    self.config.system_timezone.as_str(),
-                    &self.config.timestamp_type,
-                )?;
-                if let Some(seconds) = seconds {
-                    let datetime = Utc.timestamp_opt(seconds, 0).earliest().ok_or_else(|| {
-                        PlanError::invalid(format!("Invalid Literal TimestampSecond: {seconds}"))
-                    })?;
-                    let utc_datetime = Self::local_datetime_to_utc_datetime(
-                        datetime,
-                        &timezone_info,
-                        &self.config.timestamp_type,
-                        &self.config.system_timezone,
-                    )?;
-                    let adjusted_seconds = utc_datetime.timestamp();
-                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
-                    Ok(ScalarValue::TimestampSecond(
-                        Some(adjusted_seconds),
-                        adjusted_timezone,
-                    ))
-                } else {
-                    Ok(ScalarValue::TimestampSecond(seconds, timezone))
-                }
+                let timezone = self.resolve_timezone(&timestamp_type)?;
+                Ok(ScalarValue::TimestampSecond(seconds, timezone))
             }
             Literal::TimestampMillisecond {
                 milliseconds,
-                timezone_info,
+                timestamp_type,
             } => {
-                let timezone = Self::resolve_timezone(
-                    &timezone_info,
-                    self.config.system_timezone.as_str(),
-                    &self.config.timestamp_type,
-                )?;
-                if let Some(milliseconds) = milliseconds {
-                    let datetime = Utc
-                        .timestamp_millis_opt(milliseconds)
-                        .earliest()
-                        .ok_or_else(|| {
-                            PlanError::invalid(format!(
-                                "Literal to string TimestampMillisecond: {milliseconds}"
-                            ))
-                        })?;
-                    let utc_datetime = Self::local_datetime_to_utc_datetime(
-                        datetime,
-                        &timezone_info,
-                        &self.config.timestamp_type,
-                        &self.config.system_timezone,
-                    )?;
-                    let adjusted_milliseconds = utc_datetime.timestamp_millis();
-                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
-                    Ok(ScalarValue::TimestampMillisecond(
-                        Some(adjusted_milliseconds),
-                        adjusted_timezone,
-                    ))
-                } else {
-                    Ok(ScalarValue::TimestampMillisecond(milliseconds, timezone))
-                }
+                let timezone = self.resolve_timezone(&timestamp_type)?;
+                Ok(ScalarValue::TimestampMillisecond(milliseconds, timezone))
             }
             Literal::TimestampMicrosecond {
                 microseconds,
-                timezone_info,
+                timestamp_type,
             } => {
-                let timezone = Self::resolve_timezone(
-                    &timezone_info,
-                    self.config.system_timezone.as_str(),
-                    &self.config.timestamp_type,
-                )?;
-                if let Some(microseconds) = microseconds {
-                    let datetime =
-                        Utc.timestamp_micros(microseconds)
-                            .earliest()
-                            .ok_or_else(|| {
-                                PlanError::invalid(format!(
-                                    "Literal to string TimestampMicrosecond: {microseconds}"
-                                ))
-                            })?;
-                    let utc_datetime = Self::local_datetime_to_utc_datetime(
-                        datetime,
-                        &timezone_info,
-                        &self.config.timestamp_type,
-                        &self.config.system_timezone,
-                    )?;
-                    let adjusted_microseconds = utc_datetime.timestamp_micros();
-                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
-                    Ok(ScalarValue::TimestampMicrosecond(
-                        Some(adjusted_microseconds),
-                        adjusted_timezone,
-                    ))
-                } else {
-                    Ok(ScalarValue::TimestampMicrosecond(microseconds, timezone))
-                }
+                let timezone = self.resolve_timezone(&timestamp_type)?;
+                Ok(ScalarValue::TimestampMicrosecond(microseconds, timezone))
             }
             Literal::TimestampNanosecond {
                 nanoseconds,
-                timezone_info,
+                timestamp_type,
             } => {
-                let timezone = Self::resolve_timezone(
-                    &timezone_info,
-                    self.config.system_timezone.as_str(),
-                    &self.config.timestamp_type,
-                )?;
-                if let Some(nanoseconds) = nanoseconds {
-                    let datetime = Utc.timestamp_nanos(nanoseconds);
-                    let utc_datetime = Self::local_datetime_to_utc_datetime(
-                        datetime,
-                        &timezone_info,
-                        &self.config.timestamp_type,
-                        &self.config.system_timezone,
-                    )?;
-                    let adjusted_nanoseconds =
-                        utc_datetime.timestamp_nanos_opt().ok_or_else(|| {
-                            PlanError::invalid(format!(
-                                "Invalid Literal TimestampNanosecond: {nanoseconds}"
-                            ))
-                        })?;
-                    let adjusted_timezone = self.get_adjusted_timezone(timezone, &timezone_info);
-                    Ok(ScalarValue::TimestampNanosecond(
-                        Some(adjusted_nanoseconds),
-                        adjusted_timezone,
-                    ))
-                } else {
-                    Ok(ScalarValue::TimestampNanosecond(nanoseconds, timezone))
-                }
+                let timezone = self.resolve_timezone(&timestamp_type)?;
+                Ok(ScalarValue::TimestampNanosecond(nanoseconds, timezone))
             }
             Literal::Date32 { days } => Ok(ScalarValue::Date32(days)),
             Literal::Date64 { milliseconds } => Ok(ScalarValue::Date64(milliseconds)),
@@ -439,62 +334,6 @@ impl PlanResolver<'_> {
                     ))
                 }
             }
-        }
-    }
-
-    pub fn local_datetime_to_utc_datetime(
-        datetime: chrono::DateTime<Utc>,
-        timezone_info: &spec::TimeZoneInfo,
-        config_timestamp_type: &TimestampType,
-        system_timezone: &str,
-    ) -> PlanResult<chrono::DateTime<Utc>> {
-        // FIXME: See FIXME in `PlanResolver::resolve_timezone` for more details.
-        let should_rebase = match timezone_info {
-            // PySpark client (via Spark Connect) applies the local timezone to timestamp literals
-            // before sending them when TimeZoneInfo::LocalTimeZone is specified.
-            //
-            // Example: datetime(2022, 12, 22, 17, 0, 0) is passed up as Timestamp(1671757200000000)
-            //   - Timestamp(1671757200000000): 2022-12-22 17:00:00 America/Los_Angeles
-            //   - Timestamp(1671728400000000): 2022-12-22 17:00:00 UTC
-            //
-            // Rebasing to UTC is only needed for TimeZoneInfo::LocalTimeZone.
-            // For TimeZoneInfo::SQLConfigured, we don't rebase because we parse the timestamp as UTC.
-            spec::TimeZoneInfo::SQLConfigured => match config_timestamp_type {
-                TimestampType::TimestampLtz => false,
-                TimestampType::TimestampNtz => false,
-            },
-            spec::TimeZoneInfo::LocalTimeZone => true,
-            spec::TimeZoneInfo::NoTimeZone => false,
-            spec::TimeZoneInfo::TimeZone {
-                timezone: _timezone,
-            } => false,
-        };
-        if should_rebase {
-            let system_timezone: Tz = system_timezone.parse()?;
-            let offset_seconds: i64 = system_timezone
-                .offset_from_utc_datetime(&datetime.naive_utc())
-                .fix()
-                .local_minus_utc() as i64;
-            let result = datetime.add(TimeDelta::try_seconds(offset_seconds).ok_or_else(|| {
-                PlanError::invalid(format!(
-                    "Invalid offset seconds when converting from local to UTC: {offset_seconds}"
-                ))
-            })?);
-            Ok(result)
-        } else {
-            Ok(datetime)
-        }
-    }
-
-    fn get_adjusted_timezone(
-        &self,
-        timezone: Option<Arc<str>>,
-        timezone_info: &spec::TimeZoneInfo,
-    ) -> Option<Arc<str>> {
-        // FIXME: See FIXME in `PlanResolver::resolve_timezone` for more details.
-        match timezone_info {
-            spec::TimeZoneInfo::LocalTimeZone => None,
-            _ => timezone,
         }
     }
 }

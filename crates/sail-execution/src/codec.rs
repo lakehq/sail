@@ -50,11 +50,13 @@ use sail_plan::extension::function::array::spark_sequence::SparkSequence;
 use sail_plan::extension::function::collection::spark_concat::SparkConcat;
 use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
 use sail_plan::extension::function::collection::spark_size::SparkSize;
+use sail_plan::extension::function::datetime::spark_date::SparkDate;
 use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
 use sail_plan::extension::function::datetime::spark_last_day::SparkLastDay;
 use sail_plan::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_plan::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_plan::extension::function::datetime::spark_next_day::SparkNextDay;
+use sail_plan::extension::function::datetime::spark_timestamp::SparkTimestamp;
 use sail_plan::extension::function::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_plan::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_plan::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
@@ -739,6 +741,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = TimestampNow::new(Arc::from(timezone), time_unit);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone }) => {
+                let udf = SparkTimestamp::try_new(Arc::from(timezone))?;
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkFromUtcTimestamp(gen::SparkFromUtcTimestampUdf { time_unit }) => {
                 let time_unit = gen_datafusion_common::TimeUnit::from_str_name(time_unit.as_str())
                     .ok_or_else(|| plan_datafusion_err!("invalid time unit: {time_unit}"))?;
@@ -815,6 +821,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
             "spark_bin" | "bin" => Ok(Arc::new(ScalarUDF::from(SparkBin::new()))),
+            "spark_date" => Ok(Arc::new(ScalarUDF::from(SparkDate::new()))),
             "spark_try_to_timestamp" | "try_to_timestamp" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
             }
@@ -869,6 +876,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkSequence>()
             || node.inner().as_any().is::<SparkEncode>()
             || node.inner().as_any().is::<SparkDecode>()
+            || node.inner().as_any().is::<SparkDate>()
             || node.inner().as_any().is::<SparkTryToTimestamp>()
             || node.inner().as_any().is::<SparkBin>()
             || node.inner().as_any().is::<SparkExpm1>()
@@ -951,6 +959,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 timezone,
                 time_unit,
             })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkTimestamp>() {
+            let timezone = func.timezone().to_string();
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone })
         } else if let Some(func) = node
             .inner()
             .as_any()

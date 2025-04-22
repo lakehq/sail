@@ -46,7 +46,7 @@
                     "keyType": {
                       "timestamp": {
                         "timeUnit": "microsecond",
-                        "timezoneInfo": "sQLConfigured"
+                        "timestampType": "configured"
                       }
                     },
                     "valueType": {
@@ -306,7 +306,7 @@
                 "dataType": {
                   "timestamp": {
                     "timeUnit": "microsecond",
-                    "timezoneInfo": "sQLConfigured"
+                    "timestampType": "configured"
                   }
                 },
                 "nullable": true,
@@ -605,7 +605,7 @@
                 "dataType": {
                   "timestamp": {
                     "timeUnit": "microsecond",
-                    "timezoneInfo": "sQLConfigured"
+                    "timestampType": "configured"
                   }
                 },
                 "nullable": true,
@@ -663,7 +663,7 @@
         "success": {
           "timestamp": {
             "timeUnit": "microsecond",
-            "timezoneInfo": "sQLConfigured"
+            "timestampType": "configured"
           }
         }
       }
@@ -674,7 +674,7 @@
         "success": {
           "timestamp": {
             "timeUnit": "microsecond",
-            "timezoneInfo": "localTimeZone"
+            "timestampType": "withLocalTimeZone"
           }
         }
       }
@@ -685,7 +685,7 @@
         "success": {
           "timestamp": {
             "timeUnit": "microsecond",
-            "timezoneInfo": "noTimeZone"
+            "timestampType": "withoutTimeZone"
           }
         }
       }

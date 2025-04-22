@@ -42,7 +42,8 @@ message ExtendedScalarUdf {
     UpdateStructFieldUdf update_struct_field = 9;
     SparkWeekOfYearUdf spark_week_of_year = 10;
     TimestampNowUdf timestamp_now = 11;
-    SparkFromUtcTimestampUdf spark_from_utc_timestamp = 12;
+    SparkTimestampUdf spark_timestamp = 12;
+    SparkFromUtcTimestampUdf spark_from_utc_timestamp = 13;
   }
 }
 
@@ -117,6 +118,10 @@ message SparkWeekOfYearUdf {
 message TimestampNowUdf {
   string timezone = 1;
   string time_unit = 2;
+}
+
+message SparkTimestampUdf {
+  string timezone = 1;
 }
 
 message SparkFromUtcTimestampUdf {

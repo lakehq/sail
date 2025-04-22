@@ -5,7 +5,12 @@ import pytest
 from pyspark.sql.types import Row
 
 
-def test_plus(sail):
+@pytest.mark.parametrize(
+    ("session_timezone", "local_timezone"),
+    [("America/Los_Angeles", "America/Los_Angeles")],
+    indirect=["session_timezone", "local_timezone"],
+)
+def test_plus(sail, session_timezone, local_timezone):  # noqa: ARG001
     assert sail.sql("SELECT 1 + 2 AS result;").collect() == [Row(result=3)]
     assert sail.sql("SELECT DATE'2025-02-26' + INTERVAL '2' MONTH AS result;").collect() == [
         Row(result=datetime.date(2025, 4, 26))
@@ -20,7 +25,12 @@ def test_plus(sail):
     assert sail.sql("SELECT 1 + DATE'2025-02-26' AS result;").collect() == [Row(result=datetime.date(2025, 2, 27))]
 
 
-def test_minus(sail):
+@pytest.mark.parametrize(
+    ("session_timezone", "local_timezone"),
+    [("America/Los_Angeles", "America/Los_Angeles")],
+    indirect=["session_timezone", "local_timezone"],
+)
+def test_minus(sail, session_timezone, local_timezone):  # noqa: ARG001
     assert sail.sql("SELECT 2 - 1 AS result;").collect() == [Row(result=1)]
     assert sail.sql("SELECT TIMESTAMP'2025-02-26 12:15:29' - INTERVAL '3' SECOND AS result;").collect() == [
         Row(result=datetime.datetime(2025, 2, 26, 12, 15, 26))  # noqa: DTZ001

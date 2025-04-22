@@ -139,11 +139,11 @@ impl TryFrom<DataType> for spec::DataType {
             Kind::Date(_) => Ok(spec::DataType::Date32),
             Kind::Timestamp(_) => Ok(spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
-                timezone_info: spec::TimeZoneInfo::LocalTimeZone,
+                timestamp_type: spec::TimestampType::WithLocalTimeZone,
             }),
             Kind::TimestampNtz(_) => Ok(spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
-                timezone_info: spec::TimeZoneInfo::NoTimeZone,
+                timestamp_type: spec::TimestampType::WithoutTimeZone,
             }),
             Kind::CalendarInterval(_) => Ok(spec::DataType::Interval {
                 interval_unit: spec::IntervalUnit::MonthDayNano,
@@ -279,6 +279,8 @@ impl TryFrom<spec::DataType> for DataType {
     fn try_from(data_type: spec::DataType) -> SparkResult<DataType> {
         use crate::spark::connect::data_type::Kind;
 
+        let error =
+            |x: &spec::DataType| SparkError::unsupported(format!("cast {x:?} to Spark data type"));
         let kind = match data_type {
             spec::DataType::Null => Ok(Kind::Null(sdt::Null::default())),
             spec::DataType::Binary
@@ -296,9 +298,7 @@ impl TryFrom<spec::DataType> for DataType {
             spec::DataType::UInt32 | spec::DataType::UInt64 | spec::DataType::Int64 => {
                 Ok(Kind::Long(sdt::Long::default()))
             }
-            spec::DataType::Float16 => Err(SparkError::unsupported(
-                "TryFrom spec::DataType::Float16 to Spark Kind",
-            )),
+            spec::DataType::Float16 => Err(error(&data_type)),
             spec::DataType::Float32 => Ok(Kind::Float(sdt::Float::default())),
             spec::DataType::Float64 => Ok(Kind::Double(sdt::Double::default())),
             spec::DataType::Decimal128 { precision, scale }
@@ -333,48 +333,36 @@ impl TryFrom<spec::DataType> for DataType {
                 type_variation_reference: 0,
             })),
             spec::DataType::Date32 => Ok(Kind::Date(sdt::Date::default())),
-            spec::DataType::Date64 => Err(SparkError::unsupported(
-                "TryFrom spec::DataType::Date64 to Spark Kind",
-            )),
-            spec::DataType::Time32 { time_unit: _ } => Err(SparkError::unsupported(
-                "TryFrom spec::DataType::Time32 to Spark Kind",
-            )),
-            spec::DataType::Time64 { time_unit: _ } => Err(SparkError::unsupported(
-                "TryFrom spec::DataType::Time64 to Spark Kind",
-            )),
+            spec::DataType::Date64 => Err(error(&data_type)),
+            spec::DataType::Time32 { .. } => Err(error(&data_type)),
+            spec::DataType::Time64 { .. } => Err(error(&data_type)),
             spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
-                timezone_info: spec::TimeZoneInfo::NoTimeZone,
+                timestamp_type: spec::TimestampType::WithoutTimeZone,
             } => Ok(Kind::TimestampNtz(sdt::TimestampNtz::default())),
+            // TODO: return an error for unresolved "configured" timestamp type
             spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
-                timezone_info: spec::TimeZoneInfo::SQLConfigured,
+                timestamp_type: spec::TimestampType::Configured,
             }
             | spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
-                timezone_info: spec::TimeZoneInfo::LocalTimeZone,
+                timestamp_type: spec::TimestampType::WithLocalTimeZone,
             }
+            // FIXME: return error for nanosecond time unit once Parquet INT96 data type
+            //   is handled properly
             | spec::DataType::Timestamp {
-                time_unit: spec::TimeUnit::Microsecond,
-                timezone_info: spec::TimeZoneInfo::TimeZone { timezone: _ },
+                time_unit: spec::TimeUnit::Nanosecond,
+                timestamp_type: _,
             } => Ok(Kind::Timestamp(sdt::Timestamp::default())),
             spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Second,
-                timezone_info: _,
+                timestamp_type: _,
             }
             | spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Millisecond,
-                timezone_info: _,
-            }
-            | spec::DataType::Timestamp {
-                time_unit: spec::TimeUnit::Nanosecond,
-                timezone_info: _,
-            } => {
-                // This error theoretically should never be reached.
-                Err(SparkError::unsupported(
-                    "TryFrom spec::DataType::Timestamp { time_unit: Second | Millisecond | Nanosecond } to Spark Kind",
-                ))
-            }
+                timestamp_type: _,
+            } => Err(error(&data_type)),
             spec::DataType::Interval {
                 interval_unit: spec::IntervalUnit::MonthDayNano,
                 start_field: _,
@@ -413,12 +401,7 @@ impl TryFrom<spec::DataType> for DataType {
             }
             | spec::DataType::Duration {
                 time_unit: spec::TimeUnit::Nanosecond,
-            } => {
-                // This error theoretically should never be reached.
-                Err(SparkError::unsupported(
-                    "TryFrom spec::DataType::Duration(Second | Millisecond | Nanosecond) to Spark Kind",
-                ))
-            }
+            } => Err(error(&data_type)),
             spec::DataType::List {
                 data_type,
                 nullable,
@@ -466,18 +449,8 @@ impl TryFrom<spec::DataType> for DataType {
                 serialized_python_class,
                 sql_type: Some(Box::new((*sql_type).try_into()?)),
             }))),
-            spec::DataType::Union {
-                union_fields: _,
-                union_mode: _,
-            } => Err(SparkError::unsupported(
-                "TryFrom spec::DataType::Union to Spark Kind",
-            )),
-            spec::DataType::Dictionary {
-                key_type: _,
-                value_type: _,
-            } => Err(SparkError::unsupported(
-                "TryFrom spec::DataType::Dictionary to Spark Kind",
-            )),
+            spec::DataType::Union { .. } => Err(error(&data_type)),
+            spec::DataType::Dictionary { .. } => Err(error(&data_type)),
         };
         Ok(DataType { kind: Some(kind?) })
     }

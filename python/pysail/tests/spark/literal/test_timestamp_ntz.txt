@@ -1,0 +1,75 @@
+>>> spark.conf.set("spark.sql.session.timeZone", "Asia/Shanghai")
+>>> spark.conf.set("spark.sql.timestampType", "TIMESTAMP_LTZ")
+>>> spark.sql("SELECT TIMESTAMP_NTZ '2025-01-01 00:00:00-08:00'").show(truncate=False)
++-----------------------------------+
+|TIMESTAMP_NTZ '2025-01-01 00:00:00'|
++-----------------------------------+
+|2025-01-01 00:00:00                |
++-----------------------------------+
+
+>>> spark.conf.set("spark.sql.timestampType", "TIMESTAMP_NTZ")
+>>> spark.sql("SELECT TIMESTAMP '2025-01-01 00:00:00'").show(truncate=False)
++-----------------------------------+
+|TIMESTAMP_NTZ '2025-01-01 00:00:00'|
++-----------------------------------+
+|2025-01-01 00:00:00                |
++-----------------------------------+
+
+>>> spark.sql("SELECT TIMESTAMP '2025-01-01 00:00:00.12'").show(truncate=False)  # doctest: +NUMBER
++--------------------------------------+
+|TIMESTAMP_NTZ '2025-01-01 00:00:00.12'|
++--------------------------------------+
+|2025-01-01 00:00:00.12                |
++--------------------------------------+
+
+>>> spark.sql("SELECT TIMESTAMP '2025-01-01 00:00:00.123456'").show(truncate=False)
++------------------------------------------+
+|TIMESTAMP_NTZ '2025-01-01 00:00:00.123456'|
++------------------------------------------+
+|2025-01-01 00:00:00.123456                |
++------------------------------------------+
+
+>>> spark.sql("SELECT TIMESTAMP '2025-01-01 00:00:00.123456789'").show(truncate=False)
++------------------------------------------+
+|TIMESTAMP_NTZ '2025-01-01 00:00:00.123456'|
++------------------------------------------+
+|2025-01-01 00:00:00.123456                |
++------------------------------------------+
+
+>>> spark.sql("SELECT TIMESTAMP_LTZ '2025-01-01 00:00:00'").show(truncate=False)
++-------------------------------+
+|TIMESTAMP '2025-01-01 00:00:00'|
++-------------------------------+
+|2025-01-01 00:00:00            |
++-------------------------------+
+
+>>> spark.sql("SELECT TIMESTAMP '2025-01-01 00:00:00+00:00'").show(truncate=False)
++-------------------------------+
+|TIMESTAMP '2025-01-01 08:00:00'|
++-------------------------------+
+|2025-01-01 08:00:00            |
++-------------------------------+
+
+>>> spark.sql("SELECT typeof(c), c FROM VALUES TIMESTAMP '2025-01-01 00:00:00+00:00', TIMESTAMP '2025-01-01' AS t(c)").show(truncate=False)  # doctest: +SKIP
++---------+-------------------+
+|typeof(c)|c                  |
++---------+-------------------+
+|timestamp|2025-01-01 08:00:00|
+|timestamp|2025-01-01 00:00:00|
++---------+-------------------+
+
+>>> spark.sql("SELECT TIMESTAMP '2025-01-01 00:00:00'").printSchema()
+root
+ |-- TIMESTAMP_NTZ '2025-01-01 00:00:00': timestamp_ntz (nullable = false)
+
+>>> spark.sql("SELECT TIMESTAMP('2025-01-01 00:00:00')").printSchema()
+root
+ |-- 2025-01-01 00:00:00: timestamp (nullable = true)
+
+>>> spark.sql("SELECT CAST(TIMESTAMP '2025-01-01 00:00:00' AS LONG)")  # doctest: +SKIP
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.IllegalArgumentException: ...
+
+>>> spark.sql("SELECT CAST(TIMESTAMP('2025-01-01 00:00:00') AS LONG)")
+DataFrame[CAST(2025-01-01 00:00:00 AS BIGINT): bigint]
