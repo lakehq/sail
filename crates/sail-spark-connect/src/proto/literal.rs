@@ -103,7 +103,7 @@ impl TryFrom<Literal> for spec::Literal {
             },
             LiteralType::TimestampNtz(x) => spec::Literal::TimestampMicrosecond {
                 microseconds: Some(x),
-                timestamp_type: spec::TimestampType::WithLocalTimeZone,
+                timestamp_type: spec::TimestampType::WithoutTimeZone,
             },
             LiteralType::CalendarInterval(x) => spec::Literal::IntervalMonthDayNano {
                 value: Some(spec::IntervalMonthDayNano {
