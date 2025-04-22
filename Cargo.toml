@@ -54,7 +54,6 @@ phf = { version = "0.11.3", features = ["macros"] }
 ryu = "1.0.20"
 either = "1.15.0"
 num-bigint = "0.4.6"
-serde_arrow = { version = "0.13.3", features = ["arrow-54"] }
 mimalloc = { version = "0.1.44", default-features = false }
 rand = "0.9.1"
 rand_chacha = "0.9.0"
@@ -75,7 +74,6 @@ fastrace-opentelemetry = "0.9.0"
 opentelemetry = "0.28.0"
 opentelemetry_sdk = "0.28.0"
 opentelemetry-otlp = { version = "0.28.0", features = ["tls", "tls-roots", "grpc-tonic"] }
-hdfs-native-object-store = "0.13.1"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "0.99.0"
 k8s-openapi = { version = "0.24.0", features = ["latest"] }
@@ -98,20 +96,22 @@ rustls = "0.23.26"
 # The versions of the following dependencies are managed manually.
 ######
 
-datafusion = { version = "46.0.1", features = ["serde", "pyarrow", "avro"] }
-datafusion-common = { version = "46.0.1", features = ["object_store", "pyarrow", "avro"] }
-datafusion-expr = { version = "46.0.1" }
-datafusion-expr-common = { version = "46.0.1" }
-datafusion-proto = { version = "46.0.1" }
-datafusion-functions-nested = { version = "46.0.1" }
-datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "2520f53" }
+datafusion = { version = "47.0.0", features = ["serde", "pyarrow", "avro"] }
+datafusion-common = { version = "47.0.0", features = ["object_store", "pyarrow", "avro"] }
+datafusion-expr = { version = "47.0.0" }
+datafusion-expr-common = { version = "47.0.0" }
+datafusion-proto = { version = "47.0.0" }
+datafusion-functions-nested = { version = "47.0.0" }
+datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "459a6dc" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
-pyo3 = { version = "0.23.5", features = ["auto-initialize", "serde"] }
-arrow-buffer = { version = "54.3.0" }
-arrow-schema = { version = "54.3.0", features = ["serde"] }
-arrow-flight = { version = "54.3.0" }
+pyo3 = { version = "0.24.0", features = ["auto-initialize", "serde"] }
+arrow-buffer = { version = "55.0.0" }
+arrow-schema = { version = "55.0.0", features = ["serde"] }
+arrow-flight = { version = "55.0.0" }
+serde_arrow = { version = "0.13.3", features = ["arrow-55"] }
 # The `object_store` version must match the one used in DataFusion.
-object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] }
+object_store = { version = "0.12.0", features = ["aws", "gcp", "azure", "http"] }
+hdfs-native-object-store = "0.14.1"
 
 ######
 # This is the end of the manually managed dependencies.
@@ -121,36 +121,6 @@ object_store = { version = "0.11.0", features = ["aws", "gcp", "azure", "http"] 
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
-datafusion = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-catalog = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-common-runtime = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-datasource-avro = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-datasource-csv = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-datasource-json = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-datasource-parquet = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-doc = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-# datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-functions-aggregate-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-functions-table = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-functions-window = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-functions-window-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-macros = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-physical-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-physical-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-proto-common = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
-datafusion-sql = { git = "https://github.com/apache/datafusion.git", rev = "4ae0ede" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release

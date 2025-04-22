@@ -99,7 +99,7 @@ impl FlightService for WorkerFlightServer {
         let stream = rx
             .await
             .map_err(|_| Status::internal("failed to receive task stream"))??;
-        let stream = stream.map_err(|e| FlightError::Tonic(e.into()));
+        let stream = stream.map_err(|e| FlightError::Tonic(Box::new(e.into())));
         let stream = FlightDataEncoderBuilder::new()
             .build(stream)
             .map_err(Status::from);
