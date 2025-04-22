@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::fmt::Formatter;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
@@ -483,7 +484,7 @@ impl PartialOrd for CatalogCommand {
 }
 
 fn build_record_batch<T: Serialize>(schema: SchemaRef, items: &[T]) -> Result<RecordBatch> {
-    let arrays = to_arrow(schema.fields(), items)
+    let arrays = to_arrow(schema.fields().deref(), items)
         .map_err(|e| exec_datafusion_err!("failed to create record batch: {}", e))?;
     // We must specify the row count if the schema has no fields.
     let options = RecordBatchOptions::new().with_row_count(Some(items.len()));

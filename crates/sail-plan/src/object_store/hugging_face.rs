@@ -158,15 +158,14 @@ impl HuggingFaceObjectStore {
     }
 
     async fn get_meta(
-        &self,
+        api: &Api,
         repo: &ApiRepo,
         base_path: &str,
         filename: &str,
     ) -> object_store::Result<ObjectMeta> {
         let location = Path::parse(format!("{base_path}/{filename}"))?;
         debug!("Getting Hugging Face file metadata: {location:?}");
-        let response = self
-            .api
+        let response = api
             .client()
             .head(repo.url(filename))
             .send()
@@ -254,6 +253,7 @@ impl ObjectStore for HuggingFaceObjectStore {
             range,
             version,
             head,
+            extensions: _,
         } = options;
         if if_match.is_some()
             || if_none_match.is_some()
@@ -266,9 +266,8 @@ impl ObjectStore for HuggingFaceObjectStore {
         let path = HuggingFacePath::parse(location)?;
         let repo = self.api.repo(path.repo());
         if head {
-            let meta = self
-                .get_meta(&repo, &path.base_path(), path.path.as_str())
-                .await?;
+            let meta =
+                Self::get_meta(&self.api, &repo, &path.base_path(), path.path.as_str()).await?;
             Ok(GetResult {
                 payload: GetResultPayload::Stream(Box::pin(stream::empty())),
                 meta,
@@ -310,19 +309,20 @@ impl ObjectStore for HuggingFaceObjectStore {
         Err(object_store::Error::NotImplemented)
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         let path = match HuggingFacePath::parse_optional(prefix) {
             Ok(x) => x,
             Err(e) => return Box::pin(stream::once(async { Err(e) })),
         };
         debug!("Listing Hugging Face files: {path:?}");
+        let api = self.api.clone();
         let stream = async_stream::try_stream! {
-            let repo = self.api.repo(path.repo());
+            let repo = api.repo(path.repo());
             let info = repo.info().await.map_err(HuggingFaceError::from)?;
             for sibling in info.siblings {
                 let filename = sibling.rfilename.as_str();
                 if path.matches(filename) {
-                    yield self.get_meta(&repo, &path.base_path(), filename).await?;
+                    yield Self::get_meta(&api, &repo, &path.base_path(), filename).await?;
                 }
             }
         };

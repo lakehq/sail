@@ -142,7 +142,7 @@ impl ObjectStore for RuntimeAwareObjectStore {
         Ok(self.wrap_get_result(result))
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         let inner = self.inner.clone();
         let location = location.clone();
         self.handle
@@ -150,7 +150,7 @@ impl ObjectStore for RuntimeAwareObjectStore {
             .await?
     }
 
-    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let inner = self.inner.clone();
         let location = location.clone();
         let ranges = ranges.to_vec();
@@ -185,7 +185,7 @@ impl ObjectStore for RuntimeAwareObjectStore {
         once(Err(object_store::Error::NotImplemented)).boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
         RuntimeAwareStream::new(
             move |x| x.list(prefix.as_ref()),
@@ -199,7 +199,7 @@ impl ObjectStore for RuntimeAwareObjectStore {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
         let offset = offset.clone();
         RuntimeAwareStream::new(

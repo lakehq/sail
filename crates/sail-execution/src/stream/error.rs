@@ -72,7 +72,7 @@ impl From<FlightError> for TaskStreamError {
     fn from(value: FlightError) -> Self {
         match value {
             FlightError::Arrow(e) => Self::External(Arc::new(e)),
-            FlightError::Tonic(status) => status.into(),
+            FlightError::Tonic(status) => (*status).into(),
             FlightError::NotYetImplemented(x)
             | FlightError::ProtocolError(x)
             | FlightError::DecodeError(x) => Self::Unknown(x),

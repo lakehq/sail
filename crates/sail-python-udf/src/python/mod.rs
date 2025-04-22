@@ -1,6 +1,6 @@
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::types::{PyString, PyTuple};
-use pyo3::{intern, Bound, IntoPyObject, PyAny, PyResult};
+use pyo3::{intern, Bound, BoundObject, IntoPyObject, PyAny, PyResult};
 
 pub(crate) mod spark;
 
@@ -16,6 +16,9 @@ where
     let py = module.py();
     let cls = module.getattr(class)?;
     let obj = cls.call_method1(intern!(py, "__new__"), (&cls,))?;
-    obj.call_method1(intern!(py, "__init__"), args)?;
+    obj.call_method1(
+        intern!(py, "__init__"),
+        args.into_pyobject(py).map_err(|e| e.into())?.into_bound(),
+    )?;
     Ok(obj)
 }
