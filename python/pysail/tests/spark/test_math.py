@@ -1,4 +1,5 @@
 import datetime
+import platform
 from decimal import Decimal
 
 import pytest
@@ -10,6 +11,7 @@ from pyspark.sql.types import Row
     [("America/Los_Angeles", "America/Los_Angeles")],
     indirect=["session_timezone", "local_timezone"],
 )
+@pytest.mark.skip(condition=platform.system() == "Windows", reason="`time.tzset()` is not available on Windows")
 def test_plus(sail, session_timezone, local_timezone):  # noqa: ARG001
     assert sail.sql("SELECT 1 + 2 AS result;").collect() == [Row(result=3)]
     assert sail.sql("SELECT DATE'2025-02-26' + INTERVAL '2' MONTH AS result;").collect() == [
@@ -30,6 +32,7 @@ def test_plus(sail, session_timezone, local_timezone):  # noqa: ARG001
     [("America/Los_Angeles", "America/Los_Angeles")],
     indirect=["session_timezone", "local_timezone"],
 )
+@pytest.mark.skip(condition=platform.system() == "Windows", reason="`time.tzset()` is not available on Windows")
 def test_minus(sail, session_timezone, local_timezone):  # noqa: ARG001
     assert sail.sql("SELECT 2 - 1 AS result;").collect() == [Row(result=1)]
     assert sail.sql("SELECT TIMESTAMP'2025-02-26 12:15:29' - INTERVAL '3' SECOND AS result;").collect() == [
