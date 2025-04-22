@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::table::TableObject;
 use crate::catalog::CatalogManager;
 use crate::error::PlanResult;
-use crate::resolver::PlanResolver;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TableColumnMetadata {
@@ -44,11 +43,10 @@ impl CatalogManager<'_> {
             .fields()
             .iter()
             .map(|column| -> PlanResult<_> {
-                let data_type = PlanResolver::unresolve_data_type(column.data_type())?;
                 let data_type = self
                     .config
                     .plan_formatter
-                    .data_type_to_simple_string(&data_type, &self.config)?;
+                    .data_type_to_simple_string(column.data_type())?;
                 Ok(TableColumnMetadata::new(
                     column.name().clone(),
                     data_type,

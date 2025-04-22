@@ -26,6 +26,14 @@ impl PlanResolver<'_> {
         }
     }
 
+    pub fn resolve_data_type_for_plan(
+        &self,
+        data_type: &spec::DataType,
+    ) -> PlanResult<adt::DataType> {
+        let mut state = PlanResolverState::new();
+        self.resolve_data_type(data_type, &mut state)
+    }
+
     /// References:
     ///   org.apache.spark.sql.util.ArrowUtils#toArrowType
     ///   org.apache.spark.sql.connect.common.DataTypeProtoConverter
@@ -201,139 +209,6 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn unresolve_data_type(data_type: &adt::DataType) -> PlanResult<spec::DataType> {
-        // TODO: unresolve_data_type is no longer needed, remove it
-        use spec::DataType;
-
-        match data_type {
-            adt::DataType::Null => Ok(DataType::Null),
-            adt::DataType::Boolean => Ok(DataType::Boolean),
-            adt::DataType::Int8 => Ok(DataType::Int8),
-            adt::DataType::Int16 => Ok(DataType::Int16),
-            adt::DataType::Int32 => Ok(DataType::Int32),
-            adt::DataType::Int64 => Ok(DataType::Int64),
-            adt::DataType::UInt8 => Ok(DataType::UInt8),
-            adt::DataType::UInt16 => Ok(DataType::UInt16),
-            adt::DataType::UInt32 => Ok(DataType::UInt32),
-            adt::DataType::UInt64 => Ok(DataType::UInt64),
-            adt::DataType::Float16 => Ok(DataType::Float16),
-            adt::DataType::Float32 => Ok(DataType::Float32),
-            adt::DataType::Float64 => Ok(DataType::Float64),
-            adt::DataType::Timestamp(time_unit, None) => Ok(DataType::Timestamp {
-                time_unit: Self::unresolve_time_unit(time_unit)?,
-                timestamp_type: spec::TimestampType::WithoutTimeZone,
-            }),
-            adt::DataType::Timestamp(time_unit, Some(_)) => Ok(DataType::Timestamp {
-                time_unit: Self::unresolve_time_unit(time_unit)?,
-                timestamp_type: spec::TimestampType::WithLocalTimeZone,
-            }),
-            adt::DataType::Date32 => Ok(DataType::Date32),
-            adt::DataType::Date64 => Ok(DataType::Date64),
-            adt::DataType::Time32(time_unit) => Ok(DataType::Time32 {
-                time_unit: Self::unresolve_time_unit(time_unit)?,
-            }),
-            adt::DataType::Time64(time_unit) => Ok(DataType::Time64 {
-                time_unit: Self::unresolve_time_unit(time_unit)?,
-            }),
-            adt::DataType::Duration(time_unit) => Ok(DataType::Duration {
-                time_unit: Self::unresolve_time_unit(time_unit)?,
-            }),
-            adt::DataType::Interval(interval_unit) => {
-                // TODO: Currently `start_field` and `end_field` are lost in translation.
-                //  This does not impact computation accuracy,
-                //  This may affect the display string in the `data_type_to_simple_string` function.
-                Ok(DataType::Interval {
-                    interval_unit: Self::unresolve_interval_unit(interval_unit),
-                    start_field: None,
-                    end_field: None,
-                })
-            }
-            adt::DataType::Binary => Ok(DataType::Binary),
-            adt::DataType::FixedSizeBinary(i32) => Ok(DataType::FixedSizeBinary { size: *i32 }),
-            adt::DataType::LargeBinary => Ok(DataType::LargeBinary),
-            adt::DataType::BinaryView => Ok(DataType::BinaryView),
-            adt::DataType::Utf8 => Ok(DataType::Utf8),
-            adt::DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
-            adt::DataType::Utf8View => Ok(DataType::Utf8View),
-            adt::DataType::List(field) => {
-                let field = Self::unresolve_field(field)?;
-                Ok(DataType::List {
-                    data_type: Box::new(field.data_type),
-                    nullable: field.nullable,
-                })
-            }
-            adt::DataType::FixedSizeList(field, i32) => {
-                let field = Self::unresolve_field(field)?;
-                Ok(DataType::FixedSizeList {
-                    data_type: Box::new(field.data_type),
-                    nullable: field.nullable,
-                    length: *i32,
-                })
-            }
-            adt::DataType::LargeList(field) => {
-                let field = Self::unresolve_field(field)?;
-                Ok(DataType::LargeList {
-                    data_type: Box::new(field.data_type),
-                    nullable: field.nullable,
-                })
-            }
-            adt::DataType::Struct(fields) => Ok(DataType::Struct {
-                fields: Self::unresolve_fields(fields)?,
-            }),
-            adt::DataType::Union(union_fields, union_mode) => {
-                let union_fields = union_fields
-                    .iter()
-                    .map(|(i, field)| Ok((i, Arc::new(Self::unresolve_field(field)?))))
-                    .collect::<PlanResult<_>>()?;
-                Ok(DataType::Union {
-                    union_fields,
-                    union_mode: Self::unresolve_union_mode(union_mode),
-                })
-            }
-            adt::DataType::Dictionary(key_type, value_type) => Ok(DataType::Dictionary {
-                key_type: Box::new(Self::unresolve_data_type(key_type)?),
-                value_type: Box::new(Self::unresolve_data_type(value_type)?),
-            }),
-            adt::DataType::Decimal128(u8, i8) => Ok(DataType::Decimal128 {
-                precision: *u8,
-                scale: *i8,
-            }),
-            adt::DataType::Decimal256(u8, i8) => Ok(DataType::Decimal256 {
-                precision: *u8,
-                scale: *i8,
-            }),
-            adt::DataType::Map(field, keys_are_sorted) => {
-                let field: spec::Field = Self::unresolve_field(field)?;
-                let fields = match field.data_type {
-                    DataType::Struct { fields } => fields,
-                    _ => return Err(PlanError::invalid("invalid map data type")),
-                };
-                if fields.len() != 2 {
-                    return Err(PlanError::invalid(
-                        "map data type must have key and value fields",
-                    ));
-                }
-                Ok(DataType::Map {
-                    key_type: Box::new(fields[0].data_type.clone()),
-                    value_type: Box::new(fields[1].data_type.clone()),
-                    value_type_nullable: fields[1].nullable,
-                    keys_sorted: *keys_are_sorted,
-                })
-            }
-            adt::DataType::ListView(_) => {
-                // Not yet fully supported by Arrow
-                Err(PlanError::unsupported("unresolve_data_type ListView"))
-            }
-            adt::DataType::LargeListView(_) => {
-                // Not yet fully supported by Arrow
-                Err(PlanError::unsupported("unresolve_data_type LargeListView"))
-            }
-            adt::DataType::RunEndEncoded(_, _) => {
-                Err(PlanError::unsupported("unresolve_data_type RunEndEncoded"))
-            }
-        }
-    }
-
     pub(super) fn resolve_field(
         &self,
         field: &spec::Field,
@@ -378,36 +253,6 @@ impl PlanResolver<'_> {
         )
     }
 
-    pub fn unresolve_field(field: &adt::Field) -> PlanResult<spec::Field> {
-        let name = field.name();
-        let is_udt = field.metadata().keys().any(|k| k.starts_with("udt."));
-        let data_type = if is_udt {
-            spec::DataType::UserDefined {
-                jvm_class: field.metadata().get("udt.jvm_class").cloned(),
-                python_class: field.metadata().get("udt.python_class").cloned(),
-                serialized_python_class: field
-                    .metadata()
-                    .get("udt.serialized_python_class")
-                    .cloned(),
-                sql_type: Box::new(Self::unresolve_data_type(field.data_type())?),
-            }
-        } else {
-            Self::unresolve_data_type(field.data_type())?
-        };
-        let metadata = field
-            .metadata()
-            .iter()
-            .filter(|(k, _)| k.starts_with("metadata."))
-            .map(|(k, v)| (k["metadata.".len()..].to_string(), v.clone()))
-            .collect::<HashMap<_, _>>();
-        Ok(spec::Field {
-            name: name.clone(),
-            data_type,
-            nullable: field.is_nullable(),
-            metadata: metadata.into_iter().collect(),
-        })
-    }
-
     pub(super) fn resolve_fields(
         &self,
         fields: &spec::Fields,
@@ -420,14 +265,6 @@ impl PlanResolver<'_> {
         Ok(adt::Fields::from(fields))
     }
 
-    pub fn unresolve_fields(fields: &adt::Fields) -> PlanResult<spec::Fields> {
-        let fields = fields
-            .iter()
-            .map(|f| Self::unresolve_field(f))
-            .collect::<PlanResult<Vec<_>>>()?;
-        Ok(spec::Fields::from(fields))
-    }
-
     pub(super) fn resolve_schema(
         &self,
         schema: spec::Schema,
@@ -435,20 +272,6 @@ impl PlanResolver<'_> {
     ) -> PlanResult<adt::Schema> {
         let fields = self.resolve_fields(&schema.fields, state)?;
         Ok(adt::Schema::new(fields))
-    }
-
-    pub fn unresolve_schema(schema: adt::SchemaRef) -> PlanResult<spec::Schema> {
-        let fields = Self::unresolve_fields(schema.fields())?;
-        Ok(spec::Schema { fields })
-    }
-
-    pub fn resolve_optional_time_unit(
-        time_unit: &Option<spec::TimeUnit>,
-    ) -> PlanResult<adt::TimeUnit> {
-        match time_unit {
-            None => Ok(adt::TimeUnit::Microsecond),
-            Some(unit) => Self::resolve_time_unit(unit),
-        }
     }
 
     pub fn resolve_time_unit(time_unit: &spec::TimeUnit) -> PlanResult<adt::TimeUnit> {
@@ -460,15 +283,6 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn unresolve_time_unit(time_unit: &adt::TimeUnit) -> PlanResult<spec::TimeUnit> {
-        match time_unit {
-            adt::TimeUnit::Second => Ok(spec::TimeUnit::Second),
-            adt::TimeUnit::Millisecond => Ok(spec::TimeUnit::Millisecond),
-            adt::TimeUnit::Microsecond => Ok(spec::TimeUnit::Microsecond),
-            adt::TimeUnit::Nanosecond => Ok(spec::TimeUnit::Nanosecond),
-        }
-    }
-
     pub fn resolve_interval_unit(interval_unit: &spec::IntervalUnit) -> adt::IntervalUnit {
         match interval_unit {
             spec::IntervalUnit::YearMonth => adt::IntervalUnit::YearMonth,
@@ -477,25 +291,10 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub fn unresolve_interval_unit(interval_unit: &adt::IntervalUnit) -> spec::IntervalUnit {
-        match interval_unit {
-            adt::IntervalUnit::YearMonth => spec::IntervalUnit::YearMonth,
-            adt::IntervalUnit::DayTime => spec::IntervalUnit::DayTime,
-            adt::IntervalUnit::MonthDayNano => spec::IntervalUnit::MonthDayNano,
-        }
-    }
-
     pub fn resolve_union_mode(union_mode: &spec::UnionMode) -> adt::UnionMode {
         match union_mode {
             spec::UnionMode::Sparse => adt::UnionMode::Sparse,
             spec::UnionMode::Dense => adt::UnionMode::Dense,
-        }
-    }
-
-    pub fn unresolve_union_mode(union_mode: &adt::UnionMode) -> spec::UnionMode {
-        match union_mode {
-            adt::UnionMode::Sparse => spec::UnionMode::Sparse,
-            adt::UnionMode::Dense => spec::UnionMode::Dense,
         }
     }
 

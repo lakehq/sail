@@ -2,17 +2,15 @@ use std::fmt;
 use std::fmt::Display;
 
 use datafusion::arrow::datatypes as adt;
-use sail_common::spec;
+use datafusion::arrow::datatypes::DataType;
 use sail_common::string::escape_meta_characters;
-use sail_plan::resolver::PlanResolver;
 
 use crate::error::SparkResult;
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type::Kind;
 
 pub(crate) fn to_spark_schema(schema: adt::SchemaRef) -> SparkResult<sc::DataType> {
-    let fields = PlanResolver::unresolve_fields(schema.fields())?;
-    spec::DataType::Struct { fields }.try_into()
+    DataType::Struct(schema.fields().clone()).try_into()
 }
 
 // Since we cannot construct formatter errors when the data type is invalid,

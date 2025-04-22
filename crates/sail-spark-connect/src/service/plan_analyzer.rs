@@ -125,12 +125,15 @@ pub(crate) async fn handle_analyze_spark_version(
 }
 
 pub(crate) async fn handle_analyze_ddl_parse(
-    _ctx: &SessionContext,
+    ctx: &SessionContext,
     request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
-    let schema = parse_spark_data_type(request.ddl_string.as_str())?;
+    let data_type = parse_spark_data_type(request.ddl_string.as_str())?;
+    let spark = SparkExtension::get(ctx)?;
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let data_type = resolver.resolve_data_type_for_plan(&data_type)?;
     Ok(DdlParseResponse {
-        parsed: Some(schema.try_into()?),
+        parsed: Some(data_type.try_into()?),
     })
 }
 

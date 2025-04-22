@@ -11,7 +11,6 @@ use crate::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -85,10 +84,7 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let type_of = function_context
         .plan_config
         .plan_formatter
-        .data_type_to_simple_string(
-            &PlanResolver::unresolve_data_type(&data_type)?,
-            function_context.plan_config,
-        )?;
+        .data_type_to_simple_string(&data_type)?;
     Ok(lit(type_of))
 }
 
