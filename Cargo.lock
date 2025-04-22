@@ -5146,7 +5146,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sail-cli"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "clap",
  "fastrace",
@@ -5163,7 +5163,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -5180,7 +5180,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -5198,7 +5198,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "arrow-flight",
  "datafusion",
@@ -5226,7 +5226,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "clap",
  "lazy_static",
@@ -5238,7 +5238,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -5295,7 +5295,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "fastrace",
  "log",
@@ -5309,7 +5309,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -5327,7 +5327,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "log",
  "sail-common",
@@ -5341,7 +5341,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "async-stream",
  "datafusion",
@@ -5377,7 +5377,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "chrono",
  "chumsky",
@@ -5391,7 +5391,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5400,7 +5400,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "chumsky",
  "either",
@@ -5414,7 +5414,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "env_logger",
  "fastrace",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5
+
+_April 22, 2025_
+
+- Corrected Spark session default time zone configuration and fixed various issues for timestamp data types ([#438](https://github.com/lakehq/sail/pull/438)).
+- Improved object store setup and cluster mode task execution ([#432](https://github.com/lakehq/sail/pull/432)).
+
 ## 0.2.4
 
 _April 10, 2025_
