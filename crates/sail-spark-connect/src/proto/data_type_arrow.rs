@@ -58,14 +58,12 @@ impl TryFrom<adt::DataType> for DataType {
             | adt::DataType::LargeBinary
             | adt::DataType::BinaryView => Kind::Binary(sdt::Binary::default()),
             adt::DataType::Boolean => Kind::Boolean(sdt::Boolean::default()),
-            adt::DataType::Int8 => Kind::Byte(sdt::Byte::default()),
-            adt::DataType::Int16 => Kind::Short(sdt::Short::default()),
-            adt::DataType::Int32 => Kind::Integer(sdt::Integer::default()),
-            adt::DataType::Int64 => Kind::Long(sdt::Long::default()),
-            adt::DataType::UInt8
-            | adt::DataType::UInt16
-            | adt::DataType::UInt32
-            | adt::DataType::UInt64 => return Err(error(&data_type)),
+            // TODO: cast unsigned integer types to signed integer types in the query output,
+            //   and return an error if unsigned integer types are found here.
+            adt::DataType::UInt8 | adt::DataType::Int8 => Kind::Byte(sdt::Byte::default()),
+            adt::DataType::UInt16 | adt::DataType::Int16 => Kind::Short(sdt::Short::default()),
+            adt::DataType::UInt32 | adt::DataType::Int32 => Kind::Integer(sdt::Integer::default()),
+            adt::DataType::UInt64 | adt::DataType::Int64 => Kind::Long(sdt::Long::default()),
             adt::DataType::Float16 => return Err(error(&data_type)),
             adt::DataType::Float32 => Kind::Float(sdt::Float::default()),
             adt::DataType::Float64 => Kind::Double(sdt::Double::default()),
