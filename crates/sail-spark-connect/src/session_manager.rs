@@ -107,6 +107,7 @@ impl SessionManager {
                 "datafusion.execution.batch_size",
                 options.config.execution.batch_size,
             )
+            .set_str("datafusion.execution.parquet.coerce_int96", "us")
             .set_usize(
                 "datafusion.execution.parquet.maximum_parallel_row_group_writers",
                 options.config.parquet.maximum_parallel_row_group_writers,
