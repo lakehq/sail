@@ -61,7 +61,7 @@
       "input": "-1.8E308D",
       "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal -1.8E308 is outside the valid range for double with minimum value of -1.7976931348623157E+308 and maximum value of 1.7976931348623157E+308. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n-1.8E308D\n^^^\n",
       "output": {
-        "failure": "invalid argument: out-of-range double: \"1.8E308\""
+        "failure": "invalid argument: out-of-range double: 1.8E308"
       }
     },
     {
@@ -189,7 +189,7 @@
       "input": "1.8E308D",
       "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1.8E308 is outside the valid range for double with minimum value of -1.7976931348623157E+308 and maximum value of 1.7976931348623157E+308. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n1.8E308D\n^^^\n",
       "output": {
-        "failure": "invalid argument: out-of-range double: \"1.8E308\""
+        "failure": "invalid argument: out-of-range double: 1.8E308"
       }
     },
     {
@@ -208,7 +208,7 @@
       "input": "1000Y",
       "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1000 is outside the valid range for tinyint with minimum value of -128 and maximum value of 127. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n1000Y\n^^^\n",
       "output": {
-        "failure": "invalid argument: tinyint: \"1000\""
+        "failure": "invalid argument: tinyint: 1000"
       }
     },
     {
@@ -375,7 +375,7 @@
       "input": "40000S",
       "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 40000 is outside the valid range for smallint with minimum value of -32768 and maximum value of 32767. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n40000S\n^^^\n",
       "output": {
-        "failure": "invalid argument: smallint: \"40000\""
+        "failure": "invalid argument: smallint: 40000"
       }
     },
     {
@@ -434,7 +434,7 @@
       "input": "78732472347982492793712334L",
       "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 78732472347982492793712334 is outside the valid range for bigint with minimum value of -9223372036854775808 and maximum value of 9223372036854775807. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n78732472347982492793712334L\n^^^\n",
       "output": {
-        "failure": "invalid argument: bigint: \"78732472347982492793712334\""
+        "failure": "invalid argument: bigint: 78732472347982492793712334"
       }
     },
     {

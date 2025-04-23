@@ -4,7 +4,10 @@ use sail_sql_parser::ast::literal::{NumberLiteral, NumberSuffix, StringLiteral};
 use sail_sql_parser::string::StringValue;
 
 use crate::error::{SqlError, SqlResult};
-use crate::literal::{parse_decimal_128_string, parse_decimal_256_string, LiteralValue};
+use crate::literal::{
+    parse_decimal_128_string, parse_decimal_256_string, parse_f32_string, parse_f64_string,
+    parse_i16_string, parse_i32_string, parse_i64_string, parse_i8_string, BinaryValue,
+};
 
 pub(crate) fn from_ast_number_literal(value: NumberLiteral) -> SqlResult<spec::Expr> {
     let NumberLiteral {
@@ -12,50 +15,21 @@ pub(crate) fn from_ast_number_literal(value: NumberLiteral) -> SqlResult<spec::E
         value,
         suffix,
     } = value;
-    match suffix {
-        Some(NumberSuffix::Y) => {
-            let value = LiteralValue::<i8>::try_from(value.as_str())?;
-            spec::Expr::try_from(value)
-        }
-        Some(NumberSuffix::S) => {
-            let value = LiteralValue::<i16>::try_from(value.as_str())?;
-            spec::Expr::try_from(value)
-        }
-        Some(NumberSuffix::L) => {
-            let value = LiteralValue::<i64>::try_from(value.as_str())?;
-            spec::Expr::try_from(value)
-        }
-        Some(NumberSuffix::F) => {
-            let value = LiteralValue::<f32>::try_from(value.as_str())?;
-            spec::Expr::try_from(value)
-        }
-        Some(NumberSuffix::D) => {
-            let value = LiteralValue::<f64>::try_from(value.as_str())?;
-            spec::Expr::try_from(value)
-        }
+    let literal = match suffix {
+        Some(NumberSuffix::Y) => parse_i8_string(&value)?,
+        Some(NumberSuffix::S) => parse_i16_string(&value)?,
+        Some(NumberSuffix::L) => parse_i64_string(&value)?,
+        Some(NumberSuffix::F) => parse_f32_string(&value)?,
+        Some(NumberSuffix::D) => parse_f64_string(&value)?,
         Some(NumberSuffix::Bd) => {
-            if let Ok(value) = parse_decimal_128_string(value.as_str()) {
-                Ok(spec::Expr::Literal(value))
-            } else {
-                Ok(spec::Expr::Literal(parse_decimal_256_string(
-                    value.as_str(),
-                )?))
-            }
+            parse_decimal_128_string(&value).or_else(|_| parse_decimal_256_string(&value))?
         }
-        None => {
-            if let Ok(value) = LiteralValue::<i32>::try_from(value.as_str()) {
-                spec::Expr::try_from(value)
-            } else if let Ok(value) = LiteralValue::<i64>::try_from(value.as_str()) {
-                spec::Expr::try_from(value)
-            } else if let Ok(value) = parse_decimal_128_string(value.as_str()) {
-                Ok(spec::Expr::Literal(value))
-            } else {
-                Ok(spec::Expr::Literal(parse_decimal_256_string(
-                    value.as_str(),
-                )?))
-            }
-        }
-    }
+        None => parse_i32_string(&value)
+            .or_else(|_| parse_i64_string(&value))
+            .or_else(|_| parse_decimal_128_string(&value))
+            .or_else(|_| parse_decimal_256_string(&value))?,
+    };
+    Ok(spec::Expr::Literal(literal))
 }
 
 /// Multiple string literals can be concatenated together to form a single
@@ -73,7 +47,7 @@ impl StringLiteralList {
                 value,
                 prefix: Some('x' | 'X'),
             } => {
-                let LiteralValue(value) = value.as_str().try_into()?;
+                let BinaryValue(value) = value.parse()?;
                 Ok(Self::Binary(value))
             }
             StringValue::Valid { value, prefix: _ } => Ok(Self::Text(value)),
@@ -100,10 +74,13 @@ impl TryFrom<StringLiteralList> for spec::Expr {
     type Error = SqlError;
 
     fn try_from(value: StringLiteralList) -> Result<Self, Self::Error> {
-        match value {
-            StringLiteralList::Binary(binary) => spec::Expr::try_from(LiteralValue(binary)),
-            StringLiteralList::Text(text) => spec::Expr::try_from(LiteralValue(text)),
-        }
+        let literal = match value {
+            StringLiteralList::Binary(binary) => spec::Literal::Binary {
+                value: Some(binary),
+            },
+            StringLiteralList::Text(text) => spec::Literal::Utf8 { value: Some(text) },
+        };
+        Ok(spec::Expr::Literal(literal))
     }
 }
 
@@ -124,7 +101,9 @@ pub(crate) fn from_ast_boolean_literal(value: BooleanLiteral) -> SqlResult<spec:
         BooleanLiteral::True(_) => true,
         BooleanLiteral::False(_) => false,
     };
-    spec::Expr::try_from(LiteralValue(value))
+    Ok(spec::Expr::Literal(spec::Literal::Boolean {
+        value: Some(value),
+    }))
 }
 
 pub(crate) fn from_ast_string(s: StringLiteral) -> SqlResult<String> {

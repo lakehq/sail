@@ -16,7 +16,7 @@ use sail_sql_parser::ast::query::{
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
-use crate::literal::{LiteralValue, Signed};
+use crate::literal::{parse_signed_interval, Signed};
 use crate::query::{from_ast_named_expression, from_ast_query};
 use crate::value::{
     from_ast_boolean_literal, from_ast_number_literal, from_ast_string, from_ast_string_literal,
@@ -397,7 +397,9 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             let pattern = from_ast_quantified_pattern(quantifier, *pattern)?;
             let mut arguments = vec![expr, pattern];
             if let Some(escape) = from_ast_pattern_escape_string(escape)? {
-                arguments.push(LiteralValue(escape.to_string()).try_into()?);
+                arguments.push(spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some(escape.to_string()),
+                }))
             };
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: spec::ObjectName::bare("like"),
@@ -420,7 +422,9 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             let pattern = from_ast_quantified_pattern(quantifier, *pattern)?;
             let mut arguments = vec![expr, pattern];
             if let Some(escape) = from_ast_pattern_escape_string(escape)? {
-                arguments.push(LiteralValue(escape.to_string()).try_into()?);
+                arguments.push(spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some(escape.to_string()),
+                }));
             };
             let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: spec::ObjectName::bare("ilike"),
@@ -631,7 +635,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: spec::ObjectName::bare("extract"),
                 arguments: vec![
-                    LiteralValue(ident.value).try_into()?,
+                    spec::Expr::Literal(spec::Literal::Utf8 {
+                        value: Some(ident.value),
+                    }),
                     from_ast_expression(*expr)?,
                 ],
                 named_arguments: vec![],
@@ -903,8 +909,8 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::NumberLiteral(value) => from_ast_number_literal(value),
         AtomExpr::BooleanLiteral(value) => from_ast_boolean_literal(value),
         AtomExpr::Null(_) => Ok(spec::Expr::Literal(spec::Literal::Null)),
-        AtomExpr::Interval(_, value) => Ok(spec::Expr::Literal(spec::Literal::try_from(
-            LiteralValue(Signed::Positive(*value)),
+        AtomExpr::Interval(_, value) => Ok(spec::Expr::Literal(parse_signed_interval(
+            Signed::Positive(*value),
         )?)),
         AtomExpr::Placeholder(variable) => Ok(spec::Expr::Placeholder(variable.value)),
         AtomExpr::Identifier(x) => Ok(spec::Expr::UnresolvedAttribute {

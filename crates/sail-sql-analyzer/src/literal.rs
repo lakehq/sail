@@ -1,4 +1,3 @@
-use std::fmt::Debug;
 use std::iter::once;
 use std::ops::Neg;
 use std::str::FromStr;
@@ -57,187 +56,56 @@ lazy_static! {
         regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$").unwrap();
 }
 
-#[derive(Debug)]
-pub(crate) struct LiteralValue<T>(pub T);
-
-impl<T> TryFrom<LiteralValue<T>> for spec::Expr
-where
-    LiteralValue<T>: TryInto<spec::Literal, Error = SqlError>,
-{
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<T>) -> SqlResult<spec::Expr> {
-        Ok(spec::Expr::Literal(literal.try_into()?))
-    }
-}
-
-impl TryFrom<LiteralValue<bool>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<bool>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Boolean {
-            value: Some(literal.0),
-        })
-    }
-}
-
-impl TryFrom<LiteralValue<String>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<String>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Utf8 {
-            value: Some(literal.0),
-        })
-    }
-}
-
-impl TryFrom<LiteralValue<Vec<u8>>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<Vec<u8>>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Binary {
-            value: Some(literal.0),
-        })
-    }
-}
-
-impl TryFrom<LiteralValue<i8>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<i8>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Int8 {
-            value: Some(literal.0),
-        })
-    }
-}
-
-impl TryFrom<LiteralValue<i16>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<i16>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Int16 {
-            value: Some(literal.0),
-        })
-    }
-}
-
-impl TryFrom<LiteralValue<i32>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<i32>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Int32 {
-            value: Some(literal.0),
-        })
-    }
-}
-
-impl TryFrom<LiteralValue<i64>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<i64>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Int64 {
-            value: Some(literal.0),
-        })
-    }
-}
-
-impl TryFrom<LiteralValue<f32>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<f32>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Float32 {
-            value: Some(literal.0),
-        })
-    }
-}
-
-impl TryFrom<LiteralValue<f64>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<f64>) -> SqlResult<spec::Literal> {
-        Ok(spec::Literal::Float64 {
-            value: Some(literal.0),
-        })
-    }
-}
-
-impl TryFrom<LiteralValue<chrono::NaiveDate>> for spec::Literal {
-    type Error = SqlError;
-
-    fn try_from(literal: LiteralValue<chrono::NaiveDate>) -> SqlResult<spec::Literal> {
-        let value = chrono::NaiveDateTime::from(literal.0);
-        let days = (value - chrono::NaiveDateTime::UNIX_EPOCH).num_days();
-        let days = i32::try_from(days)
-            .map_err(|_| SqlError::invalid(format!("date literal: {:?}", literal.0)))?;
-        Ok(spec::Literal::Date32 { days: Some(days) })
-    }
-}
-
-impl TryFrom<LiteralValue<Signed<IntervalExpr>>> for spec::Literal {
-    type Error = SqlError;
-
+pub fn parse_signed_interval(value: Signed<IntervalExpr>) -> SqlResult<spec::Literal> {
     // TODO: support the legacy calendar interval when `spark.sql.legacy.interval.enabled` is `true`
-
-    fn try_from(literal: LiteralValue<Signed<IntervalExpr>>) -> SqlResult<spec::Literal> {
-        let negated = literal.0.is_negative();
-        let interval = literal.0.into_inner();
-        match interval.clone() {
-            IntervalExpr::Standard { value, qualifier } => {
-                let kind = from_ast_interval_qualifier(qualifier)?;
-                parse_standard_interval(value, kind, negated)
-            }
-            IntervalExpr::MultiUnit { head, tail } => {
-                if tail.is_empty() {
-                    match head.unit {
-                        IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
-                            parse_standard_interval(head.value, StandardIntervalKind::Year, negated)
-                        }
-                        IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
-                            parse_standard_interval(
-                                head.value,
-                                StandardIntervalKind::Month,
-                                negated,
-                            )
-                        }
-                        IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
-                            parse_standard_interval(head.value, StandardIntervalKind::Day, negated)
-                        }
-                        IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
-                            parse_standard_interval(head.value, StandardIntervalKind::Hour, negated)
-                        }
-                        IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
-                            parse_standard_interval(
-                                head.value,
-                                StandardIntervalKind::Minute,
-                                negated,
-                            )
-                        }
-                        IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
-                            parse_standard_interval(
-                                head.value,
-                                StandardIntervalKind::Second,
-                                negated,
-                            )
-                        }
-                        _ => parse_multi_unit_interval(vec![head], negated),
+    let negated = value.is_negative();
+    let interval = value.into_inner();
+    match interval.clone() {
+        IntervalExpr::Standard { value, qualifier } => {
+            let kind = from_ast_interval_qualifier(qualifier)?;
+            parse_standard_interval(value, kind, negated)
+        }
+        IntervalExpr::MultiUnit { head, tail } => {
+            if tail.is_empty() {
+                match head.unit {
+                    IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
+                        parse_standard_interval(head.value, StandardIntervalKind::Year, negated)
                     }
-                } else {
-                    let values = once(head).chain(tail).collect();
-                    parse_multi_unit_interval(values, negated)
+                    IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
+                        parse_standard_interval(head.value, StandardIntervalKind::Month, negated)
+                    }
+                    IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
+                        parse_standard_interval(head.value, StandardIntervalKind::Day, negated)
+                    }
+                    IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
+                        parse_standard_interval(head.value, StandardIntervalKind::Hour, negated)
+                    }
+                    IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
+                        parse_standard_interval(head.value, StandardIntervalKind::Minute, negated)
+                    }
+                    IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
+                        parse_standard_interval(head.value, StandardIntervalKind::Second, negated)
+                    }
+                    _ => parse_multi_unit_interval(vec![head], negated),
                 }
+            } else {
+                let values = once(head).chain(tail).collect();
+                parse_multi_unit_interval(values, negated)
             }
-            IntervalExpr::Literal(value) => {
-                parse_unqualified_interval_string(&from_ast_string(value)?, negated)
-            }
+        }
+        IntervalExpr::Literal(value) => {
+            parse_unqualified_interval_string(&from_ast_string(value)?, negated)
         }
     }
 }
 
-impl TryFrom<&str> for LiteralValue<Vec<u8>> {
-    type Error = SqlError;
+pub struct BinaryValue(pub Vec<u8>);
+
+impl FromStr for BinaryValue {
+    type Err = SqlError;
 
     /// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L285-L306>
-    fn try_from(value: &str) -> SqlResult<Self> {
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         if !BINARY_REGEX.is_match(value) {
             return Err(SqlError::invalid(format!("hex string: {value}")));
         }
@@ -264,86 +132,56 @@ impl TryFrom<&str> for LiteralValue<Vec<u8>> {
             }
         }
 
-        Ok(LiteralValue(decoded_bytes))
+        Ok(Self(decoded_bytes))
     }
 }
 
-impl TryFrom<&str> for LiteralValue<i8> {
-    type Error = SqlError;
-
-    fn try_from(value: &str) -> SqlResult<Self> {
-        let value = value
-            .parse::<i8>()
-            .map_err(|_| SqlError::invalid(format!("tinyint: {:?}", value)))?;
-        Ok(LiteralValue(value))
-    }
+pub fn parse_i8_string(value: &str) -> SqlResult<spec::Literal> {
+    let n = value
+        .parse::<i8>()
+        .map_err(|_| SqlError::invalid(format!("tinyint: {value}")))?;
+    Ok(spec::Literal::Int8 { value: Some(n) })
 }
 
-impl TryFrom<&str> for LiteralValue<i16> {
-    type Error = SqlError;
-
-    fn try_from(value: &str) -> SqlResult<Self> {
-        let value = value
-            .parse::<i16>()
-            .map_err(|_| SqlError::invalid(format!("smallint: {:?}", value)))?;
-        Ok(LiteralValue(value))
-    }
+pub fn parse_i16_string(value: &str) -> SqlResult<spec::Literal> {
+    let n = value
+        .parse::<i16>()
+        .map_err(|_| SqlError::invalid(format!("smallint: {value}")))?;
+    Ok(spec::Literal::Int16 { value: Some(n) })
 }
 
-impl TryFrom<&str> for LiteralValue<i32> {
-    type Error = SqlError;
-
-    fn try_from(value: &str) -> SqlResult<Self> {
-        let value = value
-            .parse::<i32>()
-            .map_err(|_| SqlError::invalid(format!("int: {:?}", value)))?;
-        Ok(LiteralValue(value))
-    }
+pub fn parse_i32_string(value: &str) -> SqlResult<spec::Literal> {
+    let n = value
+        .parse::<i32>()
+        .map_err(|_| SqlError::invalid(format!("int: {value}")))?;
+    Ok(spec::Literal::Int32 { value: Some(n) })
 }
 
-impl TryFrom<&str> for LiteralValue<i64> {
-    type Error = SqlError;
-
-    fn try_from(value: &str) -> SqlResult<Self> {
-        let value = value
-            .parse::<i64>()
-            .map_err(|_| SqlError::invalid(format!("bigint: {:?}", value)))?;
-        Ok(LiteralValue(value))
-    }
+pub fn parse_i64_string(value: &str) -> SqlResult<spec::Literal> {
+    let n = value
+        .parse::<i64>()
+        .map_err(|_| SqlError::invalid(format!("bigint: {value}")))?;
+    Ok(spec::Literal::Int64 { value: Some(n) })
 }
 
-impl TryFrom<&str> for LiteralValue<f32> {
-    type Error = SqlError;
-
-    fn try_from(value: &str) -> SqlResult<Self> {
-        let n = value
-            .parse::<f32>()
-            .map_err(|_| SqlError::invalid(format!("float: {:?}", value)))?;
-        if n.is_infinite() || n.is_nan() {
-            return Err(SqlError::invalid(format!(
-                "out-of-range float: {:?}",
-                value
-            )));
-        }
-        Ok(LiteralValue(n))
+pub fn parse_f32_string(value: &str) -> SqlResult<spec::Literal> {
+    let n = value
+        .parse::<f32>()
+        .map_err(|_| SqlError::invalid(format!("float: {value}")))?;
+    if n.is_infinite() || n.is_nan() {
+        return Err(SqlError::invalid(format!("out-of-range float: {value}")));
     }
+    Ok(spec::Literal::Float32 { value: Some(n) })
 }
 
-impl TryFrom<&str> for LiteralValue<f64> {
-    type Error = SqlError;
-
-    fn try_from(value: &str) -> SqlResult<Self> {
-        let n = value
-            .parse::<f64>()
-            .map_err(|_| SqlError::invalid(format!("double: {:?}", value)))?;
-        if n.is_infinite() || n.is_nan() {
-            return Err(SqlError::invalid(format!(
-                "out-of-range double: {:?}",
-                value
-            )));
-        }
-        Ok(LiteralValue(n))
+pub fn parse_f64_string(value: &str) -> SqlResult<spec::Literal> {
+    let n = value
+        .parse::<f64>()
+        .map_err(|_| SqlError::invalid(format!("double: {value}")))?;
+    if n.is_infinite() || n.is_nan() {
+        return Err(SqlError::invalid(format!("out-of-range double: {value}")));
     }
+    Ok(spec::Literal::Float64 { value: Some(n) })
 }
 
 struct DecimalSecond {
@@ -373,7 +211,7 @@ impl FromStr for Signed<DecimalSecond> {
     }
 }
 
-pub(crate) enum Signed<T> {
+pub enum Signed<T> {
     Positive(T),
     Negative(T),
 }
@@ -414,38 +252,36 @@ impl<T: FromStr> FromStr for Signed<T> {
     }
 }
 
-impl<T> TryFrom<Expr> for LiteralValue<T>
+fn parse_signed_value<T>(expr: Expr) -> SqlResult<T>
 where
     T: Neg<Output = T> + FromStr,
 {
-    type Error = SqlError;
-
-    fn try_from(expr: Expr) -> SqlResult<LiteralValue<T>> {
-        match expr {
-            Expr::UnaryOperator(UnaryOperator::Minus(_), expr) => {
-                let value = LiteralValue::<T>::try_from(*expr.clone())?;
-                Ok(LiteralValue(-value.0))
-            }
-            Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral {
-                span: _,
-                value,
-                suffix: None,
-            })) => match value.parse::<T>() {
-                Ok(x) => Ok(LiteralValue(x)),
-                Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
-            },
-            Expr::Atom(AtomExpr::StringLiteral(head, tail)) => {
-                if !tail.is_empty() {
-                    return Err(SqlError::invalid("literal: cannot convert multiple adjacent string literals to a single value"));
-                }
-                let value = from_ast_string(head)?;
-                match value.parse::<T>() {
-                    Ok(x) => Ok(LiteralValue(x)),
-                    Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
-                }
-            }
-            _ => Err(SqlError::invalid(format!("literal expression: {:?}", expr))),
+    match expr {
+        Expr::UnaryOperator(UnaryOperator::Minus(_), expr) => {
+            let value: T = parse_signed_value(*expr)?;
+            Ok(-value)
         }
+        Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral {
+            span: _,
+            value,
+            suffix: None,
+        })) => match value.parse::<T>() {
+            Ok(x) => Ok(x),
+            Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
+        },
+        Expr::Atom(AtomExpr::StringLiteral(head, tail)) => {
+            if !tail.is_empty() {
+                return Err(SqlError::invalid(
+                    "literal: cannot convert multiple adjacent string literals to a single value",
+                ));
+            }
+            let value = from_ast_string(head)?;
+            match value.parse::<T>() {
+                Ok(x) => Ok(x),
+                Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
+            }
+        }
+        _ => Err(SqlError::invalid(format!("literal expression: {:?}", expr))),
     }
 }
 
@@ -694,7 +530,7 @@ fn parse_standard_interval(
     kind: StandardIntervalKind,
     negated: bool,
 ) -> SqlResult<spec::Literal> {
-    let signed = LiteralValue::<Signed<String>>::try_from(value)?.0;
+    let signed: Signed<String> = parse_signed_value(value)?;
     let negated = signed.is_negative() ^ negated;
     let value = signed.into_inner();
     match kind {
@@ -751,36 +587,36 @@ fn parse_multi_unit_interval(
         let IntervalValueWithUnit { value, unit } = value;
         match unit {
             IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
-                let value = LiteralValue::<i32>::try_from(value)?.0;
+                let value: i32 = parse_signed_value(value)?;
                 let m = value.checked_mul(12).ok_or_else(error)?;
                 months = months.checked_add(m).ok_or_else(error)?;
             }
             IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
-                let value = LiteralValue::<i32>::try_from(value)?.0;
+                let value: i32 = parse_signed_value(value)?;
                 months = months.checked_add(value).ok_or_else(error)?;
             }
             IntervalUnit::Week(_) | IntervalUnit::Weeks(_) => {
-                let value = LiteralValue::<i64>::try_from(value)?.0;
+                let value: i64 = parse_signed_value(value)?;
                 let weeks = TimeDelta::try_weeks(value).ok_or_else(error)?;
                 delta = delta.checked_add(&weeks).ok_or_else(error)?;
             }
             IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
-                let value = LiteralValue::<i64>::try_from(value)?.0;
+                let value: i64 = parse_signed_value(value)?;
                 let days = TimeDelta::try_days(value).ok_or_else(error)?;
                 delta = delta.checked_add(&days).ok_or_else(error)?;
             }
             IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
-                let value = LiteralValue::<i64>::try_from(value)?.0;
+                let value: i64 = parse_signed_value(value)?;
                 let hours = TimeDelta::try_hours(value).ok_or_else(error)?;
                 delta = delta.checked_add(&hours).ok_or_else(error)?;
             }
             IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
-                let value = LiteralValue::<i64>::try_from(value)?.0;
+                let value: i64 = parse_signed_value(value)?;
                 let minutes = TimeDelta::try_minutes(value).ok_or_else(error)?;
                 delta = delta.checked_add(&minutes).ok_or_else(error)?;
             }
             IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
-                let value = LiteralValue::<Signed<DecimalSecond>>::try_from(value)?.0;
+                let value: Signed<DecimalSecond> = parse_signed_value(value)?;
                 let negated = value.is_negative();
                 let value = value.into_inner();
                 let seconds = TimeDelta::seconds(value.seconds as i64);
@@ -794,12 +630,12 @@ fn parse_multi_unit_interval(
                 }
             }
             IntervalUnit::Millisecond(_) | IntervalUnit::Milliseconds(_) => {
-                let value = LiteralValue::<i64>::try_from(value)?.0;
+                let value: i64 = parse_signed_value(value)?;
                 let milliseconds = TimeDelta::try_milliseconds(value).ok_or_else(error)?;
                 delta = delta.checked_add(&milliseconds).ok_or_else(error)?;
             }
             IntervalUnit::Microsecond(_) | IntervalUnit::Microseconds(_) => {
-                let value = LiteralValue::<i64>::try_from(value)?.0;
+                let value: i64 = parse_signed_value(value)?;
                 let microseconds = TimeDelta::microseconds(value);
                 delta = delta.checked_add(&microseconds).ok_or_else(error)?;
             }
@@ -895,7 +731,7 @@ fn parse_unqualified_interval_string(s: &str, negated: bool) -> SqlResult<spec::
     } else {
         Signed::Positive(interval)
     };
-    spec::Literal::try_from(LiteralValue(value))
+    parse_signed_interval(value)
 }
 
 /// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L308-L318>
