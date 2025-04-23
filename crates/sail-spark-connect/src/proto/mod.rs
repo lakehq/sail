@@ -1,6 +1,7 @@
 pub(crate) mod analyzer;
 pub(crate) mod common;
 pub(crate) mod data_type;
+pub(crate) mod data_type_arrow;
 pub(crate) mod data_type_json;
 pub(crate) mod expression;
 pub(crate) mod function;

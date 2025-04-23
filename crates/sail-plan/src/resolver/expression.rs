@@ -941,7 +941,7 @@ impl PlanResolver<'_> {
             let data_type_string = self
                 .config
                 .plan_formatter
-                .data_type_to_simple_string(&cast_to_type, &self.config)?;
+                .data_type_to_simple_string(&data_type)?;
             vec![format!(
                 "CAST({} AS {})",
                 name.one()?,
