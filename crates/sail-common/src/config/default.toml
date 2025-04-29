@@ -33,7 +33,7 @@ batch_size = 8192
 [parquet]
 enable_page_index = true
 pruning = true
-skip_metadata = false
+skip_metadata = true
 maximum_parallel_row_group_writers = 2
 maximum_buffered_record_batches_per_stream = 16
 

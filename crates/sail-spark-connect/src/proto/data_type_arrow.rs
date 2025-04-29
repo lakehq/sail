@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use datafusion::arrow::datatypes as adt;
 
 use crate::error::{SparkError, SparkResult};
@@ -26,13 +24,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
         } else {
             field.data_type().clone().try_into()?
         };
-        let metadata = field
-            .metadata()
-            .iter()
-            .filter(|(k, _)| k.starts_with("metadata."))
-            .map(|(k, v)| (k["metadata.".len()..].to_string(), v.clone()))
-            .collect::<HashMap<_, _>>();
-        let metadata = serde_json::to_string(&metadata)?;
+        let metadata = serde_json::to_string(field.metadata())?;
         Ok(sdt::StructField {
             name: field.name().clone(),
             data_type: Some(data_type),
