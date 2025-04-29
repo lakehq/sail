@@ -2,6 +2,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use sail_common::error::CommonError;
 use sail_python_udf::error::PyUdfError;
+use sail_sql_analyzer::error::SqlError;
 use thiserror::Error;
 
 pub type PlanResult<T> = Result<T, PlanError>;
@@ -55,6 +56,19 @@ impl From<CommonError> for PlanError {
             CommonError::InvalidArgument(message) => PlanError::InvalidArgument(message),
             CommonError::NotSupported(message) => PlanError::NotSupported(message),
             CommonError::InternalError(message) => PlanError::InternalError(message),
+        }
+    }
+}
+
+impl From<SqlError> for PlanError {
+    fn from(value: SqlError) -> Self {
+        match value {
+            SqlError::SqlParserError(message) => PlanError::InvalidArgument(message),
+            SqlError::MissingArgument(message) => PlanError::MissingArgument(message),
+            SqlError::InvalidArgument(message) => PlanError::InvalidArgument(message),
+            SqlError::NotImplemented(message) => PlanError::NotImplemented(message),
+            SqlError::NotSupported(message) => PlanError::NotSupported(message),
+            SqlError::InternalError(message) => PlanError::InternalError(message),
         }
     }
 }

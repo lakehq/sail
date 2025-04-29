@@ -5,12 +5,11 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType}
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, exec_err, plan_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
-use sail_common_datafusion::datetime::timestamp::{
-    parse_timestamp, parse_timezone, TimeZoneValue, TimestampValue,
-};
+use sail_sql_analyzer::literal::datetime::TimeZoneValue;
+use sail_sql_analyzer::parser::parse_timestamp;
 
 use crate::utils::ItemTaker;
 
@@ -23,7 +22,10 @@ pub struct SparkTimestamp {
 
 impl SparkTimestamp {
     pub fn try_new(timezone: Arc<str>) -> Result<Self> {
-        let timezone_value = parse_timezone(timezone.as_ref())?;
+        let timezone_value = timezone
+            .as_ref()
+            .parse()
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
         Ok(Self {
             timezone,
             timezone_value,
@@ -41,11 +43,14 @@ impl SparkTimestamp {
     }
 
     fn string_to_timestamp_microseconds<T: AsRef<str>>(&self, value: T) -> Result<i64> {
-        let TimestampValue { datetime, timezone } = parse_timestamp(value.as_ref())?;
+        let (datetime, timezone) = parse_timestamp(value.as_ref())
+            .and_then(|x| x.into_naive())
+            .map_err(|e| exec_datafusion_err!("{e}"))?;
         let datetime = timezone
             .as_ref()
             .unwrap_or(&self.timezone_value)
-            .localize_with_fallback(&datetime)?;
+            .localize_with_fallback(&datetime)
+            .map_err(|e| exec_datafusion_err!("{e}"))?;
         Ok(datetime.timestamp_micros())
     }
 }

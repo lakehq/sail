@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
@@ -18,15 +19,12 @@ use datafusion_expr::{
 };
 use datafusion_functions_nested::expr_fn::array_element;
 use sail_common::spec;
-use sail_common::spec::{PySparkUdfType, TimestampType};
-use sail_common_datafusion::datetime::date::parse_date;
-use sail_common_datafusion::datetime::timestamp::{
-    parse_timestamp, parse_timezone, TimestampValue,
-};
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
+use sail_sql_analyzer::literal::datetime::TimeZoneValue;
+use sail_sql_analyzer::parser::{parse_date, parse_timestamp};
 
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
@@ -1097,7 +1095,7 @@ impl PlanResolver<'_> {
                     &self.config.pyspark_udf_config,
                 )?;
                 let function = match function.eval_type {
-                    PySparkUdfType::GroupedAggPandas => {
+                    spec::PySparkUdfType::GroupedAggPandas => {
                         let udaf = PySparkGroupAggregateUDF::new(
                             get_udf_name(&function_name, &payload),
                             payload,
@@ -1901,7 +1899,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let date = parse_date(&value)?;
         let literal = spec::Literal::Date32 {
-            days: Some(Date32Type::from_naive_date(date)),
+            days: Some(Date32Type::from_naive_date(date.try_into()?)),
         };
         self.resolve_expression_literal(literal, state)
     }
@@ -1912,24 +1910,24 @@ impl PlanResolver<'_> {
         timestamp_type: spec::TimestampType,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let TimestampValue { datetime, timezone } = parse_timestamp(&value)?;
+        let (datetime, timezone) = parse_timestamp(&value).and_then(|x| x.into_naive())?;
         let (datetime, timestamp_type) = match (timestamp_type, timezone, self.config.default_timestamp_type) {
-                (TimestampType::Configured, None, DefaultTimestampType::TimestampLtz)
-                | (TimestampType::WithLocalTimeZone, None, _) => {
-                    let tz = parse_timezone(&self.config.session_timezone)?;
+                (spec::TimestampType::Configured, None, DefaultTimestampType::TimestampLtz)
+                | (spec::TimestampType::WithLocalTimeZone, None, _) => {
+                    let tz = TimeZoneValue::from_str(&self.config.session_timezone)?;
                     let datetime = tz.localize_with_fallback(&datetime)?;
-                    (datetime, TimestampType::WithLocalTimeZone)
+                    (datetime, spec::TimestampType::WithLocalTimeZone)
                 }
-                (TimestampType::Configured, Some(tz), _)
-                | (TimestampType::WithLocalTimeZone, Some(tz), _) => {
+                (spec::TimestampType::Configured, Some(tz), _)
+                | (spec::TimestampType::WithLocalTimeZone, Some(tz), _) => {
                     let datetime = tz.localize_with_fallback(&datetime)?;
-                    (datetime, TimestampType::WithLocalTimeZone)
+                    (datetime, spec::TimestampType::WithLocalTimeZone)
                 }
-                (TimestampType::Configured, None, DefaultTimestampType::TimestampNtz)
+                (spec::TimestampType::Configured, None, DefaultTimestampType::TimestampNtz)
                 // If the timestamp type is explicitly `TIMESTAMP_NTZ`, the time zone in the literal
                 // is simply ignored.
-                | (TimestampType::WithoutTimeZone, _, _) => {
-                    (datetime.and_utc(), TimestampType::WithoutTimeZone)
+                | (spec::TimestampType::WithoutTimeZone, _, _) => {
+                    (datetime.and_utc(), spec::TimestampType::WithoutTimeZone)
                 }
             };
         let literal = spec::Literal::TimestampMicrosecond {

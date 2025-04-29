@@ -5,10 +5,10 @@ use datafusion::arrow::array::Date32Array;
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
-use sail_common_datafusion::datetime::date::parse_date;
+use sail_sql_analyzer::parser::parse_date;
 
 use crate::utils::ItemTaker;
 
@@ -36,8 +36,9 @@ impl SparkDate {
     }
 
     fn string_to_date32(value: &str) -> Result<i32> {
-        let date = parse_date(value)?;
-        Ok(Date32Type::from_naive_date(date))
+        parse_date(value)
+            .and_then(|date| Ok(Date32Type::from_naive_date(date.try_into()?)))
+            .map_err(|e| exec_datafusion_err!("{e}"))
     }
 }
 

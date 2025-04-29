@@ -82,6 +82,20 @@
 |INTERVAL '1-2' YEAR TO MONTH                                |
 +------------------------------------------------------------+
 
+>>> spark.sql("SELECT CAST('INTERVAL \\'-1-2\\' YEAR TO MONTH' AS INTERVAL YEAR TO MONTH)").show(truncate=False)
++-------------------------------------------------------------+
+|CAST(INTERVAL '-1-2' YEAR TO MONTH AS INTERVAL YEAR TO MONTH)|
++-------------------------------------------------------------+
+|INTERVAL '-1-2' YEAR TO MONTH                                |
++-------------------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL -\\'-1-2\\' YEAR TO MONTH' AS INTERVAL YEAR TO MONTH)").show(truncate=False)
++--------------------------------------------------------------+
+|CAST(INTERVAL -'-1-2' YEAR TO MONTH AS INTERVAL YEAR TO MONTH)|
++--------------------------------------------------------------+
+|INTERVAL '1-2' YEAR TO MONTH                                  |
++--------------------------------------------------------------+
+
 >>> spark.sql("SELECT CAST('1 2' AS INTERVAL DAY TO HOUR)").show(truncate=False)
 +---------------------------------+
 |CAST(1 2 AS INTERVAL DAY TO HOUR)|
@@ -109,3 +123,17 @@
 +------------------------------------------------------------------------+
 |INTERVAL '1 02:00:03.0001' DAY TO SECOND                                |
 +------------------------------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL \\'-1 02:00:03.0001\\' DAY TO SECOND' AS INTERVAL DAY TO SECOND)").show(truncate=False)
++-------------------------------------------------------------------------+
+|CAST(INTERVAL '-1 02:00:03.0001' DAY TO SECOND AS INTERVAL DAY TO SECOND)|
++-------------------------------------------------------------------------+
+|INTERVAL '-1 02:00:03.0001' DAY TO SECOND                                |
++-------------------------------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL -\\'-1 02:00:03.0001\\' DAY TO SECOND' AS INTERVAL DAY TO SECOND)").show(truncate=False)
++--------------------------------------------------------------------------+
+|CAST(INTERVAL -'-1 02:00:03.0001' DAY TO SECOND AS INTERVAL DAY TO SECOND)|
++--------------------------------------------------------------------------+
+|INTERVAL '1 02:00:03.0001' DAY TO SECOND                                  |
++--------------------------------------------------------------------------+

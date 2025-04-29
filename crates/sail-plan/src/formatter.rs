@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 
 use chrono::{TimeZone, Timelike, Utc};
 use datafusion::arrow::array::Array;
@@ -9,7 +10,7 @@ use datafusion_common::ScalarValue;
 use half::f16;
 use sail_common::impl_dyn_object_traits;
 use sail_common::object::DynObject;
-use sail_common_datafusion::datetime::timestamp::parse_timezone;
+use sail_sql_analyzer::literal::datetime::TimeZoneValue;
 
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
@@ -741,7 +742,7 @@ fn format_decimal(value: &str, scale: i8) -> String {
 
 fn format_timestamp(datetime: chrono::DateTime<Utc>, timezone: Option<&str>) -> PlanResult<String> {
     let (prefix, datetime) = if let Some(timezone) = timezone {
-        let tz = parse_timezone(timezone)?;
+        let tz = TimeZoneValue::from_str(timezone)?;
         ("TIMESTAMP", tz.from_utc(&datetime))
     } else {
         ("TIMESTAMP_NTZ", datetime.naive_utc())

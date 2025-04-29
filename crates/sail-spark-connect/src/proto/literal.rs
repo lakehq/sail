@@ -1,6 +1,7 @@
 use sail_common::spec;
 use sail_common::spec::data_type_to_null_literal;
-use sail_sql_analyzer::literal::{microseconds_to_interval, parse_decimal_string};
+use sail_sql_analyzer::literal::interval::microseconds_to_interval;
+use sail_sql_analyzer::literal::numeric::parse_decimal_string;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect::expression::literal::{Array, Decimal, LiteralType, Map, Struct};

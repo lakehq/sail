@@ -16,7 +16,8 @@ use sail_sql_parser::ast::query::{
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
-use crate::literal::{parse_signed_interval, Signed};
+use crate::literal::interval::parse_signed_interval;
+use crate::literal::utils::Signed;
 use crate::query::{from_ast_named_expression, from_ast_query};
 use crate::value::{
     from_ast_boolean_literal, from_ast_number_literal, from_ast_string, from_ast_string_literal,

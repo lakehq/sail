@@ -1,33 +1,21 @@
 use std::iter::once;
-use std::ops::Neg;
 use std::str::FromStr;
 
 use chrono;
 use chrono::TimeDelta;
 use lazy_static::lazy_static;
 use sail_common::spec;
-use sail_common::spec::{
-    i256, ARROW_DECIMAL128_MAX_PRECISION, ARROW_DECIMAL256_MAX_PRECISION,
-    ARROW_DECIMAL256_MAX_SCALE,
-};
 use sail_sql_parser::ast::data_type::{IntervalDayTimeUnit, IntervalYearMonthUnit};
 use sail_sql_parser::ast::expression::{
-    AtomExpr, Expr, IntervalExpr, IntervalLiteral, IntervalQualifier, IntervalUnit,
-    IntervalValueWithUnit, UnaryOperator,
+    Expr, IntervalExpr, IntervalLiteral, IntervalQualifier, IntervalUnit, IntervalValueWithUnit,
 };
-use sail_sql_parser::ast::literal::NumberLiteral;
 
 use crate::error::{SqlError, SqlResult};
+use crate::literal::utils::{extract_fraction_match, extract_match, parse_signed_value, Signed};
 use crate::parser::parse_interval_literal;
 use crate::value::from_ast_string;
 
 lazy_static! {
-    static ref BINARY_REGEX: regex::Regex =
-        regex::Regex::new(r"^[0-9a-fA-F]*$").unwrap();
-    static ref DECIMAL_REGEX: regex::Regex =
-        regex::Regex::new(r"^(?P<sign>[+-]?)(?P<whole>\d{1,38})[.]?(?P<fraction>\d{0,38})([eE](?P<exponent>[+-]?\d+))?$").unwrap();
-    static ref DECIMAL_FRACTION_REGEX: regex::Regex =
-        regex::Regex::new(r"^(?P<sign>[+-]?)[.](?P<fraction>\d{1,38})([eE](?P<exponent>[+-]?\d+))?$").unwrap();
     static ref INTERVAL_YEAR_REGEX: regex::Regex =
         regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<year>\d+)\s*$").unwrap();
     static ref INTERVAL_YEAR_TO_MONTH_REGEX: regex::Regex =
@@ -99,91 +87,6 @@ pub fn parse_signed_interval(value: Signed<IntervalExpr>) -> SqlResult<spec::Lit
     }
 }
 
-pub struct BinaryValue(pub Vec<u8>);
-
-impl FromStr for BinaryValue {
-    type Err = SqlError;
-
-    /// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L285-L306>
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        if !BINARY_REGEX.is_match(value) {
-            return Err(SqlError::invalid(format!("hex string: {value}")));
-        }
-
-        let hex_bytes = value.as_bytes();
-        let mut decoded_bytes = Vec::with_capacity(hex_bytes.len().div_ceil(2));
-
-        let start_idx = hex_bytes.len() % 2;
-        if start_idx > 0 {
-            // The first byte is formed of only one char.
-            match try_decode_hex_char(hex_bytes[0])? {
-                Some(byte) => decoded_bytes.push(byte),
-                None => return Err(SqlError::invalid(format!("hex string: {value}"))),
-            };
-        }
-
-        for i in (start_idx..hex_bytes.len()).step_by(2) {
-            match (
-                try_decode_hex_char(hex_bytes[i])?,
-                try_decode_hex_char(hex_bytes[i + 1])?,
-            ) {
-                (Some(high), Some(low)) => decoded_bytes.push((high << 4) | low),
-                _ => return Err(SqlError::invalid(format!("hex string: {value}"))),
-            }
-        }
-
-        Ok(Self(decoded_bytes))
-    }
-}
-
-pub fn parse_i8_string(value: &str) -> SqlResult<spec::Literal> {
-    let n = value
-        .parse::<i8>()
-        .map_err(|_| SqlError::invalid(format!("tinyint: {value}")))?;
-    Ok(spec::Literal::Int8 { value: Some(n) })
-}
-
-pub fn parse_i16_string(value: &str) -> SqlResult<spec::Literal> {
-    let n = value
-        .parse::<i16>()
-        .map_err(|_| SqlError::invalid(format!("smallint: {value}")))?;
-    Ok(spec::Literal::Int16 { value: Some(n) })
-}
-
-pub fn parse_i32_string(value: &str) -> SqlResult<spec::Literal> {
-    let n = value
-        .parse::<i32>()
-        .map_err(|_| SqlError::invalid(format!("int: {value}")))?;
-    Ok(spec::Literal::Int32 { value: Some(n) })
-}
-
-pub fn parse_i64_string(value: &str) -> SqlResult<spec::Literal> {
-    let n = value
-        .parse::<i64>()
-        .map_err(|_| SqlError::invalid(format!("bigint: {value}")))?;
-    Ok(spec::Literal::Int64 { value: Some(n) })
-}
-
-pub fn parse_f32_string(value: &str) -> SqlResult<spec::Literal> {
-    let n = value
-        .parse::<f32>()
-        .map_err(|_| SqlError::invalid(format!("float: {value}")))?;
-    if n.is_infinite() || n.is_nan() {
-        return Err(SqlError::invalid(format!("out-of-range float: {value}")));
-    }
-    Ok(spec::Literal::Float32 { value: Some(n) })
-}
-
-pub fn parse_f64_string(value: &str) -> SqlResult<spec::Literal> {
-    let n = value
-        .parse::<f64>()
-        .map_err(|_| SqlError::invalid(format!("double: {value}")))?;
-    if n.is_infinite() || n.is_nan() {
-        return Err(SqlError::invalid(format!("out-of-range double: {value}")));
-    }
-    Ok(spec::Literal::Float64 { value: Some(n) })
-}
-
 struct DecimalSecond {
     seconds: u32,
     microseconds: u32,
@@ -198,7 +101,7 @@ impl FromStr for Signed<DecimalSecond> {
         let negated = captures.name("sign").map(|s| s.as_str()) == Some("-");
         let seconds: u32 = extract_match(&captures, "second", error)?.unwrap_or(0);
         let microseconds: u32 =
-            extract_second_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
+            extract_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
         let value = DecimalSecond {
             seconds,
             microseconds,
@@ -208,196 +111,6 @@ impl FromStr for Signed<DecimalSecond> {
         } else {
             Ok(Signed::Positive(value))
         }
-    }
-}
-
-pub enum Signed<T> {
-    Positive(T),
-    Negative(T),
-}
-
-impl<T> Signed<T> {
-    pub fn into_inner(self) -> T {
-        match self {
-            Signed::Positive(x) => x,
-            Signed::Negative(x) => x,
-        }
-    }
-
-    pub fn is_negative(&self) -> bool {
-        match self {
-            Signed::Positive(_) => false,
-            Signed::Negative(_) => true,
-        }
-    }
-}
-
-impl<T> Neg for Signed<T> {
-    type Output = Self;
-
-    fn neg(self) -> Self::Output {
-        match self {
-            Signed::Positive(x) => Signed::Negative(x),
-            Signed::Negative(x) => Signed::Positive(x),
-        }
-    }
-}
-
-impl<T: FromStr> FromStr for Signed<T> {
-    type Err = SqlError;
-
-    fn from_str(s: &str) -> SqlResult<Self> {
-        let v = s.parse::<T>().map_err(|_| SqlError::invalid(s))?;
-        Ok(Signed::Positive(v))
-    }
-}
-
-fn parse_signed_value<T>(expr: Expr) -> SqlResult<T>
-where
-    T: Neg<Output = T> + FromStr,
-{
-    match expr {
-        Expr::UnaryOperator(UnaryOperator::Minus(_), expr) => {
-            let value: T = parse_signed_value(*expr)?;
-            Ok(-value)
-        }
-        Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral {
-            span: _,
-            value,
-            suffix: None,
-        })) => match value.parse::<T>() {
-            Ok(x) => Ok(x),
-            Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
-        },
-        Expr::Atom(AtomExpr::StringLiteral(head, tail)) => {
-            if !tail.is_empty() {
-                return Err(SqlError::invalid(
-                    "literal: cannot convert multiple adjacent string literals to a single value",
-                ));
-            }
-            let value = from_ast_string(head)?;
-            match value.parse::<T>() {
-                Ok(x) => Ok(x),
-                Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
-            }
-        }
-        _ => Err(SqlError::invalid(format!("literal expression: {:?}", expr))),
-    }
-}
-
-fn extract_match<T>(
-    captures: &regex::Captures,
-    name: &str,
-    error: impl FnOnce() -> SqlError,
-) -> SqlResult<Option<T>>
-where
-    T: FromStr,
-{
-    captures
-        .name(name)
-        .map(|x| x.as_str().parse::<T>())
-        .transpose()
-        .map_err(|_| error())
-}
-
-fn extract_second_fraction_match<T>(
-    captures: &regex::Captures,
-    name: &str,
-    n: usize,
-    error: impl FnOnce() -> SqlError,
-) -> SqlResult<Option<T>>
-where
-    T: FromStr,
-{
-    captures
-        .name(name)
-        .map(|f| {
-            f.as_str()
-                .chars()
-                .chain(std::iter::repeat('0'))
-                .take(n)
-                .collect::<String>()
-                .parse::<T>()
-        })
-        .transpose()
-        .map_err(|_| error())
-}
-
-pub fn parse_decimal_128_string(s: &str) -> SqlResult<spec::Literal> {
-    let decimal_literal = parse_decimal_string(s)?;
-    match decimal_literal {
-        decimal128 @ spec::Literal::Decimal128 { .. } => Ok(decimal128),
-        _ => Err(SqlError::invalid(format!(
-            "Decimal128: {s} in parse_decimal_128_string"
-        ))),
-    }
-}
-
-pub fn parse_decimal_256_string(s: &str) -> SqlResult<spec::Literal> {
-    let decimal_literal = parse_decimal_string(s)?;
-    match decimal_literal {
-        decimal256 @ spec::Literal::Decimal256 { .. } => Ok(decimal256),
-        _ => Err(SqlError::invalid(format!(
-            "Decimal256: {s} in parse_decimal_256_string"
-        ))),
-    }
-}
-
-pub fn parse_decimal_string(s: &str) -> SqlResult<spec::Literal> {
-    let error = || SqlError::invalid(format!("decimal: {s}"));
-    let captures = DECIMAL_REGEX
-        .captures(s)
-        .or_else(|| DECIMAL_FRACTION_REGEX.captures(s))
-        .ok_or_else(error)?;
-    let sign = captures.name("sign").map(|s| s.as_str()).unwrap_or("");
-    let whole = captures
-        .name("whole")
-        .map(|s| s.as_str())
-        .unwrap_or("")
-        .trim_start_matches('0');
-    let fraction = captures.name("fraction").map(|s| s.as_str()).unwrap_or("");
-    let e: i8 = extract_match(&captures, "exponent", error)?.unwrap_or(0);
-    let (whole, w, f) = match (whole, fraction) {
-        ("", "") => ("0", 1i8, 0i8),
-        (whole, fraction) => (whole, whole.len() as i8, fraction.len() as i8),
-    };
-    let (scale, padding) = {
-        let scale = f.checked_sub(e).ok_or_else(error)?;
-        if !(-ARROW_DECIMAL256_MAX_SCALE..=ARROW_DECIMAL256_MAX_SCALE).contains(&scale) {
-            return Err(error());
-        }
-        if scale < 0 {
-            // Although the decimal type allows negative scale,
-            // we always parse the literal as zero-scale and add padding.
-            (0, -scale)
-        } else {
-            (scale, 0)
-        }
-    };
-    let width = w + f + padding;
-    let precision = std::cmp::max(width, scale) as u8;
-    let num = format!("{whole}{fraction}");
-    let width = width as usize;
-    let value = format!("{sign}{num:0<width$}");
-    if precision == 0
-        || precision > ARROW_DECIMAL256_MAX_PRECISION
-        || scale.unsigned_abs() > precision
-    {
-        Err(error())
-    } else if precision > ARROW_DECIMAL128_MAX_PRECISION {
-        let value: i256 = value.parse().map_err(|_| error())?;
-        Ok(spec::Literal::Decimal256 {
-            precision,
-            scale,
-            value: Some(value),
-        })
-    } else {
-        let value: i128 = value.parse().map_err(|_| error())?;
-        Ok(spec::Literal::Decimal128 {
-            precision,
-            scale,
-            value: Some(value),
-        })
     }
 }
 
@@ -436,8 +149,7 @@ fn parse_interval_day_time_string(
     let hours: i64 = extract_match(&captures, "hour", error)?.unwrap_or(0);
     let minutes: i64 = extract_match(&captures, "minute", error)?.unwrap_or(0);
     let seconds: i64 = extract_match(&captures, "second", error)?.unwrap_or(0);
-    let microseconds: i64 =
-        extract_second_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
+    let microseconds: i64 = extract_fraction_match(&captures, "fraction", 6, error)?.unwrap_or(0);
     let delta = TimeDelta::try_days(days)
         .ok_or_else(error)?
         .checked_add(&TimeDelta::try_hours(hours).ok_or_else(error)?)
@@ -734,183 +446,9 @@ fn parse_unqualified_interval_string(s: &str, negated: bool) -> SqlResult<spec::
     parse_signed_interval(value)
 }
 
-/// [Credit]: <https://github.com/apache/datafusion/blob/a0a635afe481b7b3cdc89591f9eff209010b911a/datafusion/sql/src/expr/value.rs#L308-L318>
-/// Try to decode a byte from a hex char.
-///
-/// None will be returned if the input char is hex-invalid.
-const fn try_decode_hex_char(c: u8) -> SqlResult<Option<u8>> {
-    match c {
-        b'A'..=b'F' => Ok(Some(c - b'A' + 10)),
-        b'a'..=b'f' => Ok(Some(c - b'a' + 10)),
-        b'0'..=b'9' => Ok(Some(c - b'0')),
-        _ => Ok(None),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_decimal128() -> SqlResult<()> {
-        use sail_common::spec::Literal;
-        let parse = |x: &str| -> SqlResult<Literal> { parse_decimal_128_string(x) };
-        assert_eq!(
-            parse("123.45")?,
-            Literal::Decimal128 {
-                precision: 5,
-                scale: 2,
-                value: Some(12345),
-            }
-        );
-        assert_eq!(
-            parse("-123.45")?,
-            Literal::Decimal128 {
-                precision: 5,
-                scale: 2,
-                value: Some(-12345),
-            }
-        );
-        assert_eq!(
-            parse("123.45e1")?,
-            Literal::Decimal128 {
-                precision: 5,
-                scale: 1,
-                value: Some(12345),
-            }
-        );
-        assert_eq!(
-            parse("123.45E-2")?,
-            Literal::Decimal128 {
-                precision: 5,
-                scale: 4,
-                value: Some(12345),
-            }
-        );
-        assert_eq!(
-            parse("1.23e10")?,
-            Literal::Decimal128 {
-                precision: 11,
-                scale: 0,
-                value: Some(12300000000),
-            }
-        );
-        assert_eq!(
-            parse("1.23E-10")?,
-            Literal::Decimal128 {
-                precision: 12,
-                scale: 12,
-                value: Some(123),
-            }
-        );
-        assert_eq!(
-            parse("0")?,
-            Literal::Decimal128 {
-                precision: 1,
-                scale: 0,
-                value: Some(0),
-            }
-        );
-        assert_eq!(
-            parse("0.")?,
-            Literal::Decimal128 {
-                precision: 1,
-                scale: 0,
-                value: Some(0),
-            }
-        );
-        assert_eq!(
-            parse("0.0")?,
-            Literal::Decimal128 {
-                precision: 1,
-                scale: 1,
-                value: Some(0),
-            }
-        );
-        assert_eq!(
-            parse(".0")?,
-            Literal::Decimal128 {
-                precision: 1,
-                scale: 1,
-                value: Some(0),
-            }
-        );
-        assert_eq!(
-            parse(".0e1")?,
-            Literal::Decimal128 {
-                precision: 1,
-                scale: 0,
-                value: Some(0),
-            }
-        );
-        assert_eq!(
-            parse(".0e-1")?,
-            Literal::Decimal128 {
-                precision: 2,
-                scale: 2,
-                value: Some(0),
-            }
-        );
-        assert_eq!(
-            parse("001.2")?,
-            Literal::Decimal128 {
-                precision: 2,
-                scale: 1,
-                value: Some(12),
-            }
-        );
-        assert_eq!(
-            parse("001.20")?,
-            Literal::Decimal128 {
-                precision: 3,
-                scale: 2,
-                value: Some(120),
-            }
-        );
-        assert!(parse(".").is_err());
-        assert!(parse("123.456.789").is_err());
-        assert!(parse("1E100").is_err());
-        assert!(parse("-.2E-100").is_err());
-        assert!(parse("12345678901234567890123456789012345678").is_ok());
-        assert!(parse("123456789012345678901234567890123456789").is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_decimal256() -> SqlResult<()> {
-        use sail_common::spec::Literal;
-        let parse = |x: &str| -> SqlResult<Literal> { parse_decimal_256_string(x) };
-        assert!(parse(".").is_err());
-        assert!(parse("123.456.789").is_err());
-        assert!(parse("1E100").is_err());
-        assert!(parse("-.2E-100").is_err());
-        assert_eq!(
-            parse("120000000000000000000000000000000000000000")?,
-            Literal::Decimal256 {
-                precision: 42,
-                scale: 4,
-                value: i256::from_string("120000000000000000000000000000000000000000"),
-            }
-        );
-        assert_eq!(
-            parse("1200000000000000000000000000000000000.00000")?,
-            Literal::Decimal256 {
-                precision: 42,
-                scale: 5,
-                value: i256::from_string("120000000000000000000000000000000000000000"),
-            }
-        );
-        assert!(parse("123456789012345678901234567890123456789").is_ok());
-        assert!(parse(
-            "1234567890123456789012345678901234567891234567890123456789012345678901234567"
-        )
-        .is_ok());
-        assert!(parse(
-            "12345678901234567890123456789012345678912345678901234567890123456789012345677"
-        )
-        .is_err());
-        Ok(())
-    }
 
     #[test]
     fn test_parse_interval() -> SqlResult<()> {
