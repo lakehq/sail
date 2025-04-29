@@ -1,0 +1,17 @@
+use std::sync::Arc;
+
+use datafusion::optimizer::{Analyzer, AnalyzerRule};
+
+mod rules;
+
+pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
+    let Analyzer {
+        function_rewrites: _,
+        rules: built_in_rules,
+    } = Analyzer::default();
+
+    let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![];
+    rules.push(Arc::new(rules::timestamp::TimestampTypeCast {}));
+    rules.extend(built_in_rules);
+    rules
+}
