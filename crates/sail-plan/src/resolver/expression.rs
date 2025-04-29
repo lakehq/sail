@@ -60,16 +60,35 @@ pub(super) struct NamedExpr {
 
 impl NamedExpr {
     pub fn new(name: Vec<String>, expr: expr::Expr) -> Self {
+        let metadata = match &expr {
+            expr::Expr::Alias(alias) => alias
+                .metadata
+                .as_ref()
+                .map(|x| {
+                    x.iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect()
+                })
+                .unwrap_or(vec![]),
+            _ => vec![],
+        };
         Self {
             name,
             expr,
-            metadata: vec![],
+            metadata,
         }
     }
 
     pub fn try_from_alias_expr(expr: expr::Expr) -> PlanResult<Self> {
         match expr {
-            expr::Expr::Alias(alias) => Ok(Self::new(vec![alias.name], *alias.expr)),
+            expr::Expr::Alias(alias) => Ok(Self {
+                name: vec![alias.name],
+                expr: *alias.expr,
+                metadata: alias
+                    .metadata
+                    .map(|x| x.into_iter().collect())
+                    .unwrap_or(vec![]),
+            }),
             _ => Err(PlanError::invalid(
                 "alias expected to create named expression",
             )),
@@ -77,7 +96,9 @@ impl NamedExpr {
     }
 
     pub fn with_metadata(mut self, metadata: Vec<(String, String)>) -> Self {
-        self.metadata = metadata;
+        if self.metadata != metadata {
+            self.metadata = metadata;
+        }
         self
     }
 }
@@ -1912,7 +1933,7 @@ impl PlanResolver<'_> {
     async fn resolve_expression_timestamp(
         &self,
         value: String,
-        timestamp_type: spec::TimestampType,
+        timestamp_type: TimestampType,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let TimestampValue { datetime, timezone } = parse_timestamp(&value)?;
