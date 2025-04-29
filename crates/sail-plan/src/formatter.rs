@@ -280,15 +280,14 @@ impl PlanFormatter for DefaultPlanFormatter {
             },
             ScalarValue::Date32(days) => match days {
                 Some(days) => {
-                    let date =
-                        chrono::NaiveDateTime::UNIX_EPOCH + chrono::Duration::days(*days as i64);
+                    let date = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(*days as i64);
                     Ok(format!("DATE '{}'", date.format("%Y-%m-%d")))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Date64(milliseconds) => match milliseconds {
                 Some(milliseconds) => {
-                    let date = chrono::NaiveDateTime::UNIX_EPOCH
+                    let date = chrono::DateTime::UNIX_EPOCH
                         + chrono::Duration::milliseconds(*milliseconds);
                     Ok(format!("DATE '{}'", date.format("%Y-%m-%d")))
                 }
