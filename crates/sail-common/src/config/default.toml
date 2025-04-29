@@ -31,6 +31,9 @@ rpc_retry_strategy = { "fixed" = { "max_count" = 3, "delay_secs" = 5 } }
 batch_size = 8192
 
 [parquet]
+enable_page_index = true
+pruning = true
+skip_metadata = false
 maximum_parallel_row_group_writers = 2
 maximum_buffered_record_batches_per_stream = 16
 

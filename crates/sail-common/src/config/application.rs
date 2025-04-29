@@ -136,6 +136,9 @@ pub struct KubernetesConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParquetConfig {
+    pub enable_page_index: bool,
+    pub pruning: bool,
+    pub skip_metadata: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
 }

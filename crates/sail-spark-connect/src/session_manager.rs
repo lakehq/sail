@@ -93,7 +93,7 @@ impl SessionManager {
         };
         // TODO: support more systematic configuration
         // TODO: return error on invalid environment variables
-        let session_config = SessionConfig::new()
+        let mut session_config = SessionConfig::new()
             .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
             .with_information_schema(true)
@@ -102,30 +102,47 @@ impl SessionManager {
                 key.user_id,
                 key.session_id,
                 job_runner,
-            )?))
-            .set_usize(
-                "datafusion.execution.batch_size",
-                options.config.execution.batch_size,
-            )
-            .set_str("datafusion.execution.parquet.coerce_int96", "us")
-            .set_usize(
-                "datafusion.execution.parquet.maximum_parallel_row_group_writers",
-                options.config.parquet.maximum_parallel_row_group_writers,
-            )
-            .set_usize(
-                "datafusion.execution.parquet.maximum_buffered_record_batches_per_stream",
-                options
-                    .config
-                    .parquet
-                    .maximum_buffered_record_batches_per_stream,
-            )
-            .set_bool(
-                "datafusion.execution.listing_table_ignore_subdirectory",
-                false,
-            )
-            // Spark defaults to false:
-            //  https://spark.apache.org/docs/latest/sql-data-sources-csv.html
-            .set_bool("datafusion.catalog.has_header", false);
+            )?));
+
+        // Catalog
+        //
+        // Spark defaults to false: https://spark.apache.org/docs/latest/sql-data-sources-csv.html
+        session_config.options_mut().catalog.has_header = false;
+
+        // Execution
+        session_config.options_mut().execution.batch_size = options.config.execution.batch_size;
+        session_config
+            .options_mut()
+            .execution
+            .listing_table_ignore_subdirectory = false;
+
+        // Execution Parquet
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .enable_page_index = options.config.parquet.enable_page_index;
+        session_config.options_mut().execution.parquet.pruning = options.config.parquet.pruning;
+        session_config.options_mut().execution.parquet.skip_metadata =
+            options.config.parquet.skip_metadata;
+        session_config.options_mut().execution.parquet.coerce_int96 = Some("us".to_string());
+        session_config.options_mut().execution.parquet.created_by =
+            concat!("sail version ", env!("CARGO_PKG_VERSION")).into();
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .maximum_parallel_row_group_writers =
+            options.config.parquet.maximum_parallel_row_group_writers;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .maximum_buffered_record_batches_per_stream = options
+            .config
+            .parquet
+            .maximum_buffered_record_batches_per_stream;
+
         let runtime = {
             let registry = DynamicObjectStoreRegistry::new(options.runtime.clone());
             let builder =
