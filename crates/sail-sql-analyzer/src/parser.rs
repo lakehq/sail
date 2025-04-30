@@ -19,6 +19,7 @@ use crate::error::{SqlError, SqlResult};
 use crate::literal::datetime::{
     create_date_parser, create_timestamp_parser, DateValue, TimestampValue,
 };
+use crate::literal::interval::{parse_unqualified_interval_string, IntervalValue};
 
 fn map_parser_input<'a, C>(
     (t, s): &'a (Token<'a>, SimpleSpan<usize, C>),
@@ -84,6 +85,10 @@ pub fn parse_named_expression(s: &str) -> SqlResult<NamedExpr> {
 
 pub(crate) fn parse_interval_literal(s: &str) -> SqlResult<IntervalLiteral> {
     parse!(s, create_interval_literal_parser)
+}
+
+pub fn parse_interval(s: &str) -> SqlResult<IntervalValue> {
+    parse_unqualified_interval_string(s, false)
 }
 
 pub fn parse_date(s: &str) -> SqlResult<DateValue> {

@@ -44,41 +44,107 @@ lazy_static! {
         regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$").unwrap();
 }
 
-pub fn parse_signed_interval(value: Signed<IntervalExpr>) -> SqlResult<spec::Literal> {
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum IntervalValue {
+    YearMonth {
+        months: i32,
+    },
+    Microsecond {
+        microseconds: i64,
+    },
+    MonthDayNanosecond {
+        months: i32,
+        days: i32,
+        nanoseconds: i64,
+    },
+}
+
+impl From<IntervalValue> for spec::Literal {
+    fn from(value: IntervalValue) -> Self {
+        match value {
+            IntervalValue::YearMonth { months } => spec::Literal::IntervalYearMonth {
+                months: Some(months),
+            },
+            IntervalValue::Microsecond { microseconds } => microseconds_to_interval(microseconds),
+            IntervalValue::MonthDayNanosecond {
+                months,
+                days,
+                nanoseconds,
+            } => spec::Literal::IntervalMonthDayNano {
+                value: Some(spec::IntervalMonthDayNano {
+                    months,
+                    days,
+                    nanoseconds,
+                }),
+            },
+        }
+    }
+}
+
+pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
+    // Arithmetic expressions such as `Date32 + Duration(Microsecond)` are not supported
+    // by [`datafusion_expr::binary::BinaryTypeCoercer`] yet.
+    // So we have the heuristic here to determine the best literal type depending on
+    // the value.
+    let total_days = microseconds / (24 * 60 * 60 * 1_000_000);
+    let remaining_micros = microseconds % (24 * 60 * 60 * 1_000_000);
+    if remaining_micros % 1000 == 0 {
+        spec::Literal::IntervalDayTime {
+            value: Some(spec::IntervalDayTime {
+                days: total_days as i32,
+                milliseconds: (remaining_micros / 1000) as i32,
+            }),
+        }
+    } else {
+        spec::Literal::DurationMicrosecond {
+            microseconds: Some(microseconds),
+        }
+    }
+}
+
+pub fn from_ast_signed_interval(value: Signed<IntervalExpr>) -> SqlResult<IntervalValue> {
     // TODO: support the legacy calendar interval when `spark.sql.legacy.interval.enabled` is `true`
     let negated = value.is_negative();
     let interval = value.into_inner();
     match interval.clone() {
         IntervalExpr::Standard { value, qualifier } => {
             let kind = from_ast_interval_qualifier(qualifier)?;
-            parse_standard_interval(value, kind, negated)
+            from_ast_standard_interval(value, kind, negated)
         }
         IntervalExpr::MultiUnit { head, tail } => {
             if tail.is_empty() {
                 match head.unit {
                     IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
-                        parse_standard_interval(head.value, StandardIntervalKind::Year, negated)
+                        from_ast_standard_interval(head.value, StandardIntervalKind::Year, negated)
                     }
                     IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
-                        parse_standard_interval(head.value, StandardIntervalKind::Month, negated)
+                        from_ast_standard_interval(head.value, StandardIntervalKind::Month, negated)
                     }
                     IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
-                        parse_standard_interval(head.value, StandardIntervalKind::Day, negated)
+                        from_ast_standard_interval(head.value, StandardIntervalKind::Day, negated)
                     }
                     IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
-                        parse_standard_interval(head.value, StandardIntervalKind::Hour, negated)
+                        from_ast_standard_interval(head.value, StandardIntervalKind::Hour, negated)
                     }
                     IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
-                        parse_standard_interval(head.value, StandardIntervalKind::Minute, negated)
+                        from_ast_standard_interval(
+                            head.value,
+                            StandardIntervalKind::Minute,
+                            negated,
+                        )
                     }
                     IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
-                        parse_standard_interval(head.value, StandardIntervalKind::Second, negated)
+                        from_ast_standard_interval(
+                            head.value,
+                            StandardIntervalKind::Second,
+                            negated,
+                        )
                     }
-                    _ => parse_multi_unit_interval(vec![head], negated),
+                    _ => from_ast_multi_unit_interval(vec![head], negated),
                 }
             } else {
                 let values = once(head).chain(tail).collect();
-                parse_multi_unit_interval(values, negated)
+                from_ast_multi_unit_interval(values, negated)
             }
         }
         IntervalExpr::Literal(value) => {
@@ -118,7 +184,7 @@ fn parse_interval_year_month_string(
     s: &str,
     negated: bool,
     interval_regex: &regex::Regex,
-) -> SqlResult<spec::Literal> {
+) -> SqlResult<IntervalValue> {
     let error = || SqlError::invalid(format!("interval: {s}"));
     let captures = interval_regex.captures(s).ok_or_else(error)?;
     let negated = negated ^ (captures.name("sign").map(|s| s.as_str()) == Some("-"));
@@ -134,14 +200,14 @@ fn parse_interval_year_month_string(
     } else {
         n
     };
-    Ok(spec::Literal::IntervalYearMonth { months: Some(n) })
+    Ok(IntervalValue::YearMonth { months: n })
 }
 
 fn parse_interval_day_time_string(
     s: &str,
     negated: bool,
     interval_regex: &regex::Regex,
-) -> SqlResult<spec::Literal> {
+) -> SqlResult<IntervalValue> {
     let error = || SqlError::invalid(format!("interval: {s}"));
     let captures = interval_regex.captures(s).ok_or_else(error)?;
     let negated = negated ^ (captures.name("sign").map(|s| s.as_str()) == Some("-"));
@@ -166,7 +232,7 @@ fn parse_interval_day_time_string(
     } else {
         microseconds
     };
-    Ok(microseconds_to_interval(n))
+    Ok(IntervalValue::Microsecond { microseconds: n })
 }
 
 enum StandardIntervalKind {
@@ -237,11 +303,11 @@ fn from_ast_interval_qualifier(qualifier: IntervalQualifier) -> SqlResult<Standa
     }
 }
 
-fn parse_standard_interval(
+fn from_ast_standard_interval(
     value: Expr,
     kind: StandardIntervalKind,
     negated: bool,
-) -> SqlResult<spec::Literal> {
+) -> SqlResult<IntervalValue> {
     let signed: Signed<String> = parse_signed_value(value)?;
     let negated = signed.is_negative() ^ negated;
     let value = signed.into_inner();
@@ -288,10 +354,10 @@ fn parse_standard_interval(
     }
 }
 
-fn parse_multi_unit_interval(
+fn from_ast_multi_unit_interval(
     values: Vec<IntervalValueWithUnit>,
     negated: bool,
-) -> SqlResult<spec::Literal> {
+) -> SqlResult<IntervalValue> {
     let error = || SqlError::invalid("multi-unit interval");
     let mut months = 0i32;
     let mut delta = TimeDelta::zero();
@@ -360,7 +426,7 @@ fn parse_multi_unit_interval(
             } else {
                 months
             };
-            Ok(spec::Literal::IntervalYearMonth { months: Some(n) })
+            Ok(IntervalValue::YearMonth { months: n })
         }
         (true, true) => {
             let days = delta.num_days();
@@ -387,12 +453,10 @@ fn parse_multi_unit_interval(
             };
             let nanoseconds = microseconds * 1_000;
 
-            Ok(spec::Literal::IntervalMonthDayNano {
-                value: Some(spec::IntervalMonthDayNano {
-                    months,
-                    days,
-                    nanoseconds,
-                }),
+            Ok(IntervalValue::MonthDayNanosecond {
+                months,
+                days,
+                nanoseconds,
             })
         }
         (false, _) => {
@@ -402,38 +466,15 @@ fn parse_multi_unit_interval(
             } else {
                 microseconds
             };
-            Ok(microseconds_to_interval(n))
+            Ok(IntervalValue::Microsecond { microseconds: n })
         }
     }
 }
 
-pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
-    // FIXME: There are temporal coercion issues in [`datafusion_expr::binary::BinaryTypeCoercer`].
-    //  After we fix the coercion issues, this function should simply return:
-    //      spec::Literal::DurationMicrosecond {
-    //          microseconds: Some(microseconds),
-    //      }
-    let total_days = microseconds / (24 * 60 * 60 * 1_000_000);
-    let remaining_micros = microseconds % (24 * 60 * 60 * 1_000_000);
-    if remaining_micros % 1000 == 0 {
-        spec::Literal::IntervalDayTime {
-            value: Some(spec::IntervalDayTime {
-                days: total_days as i32,
-                milliseconds: (remaining_micros / 1000) as i32,
-            }),
-        }
-    } else {
-        spec::Literal::IntervalMonthDayNano {
-            value: Some(spec::IntervalMonthDayNano {
-                months: 0,
-                days: total_days as i32,
-                nanoseconds: remaining_micros * 1000,
-            }),
-        }
-    }
-}
-
-fn parse_unqualified_interval_string(s: &str, negated: bool) -> SqlResult<spec::Literal> {
+pub(crate) fn parse_unqualified_interval_string(
+    s: &str,
+    negated: bool,
+) -> SqlResult<IntervalValue> {
     let IntervalLiteral {
         interval: _,
         value: interval,
@@ -443,7 +484,7 @@ fn parse_unqualified_interval_string(s: &str, negated: bool) -> SqlResult<spec::
     } else {
         Signed::Positive(interval)
     };
-    parse_signed_interval(value)
+    from_ast_signed_interval(value)
 }
 
 #[cfg(test)]

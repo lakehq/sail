@@ -27,55 +27,6 @@ impl TryFrom<DateValue> for NaiveDate {
     }
 }
 
-fn signed<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &'a str, T, E>
-where
-    T: FromStr,
-    <T as FromStr>::Err: std::fmt::Debug,
-    E: ParserExtra<'a, &'a str>,
-{
-    just('-')
-        .or_not()
-        .then(
-            one_of('0'..='9')
-                .repeated()
-                .at_least(min_digits)
-                .at_most(max_digits),
-        )
-        .to_slice()
-        .map(|s: &str| s.parse::<T>().unwrap())
-}
-
-fn unsigned<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &'a str, T, E>
-where
-    T: FromStr,
-    <T as FromStr>::Err: std::fmt::Debug,
-    E: ParserExtra<'a, &'a str>,
-{
-    one_of('0'..='9')
-        .repeated()
-        .at_least(min_digits)
-        .at_most(max_digits)
-        .to_slice()
-        .map(|s: &str| s.parse::<T>().unwrap())
-}
-
-fn date<'a, E>() -> impl Parser<'a, &'a str, DateValue, E>
-where
-    E: ParserExtra<'a, &'a str>,
-{
-    let year = signed(4, 7);
-    let month = unsigned(1, 2);
-    let day = unsigned(1, 2);
-
-    year.then(just('-').ignore_then(month).or_not())
-        .then(just('-').ignore_then(day).or_not())
-        .map(|((year, month), day)| DateValue {
-            year,
-            month: month.unwrap_or(1),
-            day: day.unwrap_or(1),
-        })
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct TimeValue {
     pub hour: u8,
@@ -96,26 +47,6 @@ impl TryFrom<TimeValue> for NaiveTime {
         )
         .ok_or_else(|| SqlError::invalid(format!("{value:?}")))
     }
-}
-
-fn time<'a, E>() -> impl Parser<'a, &'a str, TimeValue, E>
-where
-    E: ParserExtra<'a, &'a str>,
-{
-    let hour = unsigned(1, 2);
-    let minute = unsigned(1, 2);
-    let second = unsigned(1, 2);
-    let nanoseconds = unsigned(1, 9);
-
-    hour.then(just(':').ignore_then(minute).or_not())
-        .then(just(':').ignore_then(second).or_not())
-        .then(just('.').ignore_then(nanoseconds).or_not())
-        .map(|(((hour, minute), second), nanoseconds)| TimeValue {
-            hour,
-            minute: minute.unwrap_or(0),
-            second: second.unwrap_or(0),
-            nanoseconds: nanoseconds.unwrap_or(0),
-        })
 }
 
 #[derive(Debug, Clone)]
@@ -175,20 +106,6 @@ impl FromStr for TimeZoneValue {
     }
 }
 
-pub fn timezone<'a, E>() -> impl Parser<'a, &'a str, &'a str, E>
-where
-    E: ParserExtra<'a, &'a str>,
-{
-    any().repeated().to_slice().map(|s: &str| {
-        let s = s.trim_matches(' ');
-        if s.eq_ignore_ascii_case("Z") {
-            "UTC"
-        } else {
-            s
-        }
-    })
-}
-
 #[derive(Debug, Clone)]
 pub struct TimestampValue<'a> {
     pub date: DateValue,
@@ -215,21 +132,102 @@ impl TimestampValue<'_> {
     }
 }
 
+fn signed<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &'a str, T, E>
+where
+    T: FromStr,
+    <T as FromStr>::Err: std::fmt::Debug,
+    E: ParserExtra<'a, &'a str>,
+{
+    just('-')
+        .or_not()
+        .then(
+            one_of('0'..='9')
+                .repeated()
+                .at_least(min_digits)
+                .at_most(max_digits),
+        )
+        .to_slice()
+        .map(|s: &str| s.parse::<T>().unwrap())
+}
+
+fn unsigned<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &'a str, T, E>
+where
+    T: FromStr,
+    <T as FromStr>::Err: std::fmt::Debug,
+    E: ParserExtra<'a, &'a str>,
+{
+    one_of('0'..='9')
+        .repeated()
+        .at_least(min_digits)
+        .at_most(max_digits)
+        .to_slice()
+        .map(|s: &str| s.parse::<T>().unwrap())
+}
+
+fn date<'a, E>() -> impl Parser<'a, &'a str, DateValue, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
+    let year = signed(4, 7);
+    let month = unsigned(1, 2);
+    let day = unsigned(1, 2);
+
+    year.then(just('-').ignore_then(month).or_not())
+        .then(just('-').ignore_then(day).or_not())
+        .map(|((year, month), day)| DateValue {
+            year,
+            month: month.unwrap_or(1),
+            day: day.unwrap_or(1),
+        })
+}
+
+fn time<'a, E>() -> impl Parser<'a, &'a str, TimeValue, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
+    let hour = unsigned(1, 2);
+    let minute = unsigned(1, 2);
+    let second = unsigned(1, 2);
+    let nanoseconds = unsigned(1, 9);
+
+    hour.then(just(':').ignore_then(minute).or_not())
+        .then(just(':').ignore_then(second).or_not())
+        .then(just('.').ignore_then(nanoseconds).or_not())
+        .map(|(((hour, minute), second), nanoseconds)| TimeValue {
+            hour,
+            minute: minute.unwrap_or(0),
+            second: second.unwrap_or(0),
+            nanoseconds: nanoseconds.unwrap_or(0),
+        })
+}
+
+fn timezone<'a, E>() -> impl Parser<'a, &'a str, &'a str, E>
+where
+    E: ParserExtra<'a, &'a str>,
+{
+    any().repeated().to_slice().map(|s: &str| {
+        let s = s.trim_matches(' ');
+        if s.eq_ignore_ascii_case("Z") {
+            "UTC"
+        } else {
+            s
+        }
+    })
+}
+
 fn timestamp<'a, E>() -> impl Parser<'a, &'a str, TimestampValue<'a>, E>
 where
     E: ParserExtra<'a, &'a str>,
 {
     date()
         .then(choice((
-            just(' ')
-                .repeated()
-                .then(just('T').or(just('t')))
-                .then(just(' ').repeated())
+            just('T')
+                .or(just('t'))
+                .padded_by(just(' ').repeated())
+                .ignored()
+                .or(just(' ').repeated().at_least(1))
                 .ignore_then(time().then(timezone()).map(Some)),
-            just(' ')
-                .repeated()
-                .at_least(1)
-                .ignore_then(time().then(timezone()).or_not()),
+            just(' ').repeated().map(|_| None),
         )))
         .map(|(date, time_and_timezone)| {
             let (time, timezone) = match time_and_timezone {

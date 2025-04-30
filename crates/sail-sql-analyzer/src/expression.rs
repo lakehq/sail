@@ -16,7 +16,7 @@ use sail_sql_parser::ast::query::{
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
-use crate::literal::interval::parse_signed_interval;
+use crate::literal::interval::from_ast_signed_interval;
 use crate::literal::utils::Signed;
 use crate::query::{from_ast_named_expression, from_ast_query};
 use crate::value::{
@@ -910,9 +910,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::NumberLiteral(value) => from_ast_number_literal(value),
         AtomExpr::BooleanLiteral(value) => from_ast_boolean_literal(value),
         AtomExpr::Null(_) => Ok(spec::Expr::Literal(spec::Literal::Null)),
-        AtomExpr::Interval(_, value) => Ok(spec::Expr::Literal(parse_signed_interval(
-            Signed::Positive(*value),
-        )?)),
+        AtomExpr::Interval(_, value) => Ok(spec::Expr::Literal(
+            from_ast_signed_interval(Signed::Positive(*value))?.into(),
+        )),
         AtomExpr::Placeholder(variable) => Ok(spec::Expr::Placeholder(variable.value)),
         AtomExpr::Identifier(x) => Ok(spec::Expr::UnresolvedAttribute {
             name: spec::ObjectName::bare(x.value),
