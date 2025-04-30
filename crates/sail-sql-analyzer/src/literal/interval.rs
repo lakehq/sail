@@ -65,7 +65,9 @@ impl From<IntervalValue> for spec::Literal {
             IntervalValue::YearMonth { months } => spec::Literal::IntervalYearMonth {
                 months: Some(months),
             },
-            IntervalValue::Microsecond { microseconds } => microseconds_to_interval(microseconds),
+            IntervalValue::Microsecond { microseconds } => spec::Literal::DurationMicrosecond {
+                microseconds: Some(microseconds),
+            },
             IntervalValue::MonthDayNanosecond {
                 months,
                 days,
@@ -77,27 +79,6 @@ impl From<IntervalValue> for spec::Literal {
                     nanoseconds,
                 }),
             },
-        }
-    }
-}
-
-pub fn microseconds_to_interval(microseconds: i64) -> spec::Literal {
-    // Arithmetic expressions such as `Date32 + Duration(Microsecond)` are not supported
-    // by [`datafusion_expr::binary::BinaryTypeCoercer`] yet.
-    // So we have the heuristic here to determine the best literal type depending on
-    // the value.
-    let total_days = microseconds / (24 * 60 * 60 * 1_000_000);
-    let remaining_micros = microseconds % (24 * 60 * 60 * 1_000_000);
-    if remaining_micros % 1000 == 0 {
-        spec::Literal::IntervalDayTime {
-            value: Some(spec::IntervalDayTime {
-                days: total_days as i32,
-                milliseconds: (remaining_micros / 1000) as i32,
-            }),
-        }
-    } else {
-        spec::Literal::DurationMicrosecond {
-            microseconds: Some(microseconds),
         }
     }
 }

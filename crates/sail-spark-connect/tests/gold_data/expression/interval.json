@@ -38,11 +38,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 1,
-                      "milliseconds": 1000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 86401000000
                   }
                 }
               }
@@ -68,11 +65,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": -1,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -86400000000
                   }
                 }
               }
@@ -125,12 +119,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": -69497123456000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -69497123456
                   }
                 }
               }
@@ -183,11 +173,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": -7,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -604800000000
                   }
                 }
               }
@@ -213,11 +200,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": -7,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -604800000000
                   }
                 }
               }
@@ -243,11 +227,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -25200000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -25200000000
                   }
                 }
               }
@@ -273,11 +254,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -25200000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -25200000000
                   }
                 }
               }
@@ -303,12 +281,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": -7000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7
                   }
                 }
               }
@@ -334,12 +308,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": -7000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7
                   }
                 }
               }
@@ -365,11 +335,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -7
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7000
                   }
                 }
               }
@@ -395,11 +362,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -7
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7000
                   }
                 }
               }
@@ -425,11 +389,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -420000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -420000000
                   }
                 }
               }
@@ -455,11 +416,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -420000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -420000000
                   }
                 }
               }
@@ -539,11 +497,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -7000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7000000
                   }
                 }
               }
@@ -569,11 +524,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -7000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7000000
                   }
                 }
               }
@@ -599,11 +551,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": -49,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -4233600000000
                   }
                 }
               }
@@ -629,11 +578,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": -49,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -4233600000000
                   }
                 }
               }
@@ -713,12 +659,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": -99,
-                      "nanoseconds": -40953123456000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -8594553123456
                   }
                 }
               }
@@ -744,11 +686,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -774,11 +713,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -804,11 +740,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -834,11 +767,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -864,11 +794,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -894,11 +821,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -924,11 +848,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -954,11 +875,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -984,11 +902,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -1014,11 +929,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -1098,11 +1010,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -1128,11 +1037,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -1158,11 +1064,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -1188,11 +1091,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -1272,11 +1172,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -1302,11 +1199,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 1000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 1000000
                   }
                 }
               }
@@ -1332,11 +1226,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 1,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 86400000000
                   }
                 }
               }
@@ -1362,11 +1253,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 1,
-                      "milliseconds": 1000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 86401000000
                   }
                 }
               }
@@ -1392,12 +1280,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 1,
-                      "nanoseconds": 7384005006000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 93784005006
                   }
                 }
               }
@@ -1450,12 +1334,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 10,
-                      "nanoseconds": 32887123456000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 896887123456
                   }
                 }
               }
@@ -1481,11 +1361,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 10,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 864000000000
                   }
                 }
               }
@@ -1511,11 +1388,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 10,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 864000000000
                   }
                 }
               }
@@ -1541,11 +1415,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 36000000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 36000000000
                   }
                 }
               }
@@ -1571,11 +1442,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 36000000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 36000000000
                   }
                 }
               }
@@ -1601,12 +1469,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 10000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10
                   }
                 }
               }
@@ -1632,12 +1496,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 10000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10
                   }
                 }
               }
@@ -1663,11 +1523,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 10
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10000
                   }
                 }
               }
@@ -1693,11 +1550,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 10
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10000
                   }
                 }
               }
@@ -1723,11 +1577,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 600000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 600000000
                   }
                 }
               }
@@ -1753,11 +1604,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 600000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 600000000
                   }
                 }
               }
@@ -1837,11 +1685,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 10000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10000000
                   }
                 }
               }
@@ -1867,11 +1712,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 10000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10000000
                   }
                 }
               }
@@ -1897,11 +1739,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 70,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 6048000000000
                   }
                 }
               }
@@ -1927,11 +1766,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 70,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 6048000000000
                   }
                 }
               }
@@ -2011,12 +1847,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 40953123456000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 40953123456
                   }
                 }
               }
@@ -2069,11 +1901,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 21,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 1814400000000
                   }
                 }
               }
@@ -2099,11 +1928,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 21,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 1814400000000
                   }
                 }
               }
@@ -2129,11 +1955,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 75600000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 75600000000
                   }
                 }
               }
@@ -2159,11 +1982,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 75600000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 75600000000
                   }
                 }
               }
@@ -2189,12 +2009,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 21000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21
                   }
                 }
               }
@@ -2220,12 +2036,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 21000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21
                   }
                 }
               }
@@ -2251,11 +2063,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 21
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21000
                   }
                 }
               }
@@ -2281,11 +2090,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 21
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21000
                   }
                 }
               }
@@ -2311,11 +2117,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 1260000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 1260000000
                   }
                 }
               }
@@ -2341,11 +2144,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 1260000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 1260000000
                   }
                 }
               }
@@ -2425,11 +2225,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 21000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21000000
                   }
                 }
               }
@@ -2455,11 +2252,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 21000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21000000
                   }
                 }
               }
@@ -2485,11 +2279,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 147,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 12700800000000
                   }
                 }
               }
@@ -2515,11 +2306,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 147,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 12700800000000
                   }
                 }
               }
@@ -2657,12 +2445,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 99,
-                      "nanoseconds": 40953123456000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 8594553123456
                   }
                 }
               }
@@ -2688,12 +2472,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 32887123456000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 32887123456
                   }
                 }
               }
@@ -2719,12 +2499,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": -13123456000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -13123456
                   }
                 }
               }
@@ -2750,11 +2526,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": -7,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -604800000000
                   }
                 }
               }
@@ -2780,11 +2553,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": -7,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -604800000000
                   }
                 }
               }
@@ -2810,11 +2580,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -25200000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -25200000000
                   }
                 }
               }
@@ -2840,11 +2607,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -25200000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -25200000000
                   }
                 }
               }
@@ -2870,12 +2634,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": -7000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7
                   }
                 }
               }
@@ -2901,12 +2661,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": -7000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7
                   }
                 }
               }
@@ -2932,11 +2688,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -7
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7000
                   }
                 }
               }
@@ -2962,11 +2715,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -7
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7000
                   }
                 }
               }
@@ -2992,11 +2742,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -420000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -420000000
                   }
                 }
               }
@@ -3022,11 +2769,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -420000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -420000000
                   }
                 }
               }
@@ -3106,11 +2850,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -7000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7000000
                   }
                 }
               }
@@ -3136,11 +2877,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": -7000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -7000000
                   }
                 }
               }
@@ -3166,11 +2904,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": -49,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -4233600000000
                   }
                 }
               }
@@ -3196,11 +2931,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": -49,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": -4233600000000
                   }
                 }
               }
@@ -3280,11 +3012,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3310,11 +3039,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3340,11 +3066,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3370,11 +3093,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3400,11 +3120,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3430,11 +3147,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3460,11 +3174,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3490,11 +3201,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3520,11 +3228,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3550,11 +3255,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3634,11 +3336,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3664,11 +3363,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3694,11 +3390,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3724,11 +3417,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 0
                   }
                 }
               }
@@ -3808,11 +3498,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 1001
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 1001000
                   }
                 }
               }
@@ -3838,11 +3525,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 10,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 864000000000
                   }
                 }
               }
@@ -3868,11 +3552,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 10,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 864000000000
                   }
                 }
               }
@@ -3898,11 +3579,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 36000000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 36000000000
                   }
                 }
               }
@@ -3928,11 +3606,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 36000000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 36000000000
                   }
                 }
               }
@@ -3958,12 +3633,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 10000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10
                   }
                 }
               }
@@ -3989,12 +3660,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 10000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10
                   }
                 }
               }
@@ -4020,11 +3687,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 10
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10000
                   }
                 }
               }
@@ -4050,11 +3714,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 10
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10000
                   }
                 }
               }
@@ -4080,11 +3741,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 600000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 600000000
                   }
                 }
               }
@@ -4110,11 +3768,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 600000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 600000000
                   }
                 }
               }
@@ -4194,11 +3849,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 10000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10000000
                   }
                 }
               }
@@ -4224,11 +3876,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 10000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 10000000
                   }
                 }
               }
@@ -4254,11 +3903,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 70,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 6048000000000
                   }
                 }
               }
@@ -4284,11 +3930,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 70,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 6048000000000
                   }
                 }
               }
@@ -4395,12 +4038,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 13123456000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 13123456
                   }
                 }
               }
@@ -4426,12 +4065,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 13123456000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 13123456
                   }
                 }
               }
@@ -4457,11 +4092,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 21,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 1814400000000
                   }
                 }
               }
@@ -4487,11 +4119,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 21,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 1814400000000
                   }
                 }
               }
@@ -4517,11 +4146,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 75600000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 75600000000
                   }
                 }
               }
@@ -4547,11 +4173,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 75600000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 75600000000
                   }
                 }
               }
@@ -4577,12 +4200,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 21000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21
                   }
                 }
               }
@@ -4608,12 +4227,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalMonthDayNano": {
-                    "value": {
-                      "months": 0,
-                      "days": 0,
-                      "nanoseconds": 21000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21
                   }
                 }
               }
@@ -4639,11 +4254,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 21
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21000
                   }
                 }
               }
@@ -4669,11 +4281,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 21
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21000
                   }
                 }
               }
@@ -4699,11 +4308,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 1260000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 1260000000
                   }
                 }
               }
@@ -4729,11 +4335,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 1260000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 1260000000
                   }
                 }
               }
@@ -4813,11 +4416,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 21000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21000000
                   }
                 }
               }
@@ -4843,11 +4443,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 0,
-                      "milliseconds": 21000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 21000000
                   }
                 }
               }
@@ -4873,11 +4470,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 147,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 12700800000000
                   }
                 }
               }
@@ -4903,11 +4497,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 147,
-                      "milliseconds": 0
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 12700800000000
                   }
                 }
               }
@@ -5018,11 +4609,8 @@
             "arguments": [
               {
                 "literal": {
-                  "intervalDayTime": {
-                    "value": {
-                      "days": 8,
-                      "milliseconds": 7401000
-                    }
+                  "durationMicrosecond": {
+                    "microseconds": 698601000000
                   }
                 }
               }
@@ -5042,12 +4630,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 1,
-                "nanoseconds": 7384005006000
-              }
+            "durationMicrosecond": {
+              "microseconds": 93784005006
             }
           }
         }
@@ -5103,12 +4687,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 1,
-                "nanoseconds": 7384005006000
-              }
+            "durationMicrosecond": {
+              "microseconds": 93784005006
             }
           }
         }
@@ -5180,11 +4760,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 1,
-                "milliseconds": 1000
-              }
+            "durationMicrosecond": {
+              "microseconds": 86401000000
             }
           }
         }
@@ -5195,11 +4772,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": -1,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": -86400000000
             }
           }
         }
@@ -5222,12 +4796,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": -69497123456000
-              }
+            "durationMicrosecond": {
+              "microseconds": -69497123456
             }
           }
         }
@@ -5250,11 +4820,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": -7,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": -604800000000
             }
           }
         }
@@ -5265,11 +4832,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": -7,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": -604800000000
             }
           }
         }
@@ -5280,11 +4844,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -25200000
-              }
+            "durationMicrosecond": {
+              "microseconds": -25200000000
             }
           }
         }
@@ -5295,11 +4856,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -25200000
-              }
+            "durationMicrosecond": {
+              "microseconds": -25200000000
             }
           }
         }
@@ -5310,12 +4868,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": -7000
-              }
+            "durationMicrosecond": {
+              "microseconds": -7
             }
           }
         }
@@ -5326,12 +4880,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": -7000
-              }
+            "durationMicrosecond": {
+              "microseconds": -7
             }
           }
         }
@@ -5342,11 +4892,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -7
-              }
+            "durationMicrosecond": {
+              "microseconds": -7000
             }
           }
         }
@@ -5357,11 +4904,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -7
-              }
+            "durationMicrosecond": {
+              "microseconds": -7000
             }
           }
         }
@@ -5372,11 +4916,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -420000
-              }
+            "durationMicrosecond": {
+              "microseconds": -420000000
             }
           }
         }
@@ -5387,11 +4928,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -420000
-              }
+            "durationMicrosecond": {
+              "microseconds": -420000000
             }
           }
         }
@@ -5426,11 +4964,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -7000
-              }
+            "durationMicrosecond": {
+              "microseconds": -7000000
             }
           }
         }
@@ -5441,11 +4976,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -7000
-              }
+            "durationMicrosecond": {
+              "microseconds": -7000000
             }
           }
         }
@@ -5456,11 +4988,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": -49,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": -4233600000000
             }
           }
         }
@@ -5471,11 +5000,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": -49,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": -4233600000000
             }
           }
         }
@@ -5510,12 +5036,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": -99,
-                "nanoseconds": -40953123456000
-              }
+            "durationMicrosecond": {
+              "microseconds": -8594553123456
             }
           }
         }
@@ -5526,11 +5048,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5541,11 +5060,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5556,11 +5072,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5571,11 +5084,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5586,11 +5096,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5601,11 +5108,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5616,11 +5120,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5631,11 +5132,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5646,11 +5144,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5661,11 +5156,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5700,11 +5192,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5715,11 +5204,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5730,11 +5216,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5745,11 +5228,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5784,11 +5264,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -5799,11 +5276,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 1000
-              }
+            "durationMicrosecond": {
+              "microseconds": 1000000
             }
           }
         }
@@ -5814,11 +5288,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 1,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 86400000000
             }
           }
         }
@@ -5829,11 +5300,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 1,
-                "milliseconds": 1000
-              }
+            "durationMicrosecond": {
+              "microseconds": 86401000000
             }
           }
         }
@@ -5860,12 +5328,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 10,
-                "nanoseconds": 32887123456000
-              }
+            "durationMicrosecond": {
+              "microseconds": 896887123456
             }
           }
         }
@@ -5876,11 +5340,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 10,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 864000000000
             }
           }
         }
@@ -5891,11 +5352,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 10,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 864000000000
             }
           }
         }
@@ -5906,11 +5364,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 36000000
-              }
+            "durationMicrosecond": {
+              "microseconds": 36000000000
             }
           }
         }
@@ -5921,11 +5376,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 36000000
-              }
+            "durationMicrosecond": {
+              "microseconds": 36000000000
             }
           }
         }
@@ -5936,12 +5388,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 10000
-              }
+            "durationMicrosecond": {
+              "microseconds": 10
             }
           }
         }
@@ -5952,12 +5400,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 10000
-              }
+            "durationMicrosecond": {
+              "microseconds": 10
             }
           }
         }
@@ -5968,11 +5412,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 10
-              }
+            "durationMicrosecond": {
+              "microseconds": 10000
             }
           }
         }
@@ -5983,11 +5424,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 10
-              }
+            "durationMicrosecond": {
+              "microseconds": 10000
             }
           }
         }
@@ -5998,11 +5436,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 600000
-              }
+            "durationMicrosecond": {
+              "microseconds": 600000000
             }
           }
         }
@@ -6013,11 +5448,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 600000
-              }
+            "durationMicrosecond": {
+              "microseconds": 600000000
             }
           }
         }
@@ -6059,11 +5491,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 10000
-              }
+            "durationMicrosecond": {
+              "microseconds": 10000000
             }
           }
         }
@@ -6074,11 +5503,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 10000
-              }
+            "durationMicrosecond": {
+              "microseconds": 10000000
             }
           }
         }
@@ -6089,11 +5515,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 70,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 6048000000000
             }
           }
         }
@@ -6104,11 +5527,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 70,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 6048000000000
             }
           }
         }
@@ -6143,12 +5563,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 40953123456000
-              }
+            "durationMicrosecond": {
+              "microseconds": 40953123456
             }
           }
         }
@@ -6171,11 +5587,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 21,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 1814400000000
             }
           }
         }
@@ -6186,11 +5599,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 21,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 1814400000000
             }
           }
         }
@@ -6201,11 +5611,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 75600000
-              }
+            "durationMicrosecond": {
+              "microseconds": 75600000000
             }
           }
         }
@@ -6216,11 +5623,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 75600000
-              }
+            "durationMicrosecond": {
+              "microseconds": 75600000000
             }
           }
         }
@@ -6231,12 +5635,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 21000
-              }
+            "durationMicrosecond": {
+              "microseconds": 21
             }
           }
         }
@@ -6247,12 +5647,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 21000
-              }
+            "durationMicrosecond": {
+              "microseconds": 21
             }
           }
         }
@@ -6263,11 +5659,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 21
-              }
+            "durationMicrosecond": {
+              "microseconds": 21000
             }
           }
         }
@@ -6278,11 +5671,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 21
-              }
+            "durationMicrosecond": {
+              "microseconds": 21000
             }
           }
         }
@@ -6293,11 +5683,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 1260000
-              }
+            "durationMicrosecond": {
+              "microseconds": 1260000000
             }
           }
         }
@@ -6308,11 +5695,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 1260000
-              }
+            "durationMicrosecond": {
+              "microseconds": 1260000000
             }
           }
         }
@@ -6347,11 +5731,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 21000
-              }
+            "durationMicrosecond": {
+              "microseconds": 21000000
             }
           }
         }
@@ -6362,11 +5743,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 21000
-              }
+            "durationMicrosecond": {
+              "microseconds": 21000000
             }
           }
         }
@@ -6377,11 +5755,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 147,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 12700800000000
             }
           }
         }
@@ -6392,11 +5767,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 147,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 12700800000000
             }
           }
         }
@@ -6443,12 +5815,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 99,
-                "nanoseconds": 40953123456000
-              }
+            "durationMicrosecond": {
+              "microseconds": 8594553123456
             }
           }
         }
@@ -6459,12 +5827,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 32887123456000
-              }
+            "durationMicrosecond": {
+              "microseconds": 32887123456
             }
           }
         }
@@ -6475,12 +5839,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": -13123456000
-              }
+            "durationMicrosecond": {
+              "microseconds": -13123456
             }
           }
         }
@@ -6491,11 +5851,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": -7,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": -604800000000
             }
           }
         }
@@ -6506,11 +5863,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": -7,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": -604800000000
             }
           }
         }
@@ -6521,11 +5875,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -25200000
-              }
+            "durationMicrosecond": {
+              "microseconds": -25200000000
             }
           }
         }
@@ -6536,11 +5887,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -25200000
-              }
+            "durationMicrosecond": {
+              "microseconds": -25200000000
             }
           }
         }
@@ -6551,12 +5899,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": -7000
-              }
+            "durationMicrosecond": {
+              "microseconds": -7
             }
           }
         }
@@ -6567,12 +5911,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": -7000
-              }
+            "durationMicrosecond": {
+              "microseconds": -7
             }
           }
         }
@@ -6583,11 +5923,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -7
-              }
+            "durationMicrosecond": {
+              "microseconds": -7000
             }
           }
         }
@@ -6598,11 +5935,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -7
-              }
+            "durationMicrosecond": {
+              "microseconds": -7000
             }
           }
         }
@@ -6613,11 +5947,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -420000
-              }
+            "durationMicrosecond": {
+              "microseconds": -420000000
             }
           }
         }
@@ -6628,11 +5959,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -420000
-              }
+            "durationMicrosecond": {
+              "microseconds": -420000000
             }
           }
         }
@@ -6667,11 +5995,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -7000
-              }
+            "durationMicrosecond": {
+              "microseconds": -7000000
             }
           }
         }
@@ -6682,11 +6007,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": -7000
-              }
+            "durationMicrosecond": {
+              "microseconds": -7000000
             }
           }
         }
@@ -6697,11 +6019,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": -49,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": -4233600000000
             }
           }
         }
@@ -6712,11 +6031,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": -49,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": -4233600000000
             }
           }
         }
@@ -6751,11 +6067,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6766,11 +6079,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6781,11 +6091,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6796,11 +6103,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6811,11 +6115,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6826,11 +6127,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6841,11 +6139,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6856,11 +6151,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6871,11 +6163,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6886,11 +6175,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6925,11 +6211,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6940,11 +6223,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6955,11 +6235,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -6970,11 +6247,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 0
             }
           }
         }
@@ -7009,11 +6283,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 1001
-              }
+            "durationMicrosecond": {
+              "microseconds": 1001000
             }
           }
         }
@@ -7024,11 +6295,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 10,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 864000000000
             }
           }
         }
@@ -7039,11 +6307,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 10,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 864000000000
             }
           }
         }
@@ -7054,11 +6319,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 36000000
-              }
+            "durationMicrosecond": {
+              "microseconds": 36000000000
             }
           }
         }
@@ -7069,11 +6331,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 36000000
-              }
+            "durationMicrosecond": {
+              "microseconds": 36000000000
             }
           }
         }
@@ -7084,12 +6343,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 10000
-              }
+            "durationMicrosecond": {
+              "microseconds": 10
             }
           }
         }
@@ -7100,12 +6355,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 10000
-              }
+            "durationMicrosecond": {
+              "microseconds": 10
             }
           }
         }
@@ -7116,11 +6367,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 10
-              }
+            "durationMicrosecond": {
+              "microseconds": 10000
             }
           }
         }
@@ -7131,11 +6379,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 10
-              }
+            "durationMicrosecond": {
+              "microseconds": 10000
             }
           }
         }
@@ -7146,11 +6391,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 600000
-              }
+            "durationMicrosecond": {
+              "microseconds": 600000000
             }
           }
         }
@@ -7161,11 +6403,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 600000
-              }
+            "durationMicrosecond": {
+              "microseconds": 600000000
             }
           }
         }
@@ -7207,11 +6446,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 10000
-              }
+            "durationMicrosecond": {
+              "microseconds": 10000000
             }
           }
         }
@@ -7222,11 +6458,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 10000
-              }
+            "durationMicrosecond": {
+              "microseconds": 10000000
             }
           }
         }
@@ -7237,11 +6470,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 70,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 6048000000000
             }
           }
         }
@@ -7252,11 +6482,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 70,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 6048000000000
             }
           }
         }
@@ -7303,12 +6530,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 13123456000
-              }
+            "durationMicrosecond": {
+              "microseconds": 13123456
             }
           }
         }
@@ -7319,12 +6542,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 13123456000
-              }
+            "durationMicrosecond": {
+              "microseconds": 13123456
             }
           }
         }
@@ -7335,11 +6554,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 21,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 1814400000000
             }
           }
         }
@@ -7350,11 +6566,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 21,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 1814400000000
             }
           }
         }
@@ -7365,11 +6578,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 75600000
-              }
+            "durationMicrosecond": {
+              "microseconds": 75600000000
             }
           }
         }
@@ -7380,11 +6590,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 75600000
-              }
+            "durationMicrosecond": {
+              "microseconds": 75600000000
             }
           }
         }
@@ -7395,12 +6602,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 21000
-              }
+            "durationMicrosecond": {
+              "microseconds": 21
             }
           }
         }
@@ -7411,12 +6614,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalMonthDayNano": {
-              "value": {
-                "months": 0,
-                "days": 0,
-                "nanoseconds": 21000
-              }
+            "durationMicrosecond": {
+              "microseconds": 21
             }
           }
         }
@@ -7427,11 +6626,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 21
-              }
+            "durationMicrosecond": {
+              "microseconds": 21000
             }
           }
         }
@@ -7442,11 +6638,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 21
-              }
+            "durationMicrosecond": {
+              "microseconds": 21000
             }
           }
         }
@@ -7457,11 +6650,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 1260000
-              }
+            "durationMicrosecond": {
+              "microseconds": 1260000000
             }
           }
         }
@@ -7472,11 +6662,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 1260000
-              }
+            "durationMicrosecond": {
+              "microseconds": 1260000000
             }
           }
         }
@@ -7511,11 +6698,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 21000
-              }
+            "durationMicrosecond": {
+              "microseconds": 21000000
             }
           }
         }
@@ -7526,11 +6710,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 0,
-                "milliseconds": 21000
-              }
+            "durationMicrosecond": {
+              "microseconds": 21000000
             }
           }
         }
@@ -7541,11 +6722,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 147,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 12700800000000
             }
           }
         }
@@ -7556,11 +6734,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 147,
-                "milliseconds": 0
-              }
+            "durationMicrosecond": {
+              "microseconds": 12700800000000
             }
           }
         }
@@ -7611,11 +6786,8 @@
       "output": {
         "success": {
           "literal": {
-            "intervalDayTime": {
-              "value": {
-                "days": 8,
-                "milliseconds": 7401000
-              }
+            "durationMicrosecond": {
+              "microseconds": 698601000000
             }
           }
         }
