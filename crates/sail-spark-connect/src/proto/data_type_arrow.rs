@@ -30,8 +30,13 @@ impl TryFrom<adt::Field> for sdt::StructField {
             .metadata()
             .iter()
             .filter(|(k, _)| !k.starts_with("udt."))
-            .map(|(k, v)| (k.strip_prefix("metadata.").unwrap_or(k), v.as_str()))
-            .collect::<HashMap<_, _>>();
+            .map(|(k, v)| {
+                Ok((
+                    k.strip_prefix("metadata.").unwrap_or(k),
+                    serde_json::from_str(v)?,
+                ))
+            })
+            .collect::<SparkResult<HashMap<_, serde_json::Value>>>()?;
         let metadata = serde_json::to_string(metadata)?;
         Ok(sdt::StructField {
             name: field.name().clone(),
