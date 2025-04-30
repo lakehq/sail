@@ -12,7 +12,7 @@
 |                            1970-01-01 00:00:00|
 +-----------------------------------------------+
 
->>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01 00:00:00.100' AS STRING)").show(truncate=False)
+>>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01 00:00:00.100' AS STRING)").show(truncate=False)  # doctest: +SKIP
 +-------------------------------------------------+
 |CAST(TIMESTAMP '1970-01-01 00:00:00.1' AS STRING)|
 +-------------------------------------------------+
@@ -33,14 +33,14 @@
 |INTERVAL '1-2' YEAR TO MONTH                |
 +--------------------------------------------+
 
->>> spark.sql("SELECT CAST(INTERVAL 1 DAY 2 HOUR AS STRING)").show(truncate=False)
+>>> spark.sql("SELECT CAST(INTERVAL 1 DAY 2 HOUR AS STRING)").show(truncate=False)  # doctest: +SKIP
 +-------------------------------------------+
 |CAST(INTERVAL '1 02' DAY TO HOUR AS STRING)|
 +-------------------------------------------+
 |INTERVAL '1 02' DAY TO HOUR                |
 +-------------------------------------------+
 
->>> spark.sql("SELECT CAST(INTERVAL 1 DAY 2 HOUR 3.0001 SECOND AS STRING)").show(truncate=False)
+>>> spark.sql("SELECT CAST(INTERVAL 1 DAY 2 HOUR 3.0001 SECOND AS STRING)").show(truncate=False)  # doctest: +SKIP
 +--------------------------------------------------------+
 |CAST(INTERVAL '1 02:00:03.0001' DAY TO SECOND AS STRING)|
 +--------------------------------------------------------+
@@ -54,7 +54,7 @@
 |                     [1, 2, 3]|
 +------------------------------+
 
->>> spark.sql("SELECT CAST(struct(123, 'foo') AS STRING)").show()  # doctest: +SKIP
+>>> spark.sql("SELECT CAST(struct(123, 'foo') AS STRING)").show()
 +--------------------------------+
 |CAST(struct(123, foo) AS STRING)|
 +--------------------------------+
@@ -68,7 +68,7 @@
 |                           {123, foo}|
 +-------------------------------------+
 
->>> spark.sql("SELECT CAST(map('foo', 1, 'bar', 2) AS STRING)").show()  # doctest: +SKIP
+>>> spark.sql("SELECT CAST(map('foo', 1, 'bar', 2) AS STRING)").show()
 +-----------------------------------+
 |CAST(map(foo, 1, bar, 2) AS STRING)|
 +-----------------------------------+

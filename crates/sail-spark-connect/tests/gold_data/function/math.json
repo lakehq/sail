@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: timestamp_type_cast\ncaused by\nError during planning: Cannot get result type for temporal operation Interval(MonthDayNano) / Interval(MonthDayNano): Invalid argument error: Invalid interval arithmetic operation: Interval(MonthDayNano) / Interval(MonthDayNano)"
+        "failure": "error in DataFusion: type_coercion\ncaused by\nError during planning: Cannot get result type for temporal operation Interval(MonthDayNano) / Interval(MonthDayNano): Invalid argument error: Invalid interval arithmetic operation: Interval(MonthDayNano) / Interval(MonthDayNano)"
       }
     },
     {

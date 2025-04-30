@@ -1,11 +1,12 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
+use std::ops::Div;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::{DataType, Date32Type};
+use datafusion::arrow::datatypes::{DataType, Date32Type, TimeUnit};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
@@ -28,6 +29,8 @@ use sail_sql_analyzer::parser::{parse_date, parse_timestamp};
 
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::datetime::spark_date::SparkDate;
+use crate::extension::function::datetime::spark_timestamp::SparkTimestamp;
 use crate::extension::function::drop_struct_field::DropStructField;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::function::table_input::TableInput;
@@ -932,14 +935,14 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let data_type = self.resolve_data_type(&cast_to_type, state)?;
+        let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
         let name = if rename {
             let data_type_string = self
                 .config
                 .plan_formatter
-                .data_type_to_simple_string(&data_type)?;
+                .data_type_to_simple_string(&cast_to_type)?;
             vec![format!(
                 "CAST({} AS {})",
                 name.one()?,
@@ -948,10 +951,32 @@ impl PlanResolver<'_> {
         } else {
             name
         };
-        let expr = expr::Expr::Cast(expr::Cast {
-            expr: Box::new(expr),
-            data_type,
-        });
+        let expr = match (expr.get_type(schema)?, cast_to_type) {
+            (DataType::Timestamp(time_unit, _), to) if to.is_numeric() => {
+                expr::Expr::Cast(expr::Cast {
+                    expr: Box::new(scale_timestamp(expr, &time_unit)),
+                    data_type: to,
+                })
+            }
+            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32) => {
+                expr::Expr::ScalarFunction(ScalarFunction {
+                    func: Arc::new(ScalarUDF::new_from_impl(SparkDate::new())),
+                    args: vec![expr],
+                })
+            }
+            // TODO: `timestamp_ntz`
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Timestamp(TimeUnit::Microsecond, Some(tz)),
+            ) => expr::Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(tz)?)),
+                args: vec![expr],
+            }),
+            (_, to) => expr::Expr::Cast(expr::Cast {
+                expr: Box::new(expr),
+                data_type: to,
+            }),
+        };
         Ok(NamedExpr::new(name, expr))
     }
 
@@ -2029,6 +2054,19 @@ fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableRe
             table,
         }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
         None => true,
+    }
+}
+
+fn scale_timestamp(expr: expr::Expr, time_unit: &TimeUnit) -> expr::Expr {
+    let expr = expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr),
+        data_type: DataType::Int64,
+    });
+    match time_unit {
+        TimeUnit::Second => expr,
+        TimeUnit::Millisecond => expr.div(lit(1_000i64)),
+        TimeUnit::Microsecond => expr.div(lit(1_000_000i64)),
+        TimeUnit::Nanosecond => expr.div(lit(1_000_000_000i64)),
     }
 }
 

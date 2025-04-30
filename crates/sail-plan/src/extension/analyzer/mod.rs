@@ -11,7 +11,7 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     } = Analyzer::default();
 
     let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![];
-    rules.push(Arc::new(rules::timestamp::TimestampTypeCast {}));
     rules.extend(built_in_rules);
+    rules.push(Arc::new(rules::string::CastToString {}));
     rules
 }

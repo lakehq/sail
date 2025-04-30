@@ -164,6 +164,27 @@ where
         .map(|s: &str| s.parse::<T>().unwrap())
 }
 
+fn fraction<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &'a str, T, E>
+where
+    T: FromStr,
+    <T as FromStr>::Err: std::fmt::Debug,
+    E: ParserExtra<'a, &'a str>,
+{
+    one_of('0'..='9')
+        .repeated()
+        .at_least(min_digits)
+        .at_most(max_digits)
+        .to_slice()
+        .map(move |s: &str| {
+            s.chars()
+                .chain(std::iter::repeat('0'))
+                .take(max_digits)
+                .collect::<String>()
+                .parse::<T>()
+                .unwrap()
+        })
+}
+
 fn date<'a, E>() -> impl Parser<'a, &'a str, DateValue, E>
 where
     E: ParserExtra<'a, &'a str>,
@@ -188,7 +209,7 @@ where
     let hour = unsigned(1, 2);
     let minute = unsigned(1, 2);
     let second = unsigned(1, 2);
-    let nanoseconds = unsigned(1, 9);
+    let nanoseconds = fraction(0, 9);
 
     hour.then(just(':').ignore_then(minute).or_not())
         .then(just(':').ignore_then(second).or_not())
