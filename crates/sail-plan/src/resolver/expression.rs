@@ -936,13 +936,9 @@ impl PlanResolver<'_> {
         let expr = self.resolve_expression(expr, schema, state).await?;
         let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
         let expr = if let [n] = name.as_slice() {
-            if let Some(metadata) = &metadata {
-                let metadata_map: Option<HashMap<String, String>> = Some(
-                    metadata
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                        .collect(),
-                );
+            if let Some(metadata) = metadata {
+                let metadata_map: Option<HashMap<String, String>> =
+                    Some(metadata.into_iter().collect());
                 expr.alias_with_metadata(n, metadata_map)
             } else {
                 expr.alias(n)
@@ -950,11 +946,7 @@ impl PlanResolver<'_> {
         } else {
             expr
         };
-        if let Some(metadata) = metadata {
-            Ok(NamedExpr::new(name, expr).with_metadata(metadata))
-        } else {
-            Ok(NamedExpr::new(name, expr))
-        }
+        Ok(NamedExpr::new(name, expr))
     }
 
     async fn resolve_expression_cast(
