@@ -83,6 +83,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                 "time64({})",
                 Self::time_unit_to_simple_string(time_unit)
             )),
+            DataType::Duration(TimeUnit::Microsecond) => Ok("interval day to second".to_string()),
             DataType::Duration(time_unit) => Ok(format!(
                 "duration({})",
                 Self::time_unit_to_simple_string(time_unit)

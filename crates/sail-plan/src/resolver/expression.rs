@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::{DataType, Date32Type, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Date32Type, IntervalUnit, TimeUnit};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
@@ -30,9 +30,13 @@ use sail_sql_analyzer::parser::{parse_date, parse_timestamp};
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::datetime::spark_date::SparkDate;
+use crate::extension::function::datetime::spark_interval::{
+    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
+};
 use crate::extension::function::datetime::spark_timestamp::SparkTimestamp;
 use crate::extension::function::drop_struct_field::DropStructField;
 use crate::extension::function::multi_expr::MultiExpr;
+use crate::extension::function::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use crate::extension::function::table_input::TableInput;
 use crate::extension::function::update_struct_field::UpdateStructField;
 use crate::function::common::{
@@ -938,6 +942,7 @@ impl PlanResolver<'_> {
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
+        let expr_type = expr.get_type(schema)?;
         let name = if rename {
             let data_type_string = self
                 .config
@@ -951,31 +956,56 @@ impl PlanResolver<'_> {
         } else {
             name
         };
-        let expr = match (expr.get_type(schema)?, cast_to_type) {
-            (DataType::Timestamp(time_unit, _), to) if to.is_numeric() => {
-                expr::Expr::Cast(expr::Cast {
-                    expr: Box::new(scale_timestamp(expr, &time_unit)),
-                    data_type: to,
-                })
-            }
-            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32) => {
-                expr::Expr::ScalarFunction(ScalarFunction {
-                    func: Arc::new(ScalarUDF::new_from_impl(SparkDate::new())),
-                    args: vec![expr],
-                })
-            }
-            // TODO: `timestamp_ntz`
+        let override_string_cast = matches!(
+            expr_type,
+            DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Duration(_)
+                | DataType::Interval(_)
+                | DataType::Timestamp(_, _)
+                | DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_)
+                | DataType::Struct(_)
+                | DataType::Map(_, _)
+        );
+        let expr = match (expr_type, cast_to_type) {
+            (DataType::Timestamp(time_unit, _), to) if to.is_numeric() => expr::Expr::Cast(
+                expr::Cast::new(Box::new(scale_timestamp(expr, &time_unit)), to),
+            ),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-                DataType::Timestamp(TimeUnit::Microsecond, Some(tz)),
-            ) => expr::Expr::ScalarFunction(ScalarFunction {
-                func: Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(tz)?)),
-                args: vec![expr],
-            }),
-            (_, to) => expr::Expr::Cast(expr::Cast {
-                expr: Box::new(expr),
-                data_type: to,
-            }),
+                DataType::Interval(IntervalUnit::YearMonth),
+            ) => ScalarUDF::new_from_impl(SparkYearMonthInterval::new()).call(vec![expr]),
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Duration(TimeUnit::Microsecond),
+            ) => ScalarUDF::new_from_impl(SparkDayTimeInterval::new()).call(vec![expr]),
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Interval(IntervalUnit::MonthDayNano),
+            ) => ScalarUDF::new_from_impl(SparkCalendarInterval::new()).call(vec![expr]),
+            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32) => {
+                ScalarUDF::new_from_impl(SparkDate::new()).call(vec![expr])
+            }
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Timestamp(TimeUnit::Microsecond, tz),
+            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(tz)?)).call(vec![expr]),
+            (_, DataType::Utf8) if override_string_cast => {
+                ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
+            }
+            (_, DataType::LargeUtf8) if override_string_cast => {
+                ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
+            }
+            (_, DataType::Utf8View) if override_string_cast => {
+                ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
+            }
+            (_, to) => expr::Expr::Cast(expr::Cast::new(Box::new(expr), to)),
         };
         Ok(NamedExpr::new(name, expr))
     }

@@ -2,8 +2,6 @@ use std::sync::Arc;
 
 use datafusion::optimizer::{Analyzer, AnalyzerRule};
 
-mod rules;
-
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     let Analyzer {
         function_rewrites: _,
@@ -12,6 +10,5 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
 
     let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![];
     rules.extend(built_in_rules);
-    rules.push(Arc::new(rules::string::CastToString {}));
     rules
 }

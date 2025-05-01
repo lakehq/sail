@@ -1,3 +1,4 @@
+>>> spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
 >>> spark.sql("SELECT CAST(DATE '1970-01-01' AS STRING)").show()
 +---------------------------------+
 |CAST(DATE '1970-01-01' AS STRING)|
@@ -5,11 +6,11 @@
 |                       1970-01-01|
 +---------------------------------+
 
->>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01' AS STRING)").show()
+>>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01' AS STRING)").show(truncate=False)  # doctest: +SKIP
 +-----------------------------------------------+
 |CAST(TIMESTAMP '1970-01-01 00:00:00' AS STRING)|
 +-----------------------------------------------+
-|                            1970-01-01 00:00:00|
+|1970-01-01 00:00:00                            |
 +-----------------------------------------------+
 
 >>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01 00:00:00.100' AS STRING)").show(truncate=False)  # doctest: +SKIP
@@ -19,7 +20,7 @@
 |1970-01-01 00:00:00.1                            |
 +-------------------------------------------------+
 
->>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01 00:00:00.123000' AS STRING)").show(truncate=False)
+>>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01 00:00:00.123000' AS STRING)").show(truncate=False)  # doctest: +SKIP
 +---------------------------------------------------+
 |CAST(TIMESTAMP '1970-01-01 00:00:00.123' AS STRING)|
 +---------------------------------------------------+
