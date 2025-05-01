@@ -1,16 +1,22 @@
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::str::FromStr;
 
-use chrono::{TimeZone, Timelike, Utc};
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::ScalarValue;
 use half::f16;
 use sail_common::impl_dyn_object_traits;
 use sail_common::object::DynObject;
-use sail_sql_analyzer::literal::datetime::TimeZoneValue;
+use sail_common_datafusion::formatter::{
+    Date32Formatter, Date64Formatter, DurationMicrosecondFormatter, DurationMillisecondFormatter,
+    DurationNanosecondFormatter, DurationSecondFormatter, IntervalDayTimeFormatter,
+    IntervalMonthDayNanoFormatter, IntervalYearMonthFormatter, Time32MillisecondFormatter,
+    Time32SecondFormatter, Time64MicrosecondFormatter, Time64NanosecondFormatter,
+    TimestampMicrosecondFormatter, TimestampMillisecondFormatter, TimestampNanosecondFormatter,
+    TimestampSecondFormatter,
+};
 
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
@@ -222,260 +228,106 @@ impl PlanFormatter for DefaultPlanFormatter {
             // For timestamp values with no time zone, we use UTC as the time zone for formatting.
             ScalarValue::TimestampSecond(seconds, timezone) => match seconds {
                 Some(seconds) => {
-                    let datetime = Utc.timestamp_opt(*seconds, 0).earliest().ok_or_else(|| {
-                        PlanError::invalid(format!("timestamp second: {seconds}"))
-                    })?;
-                    let timezone = if timezone.is_some() {
-                        Some(config.session_timezone.as_ref())
+                    let (prefix, tz) = if timezone.is_some() {
+                        ("TIMESTAMP", Some(config.session_timezone.parse::<Tz>()?))
                     } else {
-                        None
+                        ("TIMESTAMP_NTZ", None)
                     };
-                    format_timestamp(datetime, timezone)
+                    let timestamp = TimestampSecondFormatter(*seconds, tz.as_ref());
+                    Ok(format!("{prefix} '{timestamp}'"))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::TimestampMillisecond(milliseconds, timezone) => match milliseconds {
                 Some(milliseconds) => {
-                    let datetime = Utc
-                        .timestamp_millis_opt(*milliseconds)
-                        .earliest()
-                        .ok_or_else(|| {
-                            PlanError::invalid(format!("timestamp millisecond: {milliseconds}"))
-                        })?;
-                    let timezone = if timezone.is_some() {
-                        Some(config.session_timezone.as_ref())
+                    let (prefix, tz) = if timezone.is_some() {
+                        ("TIMESTAMP", Some(config.session_timezone.parse::<Tz>()?))
                     } else {
-                        None
+                        ("TIMESTAMP_NTZ", None)
                     };
-                    format_timestamp(datetime, timezone)
+                    let timestamp = TimestampMillisecondFormatter(*milliseconds, tz.as_ref());
+                    Ok(format!("{prefix} '{timestamp}'"))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::TimestampMicrosecond(microseconds, timezone) => match microseconds {
                 Some(microseconds) => {
-                    let datetime =
-                        Utc.timestamp_micros(*microseconds)
-                            .earliest()
-                            .ok_or_else(|| {
-                                PlanError::invalid(format!("timestamp microsecond: {microseconds}"))
-                            })?;
-                    let timezone = if timezone.is_some() {
-                        Some(config.session_timezone.as_ref())
+                    let (prefix, tz) = if timezone.is_some() {
+                        ("TIMESTAMP", Some(config.session_timezone.parse::<Tz>()?))
                     } else {
-                        None
+                        ("TIMESTAMP_NTZ", None)
                     };
-                    format_timestamp(datetime, timezone)
+                    let timestamp = TimestampMicrosecondFormatter(*microseconds, tz.as_ref());
+                    Ok(format!("{prefix} '{timestamp}'"))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::TimestampNanosecond(nanoseconds, timezone) => match nanoseconds {
                 Some(nanoseconds) => {
-                    let datetime = Utc.timestamp_nanos(*nanoseconds);
-                    let timezone = if timezone.is_some() {
-                        Some(config.session_timezone.as_ref())
+                    let (prefix, tz) = if timezone.is_some() {
+                        ("TIMESTAMP", Some(config.session_timezone.parse::<Tz>()?))
                     } else {
-                        None
+                        ("TIMESTAMP_NTZ", None)
                     };
-                    format_timestamp(datetime, timezone)
+                    let timestamp = TimestampNanosecondFormatter(*nanoseconds, tz.as_ref());
+                    Ok(format!("{prefix} '{timestamp}'"))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Date32(days) => match days {
-                Some(days) => {
-                    let date =
-                        chrono::NaiveDateTime::UNIX_EPOCH + chrono::Duration::days(*days as i64);
-                    Ok(format!("DATE '{}'", date.format("%Y-%m-%d")))
-                }
+                Some(days) => Ok(format!("{}", Date32Formatter(*days))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Date64(milliseconds) => match milliseconds {
-                Some(milliseconds) => {
-                    let date = chrono::NaiveDateTime::UNIX_EPOCH
-                        + chrono::Duration::milliseconds(*milliseconds);
-                    Ok(format!("DATE '{}'", date.format("%Y-%m-%d")))
-                }
+                Some(milliseconds) => Ok(format!("{}", Date64Formatter(*milliseconds))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Time32Second(seconds) => match seconds {
-                Some(seconds) => {
-                    let secs = *seconds as u32;
-                    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, 0)
-                        .ok_or_else(|| {
-                            PlanError::invalid("invalid Time32Second: literal to string")
-                        })?;
-                    Ok(format!("TIME '{}'", time.format("%H:%M:%S")))
-                }
+                Some(seconds) => Ok(format!("{}", Time32SecondFormatter(*seconds))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Time32Millisecond(milliseconds) => match milliseconds {
-                Some(milliseconds) => {
-                    let secs = (*milliseconds / 1000) as u32;
-                    let nanos = ((*milliseconds % 1000) * 1_000_000) as u32;
-                    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
-                        .ok_or_else(|| {
-                        PlanError::invalid("invalid Time32Millisecond: literal to string")
-                    })?;
-                    Ok(format!("TIME '{}'", time.format("%H:%M:%S.%3f")))
-                }
+                Some(milliseconds) => Ok(format!("{}", Time32MillisecondFormatter(*milliseconds))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Time64Microsecond(microseconds) => match microseconds {
-                Some(microseconds) => {
-                    let secs = (*microseconds / 1_000_000) as u32;
-                    let nanos = ((*microseconds % 1_000_000) * 1000) as u32;
-                    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
-                        .ok_or_else(|| {
-                        PlanError::invalid("invalid Time64Microsecond: literal to string")
-                    })?;
-                    Ok(format!("TIME '{}'", time.format("%H:%M:%S.%6f")))
-                }
+                Some(microseconds) => Ok(format!("{}", Time64MicrosecondFormatter(*microseconds))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Time64Nanosecond(nanoseconds) => match nanoseconds {
-                Some(nanoseconds) => {
-                    let secs = (*nanoseconds / 1_000_000_000) as u32;
-                    let nanos = (*nanoseconds % 1_000_000_000) as u32;
-                    let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
-                        .ok_or_else(|| {
-                        PlanError::invalid("invalid Time64Nanosecond: literal to string")
-                    })?;
-                    Ok(format!("TIME '{}'", time.format("%H:%M:%S.%9f")))
-                }
+                Some(nanoseconds) => Ok(format!("{}", Time64NanosecondFormatter(*nanoseconds))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::DurationSecond(seconds) => match seconds {
-                Some(seconds) => {
-                    let days = *seconds / 86_400;
-                    let prepend = if days < 0 {
-                        ""
-                    } else if days == 0 && *seconds < 0 {
-                        "-"
-                    } else {
-                        ""
-                    };
-                    let hours = ((*seconds % 86_400) / 3_600).abs();
-                    let minutes = ((*seconds % 3_600) / 60).abs();
-                    let seconds = (*seconds % 60).abs();
-                    Ok(format!(
-                        "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}' DAY TO SECOND"
-                    ))
-                }
+                Some(seconds) => Ok(format!("{}", DurationSecondFormatter(*seconds))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::DurationMillisecond(milliseconds) => match milliseconds {
                 Some(milliseconds) => {
-                    let days = *milliseconds / 86_400_000;
-                    let prepend = if days < 0 {
-                        ""
-                    } else if days == 0 && *milliseconds < 0 {
-                        "-"
-                    } else {
-                        ""
-                    };
-                    let hours = ((*milliseconds % 86_400_000) / 3_600_000).abs();
-                    let minutes = ((*milliseconds % 3_600_000) / 60_000).abs();
-                    let seconds = ((*milliseconds % 60_000) / 1_000).abs();
-                    let milliseconds = (*milliseconds % 1_000).abs();
-                    Ok(format!(
-                        "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
-                    ))
+                    Ok(format!("{}", DurationMillisecondFormatter(*milliseconds)))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::DurationMicrosecond(microseconds) => match microseconds {
                 Some(microseconds) => {
-                    let days = *microseconds / 86_400_000_000;
-                    let prepend = if days < 0 {
-                        ""
-                    } else if days == 0 && *microseconds < 0 {
-                        "-"
-                    } else {
-                        ""
-                    };
-                    let hours = ((*microseconds % 86_400_000_000) / 3_600_000_000).abs();
-                    let minutes = ((*microseconds % 3_600_000_000) / 60_000_000).abs();
-                    let seconds = ((*microseconds % 60_000_000) / 1_000_000).abs();
-                    let microseconds = (*microseconds % 1_000_000).abs();
-                    Ok(format!(
-                        "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}.{microseconds:06}' DAY TO SECOND",
-                    ))
+                    Ok(format!("{}", DurationMicrosecondFormatter(*microseconds)))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::DurationNanosecond(nanoseconds) => match nanoseconds {
-                Some(nanoseconds) => {
-                    let days = *nanoseconds / 86_400_000_000_000;
-                    let prepend = if days < 0 {
-                        ""
-                    } else if days == 0 && *nanoseconds < 0 {
-                        "-"
-                    } else {
-                        ""
-                    };
-                    let hours = ((*nanoseconds % 86_400_000_000_000) / 3_600_000_000_000).abs();
-                    let minutes = ((*nanoseconds % 3_600_000_000_000) / 60_000_000_000).abs();
-                    let seconds = ((*nanoseconds % 60_000_000_000) / 1_000_000_000).abs();
-                    let nanoseconds = (*nanoseconds % 1_000_000_000).abs();
-                    Ok(format!(
-                        "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}.{nanoseconds:09}' DAY TO SECOND"
-                    ))
-                }
+                Some(nanoseconds) => Ok(format!("{}", DurationNanosecondFormatter(*nanoseconds))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::IntervalYearMonth(months) => match months {
-                Some(months) => {
-                    let years = *months / 12;
-                    let prepend = if years < 0 {
-                        ""
-                    } else if years == 0 && *months < 0 {
-                        "-"
-                    } else {
-                        ""
-                    };
-                    let months = (*months % 12).abs();
-                    Ok(format!(
-                        "INTERVAL '{prepend}{years}-{months}' YEAR TO MONTH"
-                    ))
-                }
+                Some(months) => Ok(format!("{}", IntervalYearMonthFormatter(*months))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::IntervalDayTime(value) => match value {
-                Some(value) => {
-                    let (days, milliseconds) = (value.days, value.milliseconds);
-                    let total_days = days + (milliseconds / 86_400_000); // Add days from milliseconds
-                    let remaining_millis = milliseconds % 86_400_000; // Get remaining sub-day milliseconds
-                    let prepend = if total_days < 0 {
-                        ""
-                    } else if total_days == 0 && remaining_millis < 0 {
-                        "-"
-                    } else {
-                        ""
-                    };
-                    let hours = ((remaining_millis % 86_400_000) / 3_600_000).abs();
-                    let minutes = ((remaining_millis % 3_600_000) / 60_000).abs();
-                    let seconds = ((remaining_millis % 60_000) / 1_000).abs();
-                    let milliseconds = (remaining_millis % 1_000).abs();
-                    Ok(format!(
-                        "INTERVAL '{prepend}{total_days} {hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}' DAY TO SECOND"
-                    ))
-                }
+                Some(value) => Ok(format!("{}", IntervalDayTimeFormatter(*value))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::IntervalMonthDayNano(value) => match value {
-                Some(value) => {
-                    let (months, days, nanoseconds) = (value.months, value.days, value.nanoseconds);
-                    let years = months / 12;
-                    let months = months % 12;
-                    let hours = nanoseconds / 3_600_000_000_000;
-                    let minutes = (nanoseconds % 3_600_000_000_000) / 60_000_000_000;
-                    let seconds = (nanoseconds % 60_000_000_000) / 1_000_000_000;
-                    let milliseconds = (nanoseconds % 1_000_000_000) / 1_000_000;
-                    let microseconds = (nanoseconds % 1_000_000) / 1_000;
-                    let nanoseconds = nanoseconds % 1_000;
-                    Ok(format!(
-                        "INTERVAL {years} YEAR {months} MONTH {days} DAY {hours} HOUR {minutes} MINUTE {seconds} SECOND {milliseconds} MILLISECOND {microseconds} MICROSECOND {nanoseconds} NANOSECOND"
-                    ))
-                }
+                Some(value) => Ok(format!("{}", IntervalMonthDayNanoFormatter(*value))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Binary(value)
@@ -739,23 +591,6 @@ fn format_decimal(value: &str, scale: i8) -> String {
         result.push_str(&format!("0.{:0>width$}", &value[start..], width = scale));
     }
     result
-}
-
-fn format_timestamp(datetime: chrono::DateTime<Utc>, timezone: Option<&str>) -> PlanResult<String> {
-    let (prefix, datetime) = if let Some(timezone) = timezone {
-        let tz = TimeZoneValue::from_str(timezone)?;
-        ("TIMESTAMP", tz.from_utc(&datetime))
-    } else {
-        ("TIMESTAMP_NTZ", datetime.naive_utc())
-    };
-    let value = datetime.format("%Y-%m-%d %H:%M:%S");
-    if datetime.nanosecond() > 0 {
-        let fraction = datetime.format("%.f").to_string();
-        let fraction = fraction.trim_end_matches('0');
-        Ok(format!("{prefix} '{value}{fraction}'"))
-    } else {
-        Ok(format!("{prefix} '{value}'"))
-    }
 }
 
 #[cfg(test)]

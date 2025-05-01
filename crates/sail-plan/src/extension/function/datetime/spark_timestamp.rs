@@ -2,6 +2,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
@@ -9,7 +10,7 @@ use datafusion_common::types::logical_string;
 use datafusion_common::{exec_datafusion_err, exec_err, plan_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
-use sail_sql_analyzer::literal::datetime::TimeZoneValue;
+use sail_common_datafusion::datetime::localize_with_fallback;
 use sail_sql_analyzer::parser::parse_timestamp;
 
 use crate::utils::ItemTaker;
@@ -20,7 +21,7 @@ trait TimestampParser: Debug + Send + Sync {
 
 #[derive(Debug)]
 struct TimestampLtzParser {
-    timezone: TimeZoneValue,
+    timezone: Tz,
 }
 
 impl TimestampParser for TimestampLtzParser {
@@ -28,11 +29,12 @@ impl TimestampParser for TimestampLtzParser {
         let (datetime, timezone) = parse_timestamp(value)
             .and_then(|x| x.into_naive())
             .map_err(|e| exec_datafusion_err!("{e}"))?;
-        let datetime = timezone
-            .as_ref()
-            .unwrap_or(&self.timezone)
-            .localize_with_fallback(&datetime)
-            .map_err(|e| exec_datafusion_err!("{e}"))?;
+        let timezone = if timezone.is_empty() {
+            self.timezone
+        } else {
+            timezone.parse()?
+        };
+        let datetime = localize_with_fallback(&timezone, &datetime)?;
         Ok(datetime.timestamp_micros())
     }
 }

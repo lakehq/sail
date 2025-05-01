@@ -1,10 +1,6 @@
 use std::str::FromStr;
 
-use chrono::{
-    DateTime, Days, FixedOffset, MappedLocalTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone,
-    Utc,
-};
-use chrono_tz::Tz;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use chumsky::extra::ParserExtra;
 use chumsky::prelude::{any, choice, end, just, one_of};
 use chumsky::Parser;
@@ -50,71 +46,14 @@ impl TryFrom<TimeValue> for NaiveTime {
 }
 
 #[derive(Debug, Clone)]
-pub enum TimeZoneValue {
-    Fixed(FixedOffset),
-    Tz(Tz),
-}
-
-impl TimeZoneValue {
-    #[allow(clippy::wrong_self_convention)]
-    pub fn from_utc(&self, datetime: &DateTime<Utc>) -> NaiveDateTime {
-        match self {
-            TimeZoneValue::Fixed(offset) => datetime.with_timezone(offset).naive_local(),
-            TimeZoneValue::Tz(tz) => datetime.with_timezone(tz).naive_local(),
-        }
-    }
-
-    pub fn localize(&self, datetime: &NaiveDateTime) -> MappedLocalTime<DateTime<Utc>> {
-        match self {
-            TimeZoneValue::Fixed(offset) => {
-                offset.from_local_datetime(datetime).map(|x| x.to_utc())
-            }
-            TimeZoneValue::Tz(tz) => tz.from_local_datetime(datetime).map(|x| x.to_utc()),
-        }
-    }
-
-    /// Localize the naive datetime to the time zone.
-    /// 1. If the datatime is mapped to exactly one datetime in the time zone, the local datetime
-    ///    is returned.
-    /// 1. If the datetime is ambiguous in the time zone, the earliest local datetime is returned.
-    /// 1. If the datetime is invalid in the time zone, the next valid local datetime is returned.
-    pub fn localize_with_fallback(&self, datetime: &NaiveDateTime) -> SqlResult<DateTime<Utc>> {
-        match self.localize(datetime).earliest() {
-            Some(x) => Ok(x),
-            // FIXME: The logic here may not work in all cases.
-            //   The correct solution requires access to offset transition rules for the time zone.
-            None => datetime
-                .checked_sub_days(Days::new(1))
-                .and_then(|x| self.localize(&x).earliest())
-                .and_then(|x| x.checked_add_days(Days::new(1)))
-                .ok_or_else(|| SqlError::invalid(format!("cannot localize datetime: {datetime}"))),
-        }
-    }
-}
-
-impl FromStr for TimeZoneValue {
-    type Err = SqlError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(offset) = FixedOffset::from_str(s) {
-            Ok(Self::Fixed(offset))
-        } else {
-            let tz = Tz::from_str(s)
-                .map_err(|_| SqlError::invalid(format!("invalid time zone: {s}")))?;
-            Ok(Self::Tz(tz))
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct TimestampValue<'a> {
     pub date: DateValue,
     pub time: TimeValue,
     pub timezone: &'a str,
 }
 
-impl TimestampValue<'_> {
-    pub fn into_naive(self) -> SqlResult<(NaiveDateTime, Option<TimeZoneValue>)> {
+impl<'a> TimestampValue<'a> {
+    pub fn into_naive(self) -> SqlResult<(NaiveDateTime, &'a str)> {
         let Self {
             date,
             time,
@@ -123,11 +62,6 @@ impl TimestampValue<'_> {
         let date = NaiveDate::try_from(date)?;
         let time = NaiveTime::try_from(time)?;
         let datetime = date.and_time(time);
-        let timezone = if timezone.is_empty() {
-            None
-        } else {
-            Some(TimeZoneValue::from_str(timezone)?)
-        };
         Ok((datetime, timezone))
     }
 }

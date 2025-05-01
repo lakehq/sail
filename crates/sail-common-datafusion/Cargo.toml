@@ -7,7 +7,6 @@ edition = { workspace = true }
 sail-common = { path = "../sail-common" }
 
 chrono = { workspace = true }
-chrono-tz = { workspace = true }
 ryu = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
