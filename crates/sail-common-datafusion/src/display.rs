@@ -965,17 +965,17 @@ mod tests {
         let spark = format_array(&array, &spark_fmt);
 
         assert_eq!(iso[0], "PT0.000000001S");
-        assert_eq!(spark[0], "0 days 0 hours 0 mins 0.000000001 secs");
+        assert_eq!(spark[0], "INTERVAL '0 00:00:00.000000001' DAY TO SECOND");
         assert_eq!(iso[1], "-PT0.000000001S");
-        assert_eq!(spark[1], "0 days 0 hours 0 mins -0.000000001 secs");
+        assert_eq!(spark[1], "INTERVAL '-0 00:00:00.000000001' DAY TO SECOND");
         assert_eq!(iso[2], "PT0.000001S");
-        assert_eq!(spark[2], "0 days 0 hours 0 mins 0.000001000 secs");
+        assert_eq!(spark[2], "INTERVAL '0 00:00:00.000001' DAY TO SECOND");
         assert_eq!(iso[3], "-PT0.000001S");
-        assert_eq!(spark[3], "0 days 0 hours 0 mins -0.000001000 secs");
+        assert_eq!(spark[3], "INTERVAL '-0 00:00:00.000001' DAY TO SECOND");
         assert_eq!(iso[4], "PT3938554.123456789S");
-        assert_eq!(spark[4], "45 days 14 hours 2 mins 34.123456789 secs");
+        assert_eq!(spark[4], "INTERVAL '45 14:02:34.123456789' DAY TO SECOND");
         assert_eq!(iso[5], "-PT3938554.123456789S");
-        assert_eq!(spark[5], "-45 days -14 hours -2 mins -34.123456789 secs");
+        assert_eq!(spark[5], "INTERVAL '-45 14:02:34.123456789' DAY TO SECOND");
 
         let array = DurationMicrosecondArray::from(vec![
             1,
@@ -989,17 +989,17 @@ mod tests {
         let spark = format_array(&array, &spark_fmt);
 
         assert_eq!(iso[0], "PT0.000001S");
-        assert_eq!(spark[0], "0 days 0 hours 0 mins 0.000001 secs");
+        assert_eq!(spark[0], "INTERVAL '0 00:00:00.000001' DAY TO SECOND");
         assert_eq!(iso[1], "-PT0.000001S");
-        assert_eq!(spark[1], "0 days 0 hours 0 mins -0.000001 secs");
+        assert_eq!(spark[1], "INTERVAL '-0 00:00:00.000001' DAY TO SECOND");
         assert_eq!(iso[2], "PT0.001S");
-        assert_eq!(spark[2], "0 days 0 hours 0 mins 0.001000 secs");
+        assert_eq!(spark[2], "INTERVAL '0 00:00:00.001' DAY TO SECOND");
         assert_eq!(iso[3], "-PT0.001S");
-        assert_eq!(spark[3], "0 days 0 hours 0 mins -0.001000 secs");
+        assert_eq!(spark[3], "INTERVAL '-0 00:00:00.001' DAY TO SECOND");
         assert_eq!(iso[4], "PT3938554.123456S");
-        assert_eq!(spark[4], "45 days 14 hours 2 mins 34.123456 secs");
+        assert_eq!(spark[4], "INTERVAL '45 14:02:34.123456' DAY TO SECOND");
         assert_eq!(iso[5], "-PT3938554.123456S");
-        assert_eq!(spark[5], "-45 days -14 hours -2 mins -34.123456 secs");
+        assert_eq!(spark[5], "INTERVAL '-45 14:02:34.123456' DAY TO SECOND");
 
         let array = DurationMillisecondArray::from(vec![
             1,
@@ -1013,17 +1013,17 @@ mod tests {
         let spark = format_array(&array, &spark_fmt);
 
         assert_eq!(iso[0], "PT0.001S");
-        assert_eq!(spark[0], "0 days 0 hours 0 mins 0.001 secs");
+        assert_eq!(spark[0], "INTERVAL '0 00:00:00.001' DAY TO SECOND");
         assert_eq!(iso[1], "-PT0.001S");
-        assert_eq!(spark[1], "0 days 0 hours 0 mins -0.001 secs");
+        assert_eq!(spark[1], "INTERVAL '-0 00:00:00.001' DAY TO SECOND");
         assert_eq!(iso[2], "PT1S");
-        assert_eq!(spark[2], "0 days 0 hours 0 mins 1.000 secs");
+        assert_eq!(spark[2], "INTERVAL '0 00:00:01' DAY TO SECOND");
         assert_eq!(iso[3], "-PT1S");
-        assert_eq!(spark[3], "0 days 0 hours 0 mins -1.000 secs");
+        assert_eq!(spark[3], "INTERVAL '-0 00:00:01' DAY TO SECOND");
         assert_eq!(iso[4], "PT3938554.123S");
-        assert_eq!(spark[4], "45 days 14 hours 2 mins 34.123 secs");
+        assert_eq!(spark[4], "INTERVAL '45 14:02:34.123' DAY TO SECOND");
         assert_eq!(iso[5], "-PT3938554.123S");
-        assert_eq!(spark[5], "-45 days -14 hours -2 mins -34.123 secs");
+        assert_eq!(spark[5], "INTERVAL '-45 14:02:34.123' DAY TO SECOND");
 
         let array = DurationSecondArray::from(vec![
             1,
@@ -1037,17 +1037,17 @@ mod tests {
         let spark = format_array(&array, &spark_fmt);
 
         assert_eq!(iso[0], "PT1S");
-        assert_eq!(spark[0], "0 days 0 hours 0 mins 1 secs");
+        assert_eq!(spark[0], "INTERVAL '0 00:00:01' DAY TO SECOND");
         assert_eq!(iso[1], "-PT1S");
-        assert_eq!(spark[1], "0 days 0 hours 0 mins -1 secs");
+        assert_eq!(spark[1], "INTERVAL '-0 00:00:01' DAY TO SECOND");
         assert_eq!(iso[2], "PT1000S");
-        assert_eq!(spark[2], "0 days 0 hours 16 mins 40 secs");
+        assert_eq!(spark[2], "INTERVAL '0 00:16:40' DAY TO SECOND");
         assert_eq!(iso[3], "-PT1000S");
-        assert_eq!(spark[3], "0 days 0 hours -16 mins -40 secs");
+        assert_eq!(spark[3], "INTERVAL '-0 00:16:40' DAY TO SECOND");
         assert_eq!(iso[4], "PT3938554S");
-        assert_eq!(spark[4], "45 days 14 hours 2 mins 34 secs");
+        assert_eq!(spark[4], "INTERVAL '45 14:02:34' DAY TO SECOND");
         assert_eq!(iso[5], "-PT3938554S");
-        assert_eq!(spark[5], "-45 days -14 hours -2 mins -34 secs");
+        assert_eq!(spark[5], "INTERVAL '-45 14:02:34' DAY TO SECOND");
     }
 
     #[test]

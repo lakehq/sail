@@ -50,7 +50,7 @@
 |2025-01-01 08:00:00            |
 +-------------------------------+
 
->>> spark.sql("SELECT typeof(c), c FROM VALUES TIMESTAMP '2025-01-01 00:00:00+00:00', TIMESTAMP '2025-01-01' AS t(c)").show(truncate=False)  # doctest: +SKIP
+>>> spark.sql("SELECT typeof(c), c FROM VALUES TIMESTAMP '2025-01-01 00:00:00+00:00', TIMESTAMP '2025-01-01' AS t(c)").show(truncate=False)
 +---------+-------------------+
 |typeof(c)|c                  |
 +---------+-------------------+

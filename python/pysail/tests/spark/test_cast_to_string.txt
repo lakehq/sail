@@ -6,21 +6,21 @@
 |                       1970-01-01|
 +---------------------------------+
 
->>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01' AS STRING)").show(truncate=False)  # doctest: +SKIP
+>>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01' AS STRING)").show(truncate=False)
 +-----------------------------------------------+
 |CAST(TIMESTAMP '1970-01-01 00:00:00' AS STRING)|
 +-----------------------------------------------+
 |1970-01-01 00:00:00                            |
 +-----------------------------------------------+
 
->>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01 00:00:00.100' AS STRING)").show(truncate=False)  # doctest: +SKIP
+>>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01 00:00:00.100' AS STRING)").show(truncate=False)
 +-------------------------------------------------+
 |CAST(TIMESTAMP '1970-01-01 00:00:00.1' AS STRING)|
 +-------------------------------------------------+
 |1970-01-01 00:00:00.1                            |
 +-------------------------------------------------+
 
->>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01 00:00:00.123000' AS STRING)").show(truncate=False)  # doctest: +SKIP
+>>> spark.sql("SELECT CAST(TIMESTAMP '1970-01-01 00:00:00.123000' AS STRING)").show(truncate=False)
 +---------------------------------------------------+
 |CAST(TIMESTAMP '1970-01-01 00:00:00.123' AS STRING)|
 +---------------------------------------------------+
@@ -41,7 +41,7 @@
 |INTERVAL '1 02' DAY TO HOUR                |
 +-------------------------------------------+
 
->>> spark.sql("SELECT CAST(INTERVAL 1 DAY 2 HOUR 3.0001 SECOND AS STRING)").show(truncate=False)  # doctest: +SKIP
+>>> spark.sql("SELECT CAST(INTERVAL 1 DAY 2 HOUR 3.0001 SECOND AS STRING)").show(truncate=False)
 +--------------------------------------------------------+
 |CAST(INTERVAL '1 02:00:03.0001' DAY TO SECOND AS STRING)|
 +--------------------------------------------------------+

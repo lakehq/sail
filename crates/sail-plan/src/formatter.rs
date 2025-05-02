@@ -275,27 +275,36 @@ impl PlanFormatter for DefaultPlanFormatter {
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Date32(days) => match days {
-                Some(days) => Ok(format!("{}", Date32Formatter(*days))),
+                Some(days) => Ok(format!("DATE '{}'", Date32Formatter(*days))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Date64(milliseconds) => match milliseconds {
-                Some(milliseconds) => Ok(format!("{}", Date64Formatter(*milliseconds))),
+                Some(milliseconds) => Ok(format!("DATE '{}'", Date64Formatter(*milliseconds))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Time32Second(seconds) => match seconds {
-                Some(seconds) => Ok(format!("{}", Time32SecondFormatter(*seconds))),
+                Some(seconds) => Ok(format!("TIME '{}'", Time32SecondFormatter(*seconds))),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Time32Millisecond(milliseconds) => match milliseconds {
-                Some(milliseconds) => Ok(format!("{}", Time32MillisecondFormatter(*milliseconds))),
+                Some(milliseconds) => Ok(format!(
+                    "TIME '{}'",
+                    Time32MillisecondFormatter(*milliseconds)
+                )),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Time64Microsecond(microseconds) => match microseconds {
-                Some(microseconds) => Ok(format!("{}", Time64MicrosecondFormatter(*microseconds))),
+                Some(microseconds) => Ok(format!(
+                    "TIME '{}'",
+                    Time64MicrosecondFormatter(*microseconds)
+                )),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Time64Nanosecond(nanoseconds) => match nanoseconds {
-                Some(nanoseconds) => Ok(format!("{}", Time64NanosecondFormatter(*nanoseconds))),
+                Some(nanoseconds) => Ok(format!(
+                    "TIME '{}'",
+                    Time64NanosecondFormatter(*nanoseconds)
+                )),
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::DurationSecond(seconds) => match seconds {
@@ -701,24 +710,24 @@ mod tests {
             "TIMESTAMP_NTZ '1969-12-31 23:59:59.999999'",
         );
         assert_eq!(
-            to_string(ScalarValue::IntervalMonthDayNano (
-                Some(IntervalMonthDayNano {
+            to_string(ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNano {
                     months: 15,
                     days: -20,
                     nanoseconds: 123_456_789_000,
-                })
-            ))?,
-            "INTERVAL 1 YEAR 3 MONTH -20 DAY 0 HOUR 2 MINUTE 3 SECOND 456 MILLISECOND 789 MICROSECOND 0 NANOSECOND",
+                }
+            )))?,
+            "1 years 3 months -20 days 2 minutes 3.456789 seconds",
         );
         assert_eq!(
-            to_string(ScalarValue::IntervalMonthDayNano (
-                Some(IntervalMonthDayNano {
+            to_string(ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNano {
                     months: -15,
                     days: 10,
                     nanoseconds: -1_001_000,
-                })
-            ))?,
-            "INTERVAL -1 YEAR -3 MONTH 10 DAY 0 HOUR 0 MINUTE 0 SECOND -1 MILLISECOND -1 MICROSECOND 0 NANOSECOND",
+                }
+            )))?,
+            "-1 years -3 months 10 days -0.001001 seconds",
         );
         assert_eq!(
             to_string(ScalarValue::IntervalYearMonth(Some(15)))?,
@@ -733,14 +742,14 @@ mod tests {
                 days: 0,
                 milliseconds: 123_456_000,
             })))?,
-            "INTERVAL '1 10:17:36.000' DAY TO SECOND",
+            "INTERVAL '1 10:17:36' DAY TO SECOND",
         );
         assert_eq!(
             to_string(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
                 days: 0,
                 milliseconds: -123_456_000,
             })))?,
-            "INTERVAL '-1 10:17:36.000' DAY TO SECOND",
+            "INTERVAL '-1 10:17:36' DAY TO SECOND",
         );
         assert_eq!(
             to_string(ScalarValue::DurationMicrosecond(Some(123_456_789)))?,
