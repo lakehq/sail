@@ -175,7 +175,7 @@ impl ValueFormatter<'_> {
         match self.formatter.format.write(self.idx, s) {
             Ok(_) => Ok(()),
             Err(FormatError::Arrow(e)) => Err(e),
-            Err(FormatError::Format(_)) => Err(ArrowError::CastError("Format error".to_string())),
+            Err(FormatError::Format(_)) => Err(ArrowError::CastError("format error".to_string())),
         }
     }
 
@@ -552,11 +552,11 @@ macro_rules! temporal_display {
                         let naive = try_convert!(value, $converter, "temporal")?;
                         write!(f, "{naive:?}")?
                     }
-                    TimeFormat::Spark => write!(f, "{}", $formatter(value))?,
                     TimeFormat::Custom(s) => {
                         let naive = try_convert!(value, $converter, "temporal")?;
                         write!(f, "{}", naive.format(s))?
                     }
+                    TimeFormat::Spark => write!(f, "{}", $formatter(value))?,
                 }
                 Ok(())
             }
