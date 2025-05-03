@@ -4,9 +4,10 @@ use sail_sql_parser::ast::literal::{NumberLiteral, NumberSuffix, StringLiteral};
 use sail_sql_parser::string::StringValue;
 
 use crate::error::{SqlError, SqlResult};
-use crate::literal::{
+use crate::literal::binary::BinaryValue;
+use crate::literal::numeric::{
     parse_decimal_128_string, parse_decimal_256_string, parse_f32_string, parse_f64_string,
-    parse_i16_string, parse_i32_string, parse_i64_string, parse_i8_string, BinaryValue,
+    parse_i16_string, parse_i32_string, parse_i64_string, parse_i8_string,
 };
 
 pub(crate) fn from_ast_number_literal(value: NumberLiteral) -> SqlResult<spec::Expr> {

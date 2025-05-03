@@ -1,0 +1,154 @@
+>>> spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+>>> spark.sql("SELECT CAST('1970' AS DATE)").show()
++------------------+
+|CAST(1970 AS DATE)|
++------------------+
+|        1970-01-01|
++------------------+
+
+>>> spark.sql("SELECT CAST('1970-01' AS DATE)").show()
++---------------------+
+|CAST(1970-01 AS DATE)|
++---------------------+
+|           1970-01-01|
++---------------------+
+
+>>> spark.sql("SELECT CAST('1970-01-01' AS DATE)").show()
++------------------------+
+|CAST(1970-01-01 AS DATE)|
++------------------------+
+|              1970-01-01|
++------------------------+
+
+>>> spark.sql("SELECT CAST('1970' AS TIMESTAMP)").show()
++-----------------------+
+|CAST(1970 AS TIMESTAMP)|
++-----------------------+
+|    1970-01-01 00:00:00|
++-----------------------+
+
+>>> spark.sql("SELECT CAST('1970-01' AS TIMESTAMP)").show()
++--------------------------+
+|CAST(1970-01 AS TIMESTAMP)|
++--------------------------+
+|       1970-01-01 00:00:00|
++--------------------------+
+
+>>> spark.sql("SELECT CAST('1970-01-01' AS TIMESTAMP)").show()
++-----------------------------+
+|CAST(1970-01-01 AS TIMESTAMP)|
++-----------------------------+
+|          1970-01-01 00:00:00|
++-----------------------------+
+
+>>> spark.sql("SELECT CAST('1970' AS TIMESTAMP_NTZ)").show()
++---------------------------+
+|CAST(1970 AS TIMESTAMP_NTZ)|
++---------------------------+
+|        1970-01-01 00:00:00|
++---------------------------+
+
+>>> spark.sql("SELECT CAST('1970-01-01 00:00:00+08:00' AS TIMESTAMP_NTZ)").show()
++------------------------------------------------+
+|CAST(1970-01-01 00:00:00+08:00 AS TIMESTAMP_NTZ)|
++------------------------------------------------+
+|                             1970-01-01 00:00:00|
++------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('1 YEAR 2 MONTH' AS INTERVAL)").show(truncate=False)
++--------------------------------+
+|CAST(1 YEAR 2 MONTH AS INTERVAL)|
++--------------------------------+
+|1 years 2 months                |
++--------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL 1 YEAR 2 MONTH' AS INTERVAL)").show(truncate=False)
++-----------------------------------------+
+|CAST(INTERVAL 1 YEAR 2 MONTH AS INTERVAL)|
++-----------------------------------------+
+|1 years 2 months                         |
++-----------------------------------------+
+
+>>> spark.sql("SELECT CAST('1 YEAR 2 MONTH 3 DAY 4 HOUR' AS INTERVAL)").show(truncate=False)
++---------------------------------------------+
+|CAST(1 YEAR 2 MONTH 3 DAY 4 HOUR AS INTERVAL)|
++---------------------------------------------+
+|1 years 2 months 3 days 4 hours              |
++---------------------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL 1 YEAR 2 MONTH 3 DAY 4 HOUR' AS INTERVAL)").show(truncate=False)
++------------------------------------------------------+
+|CAST(INTERVAL 1 YEAR 2 MONTH 3 DAY 4 HOUR AS INTERVAL)|
++------------------------------------------------------+
+|1 years 2 months 3 days 4 hours                       |
++------------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('1-2' AS INTERVAL YEAR TO MONTH)").show(truncate=False)  # doctest: +SKIP
++-----------------------------------+
+|CAST(1-2 AS INTERVAL YEAR TO MONTH)|
++-----------------------------------+
+|INTERVAL '1-2' YEAR TO MONTH       |
++-----------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL \\'1-2\\' YEAR TO MONTH' AS INTERVAL YEAR TO MONTH)").show(truncate=False)
++------------------------------------------------------------+
+|CAST(INTERVAL '1-2' YEAR TO MONTH AS INTERVAL YEAR TO MONTH)|
++------------------------------------------------------------+
+|INTERVAL '1-2' YEAR TO MONTH                                |
++------------------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL \\'-1-2\\' YEAR TO MONTH' AS INTERVAL YEAR TO MONTH)").show(truncate=False)
++-------------------------------------------------------------+
+|CAST(INTERVAL '-1-2' YEAR TO MONTH AS INTERVAL YEAR TO MONTH)|
++-------------------------------------------------------------+
+|INTERVAL '-1-2' YEAR TO MONTH                                |
++-------------------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL -\\'-1-2\\' YEAR TO MONTH' AS INTERVAL YEAR TO MONTH)").show(truncate=False)
++--------------------------------------------------------------+
+|CAST(INTERVAL -'-1-2' YEAR TO MONTH AS INTERVAL YEAR TO MONTH)|
++--------------------------------------------------------------+
+|INTERVAL '1-2' YEAR TO MONTH                                  |
++--------------------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('1 2' AS INTERVAL DAY TO HOUR)").show(truncate=False)  # doctest: +SKIP
++---------------------------------+
+|CAST(1 2 AS INTERVAL DAY TO HOUR)|
++---------------------------------+
+|INTERVAL '1 02' DAY TO HOUR      |
++---------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL \\'1 2\\' DAY TO HOUR' AS INTERVAL DAY TO HOUR)").show(truncate=False)  # doctest: +SKIP
++--------------------------------------------------------+
+|CAST(INTERVAL '1 2' DAY TO HOUR AS INTERVAL DAY TO HOUR)|
++--------------------------------------------------------+
+|INTERVAL '1 02' DAY TO HOUR                             |
++--------------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('1 02:00:03.0001' AS INTERVAL DAY TO SECOND)").show(truncate=False)  # doctest: +SKIP
++-----------------------------------------------+
+|CAST(1 02:00:03.0001 AS INTERVAL DAY TO SECOND)|
++-----------------------------------------------+
+|INTERVAL '1 02:00:03.0001' DAY TO SECOND       |
++-----------------------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL \\'1 02:00:03.0001\\' DAY TO SECOND' AS INTERVAL DAY TO SECOND)").show(truncate=False)
++------------------------------------------------------------------------+
+|CAST(INTERVAL '1 02:00:03.0001' DAY TO SECOND AS INTERVAL DAY TO SECOND)|
++------------------------------------------------------------------------+
+|INTERVAL '1 02:00:03.0001' DAY TO SECOND                                |
++------------------------------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL \\'-1 02:00:03.0001\\' DAY TO SECOND' AS INTERVAL DAY TO SECOND)").show(truncate=False)
++-------------------------------------------------------------------------+
+|CAST(INTERVAL '-1 02:00:03.0001' DAY TO SECOND AS INTERVAL DAY TO SECOND)|
++-------------------------------------------------------------------------+
+|INTERVAL '-1 02:00:03.0001' DAY TO SECOND                                |
++-------------------------------------------------------------------------+
+
+>>> spark.sql("SELECT CAST('INTERVAL -\\'-1 02:00:03.0001\\' DAY TO SECOND' AS INTERVAL DAY TO SECOND)").show(truncate=False)
++--------------------------------------------------------------------------+
+|CAST(INTERVAL -'-1 02:00:03.0001' DAY TO SECOND AS INTERVAL DAY TO SECOND)|
++--------------------------------------------------------------------------+
+|INTERVAL '1 02:00:03.0001' DAY TO SECOND                                  |
++--------------------------------------------------------------------------+

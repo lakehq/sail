@@ -1,50 +1,49 @@
->>> spark.sql("SELECT DATE '1970'").show()  # doctest: +SKIP
+>>> spark.sql("SELECT DATE '1970'").show()
 +-----------------+
 |DATE '1970-01-01'|
 +-----------------+
 |       1970-01-01|
 +-----------------+
 
->>> spark.sql("SELECT DATE('1970')").show()  # doctest: +SKIP
+>>> spark.sql("SELECT DATE('1970')").show()
 +----------+
 |      1970|
 +----------+
 |1970-01-01|
 +----------+
 
->>> spark.sql("SELECT DATE '1970-1'").show()  # doctest: +SKIP
+>>> spark.sql("SELECT DATE '1970-1'").show()
 +-----------------+
 |DATE '1970-01-01'|
 +-----------------+
 |       1970-01-01|
 +-----------------+
 
->>> spark.sql("SELECT DATE('1970-1')").show()  # doctest: +SKIP
+>>> spark.sql("SELECT DATE('1970-1')").show()
 +----------+
 |    1970-1|
 +----------+
 |1970-01-01|
 +----------+
 
->>> spark.sql("SELECT DATE '1970-01'").show()  # doctest: +SKIP
+>>> spark.sql("SELECT DATE '1970-01'").show()
 +-----------------+
 |DATE '1970-01-01'|
 +-----------------+
 |       1970-01-01|
 +-----------------+
 
->>> spark.sql("SELECT DATE('1970-01')").show()  # doctest: +SKIP
+>>> spark.sql("SELECT DATE('1970-01')").show()
 +----------+
 |   1970-01|
 +----------+
 |1970-01-01|
 +----------+
 
->>> spark.sql("SELECT DATE '1970-01-'").show()  # doctest: +SKIP
+>>> spark.sql("SELECT DATE '1970-01-'").show()
 Traceback (most recent call last):
 ...
 pyspark.errors.exceptions.connect.IllegalArgumentException: ...
-
 >>> spark.sql("SELECT DATE('1970-01-')").show()  # doctest: +SKIP
 +--------+
 |1970-01-|

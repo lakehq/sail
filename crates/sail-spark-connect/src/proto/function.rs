@@ -31,7 +31,7 @@ mod tests {
 
     #[allow(dead_code)]
     fn format_record_batches(batches: Vec<RecordBatch>) -> SparkResult<Vec<String>> {
-        let options = FormatOptions::default().with_null("NULL");
+        let options = FormatOptions::default();
         let mut output = vec![];
         for batch in batches {
             let formatters = batch

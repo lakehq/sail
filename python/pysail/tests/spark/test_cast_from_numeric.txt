@@ -1,0 +1,28 @@
+>>> spark.conf.set("spark.sql.session.timeZone", "Asia/Shanghai")
+>>> spark.sql("SELECT CAST(1L AS TIMESTAMP)").show(truncate=False)  # doctest: +SKIP
++--------------------+
+|CAST(1 AS TIMESTAMP)|
++--------------------+
+|1970-01-01 08:00:01 |
++--------------------+
+
+>>> spark.sql("SELECT CAST(-1L AS TIMESTAMP)").show(truncate=False)  # doctest: +SKIP
++---------------------+
+|CAST(-1 AS TIMESTAMP)|
++---------------------+
+|1970-01-01 07:59:59  |
++---------------------+
+
+>>> spark.sql("SELECT CAST(1L AS INTERVAL DAY TO SECOND)").show(truncate=False)  # doctest: +SKIP
++-----------------------------------+
+|CAST(1 AS INTERVAL DAY TO SECOND)  |
++-----------------------------------+
+|INTERVAL '0 00:00:01' DAY TO SECOND|
++-----------------------------------+
+
+>>> spark.sql("SELECT CAST(-1L AS INTERVAL DAY TO SECOND)").show(truncate=False)  # doctest: +SKIP
++------------------------------------+
+|CAST(-1 AS INTERVAL DAY TO SECOND)  |
++------------------------------------+
+|INTERVAL '-0 00:00:01' DAY TO SECOND|
++------------------------------------+

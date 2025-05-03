@@ -34,9 +34,9 @@ fn timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     ) {
         Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkTimestamp::try_new(
+            func: Arc::new(ScalarUDF::from(SparkTimestamp::try_new(Some(
                 input.function_context.plan_config.session_timezone.clone(),
-            )?)),
+            ))?)),
             args: vec![arg],
         }))
     } else {
