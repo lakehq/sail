@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_expr::{expr, BinaryExpr, Cast, Expr, ExprSchemable, Operator, ScalarUDF};
 use half::f16;
 
 use crate::error::{PlanError, PlanResult};
@@ -49,51 +49,59 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             right.get_type(function_context.schema),
         );
         match (left_type, right_type) {
+            (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
+                Ok(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(left),
+                    op: Operator::Plus,
+                    right: Box::new(Expr::Cast(Cast {
+                        expr: Box::new(right),
+                        data_type: DataType::Interval(IntervalUnit::MonthDayNano),
+                    })),
+                }))
+            }
+            (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(DataType::Date32)) => {
+                Ok(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(Expr::Cast(Cast {
+                        expr: Box::new(left),
+                        data_type: DataType::Interval(IntervalUnit::MonthDayNano),
+                    })),
+                    op: Operator::Plus,
+                    right: Box::new(right),
+                }))
+            }
+            (Ok(left_type), Ok(DataType::Date32)) if left_type.is_numeric() => {
+                Ok(Expr::Cast(Cast {
+                    expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(left),
+                        op: Operator::Plus,
+                        right: Box::new(Expr::Cast(Cast {
+                            expr: Box::new(right),
+                            data_type: DataType::Int32,
+                        })),
+                    })),
+                    data_type: DataType::Date32,
+                }))
+            }
+            (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
+                Ok(Expr::Cast(Cast {
+                    expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(Expr::Cast(Cast {
+                            expr: Box::new(left),
+                            data_type: DataType::Int32,
+                        })),
+                        op: Operator::Plus,
+                        right: Box::new(right),
+                    })),
+                    data_type: DataType::Date32,
+                }))
+            }
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkPlus`.
-            (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
+            (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::Plus,
                 right: Box::new(right),
             })),
-            (Ok(left_type), Ok(right_type)) => {
-                if (left_type.is_numeric() && matches!(right_type, DataType::Date32))
-                    || (right_type.is_numeric() && matches!(left_type, DataType::Date32))
-                {
-                    let (left, right) = if left_type.is_numeric() {
-                        (
-                            left,
-                            Expr::Cast(expr::Cast {
-                                expr: Box::new(right),
-                                data_type: DataType::Int32,
-                            }),
-                        )
-                    } else {
-                        (
-                            Expr::Cast(expr::Cast {
-                                expr: Box::new(left),
-                                data_type: DataType::Int32,
-                            }),
-                            right,
-                        )
-                    };
-                    let expr = Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(left),
-                        op: Operator::Plus,
-                        right: Box::new(right),
-                    });
-                    Ok(Expr::Cast(expr::Cast {
-                        expr: Box::new(expr),
-                        data_type: DataType::Date32,
-                    }))
-                } else {
-                    Ok(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(left),
-                        op: Operator::Plus,
-                        right: Box::new(right),
-                    }))
-                }
-            }
         }
     }
 }
@@ -131,36 +139,36 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             right.get_type(function_context.schema),
         );
         match (left_type, right_type) {
+            (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
+                Ok(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(left),
+                    op: Operator::Minus,
+                    right: Box::new(Expr::Cast(Cast {
+                        expr: Box::new(right),
+                        data_type: DataType::Interval(IntervalUnit::MonthDayNano),
+                    })),
+                }))
+            }
+            (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
+                Ok(Expr::Cast(Cast {
+                    expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(Expr::Cast(Cast {
+                            expr: Box::new(left),
+                            data_type: DataType::Int32,
+                        })),
+                        op: Operator::Minus,
+                        right: Box::new(right),
+                    })),
+                    data_type: DataType::Date32,
+                }))
+            }
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkMinus`.
-            (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
+            (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::Minus,
                 right: Box::new(right),
             })),
-            (Ok(left_type), Ok(right_type)) => {
-                if matches!(left_type, DataType::Date32) && right_type.is_numeric() {
-                    let left = Expr::Cast(expr::Cast {
-                        expr: Box::new(left),
-                        data_type: DataType::Int32,
-                    });
-                    let expr = Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(left),
-                        op: Operator::Minus,
-                        right: Box::new(right),
-                    });
-                    Ok(Expr::Cast(expr::Cast {
-                        expr: Box::new(expr),
-                        data_type: DataType::Date32,
-                    }))
-                } else {
-                    Ok(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(left),
-                        op: Operator::Minus,
-                        right: Box::new(right),
-                    }))
-                }
-            }
         }
     }
 }
@@ -192,52 +200,43 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         right.get_type(function_context.schema),
     );
     match (left_type, right_type) {
+        // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
+        //  Seems to be a bug in DataFusion.
+        (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
+            // Match duration because we cast Spark's DayTime interval to Duration.
+            Ok(Expr::Cast(Cast {
+                expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(Expr::Cast(Cast {
+                        expr: Box::new(left),
+                        data_type: DataType::Int64,
+                    })),
+                    op: Operator::Multiply,
+                    right: Box::new(right),
+                })),
+                data_type: DataType::Duration(TimeUnit::Microsecond),
+            }))
+        }
+        (Ok(_), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
+            // Match duration because we cast Spark's DayTime interval to Duration.
+            Ok(Expr::Cast(Cast {
+                expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(left),
+                    op: Operator::Multiply,
+                    right: Box::new(Expr::Cast(Cast {
+                        expr: Box::new(right),
+                        data_type: DataType::Int64,
+                    })),
+                })),
+                data_type: DataType::Duration(TimeUnit::Microsecond),
+            }))
+        }
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
-        (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
+        (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
             left: Box::new(left),
             op: Operator::Multiply,
             right: Box::new(right),
         })),
-        (Ok(left_type), Ok(right_type)) => {
-            // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
-            //  Seems to be a bug in DataFusion.
-            match (left_type, right_type) {
-                (DataType::Duration(TimeUnit::Microsecond), _) => {
-                    // Match duration because we cast Spark's DayTime interval to Duration.
-                    Ok(Expr::Cast(expr::Cast {
-                        expr: Box::new(Expr::BinaryExpr(BinaryExpr {
-                            left: Box::new(Expr::Cast(expr::Cast {
-                                expr: Box::new(left),
-                                data_type: DataType::Int64,
-                            })),
-                            op: Operator::Multiply,
-                            right: Box::new(right),
-                        })),
-                        data_type: DataType::Duration(TimeUnit::Microsecond),
-                    }))
-                }
-                (_, DataType::Duration(TimeUnit::Microsecond)) => {
-                    // Match duration because we cast Spark's DayTime interval to Duration.
-                    Ok(Expr::Cast(expr::Cast {
-                        expr: Box::new(Expr::BinaryExpr(BinaryExpr {
-                            left: Box::new(left),
-                            op: Operator::Multiply,
-                            right: Box::new(Expr::Cast(expr::Cast {
-                                expr: Box::new(right),
-                                data_type: DataType::Int64,
-                            })),
-                        })),
-                        data_type: DataType::Duration(TimeUnit::Microsecond),
-                    }))
-                }
-                _ => Ok(Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(left),
-                    op: Operator::Multiply,
-                    right: Box::new(right),
-                })),
-            }
-        }
     }
 }
 
@@ -276,8 +275,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     ) || divisor == Expr::Literal(ScalarValue::Float16(Some(f16::from_f32(0.0))))
     {
         // FIXME: Account for array input.
-        let ansi_mode = function_context.plan_config.ansi_mode;
-        return if ansi_mode {
+        return if function_context.plan_config.ansi_mode {
             Err(PlanError::ArrowError(ArrowError::DivideByZero))
         } else {
             Ok(Expr::Literal(ScalarValue::Null))
@@ -289,6 +287,47 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor.get_type(function_context.schema),
     );
     match (dividend_type, divisor_type) {
+        // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
+        //  Seems to be a bug in DataFusion.
+        (Ok(DataType::Decimal128(_, _)), Ok(_))
+        | (Ok(_), Ok(DataType::Decimal128(_, _)))
+        | (Ok(DataType::Decimal256(_, _)), Ok(_))
+        | (Ok(_), Ok(DataType::Decimal256(_, _)))
+        | (Ok(DataType::Interval(IntervalUnit::YearMonth)), Ok(_))
+        | (Ok(DataType::Interval(IntervalUnit::DayTime)), Ok(_)) => {
+            // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
+            //  See `test_divide` in python/pysail/tests/spark/test_math.py
+            Ok(Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(dividend),
+                op: Operator::Divide,
+                right: Box::new(divisor),
+            }))
+        }
+        (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
+            // Match duration because we cast Spark's DayTime interval to Duration.
+            Ok(Expr::Cast(Cast {
+                expr: Box::new(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(Expr::Cast(Cast {
+                        expr: Box::new(dividend),
+                        data_type: DataType::Int64,
+                    })),
+                    op: Operator::Divide,
+                    right: Box::new(divisor),
+                })),
+                data_type: DataType::Duration(TimeUnit::Microsecond),
+            }))
+        }
+        (Ok(_), Ok(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(Expr::Cast(Cast {
+                expr: Box::new(dividend),
+                data_type: DataType::Float64,
+            })),
+            op: Operator::Divide,
+            right: Box::new(Expr::Cast(Cast {
+                expr: Box::new(divisor),
+                data_type: DataType::Float64,
+            })),
+        })),
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
         (Err(_), _) | (_, Err(_)) => Ok(Expr::BinaryExpr(BinaryExpr {
@@ -296,51 +335,6 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
             op: Operator::Divide,
             right: Box::new(divisor),
         })),
-        (Ok(dividend_type), Ok(divisor_type)) => {
-            // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
-            //  Seems to be a bug in DataFusion.
-            match (dividend_type, divisor_type) {
-                (DataType::Decimal128(_, _), _)
-                | (_, DataType::Decimal128(_, _))
-                | (DataType::Decimal256(_, _), _)
-                | (_, DataType::Decimal256(_, _))
-                | (DataType::Interval(IntervalUnit::YearMonth), _)
-                | (DataType::Interval(IntervalUnit::DayTime), _) => {
-                    // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
-                    //  See `test_divide` in python/pysail/tests/spark/test_math.py
-                    Ok(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(dividend),
-                        op: Operator::Divide,
-                        right: Box::new(divisor),
-                    }))
-                }
-                (DataType::Duration(TimeUnit::Microsecond), _) => {
-                    // Match duration because we cast Spark's DayTime interval to Duration.
-                    Ok(Expr::Cast(expr::Cast {
-                        expr: Box::new(Expr::BinaryExpr(BinaryExpr {
-                            left: Box::new(Expr::Cast(expr::Cast {
-                                expr: Box::new(dividend),
-                                data_type: DataType::Int64,
-                            })),
-                            op: Operator::Divide,
-                            right: Box::new(divisor),
-                        })),
-                        data_type: DataType::Duration(TimeUnit::Microsecond),
-                    }))
-                }
-                _ => Ok(Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(Expr::Cast(expr::Cast {
-                        expr: Box::new(dividend),
-                        data_type: DataType::Float64,
-                    })),
-                    op: Operator::Divide,
-                    right: Box::new(Expr::Cast(expr::Cast {
-                        expr: Box::new(divisor),
-                        data_type: DataType::Float64,
-                    })),
-                })),
-            }
-        }
     }
 }
 
@@ -365,44 +359,37 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor.get_type(function_context.schema),
     );
     let expr = match (dividend_type, divisor_type) {
+        // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
+        //  Seems to be a bug in DataFusion.
+        (Ok(DataType::Duration(_)), Ok(DataType::Duration(_))) => Expr::BinaryExpr(BinaryExpr {
+            // Match duration because we cast Spark's DayTime interval to Duration.
+            left: Box::new(Expr::Cast(Cast {
+                expr: Box::new(dividend),
+                data_type: DataType::Int64,
+            })),
+            op: Operator::Divide,
+            right: Box::new(Expr::Cast(Cast {
+                expr: Box::new(divisor),
+                data_type: DataType::Int64,
+            })),
+        }),
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
-        (Err(_), _) | (_, Err(_)) => Expr::BinaryExpr(BinaryExpr {
+        (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => Expr::BinaryExpr(BinaryExpr {
             left: Box::new(dividend),
             op: Operator::Divide,
             right: Box::new(divisor),
         }),
-        (Ok(dividend_type), Ok(divisor_type)) => match (&dividend_type, &divisor_type) {
-            // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
-            //  Seems to be a bug in DataFusion.
-            (DataType::Duration(_), DataType::Duration(_)) => Expr::BinaryExpr(BinaryExpr {
-                // Match duration because we cast Spark's DayTime interval to Duration.
-                left: Box::new(Expr::Cast(expr::Cast {
-                    expr: Box::new(dividend),
-                    data_type: DataType::Int64,
-                })),
-                op: Operator::Divide,
-                right: Box::new(Expr::Cast(expr::Cast {
-                    expr: Box::new(divisor),
-                    data_type: DataType::Int64,
-                })),
-            }),
-            _ => Expr::BinaryExpr(BinaryExpr {
-                left: Box::new(dividend),
-                op: Operator::Divide,
-                right: Box::new(divisor),
-            }),
-        },
     };
     // We need this final cast because we are doing integer division.
-    Ok(Expr::Cast(expr::Cast {
+    Ok(Expr::Cast(Cast {
         expr: Box::new(expr),
         data_type: DataType::Int64,
     }))
 }
 
 fn power(base: Expr, exponent: Expr) -> Expr {
-    Expr::Cast(expr::Cast {
+    Expr::Cast(Cast {
         expr: Box::new(expr_fn::power(base, exponent)),
         data_type: DataType::Float64,
     })
@@ -424,7 +411,7 @@ fn hypot(expr1: Expr, expr2: Expr) -> Expr {
         op: Operator::Plus,
         right: Box::new(expr2),
     });
-    Expr::Cast(expr::Cast {
+    Expr::Cast(Cast {
         expr: Box::new(expr_fn::sqrt(sum)),
         data_type: DataType::Float64,
     })
@@ -444,7 +431,7 @@ fn positive(expr: Expr) -> Expr {
 }
 
 fn rint(expr: Expr) -> Expr {
-    Expr::Cast(expr::Cast {
+    Expr::Cast(Cast {
         expr: Box::new(expr_fn::round(vec![expr])),
         data_type: DataType::Float64,
     })

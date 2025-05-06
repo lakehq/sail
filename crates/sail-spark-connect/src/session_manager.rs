@@ -13,6 +13,8 @@ use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
+use sail_plan::extension::analyzer::default_analyzer_rules;
+use sail_plan::extension::optimizer::default_optimizer_rules;
 use sail_plan::function::{
     BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
 };
@@ -153,6 +155,8 @@ impl SessionManager {
             .with_config(session_config)
             .with_runtime_env(runtime)
             .with_default_features()
+            .with_analyzer_rules(default_analyzer_rules())
+            .with_optimizer_rules(default_optimizer_rules())
             .with_query_planner(new_query_planner())
             .build();
         let context = SessionContext::new_with_state(state);

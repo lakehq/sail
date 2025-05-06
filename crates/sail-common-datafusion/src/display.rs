@@ -2,7 +2,7 @@
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
-use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{NaiveDate, SecondsFormat, TimeZone, Utc};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::{
@@ -23,16 +23,34 @@ use datafusion::arrow::temporal_conversions::{
 };
 use lexical_core::FormattedSize;
 
-type TimeFormat<'a> = Option<&'a str>;
+use crate::formatter::{
+    BinaryFormatter, Date32Formatter, Date64Formatter, DurationMicrosecondFormatter,
+    DurationMillisecondFormatter, DurationNanosecondFormatter, DurationSecondFormatter,
+    IntervalDayTimeFormatter, IntervalMonthDayNanoFormatter, IntervalYearMonthFormatter,
+    Time32MillisecondFormatter, Time32SecondFormatter, Time64MicrosecondFormatter,
+    Time64NanosecondFormatter, TimestampMicrosecondFormatter, TimestampMillisecondFormatter,
+    TimestampNanosecondFormatter, TimestampSecondFormatter,
+};
+
+/// Format for displaying datetime values
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum TimeFormat<'a> {
+    /// RFC 3339 format
+    Rfc3339,
+    /// Custom format specified by the format string
+    Custom(&'a str),
+    /// Spark format
+    Spark,
+}
 
 /// Format for displaying durations
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DurationFormat {
-    /// ISO 8601 - `P198DT72932.972880S`
-    ISO8601,
-    /// A human readable representation - `198 days 16 hours 34 mins 15.407810000 secs`
-    Pretty,
+    /// ISO 8601 format
+    Iso8601,
+    /// Spark format (displayed as intervals)
+    Spark,
 }
 
 /// Options for formatting arrays
@@ -71,13 +89,13 @@ impl<'a> FormatOptions<'a> {
     pub const fn new() -> Self {
         Self {
             safe: true,
-            null: "",
-            date_format: None,
-            datetime_format: None,
-            timestamp_format: None,
-            timestamp_tz_format: None,
-            time_format: None,
-            duration_format: DurationFormat::ISO8601,
+            null: "NULL",
+            date_format: TimeFormat::Spark,
+            datetime_format: TimeFormat::Spark,
+            timestamp_format: TimeFormat::Spark,
+            timestamp_tz_format: TimeFormat::Spark,
+            time_format: TimeFormat::Spark,
+            duration_format: DurationFormat::Spark,
         }
     }
 
@@ -89,14 +107,12 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the string used to represent a null
-    ///
-    /// Defaults to `""`
     pub const fn with_null(self, null: &'a str) -> Self {
         Self { null, ..self }
     }
 
     /// Overrides the format used for [`DataType::Date32`] columns
-    pub const fn with_date_format(self, date_format: Option<&'a str>) -> Self {
+    pub const fn with_date_format(self, date_format: TimeFormat<'a>) -> Self {
         Self {
             date_format,
             ..self
@@ -104,7 +120,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Date64`] columns
-    pub const fn with_datetime_format(self, datetime_format: Option<&'a str>) -> Self {
+    pub const fn with_datetime_format(self, datetime_format: TimeFormat<'a>) -> Self {
         Self {
             datetime_format,
             ..self
@@ -112,7 +128,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Timestamp`] columns without a timezone
-    pub const fn with_timestamp_format(self, timestamp_format: Option<&'a str>) -> Self {
+    pub const fn with_timestamp_format(self, timestamp_format: TimeFormat<'a>) -> Self {
         Self {
             timestamp_format,
             ..self
@@ -120,7 +136,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Timestamp`] columns with a timezone
-    pub const fn with_timestamp_tz_format(self, timestamp_tz_format: Option<&'a str>) -> Self {
+    pub const fn with_timestamp_tz_format(self, timestamp_tz_format: TimeFormat<'a>) -> Self {
         Self {
             timestamp_tz_format,
             ..self
@@ -128,7 +144,7 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for [`DataType::Time32`] and [`DataType::Time64`] columns
-    pub const fn with_time_format(self, time_format: Option<&'a str>) -> Self {
+    pub const fn with_time_format(self, time_format: TimeFormat<'a>) -> Self {
         Self {
             time_format,
             ..self
@@ -136,8 +152,6 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the format used for duration columns
-    ///
-    /// Defaults to [`DurationFormat::ISO8601`]
     pub const fn with_duration_format(self, duration_format: DurationFormat) -> Self {
         Self {
             duration_format,
@@ -161,7 +175,7 @@ impl ValueFormatter<'_> {
         match self.formatter.format.write(self.idx, s) {
             Ok(_) => Ok(()),
             Err(FormatError::Arrow(e)) => Err(e),
-            Err(FormatError::Format(_)) => Err(ArrowError::CastError("Format error".to_string())),
+            Err(FormatError::Format(_)) => Err(ArrowError::CastError("format error".to_string())),
         }
     }
 
@@ -464,42 +478,24 @@ macro_rules! decimal_display {
 
 decimal_display!(Decimal128Type, Decimal256Type);
 
-fn write_timestamp(
-    f: &mut dyn Write,
-    naive: NaiveDateTime,
-    timezone: Option<Tz>,
-    format: Option<&str>,
-) -> FormatResult {
-    match timezone {
-        Some(tz) => {
-            let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
-            match format {
-                Some(s) => write!(f, "{}", date.format(s))?,
-                None => write!(
-                    f,
-                    "{}",
-                    date.to_rfc3339_opts(SecondsFormat::AutoSi, true)
-                        .replace('T', " ")
-                        .replace('Z', "")
-                )?,
-            }
-        }
-        None => match format {
-            Some(s) => write!(f, "{}", naive.format(s))?,
-            None => write!(f, "{}", format!("{naive:?}").replace('T', " "))?,
-        },
-    }
-    Ok(())
+macro_rules! try_convert {
+    ($value:expr, $f:expr, $t:expr $(,)?) => {
+        $f($value).ok_or_else(|| {
+            ArrowError::CastError(format!(concat!("invalid ", $t, " value: {}"), $value))
+        })
+    };
 }
 
 macro_rules! timestamp_display {
-    ($($t:ty),+) => {
-        $(impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
+    ($t:ty, $formatter:expr $(,)?) => {
+        impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
             type State = (Option<Tz>, TimeFormat<'a>);
 
             fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 match self.data_type() {
-                    DataType::Timestamp(_, Some(tz)) => Ok((Some(tz.parse()?), options.timestamp_tz_format)),
+                    DataType::Timestamp(_, Some(tz)) => {
+                        Ok((Some(tz.parse()?), options.timestamp_tz_format))
+                    }
                     DataType::Timestamp(_, None) => Ok((None, options.timestamp_format)),
                     _ => unreachable!(),
                 }
@@ -507,29 +503,41 @@ macro_rules! timestamp_display {
 
             fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
-                let naive = as_datetime::<$t>(value).ok_or_else(|| {
-                    ArrowError::CastError(format!(
-                        "Failed to convert {} to datetime for {}",
-                        value,
-                        self.data_type()
-                    ))
-                })?;
 
-                write_timestamp(f, naive, s.0, s.1.clone())
+                match s {
+                    (Some(tz), TimeFormat::Rfc3339) => {
+                        let naive = try_convert!(value, as_datetime::<$t>, "timestamp")?;
+                        let date = Utc.from_utc_datetime(&naive).with_timezone(tz);
+                        write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
+                    }
+                    (None, TimeFormat::Rfc3339) => {
+                        let naive = try_convert!(value, as_datetime::<$t>, "timestamp")?;
+                        write!(f, "{naive:?}")?
+                    }
+                    (Some(tz), TimeFormat::Custom(s)) => {
+                        let naive = try_convert!(value, as_datetime::<$t>, "timestamp")?;
+                        let date = Utc.from_utc_datetime(&naive).with_timezone(tz);
+                        write!(f, "{}", date.format(s))?
+                    }
+                    (None, TimeFormat::Custom(s)) => {
+                        let naive = try_convert!(value, as_datetime::<$t>, "timestamp")?;
+                        write!(f, "{}", naive.format(s))?
+                    }
+                    (tz, TimeFormat::Spark) => write!(f, "{}", $formatter(value, tz.as_ref()))?,
+                }
+                Ok(())
             }
-        })+
+        }
     };
 }
 
-timestamp_display!(
-    TimestampSecondType,
-    TimestampMillisecondType,
-    TimestampMicrosecondType,
-    TimestampNanosecondType
-);
+timestamp_display!(TimestampSecondType, TimestampSecondFormatter);
+timestamp_display!(TimestampMillisecondType, TimestampMillisecondFormatter);
+timestamp_display!(TimestampMicrosecondType, TimestampMicrosecondFormatter);
+timestamp_display!(TimestampNanosecondType, TimestampNanosecondFormatter);
 
 macro_rules! temporal_display {
-    ($convert:ident, $format:ident, $t:ty) => {
+    ($t:ty, $format:ident, $converter:ident, $formatter:ident $(,)?) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
             type State = TimeFormat<'a>;
 
@@ -539,17 +547,16 @@ macro_rules! temporal_display {
 
             fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
-                let naive = $convert(value as _).ok_or_else(|| {
-                    ArrowError::CastError(format!(
-                        "Failed to convert {} to temporal for {}",
-                        value,
-                        self.data_type()
-                    ))
-                })?;
-
                 match fmt {
-                    Some(s) => write!(f, "{}", naive.format(s))?,
-                    None => write!(f, "{naive:?}")?,
+                    TimeFormat::Rfc3339 => {
+                        let naive = try_convert!(value, $converter, "temporal")?;
+                        write!(f, "{naive:?}")?
+                    }
+                    TimeFormat::Custom(s) => {
+                        let naive = try_convert!(value, $converter, "temporal")?;
+                        write!(f, "{}", naive.format(s))?
+                    }
+                    TimeFormat::Spark => write!(f, "{}", $formatter(value))?,
                 }
                 Ok(())
             }
@@ -562,15 +569,40 @@ fn date32_to_date(value: i32) -> Option<NaiveDate> {
     Some(date32_to_datetime(value)?.date())
 }
 
-temporal_display!(date32_to_date, date_format, Date32Type);
-temporal_display!(date64_to_datetime, datetime_format, Date64Type);
-temporal_display!(time32s_to_time, time_format, Time32SecondType);
-temporal_display!(time32ms_to_time, time_format, Time32MillisecondType);
-temporal_display!(time64us_to_time, time_format, Time64MicrosecondType);
-temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
+temporal_display!(Date32Type, date_format, date32_to_date, Date32Formatter);
+temporal_display!(
+    Date64Type,
+    datetime_format,
+    date64_to_datetime,
+    Date64Formatter,
+);
+temporal_display!(
+    Time32SecondType,
+    time_format,
+    time32s_to_time,
+    Time32SecondFormatter,
+);
+temporal_display!(
+    Time32MillisecondType,
+    time_format,
+    time32ms_to_time,
+    Time32MillisecondFormatter,
+);
+temporal_display!(
+    Time64MicrosecondType,
+    time_format,
+    time64us_to_time,
+    Time64MicrosecondFormatter,
+);
+temporal_display!(
+    Time64NanosecondType,
+    time_format,
+    time64ns_to_time,
+    Time64NanosecondFormatter,
+);
 
 macro_rules! duration_display {
-    ($convert:ident, $t:ty, $scale:tt) => {
+    ($t:ty, $converter:ident, $formatter:ident $(,)?) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
             type State = DurationFormat;
 
@@ -581,8 +613,8 @@ macro_rules! duration_display {
             fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let v = self.value(idx);
                 match fmt {
-                    DurationFormat::ISO8601 => write!(f, "{}", $convert(v))?,
-                    DurationFormat::Pretty => duration_fmt!(f, v, $scale)?,
+                    DurationFormat::Iso8601 => write!(f, "{}", $converter(v))?,
+                    DurationFormat::Spark => write!(f, "{}", $formatter(v))?,
                 }
                 Ok(())
             }
@@ -590,205 +622,44 @@ macro_rules! duration_display {
     };
 }
 
-macro_rules! duration_fmt {
-    ($f:ident, $v:expr, 0) => {{
-        let secs = $v;
-        let mins = secs / 60;
-        let hours = mins / 60;
-        let days = hours / 24;
-
-        let secs = secs - (mins * 60);
-        let mins = mins - (hours * 60);
-        let hours = hours - (days * 24);
-        write!($f, "{days} days {hours} hours {mins} mins {secs} secs")
-    }};
-    ($f:ident, $v:expr, $scale:tt) => {{
-        let subsec = $v;
-        let secs = subsec / 10_i64.pow($scale);
-        let mins = secs / 60;
-        let hours = mins / 60;
-        let days = hours / 24;
-
-        let subsec = subsec - (secs * 10_i64.pow($scale));
-        let secs = secs - (mins * 60);
-        let mins = mins - (hours * 60);
-        let hours = hours - (days * 24);
-        match subsec.is_negative() {
-            true => {
-                write!(
-                    $f,
-                    concat!("{} days {} hours {} mins -{}.{:0", $scale, "} secs"),
-                    days,
-                    hours,
-                    mins,
-                    secs.abs(),
-                    subsec.abs()
-                )
-            }
-            false => {
-                write!(
-                    $f,
-                    concat!("{} days {} hours {} mins {}.{:0", $scale, "} secs"),
-                    days, hours, mins, secs, subsec
-                )
-            }
-        }
-    }};
-}
-
-duration_display!(duration_s_to_duration, DurationSecondType, 0);
-duration_display!(duration_ms_to_duration, DurationMillisecondType, 3);
-duration_display!(duration_us_to_duration, DurationMicrosecondType, 6);
-duration_display!(duration_ns_to_duration, DurationNanosecondType, 9);
+duration_display!(
+    DurationSecondType,
+    duration_s_to_duration,
+    DurationSecondFormatter,
+);
+duration_display!(
+    DurationMillisecondType,
+    duration_ms_to_duration,
+    DurationMillisecondFormatter,
+);
+duration_display!(
+    DurationMicrosecondType,
+    duration_us_to_duration,
+    DurationMicrosecondFormatter,
+);
+duration_display!(
+    DurationNanosecondType,
+    duration_ns_to_duration,
+    DurationNanosecondFormatter,
+);
 
 impl DisplayIndex for &PrimitiveArray<IntervalYearMonthType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let interval = self.value(idx) as f64;
-        let years = (interval / 12_f64).floor();
-        let month = interval - (years * 12_f64);
-
-        write!(f, "INTERVAL '{years}-{month}' YEAR TO MONTH",)?;
+        write!(f, "{}", IntervalYearMonthFormatter(self.value(idx),))?;
         Ok(())
     }
 }
 
 impl DisplayIndex for &PrimitiveArray<IntervalDayTimeType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let value = self.value(idx);
-        let mut prefix = "";
-
-        if value.days != 0 {
-            write!(f, "{prefix}{} days", value.days)?;
-            prefix = " ";
-        }
-
-        if value.milliseconds != 0 {
-            let millis_fmt = MillisecondsFormatter {
-                milliseconds: value.milliseconds,
-                prefix,
-            };
-
-            f.write_fmt(format_args!("{millis_fmt}"))?;
-        }
-
+        write!(f, "{}", IntervalDayTimeFormatter(self.value(idx)))?;
         Ok(())
     }
 }
 
 impl DisplayIndex for &PrimitiveArray<IntervalMonthDayNanoType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let value = self.value(idx);
-        let mut prefix = "";
-
-        if value.months != 0 {
-            write!(f, "{prefix}{} mons", value.months)?;
-            prefix = " ";
-        }
-
-        if value.days != 0 {
-            write!(f, "{prefix}{} days", value.days)?;
-            prefix = " ";
-        }
-
-        if value.nanoseconds != 0 {
-            let nano_fmt = NanosecondsFormatter {
-                nanoseconds: value.nanoseconds,
-                prefix,
-            };
-            f.write_fmt(format_args!("{nano_fmt}"))?;
-        }
-
-        Ok(())
-    }
-}
-
-struct NanosecondsFormatter<'a> {
-    nanoseconds: i64,
-    prefix: &'a str,
-}
-
-impl Display for NanosecondsFormatter<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut prefix = self.prefix;
-
-        let secs = self.nanoseconds / 1_000_000_000;
-        let mins = secs / 60;
-        let hours = mins / 60;
-
-        let secs = secs - (mins * 60);
-        let mins = mins - (hours * 60);
-
-        let nanoseconds = self.nanoseconds % 1_000_000_000;
-
-        if hours != 0 {
-            write!(f, "{prefix}{} hours", hours)?;
-            prefix = " ";
-        }
-
-        if mins != 0 {
-            write!(f, "{prefix}{} mins", mins)?;
-            prefix = " ";
-        }
-
-        if secs != 0 || nanoseconds != 0 {
-            let secs_sign = if secs < 0 || nanoseconds < 0 { "-" } else { "" };
-            write!(
-                f,
-                "{prefix}{}{}.{:09} secs",
-                secs_sign,
-                secs.abs(),
-                nanoseconds.abs()
-            )?;
-        }
-
-        Ok(())
-    }
-}
-
-struct MillisecondsFormatter<'a> {
-    milliseconds: i32,
-    prefix: &'a str,
-}
-
-impl Display for MillisecondsFormatter<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut prefix = self.prefix;
-
-        let secs = self.milliseconds / 1_000;
-        let mins = secs / 60;
-        let hours = mins / 60;
-
-        let secs = secs - (mins * 60);
-        let mins = mins - (hours * 60);
-
-        let milliseconds = self.milliseconds % 1_000;
-
-        if hours != 0 {
-            write!(f, "{prefix}{} hours", hours,)?;
-            prefix = " ";
-        }
-
-        if mins != 0 {
-            write!(f, "{prefix}{} mins", mins,)?;
-            prefix = " ";
-        }
-
-        if secs != 0 || milliseconds != 0 {
-            let secs_sign = if secs < 0 || milliseconds < 0 {
-                "-"
-            } else {
-                ""
-            };
-
-            write!(
-                f,
-                "{prefix}{}{}.{:03} secs",
-                secs_sign,
-                secs.abs(),
-                milliseconds.abs()
-            )?;
-        }
-
+        write!(f, "{}", IntervalMonthDayNanoFormatter(self.value(idx)))?;
         Ok(())
     }
 }
@@ -809,45 +680,21 @@ impl DisplayIndex for &StringViewArray {
 
 impl<O: OffsetSizeTrait> DisplayIndex for &GenericBinaryArray<O> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let v = self.value(idx);
-        write!(f, "[")?;
-        for (i, byte) in v.iter().enumerate() {
-            if i > 0 {
-                write!(f, " ")?;
-            }
-            write!(f, "{byte:02X}")?;
-        }
-        write!(f, "]")?;
+        write!(f, "{}", BinaryFormatter(self.value(idx)))?;
         Ok(())
     }
 }
 
 impl DisplayIndex for &BinaryViewArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let v = self.value(idx);
-        write!(f, "[")?;
-        for (i, byte) in v.iter().enumerate() {
-            if i > 0 {
-                write!(f, " ")?;
-            }
-            write!(f, "{byte:02X}")?;
-        }
-        write!(f, "]")?;
+        write!(f, "{}", BinaryFormatter(self.value(idx)))?;
         Ok(())
     }
 }
 
 impl DisplayIndex for &FixedSizeBinaryArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        let v = self.value(idx);
-        write!(f, "[")?;
-        for (i, byte) in v.iter().enumerate() {
-            if i > 0 {
-                write!(f, " ")?;
-            }
-            write!(f, "{byte:02X}")?;
-        }
-        write!(f, "]")?;
+        write!(f, "{}", BinaryFormatter(self.value(idx)))?;
         Ok(())
     }
 }
@@ -1070,12 +917,12 @@ mod tests {
 
     /// Test to verify options can be constant. See #4580
     const TEST_CONST_OPTIONS: FormatOptions<'static> = FormatOptions::new()
-        .with_date_format(Some("foo"))
-        .with_timestamp_format(Some("404"));
+        .with_date_format(TimeFormat::Custom("foo"))
+        .with_timestamp_format(TimeFormat::Custom("404"));
 
     #[test]
     fn test_const_options() {
-        assert_eq!(TEST_CONST_OPTIONS.date_format, Some("foo"));
+        assert_eq!(TEST_CONST_OPTIONS.date_format, TimeFormat::Custom("foo"));
     }
 
     #[test]
@@ -1103,8 +950,8 @@ mod tests {
 
     #[test]
     fn test_array_value_to_string_duration() {
-        let iso_fmt = FormatOptions::new();
-        let pretty_fmt = FormatOptions::new().with_duration_format(DurationFormat::Pretty);
+        let iso_fmt = FormatOptions::new().with_duration_format(DurationFormat::Iso8601);
+        let spark_fmt = FormatOptions::new().with_duration_format(DurationFormat::Spark);
 
         let array = DurationNanosecondArray::from(vec![
             1,
@@ -1115,20 +962,20 @@ mod tests {
             -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000_000 - 123456789,
         ]);
         let iso = format_array(&array, &iso_fmt);
-        let pretty = format_array(&array, &pretty_fmt);
+        let spark = format_array(&array, &spark_fmt);
 
         assert_eq!(iso[0], "PT0.000000001S");
-        assert_eq!(pretty[0], "0 days 0 hours 0 mins 0.000000001 secs");
+        assert_eq!(spark[0], "INTERVAL '0 00:00:00.000000001' DAY TO SECOND");
         assert_eq!(iso[1], "-PT0.000000001S");
-        assert_eq!(pretty[1], "0 days 0 hours 0 mins -0.000000001 secs");
+        assert_eq!(spark[1], "INTERVAL '-0 00:00:00.000000001' DAY TO SECOND");
         assert_eq!(iso[2], "PT0.000001S");
-        assert_eq!(pretty[2], "0 days 0 hours 0 mins 0.000001000 secs");
+        assert_eq!(spark[2], "INTERVAL '0 00:00:00.000001' DAY TO SECOND");
         assert_eq!(iso[3], "-PT0.000001S");
-        assert_eq!(pretty[3], "0 days 0 hours 0 mins -0.000001000 secs");
+        assert_eq!(spark[3], "INTERVAL '-0 00:00:00.000001' DAY TO SECOND");
         assert_eq!(iso[4], "PT3938554.123456789S");
-        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123456789 secs");
+        assert_eq!(spark[4], "INTERVAL '45 14:02:34.123456789' DAY TO SECOND");
         assert_eq!(iso[5], "-PT3938554.123456789S");
-        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123456789 secs");
+        assert_eq!(spark[5], "INTERVAL '-45 14:02:34.123456789' DAY TO SECOND");
 
         let array = DurationMicrosecondArray::from(vec![
             1,
@@ -1139,20 +986,20 @@ mod tests {
             -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000_000 - 123456,
         ]);
         let iso = format_array(&array, &iso_fmt);
-        let pretty = format_array(&array, &pretty_fmt);
+        let spark = format_array(&array, &spark_fmt);
 
         assert_eq!(iso[0], "PT0.000001S");
-        assert_eq!(pretty[0], "0 days 0 hours 0 mins 0.000001 secs");
+        assert_eq!(spark[0], "INTERVAL '0 00:00:00.000001' DAY TO SECOND");
         assert_eq!(iso[1], "-PT0.000001S");
-        assert_eq!(pretty[1], "0 days 0 hours 0 mins -0.000001 secs");
+        assert_eq!(spark[1], "INTERVAL '-0 00:00:00.000001' DAY TO SECOND");
         assert_eq!(iso[2], "PT0.001S");
-        assert_eq!(pretty[2], "0 days 0 hours 0 mins 0.001000 secs");
+        assert_eq!(spark[2], "INTERVAL '0 00:00:00.001' DAY TO SECOND");
         assert_eq!(iso[3], "-PT0.001S");
-        assert_eq!(pretty[3], "0 days 0 hours 0 mins -0.001000 secs");
+        assert_eq!(spark[3], "INTERVAL '-0 00:00:00.001' DAY TO SECOND");
         assert_eq!(iso[4], "PT3938554.123456S");
-        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123456 secs");
+        assert_eq!(spark[4], "INTERVAL '45 14:02:34.123456' DAY TO SECOND");
         assert_eq!(iso[5], "-PT3938554.123456S");
-        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123456 secs");
+        assert_eq!(spark[5], "INTERVAL '-45 14:02:34.123456' DAY TO SECOND");
 
         let array = DurationMillisecondArray::from(vec![
             1,
@@ -1163,20 +1010,20 @@ mod tests {
             -(45 * 60 * 60 * 24 + 14 * 60 * 60 + 2 * 60 + 34) * 1_000 - 123,
         ]);
         let iso = format_array(&array, &iso_fmt);
-        let pretty = format_array(&array, &pretty_fmt);
+        let spark = format_array(&array, &spark_fmt);
 
         assert_eq!(iso[0], "PT0.001S");
-        assert_eq!(pretty[0], "0 days 0 hours 0 mins 0.001 secs");
+        assert_eq!(spark[0], "INTERVAL '0 00:00:00.001' DAY TO SECOND");
         assert_eq!(iso[1], "-PT0.001S");
-        assert_eq!(pretty[1], "0 days 0 hours 0 mins -0.001 secs");
+        assert_eq!(spark[1], "INTERVAL '-0 00:00:00.001' DAY TO SECOND");
         assert_eq!(iso[2], "PT1S");
-        assert_eq!(pretty[2], "0 days 0 hours 0 mins 1.000 secs");
+        assert_eq!(spark[2], "INTERVAL '0 00:00:01' DAY TO SECOND");
         assert_eq!(iso[3], "-PT1S");
-        assert_eq!(pretty[3], "0 days 0 hours 0 mins -1.000 secs");
+        assert_eq!(spark[3], "INTERVAL '-0 00:00:01' DAY TO SECOND");
         assert_eq!(iso[4], "PT3938554.123S");
-        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34.123 secs");
+        assert_eq!(spark[4], "INTERVAL '45 14:02:34.123' DAY TO SECOND");
         assert_eq!(iso[5], "-PT3938554.123S");
-        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34.123 secs");
+        assert_eq!(spark[5], "INTERVAL '-45 14:02:34.123' DAY TO SECOND");
 
         let array = DurationSecondArray::from(vec![
             1,
@@ -1187,20 +1034,20 @@ mod tests {
             -45 * 60 * 60 * 24 - 14 * 60 * 60 - 2 * 60 - 34,
         ]);
         let iso = format_array(&array, &iso_fmt);
-        let pretty = format_array(&array, &pretty_fmt);
+        let spark = format_array(&array, &spark_fmt);
 
         assert_eq!(iso[0], "PT1S");
-        assert_eq!(pretty[0], "0 days 0 hours 0 mins 1 secs");
+        assert_eq!(spark[0], "INTERVAL '0 00:00:01' DAY TO SECOND");
         assert_eq!(iso[1], "-PT1S");
-        assert_eq!(pretty[1], "0 days 0 hours 0 mins -1 secs");
+        assert_eq!(spark[1], "INTERVAL '-0 00:00:01' DAY TO SECOND");
         assert_eq!(iso[2], "PT1000S");
-        assert_eq!(pretty[2], "0 days 0 hours 16 mins 40 secs");
+        assert_eq!(spark[2], "INTERVAL '0 00:16:40' DAY TO SECOND");
         assert_eq!(iso[3], "-PT1000S");
-        assert_eq!(pretty[3], "0 days 0 hours -16 mins -40 secs");
+        assert_eq!(spark[3], "INTERVAL '-0 00:16:40' DAY TO SECOND");
         assert_eq!(iso[4], "PT3938554S");
-        assert_eq!(pretty[4], "45 days 14 hours 2 mins 34 secs");
+        assert_eq!(spark[4], "INTERVAL '45 14:02:34' DAY TO SECOND");
         assert_eq!(iso[5], "-PT3938554S");
-        assert_eq!(pretty[5], "-45 days -14 hours -2 mins -34 secs");
+        assert_eq!(spark[5], "INTERVAL '-45 14:02:34' DAY TO SECOND");
     }
 
     #[test]

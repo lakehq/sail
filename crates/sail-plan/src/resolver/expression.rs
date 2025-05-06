@@ -1,10 +1,13 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
+use std::ops::Div;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion::arrow::datatypes::{DataType, Date32Type};
+use datafusion::arrow::array::timezone::Tz;
+use datafusion::arrow::datatypes::{DataType, Date32Type, IntervalUnit, TimeUnit};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
@@ -18,20 +21,23 @@ use datafusion_expr::{
 };
 use datafusion_functions_nested::expr_fn::array_element;
 use sail_common::spec;
-use sail_common::spec::{PySparkUdfType, TimestampType};
-use sail_common_datafusion::datetime::date::parse_date;
-use sail_common_datafusion::datetime::timestamp::{
-    parse_timestamp, parse_timezone, TimestampValue,
-};
+use sail_common_datafusion::datetime::localize_with_fallback;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
+use sail_sql_analyzer::parser::{parse_date, parse_timestamp};
 
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::datetime::spark_date::SparkDate;
+use crate::extension::function::datetime::spark_interval::{
+    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
+};
+use crate::extension::function::datetime::spark_timestamp::SparkTimestamp;
 use crate::extension::function::drop_struct_field::DropStructField;
 use crate::extension::function::multi_expr::MultiExpr;
+use crate::extension::function::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use crate::extension::function::table_input::TableInput;
 use crate::extension::function::update_struct_field::UpdateStructField;
 use crate::function::common::{
@@ -957,14 +963,15 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let data_type = self.resolve_data_type(&cast_to_type, state)?;
+        let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
+        let expr_type = expr.get_type(schema)?;
         let name = if rename {
             let data_type_string = self
                 .config
                 .plan_formatter
-                .data_type_to_simple_string(&data_type)?;
+                .data_type_to_simple_string(&cast_to_type)?;
             vec![format!(
                 "CAST({} AS {})",
                 name.one()?,
@@ -973,10 +980,57 @@ impl PlanResolver<'_> {
         } else {
             name
         };
-        let expr = expr::Expr::Cast(expr::Cast {
-            expr: Box::new(expr),
-            data_type,
-        });
+        let override_string_cast = matches!(
+            expr_type,
+            DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Duration(_)
+                | DataType::Interval(_)
+                | DataType::Timestamp(_, _)
+                | DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_)
+                | DataType::Struct(_)
+                | DataType::Map(_, _)
+        );
+        let expr = match (expr_type, cast_to_type) {
+            (DataType::Timestamp(time_unit, _), to) if to.is_numeric() => expr::Expr::Cast(
+                expr::Cast::new(Box::new(scale_timestamp(expr, &time_unit)), to),
+            ),
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Interval(IntervalUnit::YearMonth),
+            ) => ScalarUDF::new_from_impl(SparkYearMonthInterval::new()).call(vec![expr]),
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Duration(TimeUnit::Microsecond),
+            ) => ScalarUDF::new_from_impl(SparkDayTimeInterval::new()).call(vec![expr]),
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Interval(IntervalUnit::MonthDayNano),
+            ) => ScalarUDF::new_from_impl(SparkCalendarInterval::new()).call(vec![expr]),
+            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32) => {
+                ScalarUDF::new_from_impl(SparkDate::new()).call(vec![expr])
+            }
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Timestamp(TimeUnit::Microsecond, tz),
+            ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(tz)?)).call(vec![expr]),
+            (_, DataType::Utf8) if override_string_cast => {
+                ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
+            }
+            (_, DataType::LargeUtf8) if override_string_cast => {
+                ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
+            }
+            (_, DataType::Utf8View) if override_string_cast => {
+                ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
+            }
+            (_, to) => expr::Expr::Cast(expr::Cast::new(Box::new(expr), to)),
+        };
         Ok(NamedExpr::new(name, expr))
     }
 
@@ -1120,7 +1174,7 @@ impl PlanResolver<'_> {
                     &self.config.pyspark_udf_config,
                 )?;
                 let function = match function.eval_type {
-                    PySparkUdfType::GroupedAggPandas => {
+                    spec::PySparkUdfType::GroupedAggPandas => {
                         let udaf = PySparkGroupAggregateUDF::new(
                             get_udf_name(&function_name, &payload),
                             payload,
@@ -1924,7 +1978,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let date = parse_date(&value)?;
         let literal = spec::Literal::Date32 {
-            days: Some(Date32Type::from_naive_date(date)),
+            days: Some(Date32Type::from_naive_date(date.try_into()?)),
         };
         self.resolve_expression_literal(literal, state)
     }
@@ -1935,24 +1989,29 @@ impl PlanResolver<'_> {
         timestamp_type: TimestampType,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let TimestampValue { datetime, timezone } = parse_timestamp(&value)?;
+        let (datetime, timezone) = parse_timestamp(&value).and_then(|x| x.into_naive())?;
+        let timezone = if timezone.is_empty() {
+            None
+        } else {
+            Some(timezone.parse::<Tz>()?)
+        };
         let (datetime, timestamp_type) = match (timestamp_type, timezone, self.config.default_timestamp_type) {
-                (TimestampType::Configured, None, DefaultTimestampType::TimestampLtz)
-                | (TimestampType::WithLocalTimeZone, None, _) => {
-                    let tz = parse_timezone(&self.config.session_timezone)?;
-                    let datetime = tz.localize_with_fallback(&datetime)?;
-                    (datetime, TimestampType::WithLocalTimeZone)
+                (spec::TimestampType::Configured, None, DefaultTimestampType::TimestampLtz)
+                | (spec::TimestampType::WithLocalTimeZone, None, _) => {
+                    let tz = Tz::from_str(&self.config.session_timezone)?;
+                    let datetime = localize_with_fallback(&tz, &datetime)?;
+                    (datetime, spec::TimestampType::WithLocalTimeZone)
                 }
-                (TimestampType::Configured, Some(tz), _)
-                | (TimestampType::WithLocalTimeZone, Some(tz), _) => {
-                    let datetime = tz.localize_with_fallback(&datetime)?;
-                    (datetime, TimestampType::WithLocalTimeZone)
+                (spec::TimestampType::Configured, Some(tz), _)
+                | (spec::TimestampType::WithLocalTimeZone, Some(tz), _) => {
+                    let datetime = localize_with_fallback(&tz, &datetime)?;
+                    (datetime, spec::TimestampType::WithLocalTimeZone)
                 }
-                (TimestampType::Configured, None, DefaultTimestampType::TimestampNtz)
+                (spec::TimestampType::Configured, None, DefaultTimestampType::TimestampNtz)
                 // If the timestamp type is explicitly `TIMESTAMP_NTZ`, the time zone in the literal
                 // is simply ignored.
-                | (TimestampType::WithoutTimeZone, _, _) => {
-                    (datetime.and_utc(), TimestampType::WithoutTimeZone)
+                | (spec::TimestampType::WithoutTimeZone, _, _) => {
+                    (datetime.and_utc(), spec::TimestampType::WithoutTimeZone)
                 }
             };
         let literal = spec::Literal::TimestampMicrosecond {
@@ -2054,6 +2113,19 @@ fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableRe
             table,
         }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
         None => true,
+    }
+}
+
+fn scale_timestamp(expr: expr::Expr, time_unit: &TimeUnit) -> expr::Expr {
+    let expr = expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr),
+        data_type: DataType::Int64,
+    });
+    match time_unit {
+        TimeUnit::Second => expr,
+        TimeUnit::Millisecond => expr.div(lit(1_000i64)),
+        TimeUnit::Microsecond => expr.div(lit(1_000_000i64)),
+        TimeUnit::Nanosecond => expr.div(lit(1_000_000_000i64)),
     }
 }
 

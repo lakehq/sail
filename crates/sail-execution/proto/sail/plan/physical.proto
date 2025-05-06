@@ -121,7 +121,7 @@ message TimestampNowUdf {
 }
 
 message SparkTimestampUdf {
-  string timezone = 1;
+  optional string timezone = 1;
 }
 
 message SparkFromUtcTimestampUdf {

@@ -16,6 +16,10 @@ use sail_sql_parser::parser::{
 use sail_sql_parser::token::Token;
 
 use crate::error::{SqlError, SqlResult};
+use crate::literal::datetime::{
+    create_date_parser, create_timestamp_parser, DateValue, TimestampValue,
+};
+use crate::literal::interval::{parse_unqualified_interval_string, IntervalValue};
 
 fn map_parser_input<'a, C>(
     (t, s): &'a (Token<'a>, SimpleSpan<usize, C>),
@@ -37,6 +41,13 @@ macro_rules! parse {
             .map((length..length).into(), map_parser_input);
         let parser = $parser::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(&options);
         parser.parse(tokens).into_result().map_err(SqlError::parser)
+    }};
+}
+
+macro_rules! parse_simple {
+    ($input:ident, $parser:ident $(,)?) => {{
+        let parser = $parser::<chumsky::extra::Err<chumsky::error::Rich<_, _>>>();
+        parser.parse($input).into_result().map_err(SqlError::parser)
     }};
 }
 
@@ -74,6 +85,18 @@ pub fn parse_named_expression(s: &str) -> SqlResult<NamedExpr> {
 
 pub(crate) fn parse_interval_literal(s: &str) -> SqlResult<IntervalLiteral> {
     parse!(s, create_interval_literal_parser)
+}
+
+pub fn parse_interval(s: &str) -> SqlResult<IntervalValue> {
+    parse_unqualified_interval_string(s, false)
+}
+
+pub fn parse_date(s: &str) -> SqlResult<DateValue> {
+    parse_simple!(s, create_date_parser)
+}
+
+pub fn parse_timestamp(s: &str) -> SqlResult<TimestampValue> {
+    parse_simple!(s, create_timestamp_parser)
 }
 
 #[cfg(test)]

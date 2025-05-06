@@ -10,7 +10,7 @@ use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use sail_common::string::escape_meta_characters;
-use sail_common_datafusion::display::{ArrayFormatter, DurationFormat, FormatOptions};
+use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 
 use crate::utils::ItemTaker;
 
@@ -61,11 +61,7 @@ impl ShowStringFormat {
     }
 
     fn get_formatters<'a>(&'a self, batch: &'a RecordBatch) -> Result<Vec<ArrayFormatter<'a>>> {
-        let options = FormatOptions::default()
-            .with_null("NULL")
-            .with_duration_format(DurationFormat::Pretty)
-            .with_timestamp_format(Some("%Y-%m-%d %H:%M:%S%.f"))
-            .with_timestamp_tz_format(Some("%Y-%m-%d %H:%M:%S%.f"));
+        let options = FormatOptions::default();
         Ok(batch
             .columns()
             .iter()
