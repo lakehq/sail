@@ -98,7 +98,7 @@ impl SessionManager {
         let mut session_config = SessionConfig::new()
             .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
-            .with_information_schema(true)
+            .with_information_schema(options.config.catalog.enable_information_schema)
             .with_extension(Arc::new(TemporaryViewManager::default()))
             .with_extension(Arc::new(SparkExtension::try_new(
                 key.user_id,
@@ -107,18 +107,19 @@ impl SessionManager {
             )?));
 
         // Catalog
-        //
-        // Spark defaults to false: https://spark.apache.org/docs/latest/sql-data-sources-csv.html
-        session_config.options_mut().catalog.has_header = false;
+        session_config.options_mut().catalog.has_header = options.config.catalog.has_header;
 
         // Execution
         session_config.options_mut().execution.batch_size = options.config.execution.batch_size;
         session_config
             .options_mut()
             .execution
-            .listing_table_ignore_subdirectory = false;
+            .listing_table_ignore_subdirectory =
+            options.config.execution.listing_table_ignore_subdirectory;
 
         // Execution Parquet
+        session_config.options_mut().execution.parquet.created_by =
+            concat!("sail version ", env!("CARGO_PKG_VERSION")).into();
         session_config
             .options_mut()
             .execution
@@ -127,9 +128,118 @@ impl SessionManager {
         session_config.options_mut().execution.parquet.pruning = options.config.parquet.pruning;
         session_config.options_mut().execution.parquet.skip_metadata =
             options.config.parquet.skip_metadata;
-        session_config.options_mut().execution.parquet.coerce_int96 = Some("us".to_string());
-        session_config.options_mut().execution.parquet.created_by =
-            concat!("sail version ", env!("CARGO_PKG_VERSION")).into();
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .metadata_size_hint = options.config.parquet.metadata_size_hint;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .pushdown_filters = options.config.parquet.pushdown_filters;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .reorder_filters = options.config.parquet.reorder_filters;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .schema_force_view_types = options.config.parquet.schema_force_view_types;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .binary_as_string = options.config.parquet.binary_as_string;
+        session_config.options_mut().execution.parquet.coerce_int96 =
+            options.config.parquet.coerce_int96.clone();
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .data_pagesize_limit = options.config.parquet.data_pagesize_limit;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .write_batch_size = options.config.parquet.write_batch_size;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .writer_version = options.config.parquet.writer_version.clone();
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .skip_arrow_metadata = options.config.parquet.skip_arrow_metadata;
+        session_config.options_mut().execution.parquet.compression =
+            options.config.parquet.compression.clone();
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .dictionary_enabled = options.config.parquet.dictionary_enabled;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .dictionary_page_size_limit = options.config.parquet.dictionary_page_size_limit;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .statistics_enabled = options.config.parquet.statistics_enabled.clone();
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .max_row_group_size = options.config.parquet.max_row_group_size;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .column_index_truncate_length = options.config.parquet.column_index_truncate_length;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .statistics_truncate_length = options.config.parquet.statistics_truncate_length;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .data_page_row_count_limit = options.config.parquet.data_page_row_count_limit;
+        session_config.options_mut().execution.parquet.encoding =
+            options.config.parquet.encoding.clone();
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .bloom_filter_on_read = options.config.parquet.bloom_filter_on_read;
+
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .bloom_filter_on_write = options.config.parquet.bloom_filter_on_write;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .bloom_filter_fpp = options.config.parquet.bloom_filter_fpp;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .bloom_filter_ndv = options.config.parquet.bloom_filter_ndv;
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .allow_single_file_parallelism = options.config.parquet.allow_single_file_parallelism;
         session_config
             .options_mut()
             .execution
