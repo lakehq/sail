@@ -1986,7 +1986,7 @@ impl PlanResolver<'_> {
     async fn resolve_expression_timestamp(
         &self,
         value: String,
-        timestamp_type: TimestampType,
+        timestamp_type: spec::TimestampType,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let (datetime, timezone) = parse_timestamp(&value).and_then(|x| x.into_naive())?;
