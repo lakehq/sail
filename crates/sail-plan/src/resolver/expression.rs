@@ -66,16 +66,35 @@ pub(super) struct NamedExpr {
 
 impl NamedExpr {
     pub fn new(name: Vec<String>, expr: expr::Expr) -> Self {
+        let metadata = match &expr {
+            expr::Expr::Alias(alias) => alias
+                .metadata
+                .as_ref()
+                .map(|x| {
+                    x.iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect()
+                })
+                .unwrap_or(vec![]),
+            _ => vec![],
+        };
         Self {
             name,
             expr,
-            metadata: vec![],
+            metadata,
         }
     }
 
     pub fn try_from_alias_expr(expr: expr::Expr) -> PlanResult<Self> {
         match expr {
-            expr::Expr::Alias(alias) => Ok(Self::new(vec![alias.name], *alias.expr)),
+            expr::Expr::Alias(alias) => Ok(Self {
+                name: vec![alias.name],
+                expr: *alias.expr,
+                metadata: alias
+                    .metadata
+                    .map(|x| x.into_iter().collect())
+                    .unwrap_or(vec![]),
+            }),
             _ => Err(PlanError::invalid(
                 "alias expected to create named expression",
             )),
@@ -921,15 +940,17 @@ impl PlanResolver<'_> {
         let expr = self.resolve_expression(expr, schema, state).await?;
         let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
         let expr = if let [n] = name.as_slice() {
-            expr.alias(n)
+            if let Some(metadata) = metadata {
+                let metadata_map: Option<HashMap<String, String>> =
+                    Some(metadata.into_iter().collect());
+                expr.alias_with_metadata(n, metadata_map)
+            } else {
+                expr.alias(n)
+            }
         } else {
             expr
         };
-        if let Some(metadata) = metadata {
-            Ok(NamedExpr::new(name, expr).with_metadata(metadata))
-        } else {
-            Ok(NamedExpr::new(name, expr))
-        }
+        Ok(NamedExpr::new(name, expr))
     }
 
     async fn resolve_expression_cast(

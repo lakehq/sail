@@ -3870,7 +3870,7 @@ impl PlanResolver<'_> {
                 let NamedExpr {
                     name,
                     expr,
-                    metadata: _, // TODO: set field metadata
+                    metadata,
                 } = e;
                 let name = if name.len() == 1 {
                     name.one()?
@@ -3890,7 +3890,11 @@ impl PlanResolver<'_> {
                 for plan_id in plan_ids {
                     state.register_plan_id_for_field(&field_id, plan_id)?;
                 }
-                Ok(expr.alias(field_id))
+                if !metadata.is_empty() {
+                    Ok(expr.alias_with_metadata(field_id, Some(metadata.into_iter().collect())))
+                } else {
+                    Ok(expr.alias(field_id))
+                }
             })
             .collect()
     }

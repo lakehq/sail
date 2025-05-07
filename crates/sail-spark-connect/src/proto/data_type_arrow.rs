@@ -26,13 +26,19 @@ impl TryFrom<adt::Field> for sdt::StructField {
         } else {
             field.data_type().clone().try_into()?
         };
-        let metadata = field
+        // FIXME: The metadata. prefix is managed by Sail and the convention should be respected everywhere.
+        let metadata = &field
             .metadata()
             .iter()
-            .filter(|(k, _)| k.starts_with("metadata."))
-            .map(|(k, v)| (k["metadata.".len()..].to_string(), v.clone()))
-            .collect::<HashMap<_, _>>();
-        let metadata = serde_json::to_string(&metadata)?;
+            .filter(|(k, _)| !k.starts_with("udt."))
+            .map(|(k, v)| {
+                Ok((
+                    k.strip_prefix("metadata.").unwrap_or(k),
+                    serde_json::from_str(v)?,
+                ))
+            })
+            .collect::<SparkResult<HashMap<_, serde_json::Value>>>()?;
+        let metadata = serde_json::to_string(metadata)?;
         Ok(sdt::StructField {
             name: field.name().clone(),
             data_type: Some(data_type),

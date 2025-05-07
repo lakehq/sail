@@ -94,17 +94,19 @@ impl TryFrom<Expression> for spec::Expr {
                 let expr = expr.required("alias expression")?;
                 let metadata: Option<HashMap<String, String>> = metadata
                     .map(|x| {
-                        serde_json::from_str(&x).map_err(SparkError::from).and_then(
-                            |x: serde_json::Value| {
+                        serde_json::from_str(&x)
+                            .map_err(SparkError::from)
+                            .and_then(|x: serde_json::Value| {
                                 x.as_object()
                                     .ok_or_else(|| SparkError::invalid("alias metadata"))
                                     .map(|x| {
                                         x.into_iter()
-                                            .map(|(k, v)| (k.clone(), v.to_string()))
-                                            .collect()
+                                            .map(|(k, v)| {
+                                                Ok((k.clone(), serde_json::to_string(v)?))
+                                            })
+                                            .collect::<SparkResult<_>>()
                                     })
-                            },
-                        )
+                            })?
                     })
                     .transpose()?;
                 let name: Vec<spec::Identifier> = name.into_iter().map(|x| x.into()).collect();
