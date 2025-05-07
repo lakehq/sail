@@ -26,6 +26,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
         } else {
             field.data_type().clone().try_into()?
         };
+        // FIXME: The metadata. prefix is managed by Sail and the convention should be respected everywhere.
         let metadata = &field
             .metadata()
             .iter()

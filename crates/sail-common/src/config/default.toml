@@ -29,10 +29,8 @@ rpc_retry_strategy = { "fixed" = { "max_count" = 3, "delay_secs" = 5 } }
 
 [execution]
 batch_size = 8192
-listing_table_ignore_subdirectory = false
 
 [catalog]
-enable_information_schema = true
 has_header = false
 
 [parquet]
@@ -44,7 +42,6 @@ pushdown_filters = false
 reorder_filters = false
 schema_force_view_types = true
 binary_as_string = false
-coerce_int96 = "us"
 data_pagesize_limit = 1_048_576
 write_batch_size = 1024
 writer_version = "1.0"

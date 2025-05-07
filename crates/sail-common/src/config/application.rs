@@ -118,7 +118,6 @@ pub enum RetryStrategy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionConfig {
     pub batch_size: usize,
-    pub listing_table_ignore_subdirectory: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,10 +135,9 @@ pub struct KubernetesConfig {
     pub worker_service_account_name: String,
 }
 
+// Doc Comments [Credit]: <https://github.com/apache/datafusion/blob/555fc2e24dd669e44ac23a9a1d8406f4ac58a9ed/datafusion/common/src/config.rs#L423-L592>
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParquetConfig {
-    /// Doc Comments [Credit]: <https://github.com/apache/datafusion/blob/555fc2e24dd669e44ac23a9a1d8406f4ac58a9ed/datafusion/common/src/config.rs#L423-L592>
-
     /// (reading) If true, reads the Parquet data page level metadata (the
     /// Page Index), if present, to reduce the I/O and number of
     /// rows decoded.
@@ -181,14 +179,6 @@ pub struct ParquetConfig {
     /// the UTF8 flag for strings, causing string columns to be loaded as
     /// BLOB instead.
     pub binary_as_string: bool,
-
-    /// (reading) If true, parquet reader will read columns of
-    /// physical type int96 as originating from a different resolution
-    /// than nanosecond. This is useful for reading data from systems like Spark
-    /// which stores microsecond resolution timestamps in an int96 allowing it
-    /// to write values with a larger date range than 64-bit timestamps with
-    /// nanosecond resolution.
-    pub coerce_int96: Option<String>,
 
     /// (writing) Sets best effort maximum size of data page in bytes
     pub data_pagesize_limit: usize,
@@ -297,8 +287,6 @@ pub struct ParquetConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogConfig {
-    pub enable_information_schema: bool,
-    /// Spark defaults to false: https://spark.apache.org/docs/latest/sql-data-sources-csv.html
     pub has_header: bool,
 }
 

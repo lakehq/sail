@@ -102,9 +102,7 @@ impl NamedExpr {
     }
 
     pub fn with_metadata(mut self, metadata: Vec<(String, String)>) -> Self {
-        if self.metadata != metadata {
-            self.metadata = metadata;
-        }
+        self.metadata = metadata;
         self
     }
 }

@@ -98,7 +98,7 @@ impl SessionManager {
         let mut session_config = SessionConfig::new()
             .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
-            .with_information_schema(options.config.catalog.enable_information_schema)
+            .with_information_schema(true)
             .with_extension(Arc::new(TemporaryViewManager::default()))
             .with_extension(Arc::new(SparkExtension::try_new(
                 key.user_id,
@@ -107,6 +107,8 @@ impl SessionManager {
             )?));
 
         // Catalog
+        //
+        // Impacts: https://spark.apache.org/docs/latest/sql-data-sources-csv.html
         session_config.options_mut().catalog.has_header = options.config.catalog.has_header;
 
         // Execution
@@ -114,8 +116,7 @@ impl SessionManager {
         session_config
             .options_mut()
             .execution
-            .listing_table_ignore_subdirectory =
-            options.config.execution.listing_table_ignore_subdirectory;
+            .listing_table_ignore_subdirectory = false;
 
         // Execution Parquet
         session_config.options_mut().execution.parquet.created_by =
@@ -153,8 +154,7 @@ impl SessionManager {
             .execution
             .parquet
             .binary_as_string = options.config.parquet.binary_as_string;
-        session_config.options_mut().execution.parquet.coerce_int96 =
-            options.config.parquet.coerce_int96.clone();
+        session_config.options_mut().execution.parquet.coerce_int96 = Some("us".to_string());
         session_config
             .options_mut()
             .execution
