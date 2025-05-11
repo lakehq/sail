@@ -1,8 +1,8 @@
 import json
 import logging
 import os
-import sys
 import re
+import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -97,7 +97,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
     @mcp.tool()
     def create_parquet_views_for_subfolders(root_path: str, ctx: Context) -> str:
         """
-        Discover every direct sub‑directory under `root_path` in a Parquet dataset,
+        Discover every direct subdirectory under `root_path` in a Parquet dataset,
         and create a temporary view per folder.
 
         Args:
@@ -134,7 +134,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
     @mcp.tool()
     def create_csv_views_for_subfolders(root_path: str, ctx: Context) -> str:
         """
-        Discover every direct sub‑directory under `root_path` in a CSV dataset,
+        Discover every direct subdirectory under `root_path` in a CSV dataset,
         and create a temporary view per folder.
 
         Args:
@@ -171,7 +171,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
     @mcp.tool()
     def create_json_views_for_subfolders(root_path: str, ctx: Context) -> str:
         """
-        Discover every direct sub‑directory under `root_path` in a JSON dataset,
+        Discover every direct subdirectory under `root_path` in a JSON dataset,
         and create a temporary view per folder.
 
         Args:
