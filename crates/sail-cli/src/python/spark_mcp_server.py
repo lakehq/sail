@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -25,6 +26,10 @@ def _describe_column(column):
         "dataType": column.dataType,
         "nullable": column.nullable,
     }
+
+
+def _sanitize_view_name(name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_]", "_", name)
 
 
 def configure_logging():
@@ -90,6 +95,101 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         return json.dumps({})
 
     @mcp.tool()
+    def create_parquet_views_for_subfolders(root_path: str, ctx: Context) -> str:
+        """
+        Discover every direct subdirectory under `root_path` in a Parquet dataset,
+        and create a temporary view per folder.
+
+        Args:
+            root_path: The path to the Parquet dataset.
+            ctx: The context object.
+        Returns:
+            An empty JSON object.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+
+        for subdir in os.listdir(root_path):
+            subdir_path = os.path.join(root_path, subdir)
+            if os.path.isdir(subdir_path):
+                view_name = _sanitize_view_name(subdir)
+                spark.read.parquet(subdir_path).createOrReplaceTempView(view_name)
+        return json.dumps({})
+
+    @mcp.tool()
+    def create_csv_view(name: str, path: str, ctx: Context) -> str:
+        """
+        Create a temporary view from a CSV dataset.
+
+        Args:
+            name: The name of the temporary view.
+            path: The path to the CSV dataset.
+            ctx: The context object.
+        Returns:
+            An empty JSON object.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+        spark.read.csv(path).createOrReplaceTempView(name)
+        return json.dumps({})
+
+    @mcp.tool()
+    def create_csv_views_for_subfolders(root_path: str, ctx: Context) -> str:
+        """
+        Discover every direct subdirectory under `root_path` in a CSV dataset,
+        and create a temporary view per folder.
+
+        Args:
+            root_path: The path to the CSV dataset.
+            ctx: The context object.
+        Returns:
+            An empty JSON object.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+
+        for subdir in os.listdir(root_path):
+            subdir_path = os.path.join(root_path, subdir)
+            if os.path.isdir(subdir_path):
+                view_name = _sanitize_view_name(subdir)
+                spark.read.csv(subdir_path).createOrReplaceTempView(view_name)
+        return json.dumps({})
+
+    @mcp.tool()
+    def create_json_view(name: str, path: str, ctx: Context) -> str:
+        """
+        Create a temporary view from a JSON dataset.
+
+        Args:
+            name: The name of the temporary view.
+            path: The path to the JSON dataset.
+            ctx: The context object.
+        Returns:
+            An empty JSON object.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+        spark.read.json(path).createOrReplaceTempView(name)
+        return json.dumps({})
+
+    @mcp.tool()
+    def create_json_views_for_subfolders(root_path: str, ctx: Context) -> str:
+        """
+        Discover every direct subdirectory under `root_path` in a JSON dataset,
+        and create a temporary view per folder.
+
+        Args:
+            root_path: The path to the JSON dataset.
+            ctx: The context object.
+        Returns:
+            An empty JSON object.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+
+        for subdir in os.listdir(root_path):
+            subdir_path = os.path.join(root_path, subdir)
+            if os.path.isdir(subdir_path):
+                view_name = _sanitize_view_name(subdir)
+                spark.read.json(subdir_path).createOrReplaceTempView(view_name)
+        return json.dumps({})
+
+    @mcp.tool()
     def describe_view(name: str, ctx: Context) -> str:
         """
         Describe a temporary view.
@@ -141,19 +241,18 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         return json.dumps(views)
 
     @mcp.tool()
-    def execute_query(query: str, limit: int, ctx: Context) -> str:
+    def execute_query(query: str, ctx: Context) -> str:
         """
         Execute a SQL query and return the results as a JSON array.
 
         Args:
             query: The SQL query to execute.
-            limit: The maximum number of rows to return.
             ctx: The context object.
         Returns:
             A JSON array of objects.
         """
         spark: SparkSession = ctx.request_context.lifespan_context
-        df = spark.sql(query).limit(limit)
+        df = spark.sql(query)
         return df.toPandas().to_json(orient="records")
 
     return mcp
