@@ -6,6 +6,7 @@ use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::LogicalPlan;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::expression::NamedExpr;
 
 /// The field information for fields in the logical plan.
 #[derive(Debug, Clone)]
@@ -48,6 +49,20 @@ pub(super) struct PlanResolverStateConfig {
     pub arrow_allow_large_var_types: bool,
 }
 
+#[derive(Debug, Default)]
+pub(super) enum AggregateState {
+    /// The expressions in the `GROUP BY` clause is being resolved.
+    Grouping { projections: Vec<NamedExpr> },
+    /// The expressions in the `HAVING` clause is being resolved.
+    Having {
+        projections: Vec<NamedExpr>,
+        grouping: Vec<NamedExpr>,
+    },
+    /// There is no aggregate being resolved.
+    #[default]
+    None,
+}
+
 #[derive(Debug)]
 pub(super) struct PlanResolverState {
     next_id: usize,
@@ -55,6 +70,8 @@ pub(super) struct PlanResolverState {
     fields: HashMap<String, FieldInfo>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,
+    /// The aggregate state for the current query.
+    aggregate_state: AggregateState,
     /// The CTEs for the current query.
     ctes: HashMap<TableReference, Arc<LogicalPlan>>,
     config: PlanResolverStateConfig,
@@ -72,6 +89,7 @@ impl PlanResolverState {
             next_id: 0,
             fields: HashMap::new(),
             outer_query_schema: None,
+            aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
             config: PlanResolverStateConfig::default(),
         }
@@ -140,8 +158,33 @@ impl PlanResolverState {
         self.outer_query_schema.as_ref()
     }
 
+    pub fn get_projections_for_grouping(&self) -> &[NamedExpr] {
+        match &self.aggregate_state {
+            AggregateState::Grouping { projections } => projections.as_ref(),
+            _ => &[],
+        }
+    }
+
+    pub fn get_projections_for_having(&self) -> &[NamedExpr] {
+        match &self.aggregate_state {
+            AggregateState::Having { projections, .. } => projections.as_ref(),
+            _ => &[],
+        }
+    }
+
+    pub fn get_grouping_for_having(&self) -> &[NamedExpr] {
+        match &self.aggregate_state {
+            AggregateState::Having { grouping, .. } => grouping.as_ref(),
+            _ => &[],
+        }
+    }
+
     pub fn enter_query_scope(&mut self, schema: DFSchemaRef) -> QueryScope {
         QueryScope::new(self, schema)
+    }
+
+    pub fn enter_aggregate_scope(&mut self, aggregate_state: AggregateState) -> AggregateScope {
+        AggregateScope::new(self, aggregate_state)
     }
 
     pub fn enter_cte_scope(&mut self) -> CteScope {
@@ -201,6 +244,32 @@ impl<'a> QueryScope<'a> {
 impl Drop for QueryScope<'_> {
     fn drop(&mut self) {
         self.state.outer_query_schema = self.previous_outer_query_schema.take();
+    }
+}
+
+pub(crate) struct AggregateScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_aggregate_state: AggregateState,
+}
+
+impl<'a> AggregateScope<'a> {
+    fn new(state: &'a mut PlanResolverState, aggregate_state: AggregateState) -> Self {
+        let previous_aggregate_state =
+            std::mem::replace(&mut state.aggregate_state, aggregate_state);
+        Self {
+            state,
+            previous_aggregate_state,
+        }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for AggregateScope<'_> {
+    fn drop(&mut self) {
+        self.state.aggregate_state = std::mem::take(&mut self.previous_aggregate_state);
     }
 }
 
