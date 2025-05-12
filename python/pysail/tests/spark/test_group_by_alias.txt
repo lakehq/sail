@@ -1,0 +1,94 @@
+>>> spark.sql("SELECT a AS b FROM VALUES (1), (2) AS t(a) GROUP BY b ORDER BY b").show()
++---+
+|  b|
++---+
+|  1|
+|  2|
++---+
+
+>>> spark.sql("SELECT a AS b FROM VALUES (1), (2) AS t(a) GROUP BY a ORDER BY b").show()
++---+
+|  b|
++---+
+|  1|
+|  2|
++---+
+
+>>> spark.sql("SELECT a AS b FROM VALUES (1), (2) AS t(a) GROUP BY t.a ORDER BY b").show()
++---+
+|  b|
++---+
+|  1|
+|  2|
++---+
+
+>>> spark.sql("SELECT count(b) AS a FROM VALUES (1, 1), (1, 2) AS t(a, b) GROUP BY a").show()
++---+
+|  a|
++---+
+|  2|
++---+
+
+>>> spark.sql("SELECT count(b) AS a FROM VALUES (1, 1), (1, 2) AS t(a, b) GROUP BY a HAVING a > 1").show()
++---+
+|  a|
++---+
++---+
+
+>>> spark.sql("SELECT count(b) as a FROM VALUES (1, 1), (1, 2) as t(a, b) GROUP BY a HAVING count(b) > 1").show()
++---+
+|  a|
++---+
+|  2|
++---+
+
+>>> spark.sql("SELECT count(b) AS a FROM VALUES (1, 1), (1, 2) AS t(a, b) GROUP BY b").show()
++---+
+|  a|
++---+
+|  1|
+|  1|
++---+
+
+>>> spark.sql("SELECT count(b) AS b FROM VALUES (1, 1), (1, 2) AS t(a, b) GROUP BY b").show()
++---+
+|  b|
++---+
+|  1|
+|  1|
++---+
+
+>>> spark.sql("SELECT count(b) AS a FROM VALUES (1, 1), (1, 2) AS t(a, b) GROUP BY b HAVING a > 1").show()
++---+
+|  a|
++---+
++---+
+
+>>> spark.sql("SELECT count(a) AS a FROM VALUES (1, 1), (1, 2) AS t(a, b) GROUP BY b").show()
++---+
+|  a|
++---+
+|  1|
+|  1|
++---+
+
+>>> spark.sql("SELECT count(b) AS a FROM VALUES (1, 1), (1, 2), (2, 2) AS t(a, b) WHERE a > 1 GROUP BY b").show()
++---+
+|  a|
++---+
+|  1|
++---+
+
+>>> spark.sql("SELECT count(b) AS a FROM VALUES (1, 1), (1, 2), (2, 2) AS t(a, b) GROUP BY b HAVING a > 1").show()
++---+
+|  a|
++---+
+|  2|
++---+
+
+>>> spark.sql("SELECT count(b) AS a FROM VALUES (1, 1), (1, 2), (2, 2) AS t(a, b) GROUP BY b HAVING b > 1").show()
++---+
+|  a|
++---+
+|  2|
++---+

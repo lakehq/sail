@@ -64,7 +64,7 @@ use crate::function::{
 };
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdtf;
-use crate::resolver::state::PlanResolverState;
+use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
@@ -1446,12 +1446,25 @@ impl PlanResolver<'_> {
         let projections = self
             .resolve_named_expressions(projections, schema, state)
             .await?;
-        let grouping = self
-            .resolve_named_expressions(grouping, schema, state)
-            .await?;
-        let having = match having {
-            Some(having) => Some(self.resolve_expression(having, schema, state).await?),
-            None => None,
+
+        let grouping = {
+            let mut scope = state.enter_aggregate_scope(AggregateState::Grouping {
+                projections: projections.clone(),
+            });
+            let state = scope.state();
+            self.resolve_named_expressions(grouping, schema, state)
+                .await?
+        };
+        let having = {
+            let mut scope = state.enter_aggregate_scope(AggregateState::Having {
+                projections: projections.clone(),
+                grouping: grouping.clone(),
+            });
+            let state = scope.state();
+            match having {
+                Some(having) => Some(self.resolve_expression(having, schema, state).await?),
+                None => None,
+            }
         };
 
         self.rewrite_aggregate(
@@ -3520,7 +3533,7 @@ impl PlanResolver<'_> {
         Ok(())
     }
 
-    fn resolve_expressions_positions(
+    fn resolve_grouping_positions(
         &self,
         exprs: Vec<NamedExpr>,
         projections: &[NamedExpr],
@@ -3636,7 +3649,7 @@ impl PlanResolver<'_> {
         with_grouping_expressions: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let grouping = self.resolve_expressions_positions(grouping, &projections)?;
+        let grouping = self.resolve_grouping_positions(grouping, &projections)?;
         let mut aggregate_candidates = projections
             .iter()
             .map(|x| x.expr.clone())

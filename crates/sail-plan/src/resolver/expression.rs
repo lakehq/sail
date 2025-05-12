@@ -613,7 +613,22 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         if let Some((name, expr)) =
+            self.resolve_aggregate_field(&name, state.get_grouping_for_having())?
+        {
+            return Ok(NamedExpr::new(vec![name], expr));
+        }
+        if let Some((name, expr)) =
+            self.resolve_aggregate_field(&name, state.get_projections_for_having())?
+        {
+            return Ok(NamedExpr::new(vec![name], expr));
+        }
+        if let Some((name, expr)) =
             self.resolve_field_or_nested_field(&name, plan_id, schema, state)?
+        {
+            return Ok(NamedExpr::new(vec![name], expr));
+        }
+        if let Some((name, expr)) =
+            self.resolve_aggregate_field(&name, state.get_projections_for_grouping())?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -673,6 +688,36 @@ impl PlanResolver<'_> {
         if candidates.len() > 1 {
             return Err(PlanError::AnalysisError(format!(
                 "ambiguous attribute: {name:?}"
+            )));
+        }
+        Ok(candidates.pop())
+    }
+
+    fn resolve_aggregate_field(
+        &self,
+        name: &spec::ObjectName,
+        expressions: &[NamedExpr],
+    ) -> PlanResult<Option<(String, expr::Expr)>> {
+        let [name] = name.parts() else {
+            return Ok(None);
+        };
+        let mut candidates = expressions
+            .iter()
+            .filter_map(|expr| {
+                let NamedExpr {
+                    name: agg, expr, ..
+                } = expr;
+                match agg.as_slice() {
+                    [agg] if agg.eq_ignore_ascii_case(name.as_ref()) => {
+                        Some((name.as_ref().to_string(), expr.clone()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() > 1 {
+            return Err(PlanError::AnalysisError(format!(
+                "ambiguous aggregate expression: {name:?}"
             )));
         }
         Ok(candidates.pop())
