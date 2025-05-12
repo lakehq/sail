@@ -140,3 +140,11 @@ printf '<details>\n'
 printf '<summary>Passed Tests Diff</summary>\n\n'
 show_code_block "${tmp_dir}/passed-tests.diff" "diff" 10000
 printf '</details>\n'
+
+jq -r -f "${project_path}/scripts/spark-tests/show-failed-tests.jq" \
+  "${tmp_dir}/after.jsonl" > "${tmp_dir}/failed-tests.txt"
+
+printf '<details>\n'
+printf '<summary>Error Counts</summary>\n\n'
+show_code_block "${tmp_dir}/failed-tests.txt" "text" 40000
+printf '</details>\n\n'
