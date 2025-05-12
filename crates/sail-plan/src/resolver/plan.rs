@@ -1467,8 +1467,6 @@ impl PlanResolver<'_> {
             }
         };
 
-        dbg!(&having);
-
         self.rewrite_aggregate(
             input,
             projections,
