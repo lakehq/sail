@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import re
 import sys
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -26,10 +25,6 @@ def _describe_column(column):
         "dataType": column.dataType,
         "nullable": column.nullable,
     }
-
-
-def _sanitize_view_name(name: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_]", "_", name)
 
 
 def configure_logging():
@@ -142,6 +137,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
             name: The name of the temporary view.
             path: The path to the Parquet dataset.
             ctx: The context object.
+
         Returns:
             An empty JSON object.
         """
@@ -159,6 +155,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
             path: The path to the CSV dataset.
             header: Whether the CSV file has a header row.
             ctx: The context object.
+
         Returns:
             An empty JSON object.
         """
@@ -175,6 +172,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
             name: The name of the temporary view.
             path: The path to the JSON dataset.
             ctx: The context object.
+
         Returns:
             An empty JSON object.
         """
@@ -190,6 +188,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         Args:
             name: The name of the temporary view.
             ctx: The context object.
+
         Returns:
             A JSON object with the view description.
         """
@@ -212,6 +211,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         Args:
             name: The name of the temporary view.
             ctx: The context object.
+
         Returns:
             An empty JSON object.
         """
@@ -226,6 +226,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
 
         Args:
             ctx: The context object.
+
         Returns:
             A JSON array of objects.
         """
@@ -241,6 +242,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         Args:
             query: The SQL query to execute.
             ctx: The context object.
+
         Returns:
             A JSON array of objects.
         """
