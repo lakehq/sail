@@ -5,3 +5,4 @@
 | sort_by (.nodeid)
 | .[]
 | .nodeid
+| sub("^.*/site-packages/"; "")
