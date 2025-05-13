@@ -123,20 +123,28 @@ jq -r -f "${project_path}/scripts/spark-tests/count-errors.jq" \
 
 printf '<details>\n'
 printf '<summary>Error Counts</summary>\n\n'
-show_code_block "${tmp_dir}/errors.txt" "text" 40000
+show_code_block "${tmp_dir}/errors.txt" "text" 20000
 printf '</details>\n\n'
 
 mkdir "${tmp_dir}/passed-tests"
 jq -r -f "${project_path}/scripts/spark-tests/show-passed-tests.jq" \
-  "${tmp_dir}/before.jsonl" > "${tmp_dir}/passed-tests/before"
+  "${tmp_dir}/before.jsonl" > "${tmp_dir}/passed-tests/before.txt"
 jq -r -f "${project_path}/scripts/spark-tests/show-passed-tests.jq" \
-  "${tmp_dir}/after.jsonl" > "${tmp_dir}/passed-tests/after"
+  "${tmp_dir}/after.jsonl" > "${tmp_dir}/passed-tests/after.txt"
 
 pushd "${tmp_dir}/passed-tests" > /dev/null
-diff -U 0 before after > ../passed-tests.diff || true
+diff -U 0 before.txt after.txt > ../passed-tests.diff || true
 popd > /dev/null
 
 printf '<details>\n'
 printf '<summary>Passed Tests Diff</summary>\n\n'
-show_code_block "${tmp_dir}/passed-tests.diff" "diff" 10000
+show_code_block "${tmp_dir}/passed-tests.diff" "diff" 7500
 printf '</details>\n'
+
+jq -r -f "${project_path}/scripts/spark-tests/show-failed-tests.jq" \
+  "${tmp_dir}/after.jsonl" > "${tmp_dir}/failed-tests.txt"
+
+printf '<details>\n'
+printf '<summary>Failed Tests</summary>\n\n'
+show_code_block "${tmp_dir}/failed-tests.txt" "text" 35000
+printf '</details>\n\n'
