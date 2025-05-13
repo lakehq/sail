@@ -146,5 +146,5 @@ jq -r -f "${project_path}/scripts/spark-tests/show-failed-tests.jq" \
 
 printf '<details>\n'
 printf '<summary>Failed Tests</summary>\n\n'
-show_code_block "${tmp_dir}/failed-tests.txt" "text" 40000
+show_code_block "${tmp_dir}/failed-tests.txt" "text" 100000
 printf '</details>\n\n'
