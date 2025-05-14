@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.6
+
+_May 14, 2025_
+
+- Improved temporal data type casting and display ([#448](https://github.com/lakehq/sail/pull/448)).
+- Corrected the time unit for reading `INT96` timestamp data from Parquet files ([#444](https://github.com/lakehq/sail/pull/444)).
+- Fixed issues with column metadata in the Spark DataFrame API ([#447](https://github.com/lakehq/sail/pull/447)).
+- Supported referring to aliased aggregation expressions in Spark SQL `GROUP BY` and `HAVING` clauses ([#456](https://github.com/lakehq/sail/pull/456)).
+- Supported more data formats and added directory listing endpoints in the MCP server ([#455](https://github.com/lakehq/sail/pull/455) and [#458](https://github.com/lakehq/sail/pull/458)).
+
 ## 0.2.5
 
 _April 22, 2025_
