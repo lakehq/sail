@@ -75,6 +75,7 @@ dependencies = [
     "pytest~=8.3",
     "duckdb~=1.1",
     "mcp>=1.0.0,<2",
+    "boto3>=1.38,<2",
 ]
 
 [tool.hatch.envs.default.overrides]
