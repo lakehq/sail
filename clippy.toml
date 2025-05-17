@@ -2,3 +2,5 @@
 # since we are developing an application rather than a library.
 avoid-breaking-exported-api = false
 too-many-arguments-threshold = 8
+# On Rust 1.87 tonic::Result and tonic::Status trigger result_large_err: https://github.com/hyperium/tonic/issues/2253
+large-error-threshold = 257
