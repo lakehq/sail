@@ -530,17 +530,9 @@ impl TryFrom<YearMonthIntervalField> for IntervalFieldType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Schema {
     pub fields: Fields,
-}
-
-impl Default for Schema {
-    fn default() -> Self {
-        Schema {
-            fields: Fields::empty(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

@@ -228,8 +228,7 @@ pub(crate) struct QueryScope<'a> {
 
 impl<'a> QueryScope<'a> {
     fn new(state: &'a mut PlanResolverState, schema: DFSchemaRef) -> Self {
-        let previous_outer_query_schema =
-            std::mem::replace(&mut state.outer_query_schema, Some(schema));
+        let previous_outer_query_schema = state.outer_query_schema.replace(schema);
         Self {
             state,
             previous_outer_query_schema,
