@@ -501,7 +501,9 @@ pub enum CommandNode {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[allow(clippy::large_enum_variant)]
 pub enum ReadType {
+    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     NamedTable(ReadNamedTable),
     Udtf(ReadUdtf),
     DataSource(ReadDataSource),

@@ -94,11 +94,13 @@ pub(crate) struct Executor {
     state: Mutex<ExecutorState>,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum ExecutorState {
     Idle,
     Pending(ExecutorTaskContext),
     Running(ExecutorTask),
     Pausing,
+    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Failed(SparkError),
 }
 
@@ -133,8 +135,10 @@ impl ExecutorTaskContext {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum ExecutorTaskResult {
     Paused(ExecutorTaskContext),
+    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Failed(SparkError),
     Completed,
 }

@@ -127,9 +127,11 @@ struct SchemaPivotStream {
     data: Vec<RecordBatch>,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum SchemaPivotState {
     Continue,
     SchemaPivot,
+    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Error(DataFusionError),
     Stopped,
 }

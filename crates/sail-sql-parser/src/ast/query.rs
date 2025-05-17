@@ -79,7 +79,9 @@ pub struct IdentList {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum QueryBody {
+    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Term(QueryTerm),
     SetOperation {
         left: Box<QueryBody>,
@@ -156,7 +158,9 @@ pub enum SetQuantifier {
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
+#[allow(clippy::large_enum_variant)]
 pub enum QueryTerm {
+    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Select(#[parser(function = |(q, e, t), o| compose((q, e, t), o))] QuerySelect),
     Table(Table, ObjectName),
     Values(#[parser(function = |(_, e, _), o| compose(e, o))] ValuesClause),
@@ -253,6 +257,7 @@ pub struct TableWithJoins {
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Query, Expr, TableWithJoins)")]
+#[allow(clippy::large_enum_variant)]
 pub enum TableFactor {
     Values {
         #[parser(function = |(_, e, _), o| compose(e, o))]
@@ -286,6 +291,7 @@ pub enum TableFactor {
         name: ObjectName,
         #[parser(function = |(_, e, _), o| compose(e, o))]
         temporal: Option<TemporalClause>,
+        // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
         #[parser(function = |(_, e, _), o| compose(e, o))]
         sample: Option<TableSampleClause>,
         #[parser(function = |(_, e, _), o| compose(e, o))]
@@ -582,8 +588,10 @@ pub struct LimitClause {
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
+#[allow(clippy::large_enum_variant)]
 pub enum LimitValue {
     All(All),
+    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Value(#[parser(function = |e, _| e)] Expr),
 }
 

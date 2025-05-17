@@ -29,6 +29,7 @@ use crate::token::TokenLabel;
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "(Statement, Query, Expr, DataType)", label = TokenLabel::Statement)]
+#[allow(clippy::large_enum_variant)]
 pub enum Statement {
     Query(#[parser(function = |(_, q, _, _), _| q)] Query),
     SetCatalog {
@@ -230,6 +231,7 @@ pub enum Statement {
         into: Into,
         target: ObjectName,
         alias: Option<AliasClause>,
+        // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
         #[parser(function = |(_, q, _, _), o| unit(o).then(compose(q, o)))]
         using: (Using, MergeSource),
         #[parser(function = |(_, _, e, _), o| unit(o).then(e))]
@@ -441,7 +443,9 @@ pub struct ColumnTypeDefinition {
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "DataType")]
+#[allow(clippy::large_enum_variant)]
 pub enum PartitionColumn {
+    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Typed(#[parser(function = |d, o| compose(d, o))] ColumnTypeDefinition),
     Name(Ident),
 }

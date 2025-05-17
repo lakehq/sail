@@ -154,9 +154,11 @@ struct ShowStringStream {
     has_more_data: bool,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum ShowStringState {
     Continue,
     Show,
+    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Error(DataFusionError),
     Stopped,
 }

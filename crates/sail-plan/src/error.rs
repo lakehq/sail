@@ -8,7 +8,9 @@ use thiserror::Error;
 pub type PlanResult<T> = Result<T, PlanError>;
 
 #[derive(Debug, Error)]
+#[allow(clippy::large_enum_variant)]
 pub enum PlanError {
+    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     #[error("error in DataFusion: {0}")]
     DataFusionError(#[from] DataFusionError),
     #[error("error in Arrow: {0}")]
