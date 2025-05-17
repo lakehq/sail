@@ -421,12 +421,14 @@ pub struct OverClause {
 
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "Expr")]
+#[allow(clippy::large_enum_variant)]
 pub enum WindowSpec {
     Named(Ident),
     Unnamed {
         left: LeftParenthesis,
         #[parser(function = |e, o| compose(e, o))]
         modifiers: Vec<WindowModifier>,
+        // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
         #[parser(function = |e, o| compose(e, o))]
         window_frame: Option<WindowFrame>,
         right: RightParenthesis,
