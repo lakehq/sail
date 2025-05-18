@@ -50,7 +50,8 @@ impl DriverOptions {
                     image_pull_policy: config.kubernetes.image_pull_policy.clone(),
                     namespace: config.kubernetes.namespace.clone(),
                     driver_pod_name: config.kubernetes.driver_pod_name.clone(),
-                    worker_pod_name_prefix: config.kubernetes.worker_pod_name_prefix.clone(),
+                    worker_pod_name_prefix: std::env::var("KUBERNETES_WORKER_POD_NAME_PREFIX")
+                        .unwrap_or(config.kubernetes.worker_pod_name_prefix.clone()),
                     worker_service_account_name: config
                         .kubernetes
                         .worker_service_account_name
