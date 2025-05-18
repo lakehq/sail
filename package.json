@@ -9,14 +9,14 @@
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
-    "@eslint/js": "^9.26.0",
+    "@eslint/js": "^9.27.0",
     "@ianvs/prettier-plugin-sort-imports": "^4.4.1",
     "@types/eslint__js": "^8.42.3",
-    "@types/node": "^22.15.17",
+    "@types/node": "^22.15.18",
     "@typescript-eslint/eslint-plugin": "^8.32.1",
     "@typescript-eslint/parser": "^8.32.1",
     "autoprefixer": "^10.4.21",
-    "eslint": "^9.26.0",
+    "eslint": "^9.27.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-vue": "^9.33.0",
     "fast-glob": "^3.3.3",
@@ -32,7 +32,7 @@
     "typescript-eslint": "^8.32.1",
     "vite": "^5.4.19",
     "vitepress": "^1.6.3",
-    "vue": "^3.5.13",
+    "vue": "^3.5.14",
     "vue-tsc": "^2.2.10"
   },
   "postcss": {
