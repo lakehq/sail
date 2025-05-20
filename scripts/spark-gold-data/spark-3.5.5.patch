@@ -1,0 +1,339 @@
+diff --git a/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala b/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
+index bd82ce962b8..958d26f224e 100644
+--- a/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
++++ b/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
+@@ -193,6 +193,8 @@ private[spark] object Logging {
+   @volatile private[spark] var sparkShellThresholdLevel: Level = null
+   @volatile private[spark] var setLogLevelPrinted: Boolean = false
+ 
++  var parserCallback: Option[(String, String, Option[String]) => Unit] = None
++
+   val initLock = new Object()
+   try {
+     // We use reflection here to handle the case where users remove the
+diff --git a/core/src/test/scala/org/apache/spark/SparkFunSuite.scala b/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
+index 1163088c82a..8aa349269ad 100644
+--- a/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
++++ b/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
+@@ -90,15 +90,54 @@ abstract class SparkFunSuite
+ 
+   protected val regenerateGoldenFiles: Boolean = System.getenv("SPARK_GENERATE_GOLDEN_FILES") == "1"
+ 
++  /**
++   * The environment variable for specifying the directory to write test suite data.
++   * It is recommended to use an absolute path, since `build/sbt` changes the working directory
++   * when running tests.
++   */
++  protected val SPARK_SUITE_OUTPUT_DIR = "SPARK_SUITE_OUTPUT_DIR"
++
++  protected def getTestDataFile: File = {
++    val outputDir = System.getenv(SPARK_SUITE_OUTPUT_DIR)
++    if (outputDir == null || outputDir.isEmpty) {
++      throw new IllegalStateException(
++        s"$SPARK_SUITE_OUTPUT_DIR environment variable is missing or empty"
++      )
++    }
++    val className = this.getClass.getName.stripSuffix("$").split('.').last
++    new java.io.File(outputDir, s"$className.jsonl")
++  }
++
++  /** Write test data to the output file. */
++  protected def writeTestData[T](kind: String, data: T, exception: Option[String]): Unit = {
++    val mapper = new com.fasterxml.jackson.databind.ObjectMapper()
++      .registerModule(new com.fasterxml.jackson.module.scala.DefaultScalaModule)
++    val json = mapper.writeValueAsString(Map(
++      "kind" -> kind, "data" -> data, "exception" -> exception))
++    val file = getTestDataFile
++    val writer = new java.io.PrintWriter(new java.io.FileWriter(file, true))
++    try {
++      // scalastyle:off println
++      writer.println(json)
++      // scalastyle:on println
++    } finally {
++      writer.close()
++    }
++  }
++
+   protected override def beforeAll(): Unit = {
+     System.setProperty(IS_TESTING.key, "true")
+     if (enableAutoThreadAudit) {
+       doThreadPreAudit()
+     }
++    Logging.parserCallback = Some(this.writeTestData[String])
++    // truncate the test data file
++    Files.write(getTestDataFile.toPath, Array.emptyByteArray)
+     super.beforeAll()
+   }
+ 
+   protected override def afterAll(): Unit = {
++    Logging.parserCallback = None
+     try {
+       // Avoid leaking map entries in tests that use accumulators without SparkContext
+       AccumulatorContext.clear()
+diff --git a/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala b/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
+index c3a051be89b..1313126a349 100644
+--- a/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
++++ b/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
+@@ -32,12 +32,25 @@ import org.apache.spark.sql.errors.QueryParsingErrors
+ import org.apache.spark.sql.internal.SqlApiConf
+ import org.apache.spark.sql.types.{DataType, StructType}
+ 
++// scalastyle:off line.size.limit
+ /**
+  * Base SQL parsing infrastructure.
+  */
+ abstract class AbstractParser extends DataTypeParserInterface with Logging {
++  protected def parse[T](kind: String, command: String)(toResult: SqlBaseParser => T): T = {
++    try {
++      val out = parse(command)(toResult)
++      Logging.parserCallback.foreach(_.apply(kind, command, None))
++      out
++    } catch {
++      case e: Throwable =>
++        Logging.parserCallback.foreach(_.apply(kind, command, Some(e.getMessage)))
++        throw e
++    }
++  }
++
+   /** Creates/Resolves DataType for a given SQL string. */
+-  override def parseDataType(sqlText: String): DataType = parse(sqlText) { parser =>
++  override def parseDataType(sqlText: String): DataType = parse("data-type", sqlText) { parser =>
+     astBuilder.visitSingleDataType(parser.singleDataType())
+   }
+ 
+@@ -45,7 +58,7 @@ abstract class AbstractParser extends DataTypeParserInterface with Logging {
+    * Creates StructType for a given SQL string, which is a comma separated list of field
+    * definitions which will preserve the correct Hive metadata.
+    */
+-  override def parseTableSchema(sqlText: String): StructType = parse(sqlText) { parser =>
++  override def parseTableSchema(sqlText: String): StructType = parse("table-schema", sqlText) { parser =>
+     astBuilder.visitSingleTableSchema(parser.singleTableSchema())
+   }
+ 
+diff --git a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
+index 2d6fabaaef6..c0e5f388eab 100644
+--- a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
++++ b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
+@@ -23,6 +23,7 @@ import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
+ import org.apache.spark.sql.catalyst.trees.Origin
+ import org.apache.spark.sql.errors.QueryParsingErrors
+ 
++// scalastyle:off line.size.limit
+ /**
+  * Base class for all ANTLR4 [[ParserInterface]] implementations.
+  */
+@@ -30,7 +31,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+   override def astBuilder: AstBuilder
+ 
+   /** Creates Expression for a given SQL string. */
+-  override def parseExpression(sqlText: String): Expression = parse(sqlText) { parser =>
++  override def parseExpression(sqlText: String): Expression = parse("expression", sqlText) { parser =>
+     val ctx = parser.singleExpression()
+     withOrigin(ctx, Some(sqlText)) {
+       astBuilder.visitSingleExpression(ctx)
+@@ -38,26 +39,26 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+   }
+ 
+   /** Creates TableIdentifier for a given SQL string. */
+-  override def parseTableIdentifier(sqlText: String): TableIdentifier = parse(sqlText) { parser =>
++  override def parseTableIdentifier(sqlText: String): TableIdentifier = parse("table-identifier", sqlText) { parser =>
+     astBuilder.visitSingleTableIdentifier(parser.singleTableIdentifier())
+   }
+ 
+   /** Creates FunctionIdentifier for a given SQL string. */
+   override def parseFunctionIdentifier(sqlText: String): FunctionIdentifier = {
+-    parse(sqlText) { parser =>
++    parse("function-identifier", sqlText) { parser =>
+       astBuilder.visitSingleFunctionIdentifier(parser.singleFunctionIdentifier())
+     }
+   }
+ 
+   /** Creates a multi-part identifier for a given SQL string */
+   override def parseMultipartIdentifier(sqlText: String): Seq[String] = {
+-    parse(sqlText) { parser =>
++    parse("multipart-identifier", sqlText) { parser =>
+       astBuilder.visitSingleMultipartIdentifier(parser.singleMultipartIdentifier())
+     }
+   }
+ 
+   /** Creates LogicalPlan for a given SQL string of query. */
+-  override def parseQuery(sqlText: String): LogicalPlan = parse(sqlText) { parser =>
++  override def parseQuery(sqlText: String): LogicalPlan = parse("query", sqlText) { parser =>
+     val ctx = parser.query()
+     withOrigin(ctx, Some(sqlText)) {
+       astBuilder.visitQuery(ctx)
+@@ -65,7 +66,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+   }
+ 
+   /** Creates LogicalPlan for a given SQL string. */
+-  override def parsePlan(sqlText: String): LogicalPlan = parse(sqlText) { parser =>
++  override def parsePlan(sqlText: String): LogicalPlan = parse("plan", sqlText) { parser =>
+     val ctx = parser.singleStatement()
+     withOrigin(ctx, Some(sqlText)) {
+       astBuilder.visitSingleStatement(ctx) match {
+diff --git a/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/encoders/ExpressionEncoderSuite.scala b/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/encoders/ExpressionEncoderSuite.scala
+index 724a91806c7..e66d049c79d 100644
+--- a/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/encoders/ExpressionEncoderSuite.scala
++++ b/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/encoders/ExpressionEncoderSuite.scala
+@@ -246,77 +246,6 @@ class ExpressionEncoderSuite extends CodegenInterpretedPlanTest with AnalysisTes
+       useFallback = true)
+   }
+ 
+-  object OuterLevelWithVeryVeryVeryLongClassName1 {
+-    object OuterLevelWithVeryVeryVeryLongClassName2 {
+-      object OuterLevelWithVeryVeryVeryLongClassName3 {
+-        object OuterLevelWithVeryVeryVeryLongClassName4 {
+-          object OuterLevelWithVeryVeryVeryLongClassName5 {
+-            object OuterLevelWithVeryVeryVeryLongClassName6 {
+-              object OuterLevelWithVeryVeryVeryLongClassName7 {
+-                object OuterLevelWithVeryVeryVeryLongClassName8 {
+-                  object OuterLevelWithVeryVeryVeryLongClassName9 {
+-                    object OuterLevelWithVeryVeryVeryLongClassName10 {
+-                      object OuterLevelWithVeryVeryVeryLongClassName11 {
+-                        object OuterLevelWithVeryVeryVeryLongClassName12 {
+-                          object OuterLevelWithVeryVeryVeryLongClassName13 {
+-                            object OuterLevelWithVeryVeryVeryLongClassName14 {
+-                              object OuterLevelWithVeryVeryVeryLongClassName15 {
+-                                object OuterLevelWithVeryVeryVeryLongClassName16 {
+-                                  object OuterLevelWithVeryVeryVeryLongClassName17 {
+-                                    object OuterLevelWithVeryVeryVeryLongClassName18 {
+-                                      object OuterLevelWithVeryVeryVeryLongClassName19 {
+-                                        object OuterLevelWithVeryVeryVeryLongClassName20 {
+-                                          case class MalformedNameExample(x: Int)
+-                                        }}}}}}}}}}}}}}}}}}}}
+-
+-  {
+-    OuterScopes.addOuterScope(
+-      OuterLevelWithVeryVeryVeryLongClassName1
+-        .OuterLevelWithVeryVeryVeryLongClassName2
+-        .OuterLevelWithVeryVeryVeryLongClassName3
+-        .OuterLevelWithVeryVeryVeryLongClassName4
+-        .OuterLevelWithVeryVeryVeryLongClassName5
+-        .OuterLevelWithVeryVeryVeryLongClassName6
+-        .OuterLevelWithVeryVeryVeryLongClassName7
+-        .OuterLevelWithVeryVeryVeryLongClassName8
+-        .OuterLevelWithVeryVeryVeryLongClassName9
+-        .OuterLevelWithVeryVeryVeryLongClassName10
+-        .OuterLevelWithVeryVeryVeryLongClassName11
+-        .OuterLevelWithVeryVeryVeryLongClassName12
+-        .OuterLevelWithVeryVeryVeryLongClassName13
+-        .OuterLevelWithVeryVeryVeryLongClassName14
+-        .OuterLevelWithVeryVeryVeryLongClassName15
+-        .OuterLevelWithVeryVeryVeryLongClassName16
+-        .OuterLevelWithVeryVeryVeryLongClassName17
+-        .OuterLevelWithVeryVeryVeryLongClassName18
+-        .OuterLevelWithVeryVeryVeryLongClassName19
+-        .OuterLevelWithVeryVeryVeryLongClassName20)
+-    encodeDecodeTest(
+-      OuterLevelWithVeryVeryVeryLongClassName1
+-        .OuterLevelWithVeryVeryVeryLongClassName2
+-        .OuterLevelWithVeryVeryVeryLongClassName3
+-        .OuterLevelWithVeryVeryVeryLongClassName4
+-        .OuterLevelWithVeryVeryVeryLongClassName5
+-        .OuterLevelWithVeryVeryVeryLongClassName6
+-        .OuterLevelWithVeryVeryVeryLongClassName7
+-        .OuterLevelWithVeryVeryVeryLongClassName8
+-        .OuterLevelWithVeryVeryVeryLongClassName9
+-        .OuterLevelWithVeryVeryVeryLongClassName10
+-        .OuterLevelWithVeryVeryVeryLongClassName11
+-        .OuterLevelWithVeryVeryVeryLongClassName12
+-        .OuterLevelWithVeryVeryVeryLongClassName13
+-        .OuterLevelWithVeryVeryVeryLongClassName14
+-        .OuterLevelWithVeryVeryVeryLongClassName15
+-        .OuterLevelWithVeryVeryVeryLongClassName16
+-        .OuterLevelWithVeryVeryVeryLongClassName17
+-        .OuterLevelWithVeryVeryVeryLongClassName18
+-        .OuterLevelWithVeryVeryVeryLongClassName19
+-        .OuterLevelWithVeryVeryVeryLongClassName20
+-        .MalformedNameExample(42),
+-      "deeply nested Scala class should work",
+-      useFallback = true)
+-  }
+-
+   productTest(PrimitiveData(1, 1, 1, 1, 1, 1, true))
+ 
+   productTest(
+diff --git a/sql/core/src/test/scala/org/apache/spark/sql/FunctionCollectorSuite.scala b/sql/core/src/test/scala/org/apache/spark/sql/FunctionCollectorSuite.scala
+new file mode 100644
+index 00000000000..708ce93590a
+--- /dev/null
++++ b/sql/core/src/test/scala/org/apache/spark/sql/FunctionCollectorSuite.scala
+@@ -0,0 +1,78 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *    http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.spark.sql
++
++import java.util.Locale
++
++import org.apache.spark.sql.test.SharedSparkSession
++
++
++case class FunctionExample(sql: String, result: List[String])
++
++class FunctionCollectorSuite extends QueryTest with SharedSparkSession {
++  private def parseExamples(examples: String): List[FunctionExample] = {
++    examples
++      .split("\n")
++      .map(_.trim)
++      .filter(_.nonEmpty)
++      .zipWithIndex
++      .foldLeft(List[FunctionExample]())((acc, x) => {
++        val (line, n) = x
++        if (n == 0) {
++          if (line != "Examples:") {
++            throw new IllegalStateException("missing header for examples")
++          }
++          acc
++        } else {
++          if (line.startsWith(">")) {
++            val sql = line.substring(1).trim
++            acc :+ FunctionExample(sql, List())
++          } else {
++            val result = acc.last.result :+ line
++            acc.init :+ FunctionExample(acc.last.sql, result)
++          }
++        }
++      })
++  }
++
++  test("collect") {
++    val functions = spark.sessionState.functionRegistry
++      .listFunction()
++      .map(spark.sessionState.catalog.lookupFunctionInfo(_))
++      .filter(_.getSource.toLowerCase(Locale.ROOT) == "built-in")
++      .map(f => Map(
++        "name" -> f.getName,
++        "group" -> f.getGroup,
++        "examples" -> parseExamples(f.getExamples)
++          .map(e => {
++            val schema = spark.sql(e.sql).schema
++            Map(
++              "sql" -> e.sql,
++              "result" -> e.result,
++              "schema" -> schema,
++              "schemaString" -> schema.catalogString
++            )
++          })
++      ))
++      .toList
++
++    functions.foreach { f =>
++      writeTestData("function", f, None)
++    }
++  }
++}
