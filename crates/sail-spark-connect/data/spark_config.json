@@ -1,12 +1,7 @@
 {
-  "sparkVersion": "3.5.4",
+  "sparkVersion": "3.5.5",
   "comment": "This is a generated file. Do not edit it directly.",
   "entries": [
-    {
-      "key": "spark.databricks.sql.optimizer.pruneFiltersCanPruneStreamingSubplan",
-      "doc": "Allow PruneFilters to remove streaming subplans when we encounter a false filter. This flag is to restore prior buggy behavior for broken pipelines.",
-      "defaultValue": "false"
-    },
     {
       "key": "spark.sql.adaptive.advisoryPartitionSizeInBytes",
       "doc": "The advisory size in bytes of the shuffle partition during adaptive optimization (when spark.sql.adaptive.enabled is true). It takes effect when Spark coalesces small shuffle partitions or splits skewed shuffle partition.",
@@ -1469,6 +1464,14 @@
       "key": "spark.sql.optimizer.propagateDistinctKeys.enabled",
       "doc": "When true, the query optimizer will propagate a set of distinct attributes from the current node and use it to optimize query.",
       "defaultValue": "true"
+    },
+    {
+      "key": "spark.sql.optimizer.pruneFiltersCanPruneStreamingSubplan",
+      "doc": "Allow PruneFilters to remove streaming subplans when we encounter a false filter. This flag is to restore prior buggy behavior for broken pipelines.",
+      "defaultValue": "false",
+      "alternatives": [
+        "spark.databricks.sql.optimizer.pruneFiltersCanPruneStreamingSubplan"
+      ]
     },
     {
       "key": "spark.sql.optimizer.pullHintsIntoSubqueries",
