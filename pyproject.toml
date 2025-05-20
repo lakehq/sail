@@ -67,7 +67,7 @@ path = ".venvs/default"
 python = "3.11"
 installer = "pip"
 dependencies = [
-    "pyspark[connect]==3.5.4",
+    "pyspark[connect]==3.5.5",
     # We do not specify the extra dependencies for Ibis since we install PySpark explicitly.
     "ibis-framework~=9.4",
     "pyarrow-hotfix>=0.4,<1", # (required by Ibis PySpark)
@@ -146,7 +146,7 @@ PYTHONPATH = "{root}/scripts/spark-tests"
 IBIS_TESTING_DATA_DIR = "{root}/opt/ibis-testing-data"
 
 [tool.hatch.envs.test.scripts]
-install-pyspark = "\"{env:HATCH_UV}\" pip install opt/spark/python/dist/pyspark-3.5.4.tar.gz"
+install-pyspark = "\"{env:HATCH_UV}\" pip install opt/spark/python/dist/pyspark-3.5.5.tar.gz"
 install-pysail = "\"{env:HATCH_UV}\" pip install pysail --no-index -f target/wheels --force-reinstall"
 
 [tool.hatch.envs.test.overrides]
