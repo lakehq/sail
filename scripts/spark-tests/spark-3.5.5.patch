@@ -1,8 +1,8 @@
 diff --git a/pom.xml b/pom.xml
-index 8dc47f391f9..485ed754e56 100644
+index 9b009c3a42a..1b18c98b10c 100644
 --- a/pom.xml
 +++ b/pom.xml
-@@ -3351,6 +3351,10 @@
+@@ -3357,6 +3357,10 @@
              <relocation>
                <pattern>com.google.common</pattern>
                <shadedPattern>${spark.shade.packageName}.guava</shadedPattern>

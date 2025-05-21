@@ -516,8 +516,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("to_timestamp", F::custom(to_timestamp)),
         // The description for `to_timestamp_ltz` and `to_timestamp_ntz` are the same:
         //  "Parses the timestamp with the format to a timestamp without time zone. Returns null with invalid input."
-        // https://spark.apache.org/docs/3.5.4/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ltz.html
-        // https://spark.apache.org/docs/3.5.4/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
+        // https://spark.apache.org/docs/3.5.5/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ltz.html
+        // https://spark.apache.org/docs/3.5.5/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
         ("to_timestamp_ltz", F::custom(to_timestamp)),
         ("to_timestamp_ntz", F::custom(to_timestamp)),
         ("to_unix_timestamp", F::unknown("to_unix_timestamp")),
