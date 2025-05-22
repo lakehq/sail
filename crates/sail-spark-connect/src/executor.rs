@@ -21,6 +21,7 @@ use crate::spark::connect::execute_plan_response::{
 use crate::spark::connect::DataType;
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ExecutorBatch {
     ArrowBatch(ArrowBatch),
     SqlCommandResult(SqlCommandResult),
