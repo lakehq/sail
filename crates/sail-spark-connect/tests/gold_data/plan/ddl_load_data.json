@@ -27,8 +27,7 @@
                 ]
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -49,8 +48,7 @@
               "overwrite": false,
               "partition": []
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -71,8 +69,7 @@
               "overwrite": false,
               "partition": []
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -93,8 +90,7 @@
               "overwrite": true,
               "partition": []
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

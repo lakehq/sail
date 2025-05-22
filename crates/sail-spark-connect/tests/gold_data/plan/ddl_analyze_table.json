@@ -26,8 +26,7 @@
               "columns": [],
               "noScan": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -65,8 +64,7 @@
               ],
               "noScan": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -114,8 +112,7 @@
               ],
               "noScan": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -144,8 +141,7 @@
               "columns": [],
               "noScan": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -174,8 +170,7 @@
               "columns": [],
               "noScan": true
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -210,8 +205,7 @@
               "columns": [],
               "noScan": true
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -242,8 +236,7 @@
               "columns": [],
               "noScan": true
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -278,8 +271,7 @@
               "columns": [],
               "noScan": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -314,8 +306,7 @@
               "columns": [],
               "noScan": true
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -356,8 +347,7 @@
               "columns": [],
               "noScan": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -398,8 +388,7 @@
               "columns": [],
               "noScan": true
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -415,8 +404,7 @@
               ],
               "noScan": true
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -434,8 +422,7 @@
               ],
               "noScan": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -462,8 +449,7 @@
               "columns": [],
               "noScan": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -483,8 +469,7 @@
               "columns": [],
               "noScan": true
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -516,8 +501,7 @@
               "columns": [],
               "noScan": true
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

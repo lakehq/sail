@@ -89,6 +89,7 @@ fn negated(expr: spec::Expr) -> spec::Expr {
         named_arguments: vec![],
         is_distinct: false,
         is_user_defined_function: false,
+        is_internal: None,
         ignore_nulls: None,
         filter: None,
         order_by: None,
@@ -254,6 +255,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -267,6 +269,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -278,8 +281,10 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 spec::Expr::UnresolvedAttribute {
                     name,
                     plan_id: None,
+                    is_metadata_column: false,
                 } => Ok(spec::Expr::UnresolvedStar {
                     target: Some(name),
+                    plan_id: None,
                     wildcard_options: Default::default(),
                 }),
                 _ => Err(SqlError::invalid("wildcard qualifier")),
@@ -288,17 +293,21 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         Expr::Field(expr, _, field) => {
             let expr = from_ast_expression(*expr)?;
             match expr {
-                spec::Expr::UnresolvedAttribute { name, plan_id } => {
-                    Ok(spec::Expr::UnresolvedAttribute {
-                        name: name.child(field.value),
-                        plan_id,
-                    })
-                }
+                spec::Expr::UnresolvedAttribute {
+                    name,
+                    plan_id,
+                    is_metadata_column,
+                } => Ok(spec::Expr::UnresolvedAttribute {
+                    name: name.child(field.value),
+                    plan_id,
+                    is_metadata_column,
+                }),
                 _ => Ok(spec::Expr::UnresolvedExtractValue {
                     child: Box::new(expr),
                     extraction: Box::new(spec::Expr::UnresolvedAttribute {
                         name: spec::ObjectName::bare(field.value),
                         plan_id: None,
+                        is_metadata_column: false,
                     }),
                 }),
             }
@@ -408,6 +417,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -433,6 +443,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -452,6 +463,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -471,6 +483,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -510,6 +523,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                     spec::Expr::UnresolvedAttribute {
                         name: from_ast_object_name(x)?,
                         plan_id: None,
+                        is_metadata_column: false,
                     }
                 }
                 TableExpr::Query(_, query, _) => spec::Expr::ScalarSubquery {
@@ -553,6 +567,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -569,6 +584,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -601,6 +617,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                             named_arguments: vec![],
                             is_distinct: false,
                             is_user_defined_function: false,
+                            is_internal: None,
                             ignore_nulls: None,
                             filter: None,
                             order_by: None,
@@ -622,6 +639,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -644,6 +662,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -663,6 +682,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -692,6 +712,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -712,6 +733,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -724,6 +746,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -736,6 +759,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -748,6 +772,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -760,6 +785,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments: vec![],
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -851,6 +877,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 named_arguments,
                 is_distinct,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls,
                 filter,
                 order_by,
@@ -904,6 +931,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         }
         AtomExpr::Wildcard(_) => Ok(spec::Expr::UnresolvedStar {
             target: None,
+            plan_id: None,
             wildcard_options: Default::default(),
         }),
         AtomExpr::StringLiteral(head, tail) => from_ast_string_literal(head, tail),
@@ -917,6 +945,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::Identifier(x) => Ok(spec::Expr::UnresolvedAttribute {
             name: spec::ObjectName::bare(x.value),
             plan_id: None,
+            is_metadata_column: false,
         }),
     }
 }
@@ -997,6 +1026,7 @@ fn from_ast_quantified_pattern(
         named_arguments: vec![],
         is_distinct: false,
         is_user_defined_function: false,
+        is_internal: None,
         ignore_nulls: None,
         filter: None,
         order_by: None,

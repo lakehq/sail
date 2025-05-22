@@ -10,8 +10,7 @@
                 "empty": {
                   "produceOneRow": true
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
@@ -23,8 +22,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

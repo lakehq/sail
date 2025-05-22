@@ -16,16 +16,16 @@ use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
 use crate::spark::connect::analyze_plan_request::{
     DdlParse as DdlParseRequest, Explain as ExplainRequest,
     GetStorageLevel as GetStorageLevelRequest, InputFiles as InputFilesRequest,
-    IsLocal as IsLocalRequest, IsStreaming as IsStreamingRequest, Persist as PersistRequest,
-    SameSemantics as SameSemanticsRequest, Schema as SchemaRequest,
+    IsLocal as IsLocalRequest, IsStreaming as IsStreamingRequest, JsonToDdl as JsonToDdlRequest,
+    Persist as PersistRequest, SameSemantics as SameSemanticsRequest, Schema as SchemaRequest,
     SemanticHash as SemanticHashRequest, SparkVersion as SparkVersionRequest,
     TreeString as TreeStringRequest, Unpersist as UnpersistRequest,
 };
 use crate::spark::connect::analyze_plan_response::{
     DdlParse as DdlParseResponse, Explain as ExplainResponse,
     GetStorageLevel as GetStorageLevelResponse, InputFiles as InputFilesResponse,
-    IsLocal as IsLocalResponse, IsStreaming as IsStreamingResponse, Persist as PersistResponse,
-    SameSemantics as SameSemanticsResponse, Schema as SchemaResponse,
+    IsLocal as IsLocalResponse, IsStreaming as IsStreamingResponse, JsonToDdl as JsonToDdlResponse,
+    Persist as PersistResponse, SameSemantics as SameSemanticsResponse, Schema as SchemaResponse,
     SemanticHash as SemanticHashResponse, SparkVersion as SparkVersionResponse,
     TreeString as TreeStringResponse, Unpersist as UnpersistResponse,
 };
@@ -178,4 +178,11 @@ pub(crate) async fn handle_analyze_get_storage_level(
             replication: 1,
         }),
     })
+}
+
+pub(crate) async fn handle_analyze_json_to_ddl(
+    _ctx: &SessionContext,
+    _request: JsonToDdlRequest,
+) -> SparkResult<JsonToDdlResponse> {
+    Err(SparkError::todo("handle analyze json to ddl"))
 }

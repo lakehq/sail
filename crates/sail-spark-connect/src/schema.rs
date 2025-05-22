@@ -111,6 +111,7 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
         Kind::Array(_) => write!(f, "array"),
         Kind::Struct(_) => write!(f, "struct"),
         Kind::Map(_) => write!(f, "map"),
+        Kind::Variant(_) => write!(f, "variant"),
         Kind::Udt(udt) => {
             if udt.jvm_class.is_none() && udt.python_class.is_some() {
                 write!(f, "pythonuserdefined")

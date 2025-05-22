@@ -172,6 +172,9 @@ impl TryFrom<Literal> for spec::Literal {
                     ),
                 }
             }
+            LiteralType::SpecializedArray(_) => {
+                return Err(SparkError::todo("specialized array literal"))
+            }
         };
         Ok(literal)
     }

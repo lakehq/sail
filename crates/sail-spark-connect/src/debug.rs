@@ -7,10 +7,15 @@ use crate::spark::connect::LocalRelation;
 
 impl Debug for ArrowBatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let ArrowBatch { row_count, data } = self;
+        let ArrowBatch {
+            row_count,
+            data,
+            start_offset,
+        } = self;
         f.debug_struct("ArrowBatch")
             .field("row_count", row_count)
             .field("data", &DebugBinary::from(data))
+            .field("start_offset", start_offset)
             .finish()
     }
 }

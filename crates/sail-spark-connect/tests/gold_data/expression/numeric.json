@@ -14,13 +14,15 @@
                   "name": [
                     "a"
                   ],
-                  "planId": null
+                  "planId": null,
+                  "isMetadataColumn": false
                 }
               }
             ],
             "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
+            "isInternal": null,
             "ignoreNulls": null,
             "filter": null,
             "orderBy": null
@@ -50,6 +52,7 @@
             "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
+            "isInternal": null,
             "ignoreNulls": null,
             "filter": null,
             "orderBy": null
@@ -86,6 +89,7 @@
             "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
+            "isInternal": null,
             "ignoreNulls": null,
             "filter": null,
             "orderBy": null
@@ -107,13 +111,15 @@
                   "name": [
                     "a"
                   ],
-                  "planId": null
+                  "planId": null,
+                  "isMetadataColumn": false
                 }
               }
             ],
             "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
+            "isInternal": null,
             "ignoreNulls": null,
             "filter": null,
             "orderBy": null
@@ -353,7 +359,8 @@
             "name": [
               "1SL"
             ],
-            "planId": null
+            "planId": null,
+            "isMetadataColumn": false
           }
         }
       }
@@ -366,7 +373,8 @@
             "name": [
               "1a"
             ],
-            "planId": null
+            "planId": null,
+            "isMetadataColumn": false
           }
         }
       }

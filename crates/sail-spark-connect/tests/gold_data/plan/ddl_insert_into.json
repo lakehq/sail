@@ -20,13 +20,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -38,8 +38,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "testcat",
@@ -68,8 +67,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -94,13 +92,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -112,8 +110,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "testcat",
@@ -145,8 +142,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -179,13 +175,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -197,8 +193,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "testcat",
@@ -223,8 +218,7 @@
               "ifNotExists": true,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -249,13 +243,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -267,8 +261,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "testcat",
@@ -285,8 +278,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -311,13 +303,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -329,8 +321,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "testcat",
@@ -344,8 +335,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -370,13 +360,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -388,8 +378,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "testcat",
@@ -403,8 +392,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -431,13 +419,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -449,8 +437,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "testcat",
@@ -464,8 +451,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -488,8 +474,7 @@
                     }
                   ]
                 ],
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "t"
@@ -521,8 +506,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -548,13 +532,13 @@
                         "name": [
                           "DEFAULT"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     }
                   ]
                 ],
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "t"
@@ -574,8 +558,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -598,8 +581,7 @@
                     }
                   ]
                 ],
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "t"
@@ -619,8 +601,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -643,8 +624,7 @@
                     }
                   ]
                 ],
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "t"
@@ -666,8 +646,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -690,8 +669,7 @@
                     }
                   ]
                 ],
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "t"
@@ -713,8 +691,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -737,8 +714,7 @@
                     }
                   ]
                 ],
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "t"
@@ -764,8 +740,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -788,8 +763,7 @@
                     }
                   ]
                 ],
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "t"
@@ -810,8 +784,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -836,13 +809,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -854,8 +827,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "testcat",
@@ -872,8 +844,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -898,13 +869,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -916,8 +887,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "testcat",
@@ -931,8 +901,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -957,13 +926,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -975,8 +944,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "table": [
                 "testcat",
@@ -990,8 +958,7 @@
               "ifNotExists": false,
               "overwrite": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

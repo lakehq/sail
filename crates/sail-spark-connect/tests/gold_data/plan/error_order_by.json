@@ -36,8 +36,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "condition": {
                         "unresolvedFunction": {
@@ -56,7 +55,8 @@
                                       "name": [
                                         "a"
                                       ],
-                                      "planId": null
+                                      "planId": null,
+                                      "isMetadataColumn": false
                                     }
                                   },
                                   {
@@ -64,13 +64,15 @@
                                       "name": [
                                         "b"
                                       ],
-                                      "planId": null
+                                      "planId": null,
+                                      "isMetadataColumn": false
                                     }
                                   }
                                 ],
                                 "namedArguments": [],
                                 "isDistinct": false,
                                 "isUserDefinedFunction": false,
+                                "isInternal": null,
                                 "ignoreNulls": null,
                                 "filter": null,
                                 "orderBy": null
@@ -87,14 +89,14 @@
                           "namedArguments": [],
                           "isDistinct": false,
                           "isUserDefinedFunction": false,
+                          "isInternal": null,
                           "ignoreNulls": null,
                           "filter": null,
                           "orderBy": null
                         }
                       }
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "grouping": [
                     {
@@ -108,7 +110,8 @@
                               "name": [
                                 "fake"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -116,13 +119,15 @@
                               "name": [
                                 "breaker"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -135,7 +140,8 @@
                         "name": [
                           "a"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -143,15 +149,15 @@
                         "name": [
                           "b"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     }
                   ],
                   "having": null,
                   "withGroupingExpressions": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "order": [
                 {
@@ -160,7 +166,8 @@
                       "name": [
                         "c"
                       ],
-                      "planId": null
+                      "planId": null,
+                      "isMetadataColumn": false
                     }
                   },
                   "direction": "unspecified",
@@ -169,8 +176,7 @@
               ],
               "isGlobal": true
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

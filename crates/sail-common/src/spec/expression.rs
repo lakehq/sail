@@ -13,10 +13,12 @@ pub enum Expr {
     UnresolvedAttribute {
         name: ObjectName,
         plan_id: Option<i64>,
+        is_metadata_column: bool,
     },
     UnresolvedFunction(UnresolvedFunction),
     UnresolvedStar {
         target: Option<ObjectName>,
+        plan_id: Option<i64>,
         wildcard_options: WildcardOptions,
     },
     Alias {
@@ -223,6 +225,7 @@ pub struct UnresolvedFunction {
     pub named_arguments: Vec<(Identifier, Expr)>,
     pub is_distinct: bool,
     pub is_user_defined_function: bool,
+    pub is_internal: Option<bool>,
     pub ignore_nulls: Option<bool>,
     pub filter: Option<Box<Expr>>,
     pub order_by: Option<Vec<SortOrder>>,
@@ -273,6 +276,7 @@ pub enum WindowFrameBoundary {
 pub struct CommonInlineUserDefinedFunction {
     pub function_name: Identifier,
     pub deterministic: bool,
+    pub is_distinct: bool,
     pub arguments: Vec<Expr>,
     #[serde(flatten)]
     pub function: FunctionDefinition,
@@ -287,12 +291,14 @@ pub enum FunctionDefinition {
         eval_type: PySparkUdfType,
         command: Vec<u8>,
         python_version: String,
+        additional_includes: Vec<String>,
     },
     ScalarScalaUdf {
         payload: Vec<u8>,
         input_types: Vec<DataType>,
         output_type: DataType,
         nullable: bool,
+        aggregate: bool,
     },
     JavaUdf {
         class_name: String,
