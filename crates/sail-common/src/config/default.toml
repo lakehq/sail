@@ -1,33 +1,56 @@
 mode = "local"
 
 [runtime]
+# The stack size in bytes for each thread.
 stack_size = 8388608
+# Whether to enable a secondary tokio runtime for separating IO and compute tasks.
 enable_secondary = false
 
 [cluster]
+# Whether to enable TLS for the cluster communication.
 enable_tls = false
+# The host for the driver to listen on.
 driver_listen_host = "127.0.0.1"
+# The port for the driver to listen on.
 driver_listen_port = 0
+# The external host for the worker to connect to the driver.
 driver_external_host = "127.0.0.1"
+# The external port for the worker to connect to the driver.
 driver_external_port = 0
+# (This is an internal configuration option that should not be set by the user.)
 worker_id = 0
+# The host for the worker to listen on.
 worker_listen_host = "127.0.0.1"
+# The port for the worker to listen on.
 worker_listen_port = 0
+# The external host for other workers to connect to the worker.
 worker_external_host = "127.0.0.1"
+# The external host for other workers to connect to the worker.
 worker_external_port = 0
+# The initial number of workers to launch.
 worker_initial_count = 4
+# The maximum number of workers that can be launched.
 worker_max_count = 0
+# The maximum idle time in seconds before a worker is removed.
 worker_max_idle_time_secs = 180
+# The interval in seconds for worker heartbeats.
 worker_heartbeat_interval_secs = 30
+# The timeout in seconds for worker heartbeats.
 worker_heartbeat_timeout_secs = 120
+# The timeout in seconds for launching a worker.
 worker_launch_timeout_secs = 300
+# The maximum number of tasks that can be launched on a worker.
 worker_task_slots = 8
+# The number of batches to buffer in the worker shuffle stream.
 worker_stream_buffer = 16
 task_launch_timeout_secs = 300
+# The number of batches to buffer in the job output stream.
 job_output_buffer = 16
+# The retry strategy for driver and worker RPC requests.
 rpc_retry_strategy = { "fixed" = { "max_count" = 3, "delay_secs" = 5 } }
 
 [execution]
+# The batch size for physical plan execution.
 batch_size = 8192
 
 [catalog]
@@ -64,12 +87,19 @@ maximum_parallel_row_group_writers = 2
 maximum_buffered_record_batches_per_stream = 16
 
 [kubernetes]
+# The container image to use for the driver and worker pods.
 image = "sail:latest"
+# The image pull policy for the driver and worker pods.
 image_pull_policy = "IfNotPresent"
+# The Kubernetes namespace in which the driver and worker pods will be created.
 namespace = "default"
+# The name of the driver pod.
 driver_pod_name = ""
+# The name prefix for the worker pods.
 worker_pod_name_prefix = "sail-worker-"
+# The name of the service account to use for the worker pods.
 worker_service_account_name = "default"
 
 [spark]
+# The Spark session timeout in seconds.
 session_timeout_secs = 300
