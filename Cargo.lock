@@ -631,9 +631,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sso"
-version = "1.68.0"
+version = "1.69.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd5f01ea61fed99b5fe4877abff6c56943342a56ff145e9e0c7e2494419008be"
+checksum = "6e9c2e5f57f4a5b7f7e7a1c54427d679ab2337a29e578efbd005e244fd90c4ea"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -653,9 +653,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssooidc"
-version = "1.69.0"
+version = "1.70.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27454e4c55aaa4ef65647e3a1cf095cb834ca6d54e959e2909f1fef96ad87860"
+checksum = "0acaed9a89e82afa50045f68d27bc927600bdc0cc7d617dec61dfb9e6952d22f"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -675,9 +675,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.69.0"
+version = "1.70.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffd6ef5d00c94215960fabcdf2d9fe7c090eed8be482d66d47b92d4aba1dd4aa"
+checksum = "015851dba63fbf22c70c278d8e60c85f008d03640c5b40908730802e1267f651"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -3293,9 +3293,9 @@ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
 name = "jiff"
-version = "0.2.13"
+version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f02000660d30638906021176af16b17498bd0d12813dbfe7b276d8bc7f3c0806"
+checksum = "a194df1107f33c79f4f93d02c80798520551949d59dfad22b6157048a88cca93"
 dependencies = [
  "jiff-static",
  "log",
@@ -3306,9 +3306,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.13"
+version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c30758ddd7188629c6713fc45d1188af4f44c90582311d0c8d8c9907f60c48"
+checksum = "6c6e1db7ed32c6c71b759497fae34bf7933636f75a251b9e736555da426f6442"
 dependencies = [
  "proc-macro2",
  "quote",
