@@ -15,8 +15,7 @@
               "tableAlias": null,
               "condition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -46,7 +45,8 @@
                           "t",
                           "a"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -60,14 +60,14 @@
                   "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
+                  "isInternal": null,
                   "ignoreNulls": null,
                   "filter": null,
                   "orderBy": null
                 }
               }
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

@@ -602,6 +602,7 @@ fn query_plan_with_table_modifier(
                 .map(|c| spec::Expr::UnresolvedAttribute {
                     name: spec::ObjectName::bare(c),
                     plan_id: None,
+                    is_metadata_column: false,
                 })
                 .collect();
             let NamedExprList {
@@ -712,6 +713,7 @@ fn query_plan_with_table_modifier(
                         .map(|col| spec::Expr::UnresolvedAttribute {
                             name: spec::ObjectName::bare(col.value),
                             plan_id: None,
+                            is_metadata_column: false,
                         })
                         .collect();
                     let alias = alias.map(|alias| alias.value.into());

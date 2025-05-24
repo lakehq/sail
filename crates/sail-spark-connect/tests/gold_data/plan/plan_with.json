@@ -20,13 +20,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -38,8 +38,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "recursive": false,
               "ctes": [
@@ -63,13 +62,13 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
                               "unresolvedStar": {
                                 "target": null,
+                                "planId": null,
                                 "wildcardOptions": {
                                   "ilikePattern": null,
                                   "excludeColumns": null,
@@ -81,20 +80,17 @@
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "cte1",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   }
                 ]
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -119,13 +115,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -137,8 +133,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "recursive": false,
               "ctes": [
@@ -160,8 +155,7 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
@@ -169,27 +163,25 @@
                                 "name": [
                                   "c"
                                 ],
-                                "planId": null
+                                "planId": null,
+                                "isMetadataColumn": false
                               }
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "t",
                       "columns": [
                         "x"
                       ]
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   }
                 ]
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -214,13 +206,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -232,8 +224,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "recursive": false,
               "ctes": [
@@ -247,8 +238,7 @@
                             "empty": {
                               "produceOneRow": true
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
@@ -260,20 +250,17 @@
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "cte1",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   }
                 ]
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -299,13 +286,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -317,8 +304,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "recursive": false,
               "ctes": [
@@ -332,8 +318,7 @@
                             "empty": {
                               "produceOneRow": true
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
@@ -345,14 +330,12 @@
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "cte1",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   }
                 ],
                 [
@@ -373,8 +356,7 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
@@ -386,20 +368,17 @@
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "cte1",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   }
                 ]
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -424,13 +403,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -442,8 +421,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "recursive": false,
               "ctes": [
@@ -457,8 +435,7 @@
                             "empty": {
                               "produceOneRow": true
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
@@ -470,14 +447,12 @@
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "cte1",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   }
                 ],
                 [
@@ -498,13 +473,13 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
                               "unresolvedStar": {
                                 "target": null,
+                                "planId": null,
                                 "wildcardOptions": {
                                   "ilikePattern": null,
                                   "excludeColumns": null,
@@ -516,20 +491,17 @@
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "cte2",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   }
                 ]
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -554,13 +526,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -572,8 +544,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "recursive": false,
               "ctes": [
@@ -595,13 +566,13 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
                               "unresolvedStar": {
                                 "target": null,
+                                "planId": null,
                                 "wildcardOptions": {
                                   "ilikePattern": null,
                                   "excludeColumns": null,
@@ -613,20 +584,17 @@
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "cte1",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   }
                 ]
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
