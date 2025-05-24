@@ -1599,10 +1599,38 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_sample(
         &self,
-        _sample: spec::Sample,
-        _state: &mut PlanResolverState,
+        sample: spec::Sample,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("sample"))
+        let spec::Sample {
+            input,
+            lower_bound,
+            upper_bound,
+            ..
+        } = sample;
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(*input, state)
+            .await?;
+        let all_columns: Vec<Column> = input.schema().columns();
+        if lower_bound >= upper_bound {
+            return Err(PlanError::invalid(format!(
+                "invalid sample bounds: [{lower_bound}, {upper_bound})"
+            )));
+        }
+
+        let mut all_exprs: Vec<Expr> = input
+            .schema()
+            .columns()
+            .iter()
+            .map(|col| Expr::Column(col.clone()))
+            .collect();
+
+        //all_exprs.push(random().alias("rand_val"));
+
+        let plan: LogicalPlan = LogicalPlanBuilder::from(input)
+            .project(all_exprs)?
+            .build()?;
+        Ok(plan)
     }
 
     async fn resolve_query_deduplicate(
