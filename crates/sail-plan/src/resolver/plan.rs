@@ -1,6 +1,3 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
 use async_recursion::async_recursion;
 use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
@@ -15,6 +12,7 @@ use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion::functions::expr_fn::random;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::sqlparser::ast::NullTreatment;
@@ -50,6 +48,8 @@ use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::data_source::csv::CsvReadOptions;
 use crate::error::{PlanError, PlanResult};
@@ -1611,7 +1611,6 @@ impl PlanResolver<'_> {
         let input: LogicalPlan = self
             .resolve_query_plan_with_hidden_fields(*input, state)
             .await?;
-        let all_columns: Vec<Column> = input.schema().columns();
         if lower_bound >= upper_bound {
             return Err(PlanError::invalid(format!(
                 "invalid sample bounds: [{lower_bound}, {upper_bound})"
@@ -1625,7 +1624,7 @@ impl PlanResolver<'_> {
             .map(|col| Expr::Column(col.clone()))
             .collect();
 
-        //all_exprs.push(random().alias("rand_val"));
+        all_exprs.push(random().alias("rand_val"));
 
         let plan: LogicalPlan = LogicalPlanBuilder::from(input)
             .project(all_exprs)?
