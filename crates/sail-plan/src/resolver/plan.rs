@@ -1624,7 +1624,7 @@ impl PlanResolver<'_> {
             .map(|col| Expr::Column(col.clone()))
             .collect();
 
-        all_exprs.push(random().alias("rand_val"));
+        all_exprs.push(random().alias(state.register_field_name("rand_value")));
 
         let plan: LogicalPlan = LogicalPlanBuilder::from(input)
             .project(all_exprs)?
