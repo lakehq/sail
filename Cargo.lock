@@ -5139,9 +5139,11 @@ dependencies = [
  "glob",
  "half",
  "iana-time-zone",
+ "num-traits",
  "num_enum",
  "serde",
  "serde_json",
+ "serde_yaml",
  "thiserror 2.0.12",
  "tokio",
 ]

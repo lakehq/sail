@@ -1,5 +1,6 @@
 mod application;
 mod cli;
+mod loader;
 
 // Same default as Spark
 // https://github.com/apache/spark/blob/9cec3c4f7c1b467023f0eefff69e8b7c5105417d/python/pyspark/sql/connect/client/core.py#L126

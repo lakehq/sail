@@ -106,154 +106,63 @@ impl SessionManager {
                 job_runner,
             )?));
 
-        // Catalog
-        //
-        // Impacts: https://spark.apache.org/docs/latest/sql-data-sources-csv.html
-        session_config.options_mut().catalog.has_header = options.config.catalog.has_header;
+        // catalog options
+        {
+            let catalog = &mut session_config.options_mut().catalog;
 
-        // Execution
-        session_config.options_mut().execution.batch_size = options.config.execution.batch_size;
-        session_config
-            .options_mut()
-            .execution
-            .listing_table_ignore_subdirectory = false;
+            // Impacts: https://spark.apache.org/docs/latest/sql-data-sources-csv.html
+            catalog.has_header = options.config.csv.has_header;
+        }
 
-        // Execution Parquet
-        session_config.options_mut().execution.parquet.created_by =
-            concat!("sail version ", env!("CARGO_PKG_VERSION")).into();
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .enable_page_index = options.config.parquet.enable_page_index;
-        session_config.options_mut().execution.parquet.pruning = options.config.parquet.pruning;
-        session_config.options_mut().execution.parquet.skip_metadata =
-            options.config.parquet.skip_metadata;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .metadata_size_hint = options.config.parquet.metadata_size_hint;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .pushdown_filters = options.config.parquet.pushdown_filters;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .reorder_filters = options.config.parquet.reorder_filters;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .schema_force_view_types = options.config.parquet.schema_force_view_types;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .binary_as_string = options.config.parquet.binary_as_string;
-        session_config.options_mut().execution.parquet.coerce_int96 = Some("us".to_string());
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .data_pagesize_limit = options.config.parquet.data_pagesize_limit;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .write_batch_size = options.config.parquet.write_batch_size;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .writer_version = options.config.parquet.writer_version.clone();
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .skip_arrow_metadata = options.config.parquet.skip_arrow_metadata;
-        session_config.options_mut().execution.parquet.compression =
-            options.config.parquet.compression.clone();
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .dictionary_enabled = options.config.parquet.dictionary_enabled;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .dictionary_page_size_limit = options.config.parquet.dictionary_page_size_limit;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .statistics_enabled = options.config.parquet.statistics_enabled.clone();
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .max_row_group_size = options.config.parquet.max_row_group_size;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .column_index_truncate_length = options.config.parquet.column_index_truncate_length;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .statistics_truncate_length = options.config.parquet.statistics_truncate_length;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .data_page_row_count_limit = options.config.parquet.data_page_row_count_limit;
-        session_config.options_mut().execution.parquet.encoding =
-            options.config.parquet.encoding.clone();
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .bloom_filter_on_read = options.config.parquet.bloom_filter_on_read;
+        // execution options
+        {
+            let execution = &mut session_config.options_mut().execution;
 
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .bloom_filter_on_write = options.config.parquet.bloom_filter_on_write;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .bloom_filter_fpp = options.config.parquet.bloom_filter_fpp;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .bloom_filter_ndv = options.config.parquet.bloom_filter_ndv;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .allow_single_file_parallelism = options.config.parquet.allow_single_file_parallelism;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .maximum_parallel_row_group_writers =
-            options.config.parquet.maximum_parallel_row_group_writers;
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .maximum_buffered_record_batches_per_stream = options
-            .config
-            .parquet
-            .maximum_buffered_record_batches_per_stream;
+            execution.batch_size = options.config.execution.batch_size;
+            execution.listing_table_ignore_subdirectory = false;
+        }
+
+        // execution Parquet options
+        {
+            let parquet = &mut session_config.options_mut().execution.parquet;
+
+            parquet.created_by = concat!("sail version ", env!("CARGO_PKG_VERSION")).into();
+            parquet.enable_page_index = options.config.parquet.enable_page_index;
+            parquet.pruning = options.config.parquet.pruning;
+            parquet.skip_metadata = options.config.parquet.skip_metadata;
+            parquet.metadata_size_hint = options.config.parquet.metadata_size_hint;
+            parquet.pushdown_filters = options.config.parquet.pushdown_filters;
+            parquet.reorder_filters = options.config.parquet.reorder_filters;
+            parquet.schema_force_view_types = options.config.parquet.schema_force_view_types;
+            parquet.binary_as_string = options.config.parquet.binary_as_string;
+            parquet.coerce_int96 = Some("us".to_string());
+            parquet.data_pagesize_limit = options.config.parquet.data_page_size_limit;
+            parquet.write_batch_size = options.config.parquet.write_batch_size;
+            parquet.writer_version = options.config.parquet.writer_version.clone();
+            parquet.skip_arrow_metadata = options.config.parquet.skip_arrow_metadata;
+            parquet.compression = Some(options.config.parquet.compression.clone());
+            parquet.dictionary_enabled = Some(options.config.parquet.dictionary_enabled);
+            parquet.dictionary_page_size_limit = options.config.parquet.dictionary_page_size_limit;
+            parquet.statistics_enabled = Some(options.config.parquet.statistics_enabled.clone());
+            parquet.max_row_group_size = options.config.parquet.max_row_group_size;
+            parquet.column_index_truncate_length =
+                options.config.parquet.column_index_truncate_length;
+            parquet.statistics_truncate_length = options.config.parquet.statistics_truncate_length;
+            parquet.data_page_row_count_limit = options.config.parquet.data_page_row_count_limit;
+            parquet.encoding = options.config.parquet.encoding.clone();
+            parquet.bloom_filter_on_read = options.config.parquet.bloom_filter_on_read;
+            parquet.bloom_filter_on_write = options.config.parquet.bloom_filter_on_write;
+            parquet.bloom_filter_fpp = Some(options.config.parquet.bloom_filter_fpp);
+            parquet.bloom_filter_ndv = Some(options.config.parquet.bloom_filter_ndv);
+            parquet.allow_single_file_parallelism =
+                options.config.parquet.allow_single_file_parallelism;
+            parquet.maximum_parallel_row_group_writers =
+                options.config.parquet.maximum_parallel_row_group_writers;
+            parquet.maximum_buffered_record_batches_per_stream = options
+                .config
+                .parquet
+                .maximum_buffered_record_batches_per_stream;
+        }
 
         let runtime = {
             let registry = DynamicObjectStoreRegistry::new(options.runtime.clone());
