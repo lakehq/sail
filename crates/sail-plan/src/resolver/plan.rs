@@ -1,3 +1,6 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
 use async_recursion::async_recursion;
 use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
@@ -48,8 +51,6 @@ use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
@@ -1566,6 +1567,9 @@ impl PlanResolver<'_> {
             )));
         }
 
+        let rand_expr = random() * lit(upper_bound - lower_bound)
+            + lit(lower_bound).alias(state.register_field_name("rand_value"));
+
         let mut all_exprs: Vec<Expr> = input
             .schema()
             .columns()
@@ -1573,7 +1577,7 @@ impl PlanResolver<'_> {
             .map(|col| Expr::Column(col.clone()))
             .collect();
 
-        all_exprs.push(random().alias(state.register_field_name("rand_value")));
+        all_exprs.push(rand_expr);
 
         let plan: LogicalPlan = LogicalPlanBuilder::from(input)
             .project(all_exprs)?
