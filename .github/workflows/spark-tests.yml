@@ -6,7 +6,7 @@ on:
       spark_version:
         description: The Spark version to test
         type: string
-        default: "3.5.5"
+        default: "4.0.0"
 
 jobs:
   setup:

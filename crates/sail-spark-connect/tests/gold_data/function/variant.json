@@ -1,0 +1,620 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT is_variant_null(parse_json('\"null\"'));",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_variant_null(parse_json(\"null\"))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT is_variant_null(parse_json('13'));",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_variant_null(parse_json(13))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT is_variant_null(parse_json('null'));",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_variant_null(parse_json(null))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT is_variant_null(parse_json(null));",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_variant_null(parse_json(NULL))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT is_variant_null(variant_get(parse_json('{\"a\":null, \"b\":\"spark\"}'), \"$.a\"));",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_variant_null(variant_get(parse_json({\"a\":null, \"b\":\"spark\"}), $.a))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT is_variant_null(variant_get(parse_json('{\"a\":null, \"b\":\"spark\"}'), \"$.c\"));",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_variant_null(variant_get(parse_json({\"a\":null, \"b\":\"spark\"}), $.c))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT parse_json('{\"a\":1,\"b\":0.8}');",
+        "result": [
+          "{\"a\":1,\"b\":0.8}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "parse_json({\"a\":1,\"b\":0.8})",
+              "nullable": false,
+              "type": "variant",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT schema_of_variant(parse_json('[{\"b\":true,\"a\":0}]'));",
+        "result": [
+          "ARRAY<OBJECT<a: BIGINT, b: BOOLEAN>>"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "schema_of_variant(parse_json([{\"b\":true,\"a\":0}]))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT schema_of_variant(parse_json('null'));",
+        "result": [
+          "VOID"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "schema_of_variant(parse_json(null))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT schema_of_variant_agg(parse_json(j)) FROM VALUES ('1'), ('2'), ('3') AS tab(j);",
+        "result": [
+          "BIGINT"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "schema_of_variant_agg(parse_json(j))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT schema_of_variant_agg(parse_json(j)) FROM VALUES ('{\"a\": 1}'), ('{\"b\": true}'), ('{\"c\": 1.23}') AS tab(j);",
+        "result": [
+          "OBJECT<a: BIGINT, b: BOOLEAN, c: DECIMAL(3,2)>"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "schema_of_variant_agg(parse_json(j))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_variant_object(array(1, 2, 3));",
+        "result": [
+          "[1,2,3]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_variant_object(array(1, 2, 3))",
+              "nullable": false,
+              "type": "variant",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_variant_object"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_variant_object(array(map(\"a\", 2)));",
+        "result": [
+          "[{\"a\":2}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_variant_object(array(map(a, 2)))",
+              "nullable": false,
+              "type": "variant",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_variant_object"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_variant_object(array(named_struct('a', 1)));",
+        "result": [
+          "[{\"a\":1}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_variant_object(array(named_struct(a, 1)))",
+              "nullable": false,
+              "type": "variant",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_variant_object"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_variant_object(named_struct('a', 1, 'b', 2));",
+        "result": [
+          "{\"a\":1,\"b\":2}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_variant_object(named_struct(a, 1, b, 2))",
+              "nullable": false,
+              "type": "variant",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_variant_object"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_parse_json('{\"a\":1,\"b\":0.8}');",
+        "result": [
+          "{\"a\":1,\"b\":0.8}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_parse_json({\"a\":1,\"b\":0.8})",
+              "nullable": true,
+              "type": "variant",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_parse_json('{\"a\":1,');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_parse_json({\"a\":1,)",
+              "nullable": true,
+              "type": "variant",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_variant_get(parse_json('[1, \"2\"]'), '$[1]', 'string');",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_variant_get(parse_json([1, \"2\"]), $[1])",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_variant_get(parse_json('[1, \"2\"]'), '$[2]', 'string');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_variant_get(parse_json([1, \"2\"]), $[2])",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_variant_get(parse_json('[1, \"hello\"]'), '$[1]');",
+        "result": [
+          "\"hello\""
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_variant_get(parse_json([1, \"hello\"]), $[1])",
+              "nullable": true,
+              "type": "variant",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_variant_get(parse_json('[1, \"hello\"]'), '$[1]', 'int');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_variant_get(parse_json([1, \"hello\"]), $[1])",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_variant_get(parse_json('{\"a\": 1}'), '$.a', 'int');",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_variant_get(parse_json({\"a\": 1}), $.a)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_variant_get(parse_json('{\"a\": 1}'), '$.b', 'int');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_variant_get(parse_json({\"a\": 1}), $.b)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT variant_get(parse_json('[1, \"2\"]'), '$[1]', 'string');",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "variant_get(parse_json([1, \"2\"]), $[1])",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT variant_get(parse_json('[1, \"2\"]'), '$[2]', 'string');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "variant_get(parse_json([1, \"2\"]), $[2])",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT variant_get(parse_json('[1, \"hello\"]'), '$[1]');",
+        "result": [
+          "\"hello\""
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "variant_get(parse_json([1, \"hello\"]), $[1])",
+              "nullable": true,
+              "type": "variant",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT variant_get(parse_json('{\"a\": 1}'), '$.a', 'int');",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "variant_get(parse_json({\"a\": 1}), $.a)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT variant_get(parse_json('{\"a\": 1}'), '$.b', 'int');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "variant_get(parse_json({\"a\": 1}), $.b)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: parse_json"
+      }
+    }
+  ]
+}

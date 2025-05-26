@@ -3,7 +3,10 @@ from __future__ import annotations
 import ctypes
 import decimal
 import itertools
-from typing import Any, Callable, Iterator, Sequence, Union
+from typing import TYPE_CHECKING, Any, Callable, Union
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Sequence
 
 import pandas as pd
 import pyarrow as pa

@@ -116,6 +116,7 @@ def patch_pyspark_pandas_test_utils():
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pandas_test_utils():
+    import pyspark
     from pandas.testing import assert_frame_equal as _assert_frame_equal
 
     def assert_frame_equal(left, right, **kwargs):
@@ -132,7 +133,25 @@ def patch_pandas_test_utils():
         "pyspark.sql.tests.pandas.test_pandas_udf_typehints",
         "pyspark.sql.tests.pandas.test_pandas_udf_typehints_with_future_annotations",
         "pyspark.sql.tests.pandas.test_pandas_udf_window",
-        "pyspark.sql.tests.test_arrow",
+    ]
+
+    if pyspark.__version__.startswith(("3.4.", "3.5.")):
+        modules += [
+            "pyspark.sql.tests.test_arrow",
+        ]
+    elif pyspark.__version__.startswith("4."):
+        modules += [
+            "pyspark.sql.tests.arrow.test_arrow",
+            "pyspark.sql.tests.arrow.test_arrow_cogrouped_map",
+            "pyspark.sql.tests.arrow.test_arrow_grouped_map",
+            "pyspark.sql.tests.arrow.test_arrow_map",
+            "pyspark.sql.tests.arrow.test_arrow_python_udf",
+        ]
+    else:
+        message = f"unsupported PySpark version: {pyspark.__version__}"
+        raise RuntimeError(message)
+
+    modules += [
         # Some test cases import the utility function inside the test function,
         # so we also need to patch the module that defines the utility function.
         "pandas.testing",
@@ -214,11 +233,6 @@ SKIPPED_SPARK_TESTS = [
         reason="SPARK-46130: Flaky with Python 3.12",
     ),
     TestMarker(
-        # TODO: enable the test for Spark 3.5.2 or newer versions
-        keywords=["test_parity_pandas_cogrouped_map.py", "test_apply_in_pandas_not_returning_pandas_dataframe"],
-        reason="SPARK-45065: Not working with Pandas 2.x",
-    ),
-    TestMarker(
         keywords=[
             "test_parity_pandas_cogrouped_map.py",
             "test_apply_in_pandas_returning_no_column_names_and_wrong_amount",
@@ -232,11 +246,6 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_parity_pandas_cogrouped_map.py", "test_with_local_data"],
         reason="Flaky test",
-    ),
-    TestMarker(
-        # TODO: enable the test for Spark 4.0.0-preview2 or newer versions
-        keywords=["test_parity_udtf.py", "test_udtf_with_array_input_type"],
-        reason="SPARK-48710: Not working with NumPy 2.x",
     ),
 ]
 
