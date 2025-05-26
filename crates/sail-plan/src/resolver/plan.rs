@@ -1607,34 +1607,46 @@ impl PlanResolver<'_> {
             input,
             lower_bound,
             upper_bound,
+            with_replacement,
             ..
         } = sample;
-        let input: LogicalPlan = self
-            .resolve_query_plan_with_hidden_fields(*input, state)
-            .await?;
         if lower_bound >= upper_bound {
             return Err(PlanError::invalid(format!(
                 "invalid sample bounds: [{lower_bound}, {upper_bound})"
             )));
         }
+        if with_replacement {
+            return Err(PlanError::todo(
+                "sampling with replacement is not supported yet",
+            ));
+        }
+        // if defined seed use these values otherwise use random seed
 
-        let rand_expr: Expr = random().alias(state.register_field_name("rand_value"));
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(*input, state)
+            .await?;
 
-        let mut all_exprs: Vec<Expr> = input
+        let rand_column_name: String = state.register_field_name("rand_value");
+        let rand_expr: Expr = random().alias(&rand_column_name);
+
+        let init_exprs: Vec<Expr> = input
             .schema()
             .columns()
             .iter()
             .map(|col| Expr::Column(col.clone()))
             .collect();
-
+        let mut all_exprs: Vec<Expr> = init_exprs.clone();
         all_exprs.push(rand_expr);
 
-        let plan_with_rand = LogicalPlanBuilder::from(input)
+        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
             .project(all_exprs)?
             .build()?;
-        let plan = LogicalPlanBuilder::from(plan_with_rand)
-            .filter(col("#1").gt_eq(lit(lower_bound)))?
-            .filter(col("#1").lt_eq(lit(upper_bound)))?
+        let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
+            .filter(col(&rand_column_name).lt_eq(lit(upper_bound)))?
+            .filter(col(&rand_column_name).gt_eq(lit(lower_bound)))?
+            .build()?;
+        let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
+            .project(init_exprs)?
             .build()?;
 
         Ok(plan)
