@@ -41,13 +41,13 @@ function buildConfigGroups(
       id: group.id,
       title: group.title,
       pattern: group.pattern,
-      items: [],
+      items: [] as ConfigItem[],
     };
   });
   const fallbackGroup = {
     id: grouping.fallbackGroup.id,
     title: grouping.fallbackGroup.title,
-    items: [],
+    items: [] as ConfigItem[],
   };
   for (const item of items) {
     const group = groups.find((group) => group.pattern.test(item.key));

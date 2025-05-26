@@ -1,6 +1,6 @@
 <template>
   <!-- eslint-disable-next-line vue/no-v-html -->
-  <div v-if="props.raw" v-html="md.render(raw)"></div>
+  <div v-if="props.raw" v-html="md.render(props.raw)"></div>
 </template>
 
 <script setup lang="ts">

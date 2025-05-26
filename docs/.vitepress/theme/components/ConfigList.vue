@@ -31,7 +31,7 @@
         <span v-else class="property-value">(empty)</span>
       </div>
 
-      <div class="description" v-if="item.description">
+      <div class="description">
         <MarkdownBlock :raw="item.description" />
       </div>
     </div>
