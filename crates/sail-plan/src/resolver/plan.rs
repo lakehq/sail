@@ -38,8 +38,8 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
-    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, Signature,
-    TryCast, Volatility, WindowFrame, WindowFunctionDefinition,
+    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
+    WindowFrame, WindowFunctionDefinition,
 };
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
@@ -1607,7 +1607,6 @@ impl PlanResolver<'_> {
             input,
             lower_bound,
             upper_bound,
-            //fraction,
             ..
         } = sample;
         let input: LogicalPlan = self
@@ -1630,12 +1629,12 @@ impl PlanResolver<'_> {
 
         all_exprs.push(rand_expr);
 
-        let fraction: f64 = (upper_bound - lower_bound) / upper_bound;
         let plan_with_rand = LogicalPlanBuilder::from(input)
             .project(all_exprs)?
             .build()?;
         let plan = LogicalPlanBuilder::from(plan_with_rand)
-            .filter(col("#1").lt_eq(lit(0.5)))?
+            .filter(col("#1").gt_eq(lit(lower_bound)))?
+            .filter(col("#1").lt_eq(lit(upper_bound)))?
             .build()?;
 
         Ok(plan)
