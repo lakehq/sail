@@ -32,13 +32,17 @@ impl TryFrom<Expression> for spec::Expr {
     type Error = SparkError;
 
     fn try_from(expr: Expression) -> SparkResult<spec::Expr> {
-        let Expression { expr_type } = expr;
+        let Expression {
+            common: _,
+            expr_type,
+        } = expr;
         let expr_type = expr_type.required("expression type")?;
         match expr_type {
             ExprType::Literal(literal) => Ok(spec::Expr::Literal(literal.try_into()?)),
             ExprType::UnresolvedAttribute(UnresolvedAttribute {
                 unparsed_identifier,
                 plan_id,
+                is_metadata_column,
             }) => {
                 // The unparsed identifier such as `a.b` is supposed to be parsed as nested
                 // object names. However, there may be raw identifier such as `array(1)` which
@@ -47,13 +51,18 @@ impl TryFrom<Expression> for spec::Expr {
                 let name = parse_object_name(unparsed_identifier.as_str())
                     .and_then(from_ast_object_name)
                     .unwrap_or_else(|_| spec::ObjectName::from(vec![unparsed_identifier]));
-                Ok(spec::Expr::UnresolvedAttribute { name, plan_id })
+                Ok(spec::Expr::UnresolvedAttribute {
+                    name,
+                    plan_id,
+                    is_metadata_column: is_metadata_column.unwrap_or(false),
+                })
             }
             ExprType::UnresolvedFunction(UnresolvedFunction {
                 function_name,
                 arguments,
                 is_distinct,
                 is_user_defined_function,
+                is_internal,
             }) => Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: spec::ObjectName::bare(function_name),
                 arguments: arguments
@@ -63,6 +72,7 @@ impl TryFrom<Expression> for spec::Expr {
                 named_arguments: vec![],
                 is_distinct,
                 is_user_defined_function,
+                is_internal,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -76,12 +86,16 @@ impl TryFrom<Expression> for spec::Expr {
                     })?;
                 Ok(expr)
             }
-            ExprType::UnresolvedStar(UnresolvedStar { unparsed_target }) => {
+            ExprType::UnresolvedStar(UnresolvedStar {
+                unparsed_target,
+                plan_id,
+            }) => {
                 let target = unparsed_target
                     .map(|x| from_ast_qualified_wildcard(parse_qualified_wildcard(x.as_str())?))
                     .transpose()?;
                 Ok(spec::Expr::UnresolvedStar {
                     target,
+                    plan_id,
                     wildcard_options: Default::default(),
                 })
             }
@@ -117,7 +131,11 @@ impl TryFrom<Expression> for spec::Expr {
                 })
             }
             ExprType::Cast(cast) => {
-                let Cast { expr, cast_to_type } = *cast;
+                let Cast {
+                    expr,
+                    eval_mode: _, // TODO: support eval mode
+                    cast_to_type,
+                } = *cast;
                 let expr = expr.required("cast expression")?;
                 let cast_to_type = cast_to_type.required("cast type")?;
                 let cast_to_type = match cast_to_type {
@@ -216,6 +234,14 @@ impl TryFrom<Expression> for spec::Expr {
                         .collect::<SparkResult<_>>()?,
                 })
             }
+            ExprType::NamedArgumentExpression(_) => {
+                Err(SparkError::todo("named argument expression"))
+            }
+            ExprType::MergeAction(_) => Err(SparkError::todo("merge action expression")),
+            ExprType::TypedAggregateExpression(_) => {
+                Err(SparkError::todo("typed aggregate expression"))
+            }
+            ExprType::SubqueryExpression(_) => Err(SparkError::todo("subquery expression")),
             ExprType::Extension(_) => Err(SparkError::todo("extension expression")),
         }
     }
@@ -351,12 +377,14 @@ impl TryFrom<CommonInlineUserDefinedFunction> for spec::CommonInlineUserDefinedF
             function_name,
             deterministic,
             arguments,
+            is_distinct,
             function,
         } = function;
         let function = function.required("common inline UDF function")?;
         Ok(spec::CommonInlineUserDefinedFunction {
             function_name: function_name.into(),
             deterministic,
+            is_distinct,
             arguments: arguments
                 .into_iter()
                 .map(|x| x.try_into())
@@ -378,6 +406,7 @@ impl TryFrom<udf::Function> for spec::FunctionDefinition {
                 eval_type,
                 command,
                 python_ver,
+                additional_includes,
             }) => {
                 let output_type = output_type.required("Python UDF output type")?;
                 Ok(spec::FunctionDefinition::PythonUdf {
@@ -385,6 +414,7 @@ impl TryFrom<udf::Function> for spec::FunctionDefinition {
                     eval_type: spec::PySparkUdfType::try_from(eval_type)?,
                     command,
                     python_version: python_ver,
+                    additional_includes,
                 })
             }
             Function::ScalarScalaUdf(ScalarScalaUdf {
@@ -392,6 +422,7 @@ impl TryFrom<udf::Function> for spec::FunctionDefinition {
                 input_types,
                 output_type,
                 nullable,
+                aggregate,
             }) => {
                 let output_type = output_type.required("Scalar Scala UDF output type")?;
                 Ok(spec::FunctionDefinition::ScalarScalaUdf {
@@ -402,6 +433,7 @@ impl TryFrom<udf::Function> for spec::FunctionDefinition {
                         .collect::<SparkResult<_>>()?,
                     output_type: output_type.try_into()?,
                     nullable,
+                    aggregate,
                 })
             }
             Function::JavaUdf(JavaUdf {

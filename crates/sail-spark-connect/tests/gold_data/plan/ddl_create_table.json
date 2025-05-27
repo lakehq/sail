@@ -52,13 +52,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -70,13 +70,11 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -133,13 +131,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -151,13 +149,11 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -212,8 +208,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -253,8 +248,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -298,8 +292,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -352,8 +345,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -399,8 +391,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -451,8 +442,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -507,8 +497,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -564,8 +553,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -610,8 +598,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -666,8 +653,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -722,8 +708,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -777,8 +762,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -833,8 +817,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -875,8 +858,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -928,8 +910,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -989,8 +970,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1060,8 +1040,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1120,8 +1099,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1162,8 +1140,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1216,8 +1193,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1272,8 +1248,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1378,8 +1353,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1450,8 +1424,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1573,8 +1546,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1627,8 +1599,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1686,8 +1657,7 @@
               "query": null,
               "definition": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

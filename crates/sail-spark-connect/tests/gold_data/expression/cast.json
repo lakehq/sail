@@ -10,7 +10,8 @@
                 "name": [
                   "a"
                 ],
-                "planId": null
+                "planId": null,
+                "isMetadataColumn": false
               }
             },
             "castToType": {
@@ -34,7 +35,8 @@
                 "name": [
                   "a"
                 ],
-                "planId": null
+                "planId": null,
+                "isMetadataColumn": false
               }
             },
             "castToType": "int32",
@@ -53,7 +55,8 @@
                 "name": [
                   "a"
                 ],
-                "planId": null
+                "planId": null,
+                "isMetadataColumn": false
               }
             },
             "castToType": {
@@ -79,7 +82,8 @@
                     "name": [
                       "a"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 "castToType": "int32",

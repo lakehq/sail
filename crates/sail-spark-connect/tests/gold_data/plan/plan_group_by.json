@@ -25,8 +25,7 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "grouping": [
                 {
@@ -34,7 +33,8 @@
                     "name": [
                       "a"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -42,7 +42,8 @@
                     "name": [
                       "b"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 }
               ],
@@ -52,7 +53,8 @@
                     "name": [
                       "a"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -60,7 +62,8 @@
                     "name": [
                       "b"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -76,13 +79,15 @@
                               "name": [
                                 "c"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -98,8 +103,7 @@
               "having": null,
               "withGroupingExpressions": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -128,8 +132,7 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "grouping": [
                 {
@@ -139,7 +142,8 @@
                         "name": [
                           "a"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -147,7 +151,8 @@
                         "name": [
                           "b"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     }
                   ]
@@ -159,7 +164,8 @@
                     "name": [
                       "a"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -167,7 +173,8 @@
                     "name": [
                       "b"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -183,13 +190,15 @@
                               "name": [
                                 "c"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -205,8 +214,7 @@
               "having": null,
               "withGroupingExpressions": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -229,8 +237,7 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "grouping": [
                 {
@@ -240,7 +247,8 @@
                         "name": [
                           "a"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -248,7 +256,8 @@
                         "name": [
                           "b"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     }
                   ]
@@ -260,7 +269,8 @@
                     "name": [
                       "a"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -268,7 +278,8 @@
                     "name": [
                       "b"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -284,13 +295,15 @@
                               "name": [
                                 "c"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -306,8 +319,7 @@
               "having": null,
               "withGroupingExpressions": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -330,8 +342,7 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "grouping": [
                 {
@@ -341,7 +352,8 @@
                         "name": [
                           "a"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -349,7 +361,8 @@
                         "name": [
                           "b"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     }
                   ]
@@ -361,7 +374,8 @@
                     "name": [
                       "a"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -369,7 +383,8 @@
                     "name": [
                       "b"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -385,13 +400,15 @@
                               "name": [
                                 "c"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -407,8 +424,7 @@
               "having": null,
               "withGroupingExpressions": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -431,8 +447,7 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "grouping": [
                 {
@@ -442,7 +457,8 @@
                         "name": [
                           "a"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -450,7 +466,8 @@
                         "name": [
                           "b"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     }
                   ]
@@ -462,7 +479,8 @@
                     "name": [
                       "a"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -470,7 +488,8 @@
                     "name": [
                       "b"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -486,13 +505,15 @@
                               "name": [
                                 "c"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -508,8 +529,7 @@
               "having": null,
               "withGroupingExpressions": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -532,8 +552,7 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "grouping": [
                 {
@@ -544,7 +563,8 @@
                           "name": [
                             "a"
                           ],
-                          "planId": null
+                          "planId": null,
+                          "isMetadataColumn": false
                         }
                       },
                       {
@@ -552,7 +572,8 @@
                           "name": [
                             "b"
                           ],
-                          "planId": null
+                          "planId": null,
+                          "isMetadataColumn": false
                         }
                       }
                     ],
@@ -562,7 +583,8 @@
                           "name": [
                             "a"
                           ],
-                          "planId": null
+                          "planId": null,
+                          "isMetadataColumn": false
                         }
                       }
                     ],
@@ -576,7 +598,8 @@
                     "name": [
                       "a"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -584,7 +607,8 @@
                     "name": [
                       "b"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -600,13 +624,15 @@
                               "name": [
                                 "c"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -622,8 +648,7 @@
               "having": null,
               "withGroupingExpressions": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -646,8 +671,7 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "grouping": [
                 {
@@ -657,7 +681,8 @@
                         "name": [
                           "a"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -665,7 +690,8 @@
                         "name": [
                           "b"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     }
                   ]
@@ -677,7 +703,8 @@
                     "name": [
                       "a"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -685,7 +712,8 @@
                     "name": [
                       "b"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -701,13 +729,15 @@
                               "name": [
                                 "c"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -723,8 +753,7 @@
               "having": null,
               "withGroupingExpressions": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -747,8 +776,7 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "grouping": [
                 {
@@ -758,7 +786,8 @@
                         "name": [
                           "a"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -766,7 +795,8 @@
                         "name": [
                           "b"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     }
                   ]
@@ -778,7 +808,8 @@
                     "name": [
                       "a"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -786,7 +817,8 @@
                     "name": [
                       "b"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 },
                 {
@@ -802,13 +834,15 @@
                               "name": [
                                 "c"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -824,8 +858,7 @@
               "having": null,
               "withGroupingExpressions": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -848,8 +881,7 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "grouping": [
                 {
@@ -857,7 +889,8 @@
                     "name": [
                       "g"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 }
               ],
@@ -867,7 +900,8 @@
                     "name": [
                       "g"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 }
               ],
@@ -882,7 +916,8 @@
                         "name": [
                           "a"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -901,8 +936,7 @@
                                 },
                                 "isStreaming": false
                               },
-                              "planId": null,
-                              "sourceInfo": null
+                              "planId": null
                             },
                             "expressions": [
                               {
@@ -910,13 +944,13 @@
                                   "name": [
                                     "b"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               }
                             ]
                           },
-                          "planId": null,
-                          "sourceInfo": null
+                          "planId": null
                         }
                       }
                     }
@@ -924,6 +958,7 @@
                   "namedArguments": [],
                   "isDistinct": false,
                   "isUserDefinedFunction": false,
+                  "isInternal": null,
                   "ignoreNulls": null,
                   "filter": null,
                   "orderBy": null
@@ -931,8 +966,7 @@
               },
               "withGroupingExpressions": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

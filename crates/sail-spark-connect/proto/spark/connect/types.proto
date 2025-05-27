@@ -62,6 +62,7 @@ message DataType {
     Array array = 20;
     Struct struct = 21;
     Map map = 22;
+    Variant variant = 25;
 
     // UserDefinedType
     UDT udt = 23;
@@ -100,6 +101,7 @@ message DataType {
 
   message String {
     uint32 type_variation_reference = 1;
+    string collation = 2;
   }
 
   message Binary {
@@ -180,12 +182,20 @@ message DataType {
     uint32 type_variation_reference = 4;
   }
 
+  message Variant {
+    uint32 type_variation_reference = 1;
+  }
+
   message UDT {
     string type = 1;
+    // Required for Scala/Java UDT
     optional string jvm_class = 2;
+    // Required for Python UDT
     optional string python_class = 3;
+    // Required for Python UDT
     optional string serialized_python_class = 4;
-    DataType sql_type = 5;
+    // Required for Python UDT
+    optional DataType sql_type = 5;
   }
 
   message Unparsed {

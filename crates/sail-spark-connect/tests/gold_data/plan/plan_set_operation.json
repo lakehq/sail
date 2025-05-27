@@ -22,13 +22,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "expressions": [
                         {
                           "unresolvedStar": {
                             "target": null,
+                            "planId": null,
                             "wildcardOptions": {
                               "ilikePattern": null,
                               "excludeColumns": null,
@@ -40,8 +40,7 @@
                         }
                       ]
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "project": {
@@ -57,13 +56,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "expressions": [
                         {
                           "unresolvedStar": {
                             "target": null,
+                            "planId": null,
                             "wildcardOptions": {
                               "ilikePattern": null,
                               "excludeColumns": null,
@@ -75,16 +74,14 @@
                         }
                       ]
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "setOpType": "union",
                   "isAll": false,
                   "byName": false,
                   "allowMissingColumns": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "setOperation": {
@@ -102,13 +99,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "expressions": [
                         {
                           "unresolvedStar": {
                             "target": null,
+                            "planId": null,
                             "wildcardOptions": {
                               "ilikePattern": null,
                               "excludeColumns": null,
@@ -120,8 +117,7 @@
                         }
                       ]
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "project": {
@@ -137,13 +133,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "expressions": [
                         {
                           "unresolvedStar": {
                             "target": null,
+                            "planId": null,
                             "wildcardOptions": {
                               "ilikePattern": null,
                               "excludeColumns": null,
@@ -155,24 +151,21 @@
                         }
                       ]
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "setOpType": "intersect",
                   "isAll": false,
                   "byName": false,
                   "allowMissingColumns": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "except",
               "isAll": false,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -199,13 +192,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "expressions": [
                         {
                           "unresolvedStar": {
                             "target": null,
+                            "planId": null,
                             "wildcardOptions": {
                               "ilikePattern": null,
                               "excludeColumns": null,
@@ -217,8 +210,7 @@
                         }
                       ]
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "project": {
@@ -234,13 +226,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "expressions": [
                         {
                           "unresolvedStar": {
                             "target": null,
+                            "planId": null,
                             "wildcardOptions": {
                               "ilikePattern": null,
                               "excludeColumns": null,
@@ -252,16 +244,14 @@
                         }
                       ]
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "setOpType": "union",
                   "isAll": false,
                   "byName": false,
                   "allowMissingColumns": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "setOperation": {
@@ -279,13 +269,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "expressions": [
                         {
                           "unresolvedStar": {
                             "target": null,
+                            "planId": null,
                             "wildcardOptions": {
                               "ilikePattern": null,
                               "excludeColumns": null,
@@ -297,8 +287,7 @@
                         }
                       ]
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "project": {
@@ -314,13 +303,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "expressions": [
                         {
                           "unresolvedStar": {
                             "target": null,
+                            "planId": null,
                             "wildcardOptions": {
                               "ilikePattern": null,
                               "excludeColumns": null,
@@ -332,24 +321,21 @@
                         }
                       ]
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "setOpType": "intersect",
                   "isAll": true,
                   "byName": false,
                   "allowMissingColumns": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "except",
               "isAll": true,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -380,8 +366,7 @@
                                   },
                                   "isStreaming": false
                                 },
-                                "planId": null,
-                                "sourceInfo": null
+                                "planId": null
                               },
                               "expressions": [
                                 {
@@ -389,13 +374,13 @@
                                     "name": [
                                       "id"
                                     ],
-                                    "planId": null
+                                    "planId": null,
+                                    "isMetadataColumn": false
                                   }
                                 }
                               ]
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "right": {
                             "project": {
@@ -411,8 +396,7 @@
                                   },
                                   "isStreaming": false
                                 },
-                                "planId": null,
-                                "sourceInfo": null
+                                "planId": null
                               },
                               "expressions": [
                                 {
@@ -420,21 +404,20 @@
                                     "name": [
                                       "id"
                                     ],
-                                    "planId": null
+                                    "planId": null,
+                                    "isMetadataColumn": false
                                   }
                                 }
                               ]
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "setOpType": "union",
                           "isAll": true,
                           "byName": false,
                           "allowMissingColumns": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "project": {
@@ -450,8 +433,7 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
@@ -459,27 +441,25 @@
                                 "name": [
                                   "id"
                                 ],
-                                "planId": null
+                                "planId": null,
+                                "isMetadataColumn": false
                               }
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "setOpType": "union",
                       "isAll": true,
                       "byName": false,
                       "allowMissingColumns": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "name": "u_1",
                   "columns": []
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
@@ -487,13 +467,13 @@
                     "name": [
                       "id"
                     ],
-                    "planId": null
+                    "planId": null,
+                    "isMetadataColumn": false
                   }
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -522,13 +502,13 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
                               "unresolvedStar": {
                                 "target": null,
+                                "planId": null,
                                 "wildcardOptions": {
                                   "ilikePattern": null,
                                   "excludeColumns": null,
@@ -540,8 +520,7 @@
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "project": {
@@ -557,13 +536,13 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "expressions": [
                             {
                               "unresolvedStar": {
                                 "target": null,
+                                "planId": null,
                                 "wildcardOptions": {
                                   "ilikePattern": null,
                                   "excludeColumns": null,
@@ -575,27 +554,25 @@
                             }
                           ]
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "setOpType": "union",
                       "isAll": false,
                       "byName": false,
                       "allowMissingColumns": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "name": "t",
                   "columns": []
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -607,8 +584,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -633,13 +609,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -651,8 +627,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -668,13 +643,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -686,16 +661,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "except",
               "isAll": true,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -720,13 +693,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -738,8 +711,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -755,13 +727,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -773,16 +745,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "except",
               "isAll": false,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -807,13 +777,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -825,8 +795,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -842,13 +811,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -860,16 +829,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "except",
               "isAll": false,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -894,13 +861,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -912,8 +879,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -929,13 +895,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -947,16 +913,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "intersect",
               "isAll": true,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -981,13 +945,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -999,8 +963,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -1016,13 +979,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1034,16 +997,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "intersect",
               "isAll": false,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1068,13 +1029,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1086,8 +1047,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -1103,13 +1063,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1121,16 +1081,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "intersect",
               "isAll": false,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1155,13 +1113,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1173,8 +1131,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -1190,13 +1147,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1208,16 +1165,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "except",
               "isAll": true,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1242,13 +1197,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1260,8 +1215,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -1277,13 +1231,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1295,16 +1249,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "except",
               "isAll": false,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1329,13 +1281,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1347,8 +1299,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -1364,13 +1315,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1382,16 +1333,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "except",
               "isAll": false,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1416,13 +1365,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1434,8 +1383,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -1451,13 +1399,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1469,16 +1417,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "union",
               "isAll": true,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1503,13 +1449,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1521,8 +1467,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -1538,13 +1483,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1556,16 +1501,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "union",
               "isAll": false,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1590,13 +1533,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1608,8 +1551,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -1625,13 +1567,13 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
                       "unresolvedStar": {
                         "target": null,
+                        "planId": null,
                         "wildcardOptions": {
                           "ilikePattern": null,
                           "excludeColumns": null,
@@ -1643,16 +1585,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "union",
               "isAll": false,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1669,8 +1609,7 @@
                     "empty": {
                       "produceOneRow": true
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
@@ -1682,8 +1621,7 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "right": {
                 "project": {
@@ -1691,8 +1629,7 @@
                     "empty": {
                       "produceOneRow": true
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "expressions": [
                     {
@@ -1704,16 +1641,14 @@
                     }
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "setOpType": "union",
               "isAll": false,
               "byName": false,
               "allowMissingColumns": false
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

@@ -13,8 +13,7 @@
               ],
               "value": "NULL"
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -32,8 +31,7 @@
               ],
               "value": null
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -57,8 +55,7 @@
               ],
               "value": "xYz"
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -75,8 +72,7 @@
                 "c"
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -92,8 +88,7 @@
                 "c"
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -108,8 +103,7 @@
                 "c"
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -126,8 +120,7 @@
                 "c"
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -151,13 +144,13 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -169,8 +162,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -194,13 +186,13 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -212,8 +204,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -237,13 +228,13 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -255,8 +246,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -280,13 +270,13 @@
                   },
                   "isStreaming": false
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -298,8 +288,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -332,19 +321,18 @@
                         "name": [
                           "DEFAULT"
                         ],
-                        "planId": null
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     }
                   ]
                 ],
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "name": "val",
               "columns": []
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

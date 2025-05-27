@@ -53,6 +53,7 @@ impl PlanResolver<'_> {
                 eval_type,
                 command,
                 python_version,
+                additional_includes: _,
             } => (output_type, eval_type, command, python_version),
             spec::FunctionDefinition::ScalarScalaUdf { .. } => {
                 return Err(PlanError::todo("Scala UDF is not supported yet"));
@@ -96,6 +97,7 @@ impl PlanResolver<'_> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn resolve_python_udf_expr(
         &self,
         function: PythonUdf,
@@ -104,6 +106,7 @@ impl PlanResolver<'_> {
         argument_display_names: &[String],
         schema: &DFSchemaRef,
         deterministic: bool,
+        distinct: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<Expr> {
         use spec::PySparkUdfType;
@@ -211,7 +214,7 @@ impl PlanResolver<'_> {
                     func: Arc::new(AggregateUDF::from(udaf)),
                     params: AggregateFunctionParams {
                         args: arguments,
-                        distinct: false,
+                        distinct,
                         filter: None,
                         order_by: None,
                         null_treatment: None,

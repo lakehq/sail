@@ -227,6 +227,7 @@ impl TryFrom<DataType> for spec::DataType {
                     keys_sorted: false,
                 })
             }
+            Kind::Variant(_) => Err(SparkError::todo("variant data type")),
             Kind::Udt(udt) => {
                 let sdt::Udt {
                     r#type: _,

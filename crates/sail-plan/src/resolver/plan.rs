@@ -62,6 +62,7 @@ use crate::function::{
     get_built_in_table_function, get_outer_built_in_generator_functions,
     is_built_in_generator_function,
 };
+use crate::literal::LiteralEvaluator;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::{AggregateState, PlanResolverState};
@@ -756,6 +757,7 @@ impl PlanResolver<'_> {
                 named_arguments,
                 is_distinct: false,
                 is_user_defined_function: false,
+                is_internal: None,
                 ignore_nulls: None,
                 filter: None,
                 order_by: None,
@@ -1483,29 +1485,43 @@ impl PlanResolver<'_> {
     async fn resolve_query_with_parameters(
         &self,
         input: spec::QueryPlan,
-        positional: Vec<spec::Literal>,
-        named: Vec<(String, spec::Literal)>,
+        positional: Vec<spec::Expr>,
+        named: Vec<(String, spec::Expr)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let evaluator = LiteralEvaluator::new();
+        let schema = Arc::new(DFSchema::empty());
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
         let input = if !positional.is_empty() {
-            let params = positional
-                .into_iter()
-                .map(|arg| self.resolve_literal(arg, state))
-                .collect::<PlanResult<_>>()?;
+            let params = {
+                let mut params = vec![];
+                for arg in positional {
+                    let expr = self.resolve_expression(arg, &schema, state).await?;
+                    let param = evaluator
+                        .evaluate(&expr)
+                        .map_err(|e| PlanError::invalid(e.to_string()))?;
+                    params.push(param);
+                }
+                params
+            };
             input.with_param_values(ParamValues::List(params))?
         } else {
             input
         };
         if !named.is_empty() {
-            let params = named
-                .into_iter()
-                .map(|(name, arg)| -> PlanResult<(String, ScalarValue)> {
-                    Ok((name, self.resolve_literal(arg, state)?))
-                })
-                .collect::<PlanResult<_>>()?;
+            let params = {
+                let mut params = HashMap::new();
+                for (name, arg) in named {
+                    let expr = self.resolve_expression(arg, &schema, state).await?;
+                    let param = evaluator
+                        .evaluate(&expr)
+                        .map_err(|e| PlanError::invalid(e.to_string()))?;
+                    params.insert(name, param);
+                }
+                params
+            };
             Ok(input.with_param_values(ParamValues::Map(params))?)
         } else {
             Ok(input)
@@ -1722,7 +1738,12 @@ impl PlanResolver<'_> {
         let excluded = columns
             .into_iter()
             .filter_map(|col| {
-                let spec::Expr::UnresolvedAttribute { name, plan_id } = col else {
+                let spec::Expr::UnresolvedAttribute {
+                    name,
+                    plan_id,
+                    is_metadata_column: false,
+                } = col
+                else {
                     return Some(Err(PlanError::invalid("expecting column to drop")));
                 };
                 let name: Vec<String> = name.into();
@@ -1984,9 +2005,13 @@ impl PlanResolver<'_> {
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic: _,
+            is_distinct,
             arguments,
             function,
         } = function;
+        if is_distinct {
+            return Err(PlanError::invalid("distinct MapPartitions UDF"));
+        }
         let function_name: String = function_name.into();
         let input = self
             .resolve_query_project(Some(input), arguments, state)
@@ -2074,6 +2099,7 @@ impl PlanResolver<'_> {
             is_map_groups_with_state,
             output_mode,
             timeout_conf,
+            state_schema,
         } = map;
         // The following group map fields are not used in PySpark,
         // so there is no plan to support them.
@@ -2105,10 +2131,16 @@ impl PlanResolver<'_> {
                 "timeout configuration not supported in group map",
             ));
         }
+        if state_schema.is_some() {
+            return Err(PlanError::invalid(
+                "state schema not supported in group map",
+            ));
+        }
 
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
+            is_distinct,
             arguments,
             function,
         } = function;
@@ -2167,7 +2199,7 @@ impl PlanResolver<'_> {
             func: Arc::new(AggregateUDF::from(udaf)),
             params: AggregateFunctionParams {
                 args,
-                distinct: false,
+                distinct: is_distinct,
                 filter: None,
                 order_by: None,
                 null_treatment: None,
@@ -2246,9 +2278,13 @@ impl PlanResolver<'_> {
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
+            is_distinct,
             arguments: _, // no arguments are passed for co-group map
             function,
         } = function;
+        if is_distinct {
+            return Err(PlanError::invalid("distinct CoGroupMap UDF"));
+        }
         let function_name: String = function_name.into();
         let function = self.resolve_python_udf(function, state)?;
         let output_fields = match function.output_type {
@@ -2575,6 +2611,7 @@ impl PlanResolver<'_> {
             named_arguments,
             is_distinct: false,
             is_user_defined_function: false,
+            is_internal: None,
             ignore_nulls: None,
             filter: None,
             order_by: None,
@@ -2745,6 +2782,7 @@ impl PlanResolver<'_> {
             mode,
             sort_columns,
             partitioning_columns,
+            clustering_columns,
             bucket_by,
             options,
             table_properties: _,
@@ -2755,6 +2793,9 @@ impl PlanResolver<'_> {
         }
         if !partitioning_columns.is_empty() {
             return Err(PlanError::unsupported("partitioning columns"));
+        }
+        if !clustering_columns.is_empty() {
+            return Err(PlanError::unsupported("clustering columns"));
         }
         if bucket_by.is_some() {
             return Err(PlanError::unsupported("bucketing"));
@@ -3135,6 +3176,7 @@ impl PlanResolver<'_> {
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
+            is_distinct: _,
             arguments: _,
             function,
         } = function;

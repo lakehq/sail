@@ -24,14 +24,12 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "name": "s1",
                           "columns": []
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "tableAlias": {
@@ -47,14 +45,12 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "name": "s2",
                           "columns": []
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "joinType": "inner",
                       "joinCriteria": {
@@ -70,7 +66,8 @@
                                     "s1",
                                     "id"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               },
                               {
@@ -79,13 +76,15 @@
                                     "s2",
                                     "id"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               }
                             ],
                             "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
+                            "isInternal": null,
                             "ignoreNulls": null,
                             "filter": null,
                             "orderBy": null
@@ -94,8 +93,7 @@
                       },
                       "joinDataType": null
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "name": "dst",
                   "columns": [
@@ -105,13 +103,13 @@
                     "d"
                   ]
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -123,8 +121,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -153,8 +150,7 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "right": {
                             "read": {
@@ -168,15 +164,13 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "joinType": "inner",
                           "joinCriteria": null,
                           "joinDataType": null
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "read": {
@@ -190,15 +184,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "joinType": "inner",
                       "joinCriteria": null,
                       "joinDataType": null
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -212,20 +204,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "rightOuter",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -237,8 +228,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -264,8 +254,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -279,20 +268,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "cross",
                   "joinCriteria": "natural",
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -304,8 +292,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -337,8 +324,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -354,14 +340,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftAnti",
                   "joinCriteria": {
@@ -376,7 +360,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -384,13 +369,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -399,13 +386,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -417,8 +404,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -443,8 +429,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -458,8 +443,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftAnti",
                   "joinCriteria": {
@@ -470,13 +454,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -488,8 +472,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -516,14 +499,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -537,20 +518,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftAnti",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -562,8 +542,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -590,14 +569,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -611,20 +588,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "cross",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -636,8 +612,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -664,14 +639,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -685,20 +658,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "fullOuter",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -710,8 +682,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -738,14 +709,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -759,20 +728,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "fullOuter",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -784,8 +752,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -812,14 +779,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -833,20 +798,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -858,8 +822,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -886,14 +849,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -907,20 +868,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -932,8 +892,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -960,14 +919,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -981,20 +938,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftAnti",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1006,8 +962,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1034,14 +989,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -1055,20 +1008,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftOuter",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1080,8 +1032,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1108,14 +1059,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -1129,20 +1078,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftOuter",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1154,8 +1102,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1182,14 +1129,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -1203,20 +1148,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftSemi",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1228,8 +1172,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1256,14 +1199,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -1277,20 +1218,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "rightOuter",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1302,8 +1242,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1330,14 +1269,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -1351,20 +1288,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "rightOuter",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1376,8 +1312,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1404,14 +1339,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -1425,20 +1358,19 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftSemi",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1450,8 +1382,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1482,8 +1413,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -1499,14 +1429,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "fullOuter",
                   "joinCriteria": {
@@ -1521,7 +1449,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1529,13 +1458,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -1544,13 +1475,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1562,8 +1493,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1588,8 +1518,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -1603,8 +1532,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "fullOuter",
                   "joinCriteria": {
@@ -1615,13 +1543,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1633,8 +1561,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1659,8 +1586,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -1676,14 +1602,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "fullOuter",
                   "joinCriteria": {
@@ -1698,7 +1622,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1706,13 +1631,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -1721,13 +1648,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1739,8 +1666,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1765,8 +1691,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -1780,8 +1705,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "fullOuter",
                   "joinCriteria": {
@@ -1792,13 +1716,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1810,8 +1734,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1842,8 +1765,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -1859,14 +1781,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": {
@@ -1881,7 +1801,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1889,13 +1810,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -1904,13 +1827,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1922,8 +1845,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -1948,8 +1870,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -1963,8 +1884,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": {
@@ -1975,13 +1895,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -1993,8 +1913,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2031,8 +1950,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -2048,14 +1966,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": {
@@ -2070,7 +1986,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -2078,13 +1995,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -2093,13 +2012,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -2111,8 +2030,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2137,8 +2055,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -2152,8 +2069,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": {
@@ -2164,13 +2080,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -2182,8 +2098,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2208,8 +2123,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -2225,14 +2139,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftAnti",
                   "joinCriteria": {
@@ -2247,7 +2159,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -2255,13 +2168,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -2270,13 +2185,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -2288,8 +2203,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2314,8 +2228,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -2329,8 +2242,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftAnti",
                   "joinCriteria": {
@@ -2341,13 +2253,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -2359,8 +2271,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2391,8 +2302,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -2408,14 +2318,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftOuter",
                   "joinCriteria": {
@@ -2430,7 +2338,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -2438,13 +2347,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -2453,13 +2364,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -2471,8 +2382,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2497,8 +2407,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -2512,8 +2421,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftOuter",
                   "joinCriteria": {
@@ -2524,13 +2432,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -2542,8 +2450,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2574,8 +2481,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -2591,14 +2497,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftOuter",
                   "joinCriteria": {
@@ -2613,7 +2517,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -2621,13 +2526,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -2636,13 +2543,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -2654,8 +2561,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2680,8 +2586,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -2695,8 +2600,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftOuter",
                   "joinCriteria": {
@@ -2707,13 +2611,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -2725,8 +2629,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2751,8 +2654,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -2768,14 +2670,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftSemi",
                   "joinCriteria": {
@@ -2790,7 +2690,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -2798,13 +2699,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -2813,13 +2716,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -2831,8 +2734,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2857,8 +2759,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -2872,8 +2773,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftSemi",
                   "joinCriteria": {
@@ -2884,13 +2784,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -2902,8 +2802,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -2928,8 +2827,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -2945,14 +2843,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "rightOuter",
                   "joinCriteria": {
@@ -2967,7 +2863,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -2975,13 +2872,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -2990,13 +2889,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3008,8 +2907,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3034,8 +2932,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -3049,8 +2946,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "rightOuter",
                   "joinCriteria": {
@@ -3061,13 +2957,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3079,8 +2975,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3105,8 +3000,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -3122,14 +3016,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "rightOuter",
                   "joinCriteria": {
@@ -3144,7 +3036,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -3152,13 +3045,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -3167,13 +3062,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3185,8 +3080,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3211,8 +3105,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -3226,8 +3119,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "rightOuter",
                   "joinCriteria": {
@@ -3238,13 +3130,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3256,8 +3148,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3282,8 +3173,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -3299,14 +3189,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftSemi",
                   "joinCriteria": {
@@ -3321,7 +3209,8 @@
                               "name": [
                                 "a"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -3329,13 +3218,15 @@
                               "name": [
                                 "b"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -3344,13 +3235,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3362,8 +3253,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3388,8 +3278,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -3403,8 +3292,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftSemi",
                   "joinCriteria": {
@@ -3415,13 +3303,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3433,8 +3321,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3461,14 +3348,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -3484,26 +3369,24 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "fullOuter",
                   "joinCriteria": "natural",
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3515,8 +3398,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3543,14 +3425,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -3566,26 +3446,24 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "fullOuter",
                   "joinCriteria": "natural",
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3597,8 +3475,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3625,14 +3502,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -3648,26 +3523,24 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": "natural",
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3679,8 +3552,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3707,14 +3579,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -3730,26 +3600,24 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": "natural",
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3761,8 +3629,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3789,14 +3656,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -3812,26 +3677,24 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftOuter",
                   "joinCriteria": "natural",
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3843,8 +3706,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3871,14 +3733,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -3894,26 +3754,24 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "leftOuter",
                   "joinCriteria": "natural",
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -3925,8 +3783,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -3953,14 +3810,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -3976,26 +3831,24 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "rightOuter",
                   "joinCriteria": "natural",
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -4007,8 +3860,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -4035,14 +3887,12 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "tt",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "tableAlias": {
@@ -4058,26 +3908,24 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "name": "uu",
                       "columns": []
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "rightOuter",
                   "joinCriteria": "natural",
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -4089,8 +3937,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -4117,8 +3964,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "read": {
@@ -4132,15 +3978,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "joinType": "inner",
                       "joinCriteria": null,
                       "joinDataType": null
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "join": {
@@ -4156,8 +4000,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "read": {
@@ -4171,8 +4014,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "joinType": "inner",
                       "joinCriteria": {
@@ -4188,7 +4030,8 @@
                                     "t1",
                                     "col1"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               },
                               {
@@ -4197,13 +4040,15 @@
                                     "t2",
                                     "col2"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               }
                             ],
                             "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
+                            "isInternal": null,
                             "ignoreNulls": null,
                             "filter": null,
                             "orderBy": null
@@ -4212,20 +4057,19 @@
                       },
                       "joinDataType": null
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "cross",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -4237,8 +4081,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -4267,8 +4110,7 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "right": {
                             "read": {
@@ -4282,15 +4124,13 @@
                               },
                               "isStreaming": false
                             },
-                            "planId": null,
-                            "sourceInfo": null
+                            "planId": null
                           },
                           "joinType": "cross",
                           "joinCriteria": null,
                           "joinDataType": null
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "read": {
@@ -4304,8 +4144,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "joinType": "inner",
                       "joinCriteria": {
@@ -4321,7 +4160,8 @@
                                     "t3",
                                     "id"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               },
                               {
@@ -4330,13 +4170,15 @@
                                     "t1",
                                     "id"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               }
                             ],
                             "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
+                            "isInternal": null,
                             "ignoreNulls": null,
                             "filter": null,
                             "orderBy": null
@@ -4345,8 +4187,7 @@
                       },
                       "joinDataType": null
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "read": {
@@ -4360,8 +4201,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": {
@@ -4377,7 +4217,8 @@
                                 "t4",
                                 "id"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -4386,13 +4227,15 @@
                                 "t1",
                                 "id"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -4401,13 +4244,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -4419,8 +4262,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -4445,8 +4287,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "join": {
@@ -4462,8 +4303,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "read": {
@@ -4477,8 +4317,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "joinType": "inner",
                       "joinCriteria": {
@@ -4493,7 +4332,8 @@
                                   "name": [
                                     "col3"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               },
                               {
@@ -4501,13 +4341,15 @@
                                   "name": [
                                     "col2"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               }
                             ],
                             "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
+                            "isInternal": null,
                             "ignoreNulls": null,
                             "filter": null,
                             "orderBy": null
@@ -4516,20 +4358,19 @@
                       },
                       "joinDataType": null
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -4541,8 +4382,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -4567,8 +4407,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "join": {
@@ -4584,8 +4423,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "read": {
@@ -4599,8 +4437,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "joinType": "inner",
                       "joinCriteria": {
@@ -4615,7 +4452,8 @@
                                   "name": [
                                     "col3"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               },
                               {
@@ -4623,13 +4461,15 @@
                                   "name": [
                                     "col2"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               }
                             ],
                             "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
+                            "isInternal": null,
                             "ignoreNulls": null,
                             "filter": null,
                             "orderBy": null
@@ -4638,8 +4478,7 @@
                       },
                       "joinDataType": null
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": {
@@ -4654,7 +4493,8 @@
                               "name": [
                                 "col3"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -4662,13 +4502,15 @@
                               "name": [
                                 "col1"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -4677,13 +4519,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -4695,8 +4537,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -4721,8 +4562,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "join": {
@@ -4738,8 +4578,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "read": {
@@ -4753,15 +4592,13 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "joinType": "inner",
                       "joinCriteria": null,
                       "joinDataType": null
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "inner",
                   "joinCriteria": {
@@ -4776,7 +4613,8 @@
                               "name": [
                                 "col3"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -4784,13 +4622,15 @@
                               "name": [
                                 "col2"
                               ],
-                              "planId": null
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           }
                         ],
                         "namedArguments": [],
                         "isDistinct": false,
                         "isUserDefinedFunction": false,
+                        "isInternal": null,
                         "ignoreNulls": null,
                         "filter": null,
                         "orderBy": null
@@ -4799,13 +4639,13 @@
                   },
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -4817,8 +4657,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -4850,8 +4689,7 @@
                       },
                       "isStreaming": false
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "right": {
                     "join": {
@@ -4867,8 +4705,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "right": {
                         "read": {
@@ -4882,8 +4719,7 @@
                           },
                           "isStreaming": false
                         },
-                        "planId": null,
-                        "sourceInfo": null
+                        "planId": null
                       },
                       "joinType": "inner",
                       "joinCriteria": {
@@ -4899,7 +4735,8 @@
                                     "t1",
                                     "col1"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               },
                               {
@@ -4908,13 +4745,15 @@
                                     "t2",
                                     "col2"
                                   ],
-                                  "planId": null
+                                  "planId": null,
+                                  "isMetadataColumn": false
                                 }
                               }
                             ],
                             "namedArguments": [],
                             "isDistinct": false,
                             "isUserDefinedFunction": false,
+                            "isInternal": null,
                             "ignoreNulls": null,
                             "filter": null,
                             "orderBy": null
@@ -4923,20 +4762,19 @@
                       },
                       "joinDataType": null
                     },
-                    "planId": null,
-                    "sourceInfo": null
+                    "planId": null
                   },
                   "joinType": "cross",
                   "joinCriteria": null,
                   "joinDataType": null
                 },
-                "planId": null,
-                "sourceInfo": null
+                "planId": null
               },
               "expressions": [
                 {
                   "unresolvedStar": {
                     "target": null,
+                    "planId": null,
                     "wildcardOptions": {
                       "ilikePattern": null,
                       "excludeColumns": null,
@@ -4948,8 +4786,7 @@
                 }
               ]
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

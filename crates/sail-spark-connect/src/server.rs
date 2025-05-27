@@ -20,8 +20,9 @@ use crate::spark::connect::spark_connect_service_server::SparkConnectService;
 use crate::spark::connect::{
     plan, AddArtifactsRequest, AddArtifactsResponse, AnalyzePlanRequest, AnalyzePlanResponse,
     ArtifactStatusesRequest, ArtifactStatusesResponse, Command, ConfigRequest, ConfigResponse,
-    ExecutePlanRequest, InterruptRequest, InterruptResponse, Plan, ReattachExecuteRequest,
-    ReleaseExecuteRequest, ReleaseExecuteResponse,
+    ExecutePlanRequest, FetchErrorDetailsRequest, FetchErrorDetailsResponse, InterruptRequest,
+    InterruptResponse, Plan, ReattachExecuteRequest, ReleaseExecuteRequest, ReleaseExecuteResponse,
+    ReleaseSessionRequest, ReleaseSessionResponse,
 };
 
 #[derive(Debug)]
@@ -46,6 +47,8 @@ fn is_reattachable(request_options: &[sc::execute_plan_request::RequestOption]) 
     false
 }
 
+// TODO: make sure that `server_side_session_id` is set properly
+
 #[tonic::async_trait]
 impl SparkConnectService for SparkConnectServer {
     type ExecutePlanStream = ExecutePlanResponseStream;
@@ -58,7 +61,7 @@ impl SparkConnectService for SparkConnectServer {
         debug!("{:?}", request);
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
-            session_id: request.session_id.clone(),
+            session_id: request.session_id,
         };
         let metadata = ExecutorMetadata {
             operation_id: request
@@ -119,8 +122,36 @@ impl SparkConnectService for SparkConnectServer {
                         service::handle_execute_register_table_function(&ctx, udtf, metadata)
                             .await?
                     }
+                    CommandType::StreamingQueryListenerBusCommand(_) => {
+                        return Err(Status::unimplemented(
+                            "streaming query listener bus command",
+                        ));
+                    }
+                    CommandType::RegisterDataSource(_) => {
+                        return Err(Status::unimplemented("register data source command"));
+                    }
+                    CommandType::CreateResourceProfileCommand(_) => {
+                        return Err(Status::unimplemented("create resource profile command"));
+                    }
+                    CommandType::CheckpointCommand(_) => {
+                        return Err(Status::unimplemented("checkpoint command"));
+                    }
+                    CommandType::RemoveCachedRemoteRelationCommand(_) => {
+                        return Err(Status::unimplemented(
+                            "remove cached remote relation command",
+                        ));
+                    }
+                    CommandType::MergeIntoTableCommand(_) => {
+                        return Err(Status::unimplemented("merge into table command"));
+                    }
+                    CommandType::MlCommand(_) => {
+                        return Err(Status::unimplemented("ml command"));
+                    }
+                    CommandType::ExecuteExternalCommand(_) => {
+                        return Err(Status::unimplemented("execute external command"));
+                    }
                     CommandType::Extension(_) => {
-                        return Err(Status::unimplemented("unsupported command extension"));
+                        return Err(Status::unimplemented("command extension"));
                     }
                 }
             }
@@ -196,9 +227,14 @@ impl SparkConnectService for SparkConnectServer {
                 let level = service::handle_analyze_get_storage_level(&ctx, level).await?;
                 Some(AnalyzeResult::GetStorageLevel(level))
             }
+            Analyze::JsonToDdl(json) => {
+                let json = service::handle_analyze_json_to_ddl(&ctx, json).await?;
+                Some(AnalyzeResult::JsonToDdl(json))
+            }
         };
         let response = AnalyzePlanResponse {
-            session_id: request.session_id,
+            session_id: request.session_id.clone(),
+            server_side_session_id: request.session_id,
             result,
         };
         debug!("{:?}", response);
@@ -226,7 +262,8 @@ impl SparkConnectService for SparkConnectServer {
             ConfigOpType::Get(sc::config_request::Get { keys }) => {
                 service::handle_config_get(&ctx, keys)?
             }
-            ConfigOpType::Set(sc::config_request::Set { pairs }) => {
+            ConfigOpType::Set(sc::config_request::Set { pairs, silent: _ }) => {
+                // TODO: ignore errors if `silent` is true
                 service::handle_config_set(&ctx, pairs)?
             }
             ConfigOpType::GetWithDefault(sc::config_request::GetWithDefault { pairs }) => {
@@ -272,7 +309,7 @@ impl SparkConnectService for SparkConnectServer {
             .get_or_create_session_context(session_key)
             .await?;
         let payload = first.payload;
-        let session_id = first.session_id;
+        let session_id = first.session_id.clone();
         let stream = async_stream::try_stream! {
             if let Some(payload) = payload {
                 yield payload;
@@ -289,7 +326,11 @@ impl SparkConnectService for SparkConnectServer {
             }
         };
         let artifacts = service::handle_add_artifacts(&ctx, stream).await?;
-        let response = AddArtifactsResponse { artifacts };
+        let response = AddArtifactsResponse {
+            session_id: first.session_id.clone(),
+            server_side_session_id: first.session_id,
+            artifacts,
+        };
         debug!("{:?}", response);
         Ok(Response::new(response))
     }
@@ -309,7 +350,11 @@ impl SparkConnectService for SparkConnectServer {
             .get_or_create_session_context(session_key)
             .await?;
         let statuses = service::handle_artifact_statuses(&ctx, request.names).await?;
-        let response = ArtifactStatusesResponse { statuses };
+        let response = ArtifactStatusesResponse {
+            session_id: request.session_id.clone(),
+            server_side_session_id: request.session_id,
+            statuses,
+        };
         debug!("{:?}", response);
         Ok(Response::new(response))
     }
@@ -350,6 +395,7 @@ impl SparkConnectService for SparkConnectServer {
         };
         let response = InterruptResponse {
             session_id: request.session_id.clone(),
+            server_side_session_id: request.session_id,
             interrupted_ids: ids?,
         };
         debug!("{:?}", response);
@@ -366,7 +412,7 @@ impl SparkConnectService for SparkConnectServer {
         debug!("{:?}", request);
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
-            session_id: request.session_id.clone(),
+            session_id: request.session_id,
         };
         let ctx = self
             .session_manager
@@ -399,9 +445,28 @@ impl SparkConnectService for SparkConnectServer {
         service::handle_release_execute(&ctx, request.operation_id.clone(), response_id).await?;
         let response = ReleaseExecuteResponse {
             session_id: request.session_id.clone(),
+            server_side_session_id: request.session_id,
             operation_id: Some(request.operation_id),
         };
         debug!("{:?}", response);
         Ok(Response::new(response))
+    }
+
+    async fn release_session(
+        &self,
+        request: Request<ReleaseSessionRequest>,
+    ) -> Result<Response<ReleaseSessionResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{:?}", request);
+        Err(Status::unimplemented("release session"))
+    }
+
+    async fn fetch_error_details(
+        &self,
+        request: Request<FetchErrorDetailsRequest>,
+    ) -> Result<Response<FetchErrorDetailsResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{:?}", request);
+        Err(Status::unimplemented("fetch error details"))
     }
 }

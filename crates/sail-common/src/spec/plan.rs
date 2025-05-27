@@ -42,7 +42,6 @@ pub struct QueryPlan {
     #[serde(flatten)]
     pub node: QueryNode,
     pub plan_id: Option<i64>,
-    pub source_info: Option<String>,
 }
 
 impl QueryPlan {
@@ -50,7 +49,6 @@ impl QueryPlan {
         Self {
             node,
             plan_id: None,
-            source_info: None,
         }
     }
 }
@@ -61,7 +59,6 @@ pub struct CommandPlan {
     #[serde(flatten)]
     pub node: CommandNode,
     pub plan_id: Option<i64>,
-    pub source_info: Option<String>,
 }
 
 impl CommandPlan {
@@ -69,7 +66,6 @@ impl CommandPlan {
         Self {
             node,
             plan_id: None,
-            source_info: None,
         }
     }
 }
@@ -243,8 +239,8 @@ pub enum QueryNode {
     },
     WithParameters {
         input: Box<QueryPlan>,
-        positional_arguments: Vec<Literal>,
-        named_arguments: Vec<(String, Literal)>,
+        positional_arguments: Vec<Expr>,
+        named_arguments: Vec<(String, Expr)>,
     },
     Values(Vec<Vec<Expr>>),
     TableAlias {
@@ -696,6 +692,7 @@ pub struct GroupMap {
     pub is_map_groups_with_state: Option<bool>,
     pub output_mode: Option<String>,
     pub timeout_conf: Option<String>,
+    pub state_schema: Option<Schema>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -805,6 +802,7 @@ pub struct Write {
     pub mode: SaveMode,
     pub sort_columns: Vec<Identifier>,
     pub partitioning_columns: Vec<Identifier>,
+    pub clustering_columns: Vec<Identifier>,
     pub bucket_by: Option<SaveBucketBy>,
     pub options: Vec<(String, String)>,
     pub table_properties: Vec<(String, String)>,

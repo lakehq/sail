@@ -79,10 +79,13 @@ mod tests {
             |example: FunctionExample| -> SparkResult<String> {
                 let relation = Relation {
                     common: None,
+                    #[allow(deprecated)]
                     rel_type: Some(RelType::Sql(Sql {
                         query: example.query,
                         args: HashMap::new(),
                         pos_args: vec![],
+                        named_arguments: HashMap::new(),
+                        pos_arguments: vec![],
                     })),
                 };
                 let plan = relation.try_into()?;

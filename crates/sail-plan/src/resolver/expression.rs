@@ -344,8 +344,12 @@ impl PlanResolver<'_> {
 
         match expr {
             Expr::Literal(literal) => self.resolve_expression_literal(literal, state),
-            Expr::UnresolvedAttribute { name, plan_id } => {
-                self.resolve_expression_attribute(name, plan_id, schema, state)
+            Expr::UnresolvedAttribute {
+                name,
+                plan_id,
+                is_metadata_column,
+            } => {
+                self.resolve_expression_attribute(name, plan_id, is_metadata_column, schema, state)
             }
             Expr::UnresolvedFunction(function) => {
                 self.resolve_expression_function(function, schema, state)
@@ -353,9 +357,10 @@ impl PlanResolver<'_> {
             }
             Expr::UnresolvedStar {
                 target,
+                plan_id,
                 wildcard_options,
             } => {
-                self.resolve_expression_wildcard(target, wildcard_options, schema, state)
+                self.resolve_expression_wildcard(target, plan_id, wildcard_options, schema, state)
                     .await
             }
             Expr::Alias {
@@ -609,9 +614,13 @@ impl PlanResolver<'_> {
         &self,
         name: spec::ObjectName,
         plan_id: Option<i64>,
+        is_metadata_column: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        if is_metadata_column {
+            return Err(PlanError::todo("resolve metadata column"));
+        }
         if let Some((name, expr)) =
             self.resolve_aggregate_field(&name, state.get_grouping_for_having())?
         {
@@ -837,6 +846,7 @@ impl PlanResolver<'_> {
             spec::Expr::UnresolvedAttribute {
                 name,
                 plan_id: None,
+                is_metadata_column: false,
             } => spec::QueryPlan::new(spec::QueryNode::Read {
                 read_type: spec::ReadType::NamedTable(spec::ReadNamedTable {
                     name,
@@ -873,6 +883,7 @@ impl PlanResolver<'_> {
             named_arguments,
             is_distinct,
             is_user_defined_function: _,
+            is_internal: _,
             ignore_nulls,
             filter,
             order_by,
@@ -915,6 +926,7 @@ impl PlanResolver<'_> {
                     &argument_display_names,
                     schema,
                     f.deterministic(),
+                    is_distinct,
                     state,
                 )?
             } else {
@@ -1151,6 +1163,7 @@ impl PlanResolver<'_> {
                 arguments,
                 named_arguments,
                 is_user_defined_function: false,
+                is_internal: _,
                 is_distinct,
                 ignore_nulls,
                 filter: None,
@@ -1196,9 +1209,13 @@ impl PlanResolver<'_> {
                 let spec::CommonInlineUserDefinedFunction {
                     function_name,
                     deterministic,
+                    is_distinct,
                     arguments,
                     function,
                 } = function;
+                if is_distinct {
+                    return Err(PlanError::todo("distinct window function"));
+                }
                 let function_name: String = function_name.into();
                 let (argument_display_names, arguments) = self
                     .resolve_expressions_and_names(arguments, schema, state)
@@ -1266,10 +1283,14 @@ impl PlanResolver<'_> {
     async fn resolve_expression_wildcard(
         &self,
         target: Option<spec::ObjectName>,
+        plan_id: Option<i64>,
         wildcard_options: spec::WildcardOptions,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        if plan_id.is_some() {
+            return Err(PlanError::todo("wildcard with plan ID"));
+        }
         match target {
             Some(target) if wildcard_options == Default::default() => {
                 self.resolve_wildcard_or_nested_field_wildcard(&target, schema, state)
@@ -1578,6 +1599,7 @@ impl PlanResolver<'_> {
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
+            is_distinct,
             arguments,
             function,
         } = function;
@@ -1593,12 +1615,13 @@ impl PlanResolver<'_> {
             &argument_display_names,
             schema,
             deterministic,
+            is_distinct,
             state,
         )?;
         let name = self.config.plan_formatter.function_to_string(
             &function_name,
             argument_display_names.iter().map(|x| x.as_str()).collect(),
-            false,
+            is_distinct,
         )?;
         Ok(NamedExpr::new(vec![name], func))
     }
@@ -1657,6 +1680,7 @@ impl PlanResolver<'_> {
             named_arguments: vec![],
             is_distinct: false,
             is_user_defined_function: false,
+            is_internal: None,
             ignore_nulls: None,
             filter: None,
             order_by: None,
@@ -2214,6 +2238,7 @@ mod tests {
                     named_arguments: vec![],
                     is_distinct: false,
                     is_user_defined_function: false,
+                    is_internal: None,
                     ignore_nulls: None,
                     filter: None,
                     order_by: None,
@@ -2253,6 +2278,7 @@ mod tests {
                             named_arguments: vec![],
                             is_distinct: false,
                             is_user_defined_function: false,
+                            is_internal: None,
                             ignore_nulls: None,
                             filter: None,
                             order_by: None

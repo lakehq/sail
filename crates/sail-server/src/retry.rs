@@ -81,19 +81,21 @@ impl RetryStrategy {
 impl From<&config::RetryStrategy> for RetryStrategy {
     fn from(config: &config::RetryStrategy) -> Self {
         match config {
-            config::RetryStrategy::Fixed {
+            config::RetryStrategy::Fixed(config::FixedRetryStrategy {
                 max_count,
                 delay_secs,
-            } => Self::Fixed {
+            }) => Self::Fixed {
                 max_count: *max_count,
                 delay: Duration::from_secs(*delay_secs),
             },
-            config::RetryStrategy::ExponentialBackoff {
-                max_count,
-                initial_delay_secs,
-                max_delay_secs,
-                factor,
-            } => Self::ExponentialBackoff {
+            config::RetryStrategy::ExponentialBackoff(
+                config::ExponentialBackoffRetryStrategy {
+                    max_count,
+                    initial_delay_secs,
+                    max_delay_secs,
+                    factor,
+                },
+            ) => Self::ExponentialBackoff {
                 max_count: *max_count,
                 initial_delay: Duration::from_secs(*initial_delay_secs),
                 max_delay: Duration::from_secs(*max_delay_secs),

@@ -21,8 +21,7 @@
               "ifExists": false,
               "operation": "unknown"
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -41,8 +40,7 @@
               "ifExists": false,
               "operation": "unknown"
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -59,8 +57,7 @@
               "ifExists": false,
               "operation": "unknown"
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -77,8 +74,7 @@
               "ifExists": false,
               "operation": "unknown"
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }
@@ -95,8 +91,7 @@
               "ifExists": false,
               "operation": "unknown"
             },
-            "planId": null,
-            "sourceInfo": null
+            "planId": null
           }
         }
       }

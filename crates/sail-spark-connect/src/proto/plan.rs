@@ -15,23 +15,18 @@ use crate::spark::connect::{
 
 struct RelationMetadata {
     plan_id: Option<i64>,
-    source_info: Option<String>,
 }
 
 impl From<Option<RelationCommon>> for RelationMetadata {
     fn from(common: Option<RelationCommon>) -> Self {
         match common {
+            #[allow(deprecated)]
             Some(RelationCommon {
-                source_info,
+                source_info: _,
                 plan_id,
-            }) => Self {
-                plan_id,
-                source_info: Some(source_info),
-            },
-            None => Self {
-                plan_id: None,
-                source_info: None,
-            },
+                origin: _,
+            }) => Self { plan_id },
+            None => Self { plan_id: None },
         }
     }
 }
@@ -61,12 +56,10 @@ impl TryFrom<Relation> for spec::Plan {
             RelationNode::Query(query) => Ok(spec::Plan::Query(spec::QueryPlan {
                 node: query,
                 plan_id: metadata.plan_id,
-                source_info: metadata.source_info,
             })),
             RelationNode::Command(command) => Ok(spec::Plan::Command(spec::CommandPlan {
                 node: command,
                 plan_id: metadata.plan_id,
-                source_info: metadata.source_info,
             })),
         }
     }
@@ -83,7 +76,6 @@ impl TryFrom<Relation> for spec::QueryPlan {
         Ok(spec::QueryPlan {
             node: node.try_into_query()?,
             plan_id: metadata.plan_id,
-            source_info: metadata.source_info,
         })
     }
 }
@@ -99,7 +91,6 @@ impl TryFrom<Relation> for spec::CommandPlan {
         Ok(spec::CommandPlan {
             node: node.try_into_command()?,
             plan_id: metadata.plan_id,
-            source_info: metadata.source_info,
         })
     }
 }
@@ -331,7 +322,7 @@ impl TryFrom<RelType> for RelationNode {
                 }))
             }
             RelType::Aggregate(aggregate) => {
-                use sc::aggregate::GroupType;
+                use sc::aggregate::{GroupType, GroupingSets};
 
                 let sc::Aggregate {
                     input,
@@ -339,6 +330,7 @@ impl TryFrom<RelType> for RelationNode {
                     grouping_expressions,
                     aggregate_expressions,
                     pivot,
+                    grouping_sets,
                 } = *aggregate;
                 let input = input.required("aggregate input")?;
                 let input = (*input).try_into()?;
@@ -411,25 +403,72 @@ impl TryFrom<RelType> for RelationNode {
                             values,
                         })
                     }
+                    GroupType::GroupingSets => {
+                        if !grouping.is_empty() {
+                            return Err(SparkError::invalid(
+                                "grouping sets with grouping expressions",
+                            ));
+                        }
+                        let grouping_sets = grouping_sets
+                            .into_iter()
+                            .map(|x| {
+                                let GroupingSets { grouping_set } = x;
+                                grouping_set.into_iter().map(|x| x.try_into()).collect()
+                            })
+                            .collect::<SparkResult<Vec<_>>>()?;
+                        spec::QueryNode::Aggregate(spec::Aggregate {
+                            input: Box::new(input),
+                            grouping: vec![spec::Expr::GroupingSets(grouping_sets)],
+                            aggregate,
+                            having: None,
+                            with_grouping_expressions: true,
+                        })
+                    }
                 };
                 Ok(RelationNode::Query(node))
             }
             RelType::Sql(sql) => {
+                #[allow(deprecated)]
                 let sc::Sql {
                     query,
                     args,
                     pos_args,
+                    named_arguments,
+                    pos_arguments,
                 } = sql;
                 match from_ast_statement(parse_one_statement(query.as_str())?)? {
                     spec::Plan::Query(input) => {
-                        let positional_arguments = pos_args
-                            .into_iter()
-                            .map(|x| x.try_into())
-                            .collect::<SparkResult<Vec<_>>>()?;
-                        let named_arguments = args
-                            .into_iter()
-                            .map(|(k, v)| Ok((k, v.try_into()?)))
-                            .collect::<SparkResult<Vec<_>>>()?;
+                        let positional_arguments =
+                            match (pos_args.is_empty(), pos_arguments.is_empty()) {
+                                (false, false) => {
+                                    return Err(SparkError::invalid(
+                                        "conflicting positional arguments",
+                                    ))
+                                }
+                                (false, true) => pos_args
+                                    .into_iter()
+                                    .map(|x| Ok(spec::Expr::Literal(x.try_into()?)))
+                                    .collect::<SparkResult<Vec<_>>>()?,
+                                (true, false) => pos_arguments
+                                    .into_iter()
+                                    .map(|x| x.try_into())
+                                    .collect::<SparkResult<Vec<_>>>()?,
+                                (true, true) => vec![],
+                            };
+                        let named_arguments = match (args.is_empty(), named_arguments.is_empty()) {
+                            (false, false) => {
+                                return Err(SparkError::invalid("conflicting named arguments"))
+                            }
+                            (false, true) => args
+                                .into_iter()
+                                .map(|(k, v)| Ok((k, spec::Expr::Literal(v.try_into()?))))
+                                .collect::<SparkResult<Vec<_>>>()?,
+                            (true, false) => named_arguments
+                                .into_iter()
+                                .map(|(k, v)| Ok((k, v.try_into()?)))
+                                .collect::<SparkResult<Vec<_>>>()?,
+                            (true, true) => vec![],
+                        };
                         Ok(RelationNode::Query(spec::QueryNode::WithParameters {
                             input: Box::new(input),
                             positional_arguments,
@@ -573,12 +612,29 @@ impl TryFrom<RelType> for RelationNode {
                 let sc::WithColumnsRenamed {
                     input,
                     rename_columns_map,
+                    renames,
                 } = *with_columns_renamed;
                 let input = input.required("with columns renamed input")?;
-                let rename_columns_map = rename_columns_map
-                    .into_iter()
-                    .map(|(k, v)| (k.into(), v.into()))
-                    .collect();
+                let rename_columns_map = match (rename_columns_map.is_empty(), renames.is_empty()) {
+                    (false, false) => {
+                        return Err(SparkError::invalid("conflicting column renames"))
+                    }
+                    (false, true) => rename_columns_map
+                        .into_iter()
+                        .map(|(k, v)| (k.into(), v.into()))
+                        .collect(),
+                    (true, false) => renames
+                        .into_iter()
+                        .map(|x| {
+                            let sc::with_columns_renamed::Rename {
+                                col_name,
+                                new_col_name,
+                            } = x;
+                            (col_name.into(), new_col_name.into())
+                        })
+                        .collect(),
+                    (true, true) => vec![],
+                };
                 Ok(RelationNode::Query(spec::QueryNode::WithColumnsRenamed {
                     input: Box::new((*input).try_into()?),
                     rename_columns_map,
@@ -637,6 +693,7 @@ impl TryFrom<RelType> for RelationNode {
                     .map(|x| {
                         sc::Expression {
                             expr_type: Some(sc::expression::ExprType::Alias(Box::new(x))),
+                            common: None,
                         }
                         .try_into()
                     })
@@ -741,6 +798,7 @@ impl TryFrom<RelType> for RelationNode {
                     input,
                     func,
                     is_barrier,
+                    profile_id: _,
                 } = *map_partitions;
                 let input = input.required("map partitions input")?;
                 let func = func.required("map partitions function")?;
@@ -801,6 +859,7 @@ impl TryFrom<RelType> for RelationNode {
                     is_map_groups_with_state,
                     output_mode,
                     timeout_conf,
+                    state_schema,
                 } = *group_map;
                 let input = input.required("group map input")?;
                 let grouping_expressions = grouping_expressions
@@ -819,6 +878,10 @@ impl TryFrom<RelType> for RelationNode {
                     .into_iter()
                     .map(|x| x.try_into())
                     .collect::<SparkResult<Vec<_>>>()?;
+                let state_schema = state_schema
+                    .map(|x| x.try_into())
+                    .transpose()?
+                    .map(|x: spec::DataType| x.into_schema(DEFAULT_FIELD_NAME, true));
                 Ok(RelationNode::Query(spec::QueryNode::GroupMap(
                     spec::GroupMap {
                         input: Box::new((*input).try_into()?),
@@ -830,6 +893,7 @@ impl TryFrom<RelType> for RelationNode {
                         is_map_groups_with_state,
                         output_mode,
                         timeout_conf,
+                        state_schema,
                     },
                 )))
             }
@@ -953,6 +1017,16 @@ impl TryFrom<RelType> for RelationNode {
             RelType::CommonInlineUserDefinedTableFunction(udtf) => Ok(RelationNode::Query(
                 spec::QueryNode::CommonInlineUserDefinedTableFunction(udtf.try_into()?),
             )),
+            RelType::AsOfJoin(_) => Err(SparkError::todo("as of join")),
+            RelType::CommonInlineUserDefinedDataSource(_) => {
+                Err(SparkError::todo("common inline user defined data source"))
+            }
+            RelType::WithRelations(_) => Err(SparkError::todo("with relations")),
+            RelType::Transpose(_) => Err(SparkError::todo("transpose")),
+            RelType::UnresolvedTableValuedFunction(_) => {
+                Err(SparkError::todo("unresolved table valued function"))
+            }
+            RelType::LateralJoin(_) => Err(SparkError::todo("lateral join")),
             RelType::FillNa(fill_na) => {
                 let sc::NaFill {
                     input,
@@ -1126,6 +1200,7 @@ impl TryFrom<RelType> for RelationNode {
                 }))
             }
             RelType::Catalog(catalog) => Ok(RelationNode::Command(catalog.try_into()?)),
+            RelType::MlRelation(_) => Err(SparkError::unsupported("ML relation")),
             RelType::Extension(_) => Err(SparkError::unsupported("extension relation")),
             RelType::Unknown(_) => Err(SparkError::unsupported("unknown relation")),
         }
@@ -1414,6 +1489,7 @@ impl TryFrom<WriteOperation> for spec::Write {
             partitioning_columns,
             bucket_by,
             options,
+            clustering_columns,
             save_type,
         } = write;
         let input = input.required("input")?.try_into()?;
@@ -1426,6 +1502,7 @@ impl TryFrom<WriteOperation> for spec::Write {
         };
         let sort_columns = sort_column_names.into_iter().map(|x| x.into()).collect();
         let partitioning_columns = partitioning_columns.into_iter().map(|x| x.into()).collect();
+        let clustering_columns = clustering_columns.into_iter().map(|x| x.into()).collect();
         let bucket_by = match bucket_by {
             Some(x) => {
                 let BucketBy {
@@ -1469,6 +1546,7 @@ impl TryFrom<WriteOperation> for spec::Write {
             mode,
             sort_columns,
             partitioning_columns,
+            clustering_columns,
             bucket_by,
             options,
             table_properties: vec![],
@@ -1492,6 +1570,7 @@ impl TryFrom<WriteOperationV2> for spec::Write {
             table_properties,
             mode,
             overwrite_condition,
+            clustering_columns,
         } = write;
         let input = input.required("input")?.try_into()?;
         let table = from_ast_object_name(parse_object_name(table_name.as_str())?)?;
@@ -1500,7 +1579,11 @@ impl TryFrom<WriteOperationV2> for spec::Write {
             .map(|x| {
                 let expr: spec::Expr = x.try_into()?;
                 match expr {
-                    spec::Expr::UnresolvedAttribute { name, plan_id: _ } => {
+                    spec::Expr::UnresolvedAttribute {
+                        name,
+                        plan_id: _,
+                        is_metadata_column: _,
+                    } => {
                         let mut name: Vec<String> = name.into();
                         if name.len() > 1 {
                             return Err(SparkError::invalid("multiple partitioning column"));
@@ -1512,6 +1595,7 @@ impl TryFrom<WriteOperationV2> for spec::Write {
                 }
             })
             .collect::<SparkResult<_>>()?;
+        let clustering_columns = clustering_columns.into_iter().map(|x| x.into()).collect();
         let options = options.into_iter().collect();
         let table_properties = table_properties.into_iter().collect();
         let mode = match Mode::try_from(mode).required("write operation v2 mode")? {
@@ -1534,6 +1618,7 @@ impl TryFrom<WriteOperationV2> for spec::Write {
             mode,
             sort_columns: vec![],
             partitioning_columns,
+            clustering_columns,
             bucket_by: None,
             options,
             table_properties,
