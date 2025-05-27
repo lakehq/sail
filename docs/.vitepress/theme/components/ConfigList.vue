@@ -31,7 +31,7 @@
       </div>
 
       <div v-if="item.experimental" class="experimental-note">
-        This option may change in future versions without notice.
+        <span>This option may change in future versions without notice.</span>
       </div>
     </div>
   </div>
