@@ -205,6 +205,10 @@ class Sidebar {
             link: "/reference/python/",
           },
           {
+            text: "Configuration",
+            link: "/reference/configuration/",
+          },
+          {
             text: "Changelog",
             link: "/reference/changelog/",
           },
