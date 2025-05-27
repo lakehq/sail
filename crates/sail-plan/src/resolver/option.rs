@@ -16,17 +16,24 @@ impl PlanResolver<'_> {
         if !options.contains_key("format.quote") {
             options.insert("format.quote".to_string(), "\"".to_string());
         }
-        if !options.contains_key("format.terminator") && !reading {
-            options.insert("format.terminator".to_string(), "\n".to_string());
-        }
+        // TODO: Uncomment when terminator for writing is supported
+        // if !options.contains_key("format.terminator") && !reading {
+        //     options.insert("format.terminator".to_string(), "\n".to_string());
+        // }
         if !options.contains_key("format.escape") {
             options.insert("format.escape".to_string(), "\\".to_string());
         }
-        if !options.contains_key("format.double_quote") {
+        if !options.contains_key("format.double_quote") && !reading {
             options.insert("format.double_quote".to_string(), true.to_string());
         }
-        if !options.contains_key("format.compression") {
+        if !options.contains_key("format.compression") && !reading {
             options.insert("format.compression".to_string(), "UNCOMPRESSED".to_string());
+        }
+        if !options.contains_key("format.file_compression_type") && reading {
+            options.insert(
+                "format.file_compression_type".to_string(),
+                "UNCOMPRESSED".to_string(),
+            );
         }
         if !options.contains_key("format.date_format") {
             options.insert("format.date_format".to_string(), "%Y-%m-%d".to_string());
@@ -48,6 +55,7 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// CSV read options: [`datafusion::datasource::file_format::options::CsvReadOptions`]
     fn resolve_data_reader_option(
         format: &str,
         key: &str,
@@ -73,7 +81,10 @@ impl PlanResolver<'_> {
             ("csv", "newlines_in_values") => {
                 ("format.newlines_in_values".to_string(), value.to_string())
             }
-            ("csv", "compression") => ("format.compression".to_string(), value.to_string()),
+            ("csv", "compression") | ("csv", "file_compression_type") => (
+                "format.file_compression_type".to_string(),
+                value.to_string(),
+            ),
             ("csv", "schema_infer_max_rec") => {
                 ("format.schema_infer_max_rec".to_string(), value.to_string())
             }
@@ -117,6 +128,7 @@ impl PlanResolver<'_> {
         Ok(output)
     }
 
+    /// CSV write options: [`datafusion_common::file_options::csv_writer::CsvWriterOptions`]
     fn resolve_data_writer_option(
         format: &str,
         key: &str,
@@ -133,7 +145,7 @@ impl PlanResolver<'_> {
             }
             ("csv", "quote") => ("format.quote".to_string(), value.to_string()),
             ("csv", "linesep") | ("csv", "terminator") => {
-                ("format.terminator".to_string(), value.to_string())
+                return Err(PlanError::todo("CSV writer line seperator"))
             }
             ("csv", "escape") => ("format.escape".to_string(), value.to_string()),
             ("csv", "escapequotes") | ("csv", "double_quote") => {
