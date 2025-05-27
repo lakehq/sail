@@ -4,11 +4,6 @@
       <div class="property-row">
         <span class="property-name">Key:</span>
         <code class="property-value config-key">{{ item.key }}</code>
-        <span
-          v-if="item.experimental"
-          class="property-label config-experimental"
-          >&#9888; Experimental</span
-        >
       </div>
 
       <div class="property-row">
@@ -33,6 +28,10 @@
 
       <div class="description">
         <MarkdownBlock :raw="item.description" />
+      </div>
+
+      <div v-if="item.experimental" class="experimental-note">
+        This option may change in future versions without notice.
       </div>
     </div>
   </div>
@@ -84,10 +83,6 @@ function configEnvVar(key: string): string {
   @apply font-bold;
 }
 
-.config-experimental {
-  @apply bg-orange-100 text-orange-600 dark:bg-orange-900 dark:text-orange-200;
-}
-
 .config-type-string {
   @apply bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200;
 }
@@ -110,5 +105,10 @@ function configEnvVar(key: string): string {
 
 .description {
   @apply mb-2;
+}
+
+.experimental-note {
+  @apply mb-2 text-sm text-orange-600 dark:text-orange-200;
+  @apply before:mr-1 before:content-['⚠'];
 }
 </style>

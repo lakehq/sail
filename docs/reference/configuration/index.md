@@ -5,9 +5,9 @@ This page lists all the available configuration options for Sail.
 ::: warning
 The Sail configuration system is not stable yet.
 
-For options marked as **experimental**, breaking changes can happen across versions **without notice**.
+For options with the ⚠ note, breaking changes can happen across versions **without notice**.
 
-For all other options, breaking changes can happen across **minor versions** for 0.x releases. Such changes will be documented in the [changelog](/reference/changelog/).
+For all other options, breaking changes can happen across **minor versions** for the 0.x releases. Such changes will be documented in the [changelog](/reference/changelog/).
 :::
 
 ::: info
