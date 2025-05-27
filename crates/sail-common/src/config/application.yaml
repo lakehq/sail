@@ -199,16 +199,6 @@
   description: The batch size for physical plan execution.
   experimental: true
 
-- key: csv.has_header
-  type: boolean
-  default: "false"
-  description: |
-    Whether the first row should be treated as a header row when reading CSV files.
-    
-    This option can be overridden at the data source level via the `header` option
-    in the Spark data reader.
-  experimental: true
-
 - key: parquet.enable_page_index
   type: boolean
   default: "true"

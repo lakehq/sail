@@ -18,7 +18,6 @@ pub struct AppConfig {
     pub cluster: ClusterConfig,
     pub execution: ExecutionConfig,
     pub kubernetes: KubernetesConfig,
-    pub csv: CsvConfig,
     pub parquet: ParquetConfig,
     pub spark: SparkConfig,
     /// Reserved for internal use.
@@ -176,12 +175,6 @@ pub struct KubernetesConfig {
     pub driver_pod_name: String,
     pub worker_pod_name_prefix: String,
     pub worker_service_account_name: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CsvConfig {
-    pub has_header: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

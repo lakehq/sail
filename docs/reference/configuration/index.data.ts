@@ -45,11 +45,6 @@ export default {
           pattern: /^execution\./,
         },
         {
-          id: "csv",
-          title: "CSV Options",
-          pattern: /^csv\./,
-        },
-        {
           id: "parquet",
           title: "Parquet Options",
           pattern: /^parquet\./,
