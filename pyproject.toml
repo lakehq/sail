@@ -101,26 +101,11 @@ build = "sphinx-build python/pysail/docs python/pysail/docs/_build -b json"
 env.CI.installer = "uv"
 
 [tool.hatch.envs.test]
+matrix-name-format = "{variable}-{value}"
 detached = true
-path = ".venvs/test"
 python = "3.11"
 installer = "pip"
 dependencies = [
-    # PySpark dependencies
-    # PySpark itself is not added here since we install our patched version.
-    "numpy~=1.21",
-    "scipy~=1.15",
-    "pandas==2.2.3",
-    "pyarrow==18.1.0",
-    "flask~=3.1",
-    "matplotlib~=3.10",
-    "plotly~=5.24",
-    "scikit-learn~=1.6",
-    "mlflow~=2.22",
-    "memory-profiler==0.60.0",
-    "grpcio==1.67.1",
-    "grpcio-status==1.67.1",
-    "googleapis-common-protos==1.65.0",
     # pytest and plugins
     "pytest~=8.3",
     "pytest-xdist==3.6.1",
@@ -146,11 +131,48 @@ PYTHONPATH = "{root}/scripts/spark-tests"
 IBIS_TESTING_DATA_DIR = "{root}/opt/ibis-testing-data"
 
 [tool.hatch.envs.test.scripts]
-install-pyspark = "\"{env:HATCH_UV}\" pip install opt/spark/python/dist/pyspark-4.0.0.tar.gz"
+install-pyspark = "\"{env:HATCH_UV}\" pip install opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz"
 install-pysail = "\"{env:HATCH_UV}\" pip install pysail --no-index -f target/wheels --force-reinstall"
 
 [tool.hatch.envs.test.overrides]
 env.CI.installer = "uv"
+matrix.spark.path = [
+    { value = ".venvs/test.spark-3.5.5", if = ["3.5.5"] },
+    { value = ".venvs/test.spark-4.0.0", if = ["4.0.0"] },
+]
+matrix.spark.extra-dependencies = [
+    # PySpark dependencies
+    # PySpark itself is not added here since we install our patched version.
+    { value = "numpy~=1.15", if = ["3.5.5"] },
+    { value = "scipy~=1.14", if = ["3.5.5"] },
+    { value = "pandas==2.0.3", if = ["3.5.5"] },
+    { value = "pyarrow==12.0.1", if = ["3.5.5"] },
+    { value = "flask==3.0.2", if = ["3.5.5"] },
+    { value = "matplotlib~=3.9", if = ["3.5.5"] },
+    { value = "plotly~=4.8", if = ["3.5.5"] },
+    { value = "scikit-learn~=1.1", if = ["3.5.5"] },
+    { value = "mlflow~=2.14.2", if = ["3.5.5"] },
+    { value = "memory-profiler==0.60.0", if = ["3.5.5"] },
+    { value = "grpcio>=1.56,<1.57", if = ["3.5.5"] },
+    { value = "grpcio-status>=1.56,<1.57", if = ["3.5.5"] },
+    { value = "googleapis-common-protos==1.56.4", if = ["3.5.5"] },
+    { value = "numpy~=1.21", if = ["4.0.0"] },
+    { value = "scipy~=1.15", if = ["4.0.0"] },
+    { value = "pandas==2.2.3", if = ["4.0.0"] },
+    { value = "pyarrow==18.1.0", if = ["4.0.0"] },
+    { value = "flask~=3.1", if = ["4.0.0"] },
+    { value = "matplotlib~=3.10", if = ["4.0.0"] },
+    { value = "plotly~=5.24", if = ["4.0.0"] },
+    { value = "scikit-learn~=1.6", if = ["4.0.0"] },
+    { value = "mlflow~=2.22", if = ["4.0.0"] },
+    { value = "memory-profiler==0.60.0", if = ["4.0.0"] },
+    { value = "grpcio==1.67.1", if = ["4.0.0"] },
+    { value = "grpcio-status==1.67.1", if = ["4.0.0"] },
+    { value = "googleapis-common-protos==1.65.0", if = ["4.0.0"] },
+]
+
+[[tool.hatch.envs.test.matrix]]
+spark = ["3.5.5", "4.0.0"]
 
 [tool.hatch.build.targets.sdist]
 packages = ["python/pysail"]
