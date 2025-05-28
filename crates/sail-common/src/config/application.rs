@@ -11,7 +11,6 @@ use crate::error::{CommonError, CommonResult};
 const APP_CONFIG: &str = include_str!("application.yaml");
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AppConfig {
     pub mode: ExecutionMode,
     pub runtime: RuntimeConfig,
