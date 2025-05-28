@@ -1,11 +1,11 @@
 ---
-title: User-defined Functions
-rank: 2
+title: Spark DataFrame API
+rank: 1
 ---
 
-# User-defined Functions
+# Spark DataFrame API
 
-<PageList :data="data" :prefix="['guide', 'tasks', 'udf']" />
+<PageList :data="data" :prefix="['guide', 'dataframe']" />
 
 <script setup>
 import PageList from "@theme/components/PageList.vue";

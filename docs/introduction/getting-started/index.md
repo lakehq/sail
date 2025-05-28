@@ -1,6 +1,6 @@
 ---
 title: Getting Started
-rank: 20
+rank: 3
 ---
 
 # Getting Started
