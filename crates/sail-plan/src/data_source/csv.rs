@@ -47,9 +47,10 @@ pub struct CsvReadOptions<'a> {
     /// Indicates how the file is sorted.
     /// See [`datafusion::datasource::listing::table::ListingOptions`] for more details.
     pub file_sort_order: Vec<Vec<SortExpr>>,
-    /// Optional regex to match null values. Defaults to treating empty values as null
+    /// Optional regex to match null values. Defaults to treating empty values as null.
     pub null_regex: Option<String>,
 }
+
 impl Default for CsvReadOptions<'_> {
     fn default() -> Self {
         Self::new()
