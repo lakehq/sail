@@ -67,7 +67,7 @@
     },
     {
       "input": "SELECT * FROM (INSERT INTO BAR VALUES (2))",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BAR': missing ')'.(line 1, pos 27)\n\n== SQL ==\nSELECT * FROM (INSERT INTO BAR VALUES (2))\n---------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BAR': missing ')'. SQLSTATE: 42601 (line 1, pos 27)\n\n== SQL ==\nSELECT * FROM (INSERT INTO BAR VALUES (2))\n---------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found INTO at 22:26 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', or ')'"
       }
@@ -166,7 +166,7 @@
     },
     {
       "input": "SELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'IN'.(line 1, pos 25)\n\n== SQL ==\nSELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))\n-------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'IN'. SQLSTATE: 42601 (line 1, pos 25)\n\n== SQL ==\nSELECT * FROM S WHERE C1 IN (INSERT INTO T VALUES (2))\n-------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found IN at 25:27 expected 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
@@ -1339,7 +1339,7 @@
     },
     {
       "input": "SELECT * FROM a.b.c TIMESTAMP AS OF col",
-      "exception": "\nInvalid time travel spec: timestamp expression cannot refer to any columns.(line 1, pos 36)\n\n== SQL ==\nSELECT * FROM a.b.c TIMESTAMP AS OF col\n------------------------------------^^^\n",
+      "exception": "\nInvalid time travel spec: timestamp expression cannot refer to any columns.\n== SQL (line 1, position 21) ==\nSELECT * FROM a.b.c TIMESTAMP AS OF col\n                    ^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "query": {
@@ -1562,14 +1562,14 @@
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(300M) s",
-      "exception": "\nTABLESAMPLE(byteLengthLiteral) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(300M) s\n-------------------------------------^^^\n",
+      "exception": "\nTABLESAMPLE(byteLengthLiteral) is not supported.\n== SQL (line 1, position 26) ==\nSELECT * FROM parquet_t0 TABLESAMPLE(300M) s\n                         ^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found ) at 41:42 expected 'PERCENT', or 'ROWS'"
       }
     },
     {
       "input": "SELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s",
-      "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON function) is not supported.(line 1, pos 37)\n\n== SQL ==\nSELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s\n-------------------------------------^^^\n",
+      "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON function) is not supported.\n== SQL (line 1, position 26) ==\nSELECT * FROM parquet_t0 TABLESAMPLE(BUCKET 3 OUT OF 32 ON rand()) s\n                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found ON at 56:58 expected ')'"
       }
@@ -1784,14 +1784,14 @@
     },
     {
       "input": "SELECT :",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 8)\n\n== SQL ==\nSELECT :\n--------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601 (line 1, pos 8)\n\n== SQL ==\nSELECT :\n--------^^^\n",
       "output": {
         "failure": "invalid argument: found : at 7:8 expected 'ALL', 'DISTINCT', or expression"
       }
     },
     {
       "input": "SELECT :-",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'.(line 1, pos 8)\n\n== SQL ==\nSELECT :-\n--------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'. SQLSTATE: 42601 (line 1, pos 8)\n\n== SQL ==\nSELECT :-\n--------^^^\n",
       "output": {
         "failure": "invalid argument: found : at 7:8 expected 'ALL', 'DISTINCT', or expression"
       }
@@ -2086,7 +2086,7 @@
     },
     {
       "input": "SELECT TRANSFORM(a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData",
-      "exception": "\n[UNSUPPORTED_FEATURE.TRANSFORM_NON_HIVE] The feature is not supported: TRANSFORM with SERDE is only supported in hive mode.(line 1, pos 0)\n\n== SQL ==\nSELECT TRANSFORM(a, b, c)\n^^^\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\n  USING 'cat' AS (a, b, c)\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n  WITH SERDEPROPERTIES(\n    \"separatorChar\" = \"\\t\",\n    \"quoteChar\" = \"'\",\n    \"escapeChar\" = \"\\\\\")\nFROM testData\n",
+      "exception": "\n[UNSUPPORTED_FEATURE.TRANSFORM_NON_HIVE] The feature is not supported: TRANSFORM with SERDE is only supported in hive mode. SQLSTATE: 0A000\n== SQL (line 1, position 1) ==\nSELECT TRANSFORM(a, b, c)\n^^^^^^^^^^^^^^^^^^^^^^^^^\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  WITH SERDEPROPERTIES(\n^^^^^^^^^^^^^^^^^^^^^^^\n    \"separatorChar\" = \"\\t\",\n^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    \"quoteChar\" = \"'\",\n^^^^^^^^^^^^^^^^^^^^^^\n    \"escapeChar\" = \"\\\\\")\n^^^^^^^^^^^^^^^^^^^^^^^^\n  USING 'cat' AS (a, b, c)\n^^^^^^^^^^^^^^^^^^^^^^^^^^\n  ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  WITH SERDEPROPERTIES(\n^^^^^^^^^^^^^^^^^^^^^^^\n    \"separatorChar\" = \"\\t\",\n^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    \"quoteChar\" = \"'\",\n^^^^^^^^^^^^^^^^^^^^^^\n    \"escapeChar\" = \"\\\\\")\n^^^^^^^^^^^^^^^^^^^^^^^^\nFROM testData\n^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found FORMAT at 32:38 expected ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
@@ -2875,21 +2875,21 @@
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)",
-      "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_PIVOT] Not allowed in the FROM clause: LATERAL together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\n",
+      "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_PIVOT] Not allowed in the FROM clause: LATERAL together with PIVOT. SQLSTATE: 42601\n== SQL (line 2, position 1) ==\nfrom t\n^^^^^^\nlateral view explode(x) expl\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^\npivot (\n^^^^^^^\n  sum(x)\n^^^^^^^^\n  FOR y IN ('a', 'b')\n^^^^^^^^^^^^^^^^^^^^^\n)\n^\n",
       "output": {
         "failure": "invalid argument: found ( at 51:52 expected ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)",
-      "exception": "\n[NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\npivot (\n  sum(x)\n  FOR y IN ('a', 'b')\n)\nunpivot (\n  val FOR y IN (x)\n)\n",
+      "exception": "\n[NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT] Not allowed in the FROM clause: UNPIVOT together with PIVOT. SQLSTATE: 42601\n== SQL (line 2, position 1) ==\nfrom t\n^^^^^^\nlateral view explode(x) expl\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^\npivot (\n^^^^^^^\n  sum(x)\n^^^^^^^^\n  FOR y IN ('a', 'b')\n^^^^^^^^^^^^^^^^^^^^^\n)\n^\nunpivot (\n^^^^^^^^^\n  val FOR y IN (x)\n^^^^^^^^^^^^^^^^^^\n)\n^\n",
       "output": {
         "failure": "invalid argument: found ( at 51:52 expected ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "select *\nfrom t\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)",
-      "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_UNPIVOT] Not allowed in the FROM clause: LATERAL together with UNPIVOT.(line 2, pos 0)\n\n== SQL ==\nselect *\nfrom t\n^^^\nlateral view explode(x) expl\nunpivot (\n  val FOR y IN (x)\n)\n",
+      "exception": "\n[NOT_ALLOWED_IN_FROM.LATERAL_WITH_UNPIVOT] Not allowed in the FROM clause: LATERAL together with UNPIVOT. SQLSTATE: 42601\n== SQL (line 2, position 1) ==\nfrom t\n^^^^^^\nlateral view explode(x) expl\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nunpivot (\n^^^^^^^^^\n  val FOR y IN (x)\n^^^^^^^^^^^^^^^^^^\n)\n^\n",
       "output": {
         "failure": "invalid argument: found ( at 53:54 expected ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
@@ -2949,7 +2949,7 @@
     },
     {
       "input": "select * from default.range(2)",
-      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `default`.`range`.(line 1, pos 14)\n\n== SQL ==\nselect * from default.range(2)\n--------------^^^\n",
+      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `default`.`range`. SQLSTATE: 42000\n== SQL (line 1, position 15) ==\nselect * from default.range(2)\n              ^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "query": {
@@ -3327,7 +3327,7 @@
     },
     {
       "input": "select * from my_tvf(arg1 => table v1)",
-      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_FUNCTION_IDENTIFIER_ARGUMENT_MISSING_PARENTHESES] Invalid SQL syntax: Syntax error: call to table-valued function is invalid because parentheses are missing around the provided TABLE argument `v1`; please surround this with parentheses and try again.(line 1, pos 29)\n\n== SQL ==\nselect * from my_tvf(arg1 => table v1)\n-----------------------------^^^\n",
+      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_FUNCTION_IDENTIFIER_ARGUMENT_MISSING_PARENTHESES] Invalid SQL syntax: Syntax error: call to table-valued function is invalid because parentheses are missing around the provided TABLE argument `v1`; please surround this with parentheses and try again. SQLSTATE: 42000\n== SQL (line 1, position 30) ==\nselect * from my_tvf(arg1 => table v1)\n                             ^^^^^^^^\n",
       "output": {
         "success": {
           "query": {
@@ -3382,6 +3382,31 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(1) partition by col1 with single partition)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'partition'. SQLSTATE: 42601 (line 1, pos 38)\n\n== SQL ==\nselect * from my_tvf(arg1 => table(1) partition by col1 with single partition)\n--------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: found partition at 38:47 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) distribute by col1)",
+      "output": {
+        "failure": "invalid argument: found distribute at 39:49 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) partition by col1)",
+      "output": {
+        "failure": "invalid argument: found partition at 39:48 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) with single partition)",
+      "output": {
+        "failure": "invalid argument: found with at 39:43 expected ',', or ')'"
       }
     },
     {
@@ -3570,7 +3595,7 @@
     },
     {
       "input": "select * from spark_catalog.default.range(2)",
-      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `spark_catalog`.`default`.`range`.(line 1, pos 14)\n\n== SQL ==\nselect * from spark_catalog.default.range(2)\n--------------^^^\n",
+      "exception": "\n[INVALID_SQL_SYNTAX.INVALID_TABLE_VALUED_FUNC_NAME] Invalid SQL syntax: Table valued function cannot specify database name: `spark_catalog`.`default`.`range`. SQLSTATE: 42000\n== SQL (line 1, position 15) ==\nselect * from spark_catalog.default.range(2)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "query": {
@@ -3739,7 +3764,7 @@
     },
     {
       "input": "select * from t cluster by a distribute by a",
-      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t cluster by a distribute by a\n----------------^^^\n",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t cluster by a distribute by a\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "not implemented: CLUSTER BY"
       }
@@ -4135,7 +4160,7 @@
     },
     {
       "input": "select * from t tablesample(bucket 11 out of 10) as x",
-      "exception": "\nSampling fraction (1.1) must be on interval [0, 1].(line 1, pos 16)\n\n== SQL ==\nselect * from t tablesample(bucket 11 out of 10) as x\n----------------^^^\n",
+      "exception": "\nSampling fraction (1.1) must be on interval [0, 1].\n== SQL (line 1, position 17) ==\nselect * from t tablesample(bucket 11 out of 10) as x\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "query": {
@@ -4192,7 +4217,7 @@
     },
     {
       "input": "select * from t tablesample(bucket 4 out of 10 on x) as x",
-      "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON colname) is not supported.(line 1, pos 28)\n\n== SQL ==\nselect * from t tablesample(bucket 4 out of 10 on x) as x\n----------------------------^^^\n",
+      "exception": "\nTABLESAMPLE(BUCKET x OUT OF y ON colname) is not supported.\n== SQL (line 1, position 17) ==\nselect * from t tablesample(bucket 4 out of 10 on x) as x\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found on at 47:49 expected ')'"
       }
@@ -5310,14 +5335,14 @@
     },
     {
       "input": "select ltrim(both 'S' from 'SS abc S'",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 22)\n\n== SQL ==\nselect ltrim(both 'S' from 'SS abc S'\n----------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'. SQLSTATE: 42601 (line 1, pos 22)\n\n== SQL ==\nselect ltrim(both 'S' from 'SS abc S'\n----------------------^^^\n",
       "output": {
         "failure": "invalid argument: found 'S' at 18:21 expected ',', or ')'"
       }
     },
     {
       "input": "select rtrim(trailing 'S' from 'SS abc S'",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'.(line 1, pos 26)\n\n== SQL ==\nselect rtrim(trailing 'S' from 'SS abc S'\n--------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'from'. SQLSTATE: 42601 (line 1, pos 26)\n\n== SQL ==\nselect rtrim(trailing 'S' from 'SS abc S'\n--------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found 'S' at 22:25 expected ',', or ')'"
       }

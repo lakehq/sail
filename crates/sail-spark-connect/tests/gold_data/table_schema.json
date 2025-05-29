@@ -2,7 +2,7 @@
   "tests": [
     {
       "input": "",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 0)\n\n== SQL ==\n\n^^^\n",
+      "exception": "\n[PARSE_EMPTY_STATEMENT] Syntax error, unexpected empty statement. SQLSTATE: 42617 (line 1, pos 0)\n\n== SQL ==\n\n^^^\n",
       "output": {
         "failure": "invalid argument: empty data type"
       }
@@ -43,7 +43,7 @@
     },
     {
       "input": "a",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 1)\n\n== SQL ==\na\n-^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601 (line 1, pos 1)\n\n== SQL ==\na\n-^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
@@ -65,28 +65,28 @@
     },
     {
       "input": "a INT b long",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'b'.(line 1, pos 6)\n\n== SQL ==\na INT b long\n------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'b'. SQLSTATE: 42601 (line 1, pos 6)\n\n== SQL ==\na INT b long\n------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
       "input": "a INT, b long, c int,",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 21)\n\n== SQL ==\na INT, b long, c int,\n---------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601 (line 1, pos 21)\n\n== SQL ==\na INT, b long, c int,\n---------------------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
       "input": "a INT, b long,,",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 1, pos 14)\n\n== SQL ==\na INT, b long,,\n--------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ','. SQLSTATE: 42601 (line 1, pos 14)\n\n== SQL ==\na INT, b long,,\n--------------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }
     },
     {
       "input": "a INT,, b long",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ','.(line 1, pos 6)\n\n== SQL ==\na INT,, b long\n------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ','. SQLSTATE: 42601 (line 1, pos 6)\n\n== SQL ==\na INT,, b long\n------^^^\n",
       "output": {
         "failure": "error in JSON serde: expected value at line 1 column 1"
       }

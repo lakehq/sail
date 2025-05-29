@@ -235,7 +235,7 @@
     },
     {
       "input": "select * from a natural cross join b",
-      "exception": "\n[INCOMPATIBLE_JOIN_TYPES] The join types NATURAL and CROSS are incompatible.(line 1, pos 16)\n\n== SQL ==\nselect * from a natural cross join b\n----------------^^^\n",
+      "exception": "\n[INCOMPATIBLE_JOIN_TYPES] The join types NATURAL and CROSS are incompatible. SQLSTATE: 42613\n== SQL (line 1, position 17) ==\nselect * from a natural cross join b\n                ^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "query": {
@@ -299,7 +299,7 @@
     },
     {
       "input": "select * from a natural join b on a.id = b.id",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'.(line 1, pos 31)\n\n== SQL ==\nselect * from a natural join b on a.id = b.id\n-------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'. SQLSTATE: 42601 (line 1, pos 31)\n\n== SQL ==\nselect * from a natural join b on a.id = b.id\n-------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: NATURAL JOIN with criteria"
       }
@@ -4664,7 +4664,7 @@
     },
     {
       "input": "select * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'.(line 1, pos 60)\n\n== SQL ==\nselect * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1\n------------------------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'on'. SQLSTATE: 42601 (line 1, pos 60)\n\n== SQL ==\nselect * from t1 inner join t2 inner join t3 on col3 = col2 on col3 = col1\n------------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found on at 60:62 expected 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }

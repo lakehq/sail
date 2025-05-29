@@ -428,7 +428,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "current_database()",
+              "name": "current_schema()",
               "nullable": false,
               "type": "string",
               "metadata": {}
@@ -450,7 +450,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "current_database()",
+              "name": "current_schema()",
               "nullable": false,
               "type": "string",
               "metadata": {}
@@ -486,112 +486,32 @@
     },
     {
       "input": {
-        "query": "SELECT equal_null(1, '11');",
+        "query": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1));",
         "result": [
-          "false"
+          "[false]"
         ],
         "schema": {
           "type": "struct",
-          "fields": [
-            {
-              "name": "equal_null(1, 11)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
+          "fields": []
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "not supported: unknown function: from_avro"
       }
     },
     {
       "input": {
-        "query": "SELECT equal_null(3, 3);",
+        "query": "SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id));",
         "result": [
-          "true"
+          "[false]"
         ],
         "schema": {
           "type": "struct",
-          "fields": [
-            {
-              "name": "equal_null(3, 3)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
+          "fields": []
         }
       },
       "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT equal_null(NULL, 'abc');",
-        "result": [
-          "false"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "equal_null(NULL, abc)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT equal_null(NULL, NULL);",
-        "result": [
-          "true"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "equal_null(NULL, NULL)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT equal_null(true, NULL);",
-        "result": [
-          "false"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "equal_null(true, NULL)",
-              "nullable": false,
-              "type": "boolean",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
+        "failure": "not supported: unknown function: from_protobuf"
       }
     },
     {
@@ -816,14 +736,13 @@
       "input": {
         "query": "SELECT raise_error('custom error message');",
         "result": [
-          "java.lang.RuntimeException",
-          "custom error message"
+          "[USER_RAISED_EXCEPTION] custom error message"
         ],
         "schema": {
           "type": "struct",
           "fields": [
             {
-              "name": "raise_error(custom error message)",
+              "name": "raise_error(USER_RAISED_EXCEPTION, map(errorMessage, custom error message))",
               "nullable": true,
               "type": "null",
               "metadata": {}
@@ -881,6 +800,43 @@
     },
     {
       "input": {
+        "query": "SELECT schema_of_avro('{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{\"name\": \"u\", \"type\": [\"int\", \"string\"]}]}', map());",
+        "result": [
+          "STRUCT<u: STRUCT<member0: INT, member1: STRING> NOT NULL>"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: schema_of_avro"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT session_user();",
+        "result": [
+          "mockingjay"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "session_user()",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: session_user"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT spark_partition_id();",
         "result": [
           "0"
@@ -899,6 +855,51 @@
       },
       "output": {
         "failure": "not implemented: function: spark_partition_id"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_avro(s) IS NULL FROM (SELECT NULL AS s);",
+        "result": [
+          "[true]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_avro"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}') IS NULL FROM (SELECT NULL AS s);",
+        "result": [
+          "[true]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_avro"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_protobuf(s, 'Person', '/path/to/descriptor.desc', map('emitDefaultValues', 'true')) IS NULL FROM (SELECT NULL AS s);",
+        "result": [
+          "[true]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_protobuf"
       }
     },
     {
@@ -943,6 +944,72 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_reflect('java.net.URLDecoder', 'decode', '%');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_reflect(java.net.URLDecoder, decode, %)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_reflect"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_reflect('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');",
+        "result": [
+          "a5cf6c42-0c85-418f-af6c-3e4e5b1328f2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_reflect(java.util.UUID, fromString, a5cf6c42-0c85-418f-af6c-3e4e5b1328f2)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_reflect"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_reflect('java.util.UUID', 'randomUUID');",
+        "result": [
+          "c33fb387-8500-4bfa-81d2-6e0e3e930df2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_reflect(java.util.UUID, randomUUID)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_reflect"
       }
     },
     {
@@ -999,7 +1066,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "current_user()",
+              "name": "user()",
               "nullable": false,
               "type": "string",
               "metadata": {}

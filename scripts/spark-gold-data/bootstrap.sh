@@ -7,6 +7,8 @@ if [ -z "${JAVA_HOME:-}" ]; then
   exit 1
 fi
 
+spark_version="${SPARK_VERSION:-4.0.0}"
+
 project_path="$(git rev-parse --show-toplevel)"
 
 scripts_path="${project_path}/scripts/spark-gold-data"
@@ -15,7 +17,7 @@ output_path="${project_path}/crates/sail-spark-connect/tests/gold_data"
 
 source "${project_path}/scripts/shell-tools/git-patch.sh"
 
-apply_git_patch "${project_path}"/opt/spark "v3.5.5" "${scripts_path}"/spark-3.5.5.patch
+apply_git_patch "${project_path}"/opt/spark "v${spark_version}" "${scripts_path}/spark-${spark_version}.patch"
 
 cd "${project_path}"/opt/spark
 
