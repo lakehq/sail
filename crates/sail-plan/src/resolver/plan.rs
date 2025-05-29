@@ -15,6 +15,7 @@ use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion::functions::expr_fn::random;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::sqlparser::ast::NullTreatment;
@@ -1564,10 +1565,56 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_sample(
         &self,
-        _sample: spec::Sample,
-        _state: &mut PlanResolverState,
+        sample: spec::Sample,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("sample"))
+        let spec::Sample {
+            input,
+            lower_bound,
+            upper_bound,
+            with_replacement,
+            ..
+        } = sample;
+        if lower_bound >= upper_bound {
+            return Err(PlanError::invalid(format!(
+                "invalid sample bounds: [{lower_bound}, {upper_bound})"
+            )));
+        }
+        if with_replacement {
+            return Err(PlanError::todo(
+                "sampling with replacement is not supported yet",
+            ));
+        }
+        // if defined seed use these values otherwise use random seed
+
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(*input, state)
+            .await?;
+
+        let rand_column_name: String = state.register_field_name("rand_value");
+        let rand_expr: Expr = random().alias(&rand_column_name);
+
+        let init_exprs: Vec<Expr> = input
+            .schema()
+            .columns()
+            .iter()
+            .map(|col| Expr::Column(col.clone()))
+            .collect();
+        let mut all_exprs: Vec<Expr> = init_exprs.clone();
+        all_exprs.push(rand_expr);
+
+        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
+            .project(all_exprs)?
+            .build()?;
+        let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
+            .filter(col(&rand_column_name).lt_eq(lit(upper_bound)))?
+            .filter(col(&rand_column_name).gt_eq(lit(lower_bound)))?
+            .build()?;
+        let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
+            .project(init_exprs)?
+            .build()?;
+
+        Ok(plan)
     }
 
     async fn resolve_query_deduplicate(
