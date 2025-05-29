@@ -59,7 +59,7 @@ impl Default for CsvReadOptions<'_> {
 impl<'a> CsvReadOptions<'a> {
     pub fn new() -> Self {
         Self {
-            has_header: true,
+            has_header: false,
             schema: None,
             schema_infer_max_records: DEFAULT_SCHEMA_INFER_MAX_RECORD,
             delimiter: b',',
