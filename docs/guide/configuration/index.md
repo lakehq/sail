@@ -1,6 +1,6 @@
 ---
 title: Configuration
-rank: 50
+rank: 8
 ---
 
 # Configuration

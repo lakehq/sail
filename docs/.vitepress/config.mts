@@ -176,6 +176,15 @@ class Sidebar {
     return trees.map((tree) => transform(tree, 1));
   }
 
+  static async introduction(): Promise<DefaultTheme.SidebarItem[]> {
+    const pages = await loadPages(
+      this.srcDir,
+      "/introduction/**/*.md",
+      Site.srcExclude(),
+    );
+    return Sidebar.items(TreeNode.fromPaths(pages));
+  }
+
   static async userGuide(): Promise<DefaultTheme.SidebarItem[]> {
     const pages = await loadPages(
       this.srcDir,
@@ -274,6 +283,11 @@ export default async () => {
       siteTitle: "Sail",
       logo: "/logo.png",
       nav: [
+        {
+          text: "Introduction",
+          link: "/introduction/",
+          activeMatch: "^/introduction/",
+        },
         { text: "User Guide", link: "/guide/", activeMatch: "^/guide/" },
         {
           text: "Development",
@@ -287,10 +301,16 @@ export default async () => {
       },
       sidebar: {
         "/": [
+          ...(await Sidebar.introduction()),
           ...(await Sidebar.userGuide()),
-          ...(await Sidebar.development()),
+          {
+            text: "Development",
+            items: [],
+            link: "/development/",
+          },
           ...(await Sidebar.reference()),
         ],
+        "/development/": await Sidebar.development(),
         "/reference/python/": await Sidebar.pythonReference(),
       },
       externalLinkIcon: true,

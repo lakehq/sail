@@ -1,6 +1,6 @@
 ---
 title: MCP Server
-rank: 3
+rank: 1
 ---
 
 # MCP Server
