@@ -1,0 +1,195 @@
+# References:
+#   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-csv.html#data-source-option
+#   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L254-L290
+#   - [3] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L767-L787
+
+- key: csv.read.sep
+  alias: csv.read.delimiter
+  type: string
+  default: ","
+  description: |
+    Sets a separator for each field and value. This separator can be one or more characters.
+  supported: true
+
+- key: csv.read.encoding
+  alias: csv.read.charset
+  type: string
+  default: "UTF-8"
+  description: |
+    For reading, decodes the CSV files by the given encoding type. CSV built-in functions ignore this option.
+  supported: false
+
+- key: csv.read.quote
+  type: string
+  default: "\""
+  description: |
+    Sets a single character used for escaping quoted values where the separator can be part of the value.
+    For reading, if you would like to turn off quotations, you need to set not null but an empty string.
+
+- key: csv.read.escape
+  type: string
+  default: "\\"
+  description: |
+    Sets a single character used for escaping quotes inside an already quoted value.
+
+- key: csv.read.comment
+  type: string
+  default: ""
+  description: |
+    Sets a single character used for skipping lines beginning with this character. By default, it is disabled.
+
+- key: csv.read.header
+  type: boolean
+  default: "false"
+  description: |
+    For reading, uses the first line as names of columns. Note that if the given path is a RDD of Strings, this header option will remove all lines same with the header if exists. CSV built-in functions ignore this option.
+
+- key: csv.read.infer_schema
+  type: boolean
+  default: "false"
+  description: |
+    Infers the input schema automatically from data. It requires one extra pass over the data. CSV built-in functions ignore this option.
+
+- key: csv.read.prefer_date
+  type: boolean
+  default: "true"
+  description: |
+    During schema inference (inferSchema), attempts to infer string columns that contain dates as Date if the values satisfy the dateFormat option or default date format. For columns that contain a mixture of dates and timestamps, try inferring them as TimestampType if timestamp format not specified, otherwise infer them as StringType.
+
+- key: csv.read.enforce_schema
+  type: boolean
+  default: "true"
+  description: |
+    If it is set to true, the specified or inferred schema will be forcibly applied to datasource files, and headers in CSV files will be ignored. If the option is set to false, the schema will be validated against all headers in CSV files in the case when the header option is set to true. Field names in the schema and column names in CSV headers are checked by their positions taking into account spark.sql.caseSensitive. Though the default value is true, it is recommended to disable the enforceSchema option to avoid incorrect results. CSV built-in functions ignore this option.
+
+- key: csv.read.ignore_leading_white_space
+  type: boolean
+  default: "false"
+  description: |
+    A flag indicating whether or not leading whitespaces from values being read should be skipped.
+
+- key: csv.read.ignore_trailing_white_space
+  type: boolean
+  default: "false"
+  description: |
+    A flag indicating whether or not trailing whitespaces from values being read should be skipped.
+
+- key: csv.read.null_value
+  type: string
+  default: ""
+  description: |
+    Sets the string representation of a null value. Since 2.0.1, this nullValue param applies to all supported types including the string type.
+
+- key: csv.read.nan_value
+  type: string
+  default: "NaN"
+  description: |
+    Sets the string representation of a non-number value.
+
+- key: csv.read.positive_inf
+  type: string
+  default: "Inf"
+  description: |
+    Sets the string representation of a positive infinity value.
+
+- key: csv.read.negative_inf
+  type: string
+  default: "-Inf"
+  description: |
+    Sets the string representation of a negative infinity value.
+
+- key: csv.read.date_format
+  type: string
+  default: "yyyy-MM-dd"
+  description: |
+    Sets the string that indicates a date format. Custom date formats follow the formats at Datetime Patterns. This applies to date type.
+
+- key: csv.read.timestamp_format
+  type: string
+  default: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
+  description: |
+    Sets the string that indicates a timestamp format. Custom date formats follow the formats at Datetime Patterns. This applies to timestamp type.
+
+- key: csv.read.timestamp_ntz_format
+  type: string
+  default: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
+  description: |
+    Sets the string that indicates a timestamp without timezone format. Custom date formats follow the formats at Datetime Patterns. This applies to timestamp without timezone type, note that zone-offset and time-zone components are not supported when writing or reading this data type.
+
+- key: csv.read.enable_date_time_parsing_fallback
+  type: boolean
+  default: "null"
+  description: |
+    Allows falling back to the backward compatible (Spark 1.x and 2.0) behavior of parsing dates and timestamps if values do not match the set patterns. Enabled if the time parser policy has legacy settings or if no custom date or timestamp pattern was provided.
+
+- key: csv.read.max_columns
+  type: integer
+  default: "20480"
+  description: |
+    Defines a hard limit of how many columns a record can have.
+
+- key: csv.read.max_chars_per_column
+  type: integer
+  default: "-1"
+  description: |
+    Defines the maximum number of characters allowed for any given value being read. By default, it is -1 meaning unlimited length.
+
+- key: csv.read.mode
+  type: string
+  default: "PERMISSIVE"
+  description: |
+    Allows a mode for dealing with corrupt records during parsing. It supports the following case-insensitive modes. Note that Spark tries to parse only required columns in CSV under column pruning. Therefore, corrupt records can be different based on required set of fields. This behavior can be controlled by spark.sql.csv.parser.columnPruning.enabled (enabled by default). PERMISSIVE - when it meets a corrupted record, puts the malformed string into a field configured by columnNameOfCorruptRecord, and sets malformed fields to null. DROPMALFORMED - ignores the whole corrupted records. This mode is unsupported in the CSV built-in functions. FAILFAST - throws an exception when it meets corrupted records.
+
+- key: csv.read.column_name_of_corrupt_record
+  type: string
+  default: "null"
+  description: |
+    Allows renaming the new field having malformed string created by PERMISSIVE mode. This overrides spark.sql.columnNameOfCorruptRecord.
+
+- key: csv.read.multi_line
+  type: boolean
+  default: "false"
+  description: |
+    Allows a row to span multiple lines, by parsing line breaks within quoted values as part of the value itself. CSV built-in functions ignore this option.
+
+- key: csv.read.char_to_escape_quote_escaping
+  type: string
+  default: "null"
+  description: |
+    Sets a single character used for escaping the escape for the quote character. The default value is escape character when escape and quote characters are different, \\0 otherwise.
+
+- key: csv.read.sampling_ratio
+  type: float
+  default: "1.0"
+  description: |
+    Defines fraction of rows used for schema inferring. CSV built-in functions ignore this option.
+
+- key: csv.read.empty_value
+  type: string
+  default: ""
+  description: |
+    Sets the string representation of an empty value.
+
+- key: csv.read.locale
+  type: string
+  default: "en-US"
+  description: |
+    Sets a locale as language tag in IETF BCP 47 format. For instance, this is used while parsing dates and timestamps.
+
+- key: csv.read.line_sep
+  type: string
+  default: "null"
+  description: |
+    Defines the line separator that should be used for parsing. Maximum length is 1 character. CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
+
+- key: csv.read.unescaped_quote_handling
+  type: string
+  default: "STOP_AT_DELIMITER"
+  description: |
+    Defines how the CsvParser will handle values with unescaped quotes. STOP_AT_CLOSING_QUOTE - If unescaped quotes are found in the input, accumulate the quote character and proceed parsing the value as a quoted value, until a closing quote is found. BACK_TO_DELIMITER - If unescaped quotes are found in the input, consider the value as an unquoted value. This will make the parser accumulate all characters of the current parsed value until the delimiter is found. STOP_AT_DELIMITER - If unescaped quotes are found in the input, consider the value as an unquoted value. This will make the parser accumulate all characters until the delimiter or a line ending is found in the input. SKIP_VALUE - If unescaped quotes are found in the input, the content parsed for the given value will be skipped and the value set in nullValue will be produced instead. RAISE_ERROR - If unescaped quotes are found in the input, a TextParsingException will be thrown.
+
+- key: csv.read.time_zone
+  type: string
+  default: "null"
+  description: |
+    Sets the string that indicates a time zone ID to be used to format timestamps in the JSON datasources or partition values. The following formats of timeZone are supported - Region-based zone ID - It should have the form 'area/city', such as 'America/Los_Angeles'. Zone offset - It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'. Also 'UTC' and 'Z' are supported as aliases of '+00:00'. Other short names like 'CST' are not recommended to use because they can be ambiguous.
