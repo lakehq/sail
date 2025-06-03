@@ -2,6 +2,10 @@ use figment::value::{Dict, Map, Tag, Value};
 use figment::{Error, Metadata, Profile, Provider};
 use serde::Deserialize;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum ConfigType {
@@ -16,6 +20,7 @@ enum ConfigType {
 #[serde(deny_unknown_fields)]
 struct ConfigItem {
     key: String,
+    alias: Option<String>,
     #[expect(unused)]
     r#type: ConfigType,
     /// Every configuration item must have a default value.
@@ -37,6 +42,9 @@ struct ConfigItem {
     #[expect(unused)]
     #[serde(default)]
     hidden: bool,
+    #[expect(unused)]
+    #[serde(default = "default_true")]
+    supported: bool,
 }
 
 /// Deserialize a unit value and ignore the `serde(deny_unknown_fields)` attribute.

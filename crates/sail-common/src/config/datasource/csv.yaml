@@ -204,14 +204,14 @@
   supported: false
 
 - key: csv.read.max_columns
-  type: integer
+  type: number
   default: "20480"
   description: |
     Defines a hard limit of how many columns a record can have.
   supported: false
 
 - key: csv.read.max_chars_per_column
-  type: integer
+  type: number
   default: "-1"
   description: |
     Defines the maximum number of characters allowed for any given value being read. By default, it is -1 meaning
@@ -254,7 +254,7 @@
   supported: false
 
 - key: csv.read.sampling_ratio
-  type: float
+  type: number
   default: "1.0"
   description: |
     Defines fraction of rows used for schema inferring. CSV built-in functions ignore this option.

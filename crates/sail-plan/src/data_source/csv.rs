@@ -6,28 +6,31 @@ use crate::error::{PlanError, PlanResult};
 
 /// Datasource Options that control the reading of CSV files.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all(deserialize = "camelCase"))]
-pub struct CsvReadOptions<'a> {
-    pub delimiter: u8,
-    pub quote: u8,
-    pub escape: Option<u8>,
-    pub comment: Option<u8>,
+// #[serde(rename_all(deserialize = "camelCase"))]
+pub struct CsvReadOptions {
+    pub delimiter: String,
+    pub quote: String,
+    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    pub escape: Option<String>,
+    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    pub comment: Option<String>,
     pub header: bool,
     #[serde(deserialize_with = "deserialize_non_empty_string")]
     pub null_value: Option<String>,
     #[serde(deserialize_with = "deserialize_non_empty_string")]
     pub null_regex: Option<String>,
-    pub line_sep: Option<u8>,
+    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    pub line_sep: Option<String>,
     pub schema_infer_max_records: usize,
     pub newlines_in_values: bool,
-    pub file_extension: &'a str,
-    pub compression: &'a str,
+    pub file_extension: String,
+    pub compression: String,
 }
 
-impl<'a> CsvReadOptions<'a> {
+impl CsvReadOptions {
     pub fn load_default() -> PlanResult<Self> {
         Figment::from(ConfigDefinition::new(CSV_CONFIG))
-            .extract()
+            .extract_inner("csv.read")
             .map_err(|e| PlanError::InvalidArgument(e.to_string()))
     }
 }
