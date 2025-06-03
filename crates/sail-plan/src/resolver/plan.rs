@@ -51,6 +51,7 @@ use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
+use crate::data_source::csv::CsvReadOptions;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
@@ -841,12 +842,13 @@ impl PlanResolver<'_> {
         let Some(format) = format else {
             return Err(PlanError::invalid("missing data source format"));
         };
-        let mut options = Self::resolve_data_reader_options(&format, options)?;
+        let options = Self::resolve_data_reader_options(&format, options)?;
         let (format_factory, extension): (Box<dyn FileFormatFactory>, _) =
             match format.to_lowercase().as_str() {
                 "json" => (Box::new(JsonFormatFactory::new()), ".json"),
                 "csv" => {
-                    Self::apply_default_csv_options(&mut options, true);
+                    let default_csv_read_config = CsvReadOptions::load_default()?;
+                    println!("CHECK HERE default CSV read options: {default_csv_read_config:?}",);
                     (Box::new(CsvFormatFactory::new()), ".csv")
                 }
                 "parquet" => (Box::new(ParquetFormatFactory::new()), ".parquet"),
@@ -2817,14 +2819,11 @@ impl PlanResolver<'_> {
                 let Some(source) = source else {
                     return Err(PlanError::invalid("missing source"));
                 };
-                let mut options = Self::resolve_data_writer_options(&source, options)?;
+                let options = Self::resolve_data_writer_options(&source, options)?;
                 let format_factory: Arc<dyn FileFormatFactory> = match source.as_str() {
                     "json" => Arc::new(JsonFormatFactory::new()),
                     "parquet" => Arc::new(ParquetFormatFactory::new()),
-                    "csv" => {
-                        Self::apply_default_csv_options(&mut options, false);
-                        Arc::new(CsvFormatFactory::new())
-                    }
+                    "csv" => Arc::new(CsvFormatFactory::new()),
                     "arrow" => Arc::new(ArrowFormatFactory::new()),
                     "avro" => Arc::new(AvroFormatFactory::new()),
                     _ => return Err(PlanError::invalid(format!("unsupported source: {source}"))),
@@ -2984,15 +2983,12 @@ impl PlanResolver<'_> {
         .await?;
 
         let copy_to_plan = if let Some(query_logical_plan) = query_logical_plan {
-            let mut options = Self::resolve_data_writer_options(&file_format, options.clone())?;
+            let options = Self::resolve_data_writer_options(&file_format, options.clone())?;
             let format_factory: Arc<dyn FileFormatFactory> =
                 match file_format.to_lowercase().as_str() {
                     "json" => Arc::new(JsonFormatFactory::new()),
                     "parquet" => Arc::new(ParquetFormatFactory::new()),
-                    "csv" => {
-                        Self::apply_default_csv_options(&mut options, false);
-                        Arc::new(CsvFormatFactory::new())
-                    }
+                    "csv" => Arc::new(CsvFormatFactory::new()),
                     "arrow" => Arc::new(ArrowFormatFactory::new()),
                     "avro" => Arc::new(AvroFormatFactory::new()),
                     _ => {

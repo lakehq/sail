@@ -5,56 +5,6 @@ use crate::resolver::PlanResolver;
 use crate::utils::spark_datetime_format_to_chrono_strftime;
 
 impl PlanResolver<'_> {
-    // https://spark.apache.org/docs/3.5.5/sql-data-sources-csv.html
-    pub(crate) fn apply_default_csv_options(options: &mut HashMap<String, String>, reading: bool) {
-        if !options.contains_key("format.has_header") {
-            options.insert("format.has_header".to_string(), false.to_string());
-        }
-        if !options.contains_key("format.delimiter") {
-            options.insert("format.delimiter".to_string(), ",".to_string());
-        }
-        if !options.contains_key("format.quote") {
-            options.insert("format.quote".to_string(), "\"".to_string());
-        }
-        // TODO: Uncomment when terminator for writing is supported
-        // if !options.contains_key("format.terminator") && !reading {
-        //     options.insert("format.terminator".to_string(), "\n".to_string());
-        // }
-        if !options.contains_key("format.escape") {
-            options.insert("format.escape".to_string(), "\\".to_string());
-        }
-        if !options.contains_key("format.double_quote") && !reading {
-            options.insert("format.double_quote".to_string(), true.to_string());
-        }
-        if !options.contains_key("format.compression") && !reading {
-            options.insert("format.compression".to_string(), "UNCOMPRESSED".to_string());
-        }
-        if !options.contains_key("format.file_compression_type") && reading {
-            options.insert(
-                "format.file_compression_type".to_string(),
-                "UNCOMPRESSED".to_string(),
-            );
-        }
-        if !options.contains_key("format.date_format") {
-            options.insert("format.date_format".to_string(), "%Y-%m-%d".to_string());
-        }
-        if !options.contains_key("format.datetime_format") {
-            options.insert(
-                "format.datetime_format".to_string(),
-                "%Y-%m-%dT%H:%M:%S%.f".to_string(),
-            );
-        }
-        if !options.contains_key("format.timestamp_format") {
-            options.insert(
-                "format.timestamp_format".to_string(),
-                "%Y-%m-%dT%H:%M:%S%.f".to_string(),
-            );
-        }
-        if !options.contains_key("format.timestamp_tz_format") {
-            options.insert("format.timestamp_tz_format".to_string(), "%+".to_string());
-        }
-    }
-
     /// CSV read options: [`datafusion::datasource::file_format::options::CsvReadOptions`]
     fn resolve_data_reader_option(
         format: &str,

@@ -1,5 +1,6 @@
 mod application;
 mod cli;
+mod datasource;
 mod loader;
 
 // Same default as Spark
@@ -8,3 +9,5 @@ pub const GRPC_MAX_MESSAGE_LENGTH_DEFAULT: usize = 128 * 1024 * 1024;
 
 pub use application::*;
 pub use cli::*;
+pub use datasource::*;
+pub use loader::*;
