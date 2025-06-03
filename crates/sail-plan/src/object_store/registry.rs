@@ -75,12 +75,17 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
             .map_err(|e| plan_datafusion_err!("failed to get object store: {e}"))?;
         if let Some(store) = stores.get(&key) {
             Ok(Arc::clone(store))
-        } else if let Some(handle) = self.runtime.secondary() {
-            let store =
-                RuntimeAwareObjectStore::try_new(|| get_dynamic_object_store(url), handle.clone())?;
-            Ok(Arc::new(store))
         } else {
-            Ok(get_dynamic_object_store(url)?)
+            let store = if let Some(handle) = self.runtime.secondary() {
+                Arc::new(RuntimeAwareObjectStore::try_new(
+                    || get_dynamic_object_store(url),
+                    handle.clone(),
+                )?)
+            } else {
+                get_dynamic_object_store(url)?
+            };
+            self.register_store(url, Arc::clone(&store));
+            Ok(store)
         }
     }
 }
