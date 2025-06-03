@@ -847,7 +847,12 @@ impl PlanResolver<'_> {
             match format.to_lowercase().as_str() {
                 "json" => (Box::new(JsonFormatFactory::new()), ".json"),
                 "csv" => {
-                    let default_csv_read_config = CsvReadOptions::load_default()?;
+                    // let options_json = serde_json::to_value(&options).unwrap();
+                    let default_csv_read_config = CsvReadOptions::default();
+                    let user_options = CsvReadOptions::load_csv_options(options.clone())?;
+                    let options = default_csv_read_config
+                        .merge_with(user_options)
+                        .map_err(|e| PlanError::internal(e.to_string()))?;
                     println!("CHECK HERE default CSV read options: {default_csv_read_config:?}",);
                     (Box::new(CsvFormatFactory::new()), ".csv")
                 }

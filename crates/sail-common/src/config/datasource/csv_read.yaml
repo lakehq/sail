@@ -3,15 +3,17 @@
 #   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L254-L290
 #   - [3] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L767-L787
 
-- key: csv.read.delimiter
-  alias: csv.read.sep
+# CHECK HERE: ADD CAMEL CASE ALIAS FOR ALL KEYS BEFORE MERGING!!!!
+- key: delimiter
+  alias:
+    - sep
   type: string
   default: ","
   description: |
     Sets a separator that can be one or more characters for each field and value.
   supported: true
 
-- key: csv.read.quote
+- key: quote
   type: string
   default: "\""
   description: |
@@ -19,28 +21,28 @@
     For reading, if you would like to turn off quotations, you need to set not null but an empty string.
   supported: true
 
-- key: csv.read.escape
+- key: escape
   type: string
   default: "\\"
   description: |
     Sets a single character used for escaping quotes inside an already quoted value.
   supported: true
 
-- key: csv.read.comment
+- key: comment
   type: string
   default: ""
   description: |
     Sets a single character used for skipping lines that begin with this character. By default, it is disabled.
   supported: true
 
-- key: csv.read.header
+- key: header
   type: boolean
   default: "false"
   description: |
     For reading, uses the first line as names of columns. CSV built-in functions ignore this option.
   supported: true
 
-- key: csv.read.null_value
+- key: null_value
   type: string
   default: ""
   description: |
@@ -48,15 +50,16 @@
     Defaults to treating empty values as null.
   supported: true
 
-- key: csv.read.null_regex
+- key: null_regex
   type: string
   default: ""
   description: |
+    CHECK HERE: DEFINE WHAT REGEX IS
     Optional regex to match null values. Throws an exception if `null_value` is also set.
     Defaults to treating empty values as null.
   supported: true
 
-- key: csv.read.line_sep
+- key: line_sep
   type: string
   default: ""
   description: |
@@ -65,7 +68,7 @@
     For reading, Defaults to None (CRLF: \\r, \\r\\n and \\n).
   supported: true
 
-- key: csv.read.infer_schema
+- key: infer_schema
   type: boolean
   default: "true"
   description: |
@@ -74,14 +77,14 @@
     CSV built-in functions ignore this option.
   supported: true
 
-- key: csv.read.schema_infer_max_records
+- key: schema_infer_max_records
   type: number
   default: "1000"
   description: |
     The maximum number of rows to read from CSV files for schema inference if needed.
   supported: true
 
-- key: csv.read.newlines_in_values
+- key: newlines_in_values
   type: boolean
   default: "false"
   description: |
@@ -90,14 +93,14 @@
     Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
   supported: true
 
-- key: csv.read.file_extension
+- key: file_extension
   type: string
   default: ".csv"
   description: |
     Only files with this extension are selected for data input.
   supported: true
 
-- key: csv.read.compression
+- key: compression
   type: string
   default: "UNCOMPRESSED"
   description: |
@@ -109,15 +112,18 @@
       - `UNCOMPRESSED` or ""
   supported: true
 
-- key: csv.read.encoding
-  alias: csv.read.charset
+- key: encoding
+  alias:
+    - charset
   type: string
   default: "UTF-8"
   description: |
     For reading, decodes the CSV files by the given encoding type. CSV built-in functions ignore this option.
   supported: false
 
-- key: csv.read.prefer_date
+- key: prefer_date
+  alias:
+    - preferDate
   type: boolean
   default: "true"
   description: |
@@ -127,7 +133,7 @@
     `StringType`.
   supported: false
 
-- key: csv.read.enforce_schema
+- key: enforce_schema
   type: boolean
   default: "true"
   description: |
@@ -139,55 +145,55 @@
     CSV built-in functions ignore this option.
   supported: false
 
-- key: csv.read.ignore_leading_white_space
+- key: ignore_leading_white_space
   type: boolean
   default: "false (for reading)"
   description: |
     A flag indicating whether or not leading whitespaces from values being read should be skipped.
   supported: false
 
-- key: csv.read.ignore_trailing_white_space
+- key: ignore_trailing_white_space
   type: boolean
   default: "false (for reading)"
   description: |
     A flag indicating whether or not trailing whitespaces from values being read should be skipped.
   supported: false
 
-- key: csv.read.nan_value
+- key: nan_value
   type: string
   default: "NaN"
   description: |
     Sets the string representation of a non-number value.
   supported: false
 
-- key: csv.read.positive_inf
+- key: positive_inf
   type: string
   default: "Inf"
   description: |
     Sets the string representation of a positive infinity value.
   supported: false
 
-- key: csv.read.negative_inf
+- key: negative_inf
   type: string
   default: "-Inf"
   description: |
     Sets the string representation of a negative infinity value.
   supported: false
 
-- key: csv.read.date_format
+- key: date_format
   type: string
   default: "yyyy-MM-dd"
   description: |
     Sets the string that indicates a date format. Custom date formats follow the formats at `Datetime` Patterns.
   supported: false
 
-- key: csv.read.timestamp_format
+- key: timestamp_format
   type: string
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
   description: |
     Sets the string that indicates a timestamp format. Custom date formats follow the formats at `Datetime` Patterns.
 
-- key: csv.read.timestamp_ntz_format
+- key: timestamp_ntz_format
   type: string
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
   description: |
@@ -195,7 +201,7 @@
     `Datetime` Patterns.
   supported: false
 
-- key: csv.read.enable_date_time_parsing_fallback
+- key: enable_date_time_parsing_fallback
   type: boolean
   default: "Enabled if the time parser policy has legacy settings or if no custom date or timestamp pattern was provided."
   description: |
@@ -203,14 +209,14 @@
     set patterns.
   supported: false
 
-- key: csv.read.max_columns
+- key: max_columns
   type: number
   default: "20480"
   description: |
     Defines a hard limit of how many columns a record can have.
   supported: false
 
-- key: csv.read.max_chars_per_column
+- key: max_chars_per_column
   type: number
   default: "-1"
   description: |
@@ -218,7 +224,7 @@
     unlimited length.
   supported: false
 
-- key: csv.read.mode
+- key: mode
   type: string
   default: "PERMISSIVE"
   description: |
@@ -229,7 +235,7 @@
       - `FAILFAST`: Throws an exception when it meets corrupted records.
   supported: false
 
-- key: csv.read.column_name_of_corrupt_record
+- key: column_name_of_corrupt_record
   type: string
   default: "value of sail.sql.column_name_of_corrupt_record configuration"
   description: |
@@ -237,7 +243,7 @@
     This overrides `sail.sql.column_name_of_corrupt_record`.
   supported: false
 
-- key: csv.read.multi_line
+- key: multi_line
   type: boolean
   default: "false"
   description: |
@@ -245,7 +251,7 @@
     CSV built-in functions ignore this option.
   supported: false
 
-- key: csv.read.char_to_escape_quote_escaping
+- key: char_to_escape_quote_escaping
   type: string
   default: "escape or \\0"
   description: |
@@ -253,28 +259,28 @@
     The default value is escape character when escape and quote characters are different, \\0 otherwise.
   supported: false
 
-- key: csv.read.sampling_ratio
+- key: sampling_ratio
   type: number
   default: "1.0"
   description: |
     Defines fraction of rows used for schema inferring. CSV built-in functions ignore this option.
   supported: false
 
-- key: csv.read.empty_value
+- key: empty_value
   type: string
   default: ""
   description: |
     Sets the string representation of an empty value.
   supported: false
 
-- key: csv.read.locale
+- key: locale
   type: string
   default: "en-US"
   description: |
     Sets a locale as language tag in IETF BCP 47 format. For instance, this is used while parsing dates and timestamps.
   supported: false
 
-- key: csv.read.unescaped_quote_handling
+- key: unescaped_quote_handling
   type: string
   default: "STOP_AT_DELIMITER"
   description: |
@@ -290,7 +296,7 @@
       - `RAISE_ERROR`: If unescaped quotes are found in the input, a `TextParsingException` will be thrown.
   supported: false
 
-- key: csv.read.time_zone
+- key: time_zone
   type: string
   default: "value of sail.sql.session.timeZone configuration"
   description: |
