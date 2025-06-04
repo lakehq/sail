@@ -40,7 +40,7 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
         // A secure connection can be handled by a gateway in production.
         let listener = TcpListener::bind((ip, port)).await?;
         info!(
-            "MEOW: Starting the Spark Connect server on {}...",
+            "Starting the Spark Connect server on {}...",
             listener.local_addr()?
         );
         serve(listener, shutdown(), options).await?;
