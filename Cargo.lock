@@ -5244,6 +5244,7 @@ dependencies = [
  "chrono-tz",
  "chumsky",
  "comfy-table",
+ "dashmap",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
