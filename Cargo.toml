@@ -102,18 +102,18 @@ tonic-reflection = "0.12.3"
 tonic-health = "0.12.3"
 tonic-types = "0.12.3"
 
-datafusion = { version = "47.0.0", features = ["serde", "pyarrow", "avro"] }
-datafusion-common = { version = "47.0.0", features = ["object_store", "pyarrow", "avro"] }
-datafusion-expr = { version = "47.0.0" }
-datafusion-expr-common = { version = "47.0.0" }
-datafusion-proto = { version = "47.0.0" }
-datafusion-functions-nested = { version = "47.0.0" }
-datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "459a6dc" }
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1", features = ["serde", "pyarrow", "avro"] }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1", features = ["object_store", "pyarrow", "avro"] }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
+datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
+datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
+datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "d76ad8d" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
-pyo3 = { version = "0.24.0", features = ["auto-initialize", "serde"] }
-arrow-buffer = { version = "55.0.0" }
-arrow-schema = { version = "55.0.0", features = ["serde"] }
-arrow-flight = { version = "55.0.0" }
+pyo3 = { version = "0.24.2", features = ["auto-initialize", "serde"] }
+arrow-buffer = { version = "55.1.0" }
+arrow-schema = { version = "55.1.0", features = ["serde"] }
+arrow-flight = { version = "55.1.0" }
 serde_arrow = { version = "0.13.3", features = ["arrow-55"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.1", features = ["aws", "gcp", "azure", "http"] }
