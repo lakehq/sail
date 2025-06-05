@@ -141,7 +141,6 @@ datafusion-doc = { git = "https://github.com/apache/datafusion.git", rev = "48.0
 datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
 datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
 datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
-datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
 datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
 datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
 datafusion-functions-aggregate-common = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }

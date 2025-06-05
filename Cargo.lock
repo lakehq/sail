@@ -7133,11 +7133,6 @@ dependencies = [
 ]
 
 [[patch.unused]]
-name = "datafusion-ffi"
-version = "48.0.0"
-source = "git+https://github.com/apache/datafusion.git?rev=48.0.0-rc1#992d156c46f6ad4f0096c4a62b293cabef63718d"
-
-[[patch.unused]]
 name = "datafusion-spark"
 version = "48.0.0"
 source = "git+https://github.com/apache/datafusion.git?rev=48.0.0-rc1#992d156c46f6ad4f0096c4a62b293cabef63718d"
