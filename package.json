@@ -29,6 +29,7 @@
     "markdown-it-footnote": "^4.0.0",
     "prettier": "^3.5.3",
     "prettier-plugin-tailwindcss": "^0.6.11",
+    "prettier-plugin-vitepress": "^0.0.10",
     "sql-formatter": "^15.6.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3",
@@ -47,7 +48,8 @@
   "prettier": {
     "plugins": [
       "@ianvs/prettier-plugin-sort-imports",
-      "prettier-plugin-tailwindcss"
+      "prettier-plugin-tailwindcss",
+      "prettier-plugin-vitepress"
     ],
     "importOrder": [
       "<BUILT_IN_MODULES>",

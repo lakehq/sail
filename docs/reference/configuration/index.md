@@ -17,6 +17,6 @@ The default value of each option is shown as its **string representation** that 
 <ConfigGroupList :groups="data" />
 
 <script setup lang="ts">
-import ConfigGroupList from '@theme/components/ConfigGroupList.vue';
-import { data } from './index.data.ts';
+import ConfigGroupList from "@theme/components/ConfigGroupList.vue";
+import { data } from "./index.data.ts";
 </script>

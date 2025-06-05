@@ -1,11 +1,11 @@
 ---
-title: User-defined Functions
+title: User-Defined Functions
 rank: 3
 ---
 
-# User-defined Functions
+# User-Defined Functions
 
-Sail provides comprehensive support for PySpark user-defined functions (UDFs) and user-defined table functions (UDTFs).
+Sail provides performant support for PySpark user-defined functions (UDFs) and user-defined table functions (UDTFs).
 You can use UDFs and UDTFs in the PySpark DataFrame API.
 You can also register UDFs and UDTFs and then use them in Spark SQL queries.
 
@@ -44,6 +44,6 @@ Sail respects such configuration for input and output conversion. But note that 
 
 <script setup>
 import PageList from "@theme/components/PageList.vue";
-import PySparkApi from '@theme/components/PySparkApi.vue';
+import PySparkApi from "@theme/components/PySparkApi.vue";
 import { data } from "./index.data.ts";
 </script>

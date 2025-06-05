@@ -68,6 +68,9 @@ importers:
       prettier-plugin-tailwindcss:
         specifier: ^0.6.11
         version: 0.6.11(@ianvs/prettier-plugin-sort-imports@4.4.1(@vue/compiler-sfc@3.5.14)(prettier@3.5.3))(prettier@3.5.3)
+      prettier-plugin-vitepress:
+        specifier: ^0.0.10
+        version: 0.0.10(prettier@3.5.3)
       sql-formatter:
         specifier: ^15.6.1
         version: 15.6.1
@@ -1589,6 +1592,11 @@ packages:
         optional: true
       prettier-plugin-svelte:
         optional: true
+
+  prettier-plugin-vitepress@0.0.10:
+    resolution: {integrity: sha512-6JAwhKVYewm3cICJCodd32dGIaj8Wbkkw71OMgqdCoMa8asGlt/eRPFhFeuucM6X/5qLKEk0JlqFLjN4DSbTdg==}
+    peerDependencies:
+      prettier: ^3.5.3
 
   prettier@3.5.3:
     resolution: {integrity: sha512-QQtaxnoDJeAkDvDKWCLiwIXkTgRhwYDEQCghU9Z6q03iyek/rxRh/2lC3HB7P8sWT2xC/y5JDctPLBIGzHKbhw==}
@@ -3392,6 +3400,10 @@ snapshots:
       prettier: 3.5.3
     optionalDependencies:
       '@ianvs/prettier-plugin-sort-imports': 4.4.1(@vue/compiler-sfc@3.5.14)(prettier@3.5.3)
+
+  prettier-plugin-vitepress@0.0.10(prettier@3.5.3):
+    dependencies:
+      prettier: 3.5.3
 
   prettier@3.5.3: {}
 

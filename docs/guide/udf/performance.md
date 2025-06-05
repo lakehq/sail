@@ -1,9 +1,9 @@
 ---
-title: Performance Considerations
+title: Performance
 rank: 2
 ---
 
-# Performance Considerations
+# Performance
 
 In general, the Sail implementation of PySpark UDFs and UDTFs is more efficient than the original implementation. The Python interpreter running the UDF is in the same process as the Rust-based execution engine. Therefore, there is no data (de)serialization overhead, while the JVM-based implementation has to move data between the JVM and the Python worker.
 
