@@ -118,15 +118,7 @@ class TransformPageData {
   static sphinx(pageData: PageData): void {
     if (pageData.params?.sphinx) {
       pageData.title = pageData.params.current.text;
-      pageData.titleTemplate = ":title - Sail Python API Reference";
-      pageData.frontmatter.prev = pageData.params.prev ?? {
-        link: "/reference/",
-        text: "Reference",
-      };
-      pageData.frontmatter.next = pageData.params.next ?? {
-        link: "/reference/changelog/",
-        text: "Changelog",
-      };
+      pageData.titleTemplate = ":title - Sail Python API";
     }
   }
 
@@ -210,7 +202,7 @@ class Sidebar {
         link: "/reference/",
         items: [
           {
-            text: "Python API Reference",
+            text: "Python API",
             link: "/reference/python/",
           },
           {
@@ -240,7 +232,7 @@ class Sidebar {
       );
     return [
       {
-        text: "Python API Reference",
+        text: "Python API",
         link: "/reference/python/",
         items: Sidebar.items(trees, "/reference/python"),
       },
@@ -308,9 +300,14 @@ export default async () => {
             items: [],
             link: "/development/",
           },
-          ...(await Sidebar.reference()),
+          {
+            text: "Reference",
+            items: [],
+            link: "/reference/",
+          },
         ],
         "/development/": await Sidebar.development(),
+        "/reference/": await Sidebar.reference(),
         "/reference/python/": await Sidebar.pythonReference(),
       },
       externalLinkIcon: true,

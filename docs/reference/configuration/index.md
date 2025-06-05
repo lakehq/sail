@@ -1,3 +1,8 @@
+---
+prev: false
+next: false
+---
+
 # Configuration
 
 This page lists all the available configuration options for Sail.

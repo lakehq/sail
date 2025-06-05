@@ -14,7 +14,7 @@ pip install "pysail[spark]=={{ libVersion }}"
 ```
 
 ::: info
-Please refer to the [Installation Guide](/guide/installation/) for more information about installing Sail.
+Please refer to the [Installation](/introduction/installation/) page for more information about installing Sail.
 :::
 
 ::: info
