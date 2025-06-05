@@ -62,7 +62,7 @@
     },
     {
       "input": "a ilike all()",
-      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike all()\n--^^^\n",
+      "exception": "\nExpected something between '(' and ')'..\n== SQL (line 1, position 3) ==\na ilike all()\n  ^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found something at 8:11 expected something else"
       }
@@ -129,7 +129,7 @@
     },
     {
       "input": "a ilike any()",
-      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike any()\n--^^^\n",
+      "exception": "\nExpected something between '(' and ')'..\n== SQL (line 1, position 3) ==\na ilike any()\n  ^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found something at 8:11 expected something else"
       }
@@ -196,7 +196,7 @@
     },
     {
       "input": "a ilike some()",
-      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na ilike some()\n--^^^\n",
+      "exception": "\nExpected something between '(' and ')'..\n== SQL (line 1, position 3) ==\na ilike some()\n  ^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found something at 8:12 expected something else"
       }
@@ -284,7 +284,7 @@
     },
     {
       "input": "a like 'pattern%' escape '##'",
-      "exception": "\n[INVALID_ESC] Found an invalid escape string: '##'. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na like 'pattern%' escape '##'\n--^^^\n",
+      "exception": "\n[INVALID_ESC] Found an invalid escape string: '##'. The escape string must contain only one character. SQLSTATE: 42604\n== SQL (line 1, position 3) ==\na like 'pattern%' escape '##'\n  ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: invalid escape character: ##"
       }
@@ -335,7 +335,7 @@
     },
     {
       "input": "a like 'pattern%' escape ''",
-      "exception": "\n[INVALID_ESC] Found an invalid escape string: ''. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na like 'pattern%' escape ''\n--^^^\n",
+      "exception": "\n[INVALID_ESC] Found an invalid escape string: ''. The escape string must contain only one character. SQLSTATE: 42604\n== SQL (line 1, position 3) ==\na like 'pattern%' escape ''\n  ^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: invalid escape character: "
       }
@@ -402,7 +402,7 @@
     },
     {
       "input": "a like all()",
-      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like all()\n--^^^\n",
+      "exception": "\nExpected something between '(' and ')'..\n== SQL (line 1, position 3) ==\na like all()\n  ^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found something at 7:10 expected something else"
       }
@@ -469,7 +469,7 @@
     },
     {
       "input": "a like any()",
-      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like any()\n--^^^\n",
+      "exception": "\nExpected something between '(' and ')'..\n== SQL (line 1, position 3) ==\na like any()\n  ^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found something at 7:10 expected something else"
       }
@@ -536,7 +536,7 @@
     },
     {
       "input": "a like some()",
-      "exception": "\nExpected something between '(' and ')'..(line 1, pos 2)\n\n== SQL ==\na like some()\n--^^^\n",
+      "exception": "\nExpected something between '(' and ')'..\n== SQL (line 1, position 3) ==\na like some()\n  ^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found something at 7:11 expected something else"
       }
@@ -884,7 +884,7 @@
     },
     {
       "input": "a not like 'pattern%' escape '\"/'",
-      "exception": "\n[INVALID_ESC] Found an invalid escape string: '\"/'. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na not like 'pattern%' escape '\"/'\n--^^^\n",
+      "exception": "\n[INVALID_ESC] Found an invalid escape string: '\"/'. The escape string must contain only one character. SQLSTATE: 42604\n== SQL (line 1, position 3) ==\na not like 'pattern%' escape '\"/'\n  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: invalid escape character: \"/"
       }
@@ -951,7 +951,7 @@
     },
     {
       "input": "a not like 'pattern%' escape ''",
-      "exception": "\n[INVALID_ESC] Found an invalid escape string: ''. The escape string must contain only one character.(line 1, pos 2)\n\n== SQL ==\na not like 'pattern%' escape ''\n--^^^\n",
+      "exception": "\n[INVALID_ESC] Found an invalid escape string: ''. The escape string must contain only one character. SQLSTATE: 42604\n== SQL (line 1, position 3) ==\na not like 'pattern%' escape ''\n  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: invalid escape character: "
       }

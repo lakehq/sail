@@ -32,7 +32,7 @@
     },
     {
       "input": "DAtE 'mar 11 2016'",
-      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"DATE\" is invalid: 'mar 11 2016'.(line 1, pos 0)\n\n== SQL ==\nDAtE 'mar 11 2016'\n^^^\n",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"DATE\" is invalid: 'mar 11 2016'. SQLSTATE: 42604\n== SQL (line 1, position 1) ==\nDAtE 'mar 11 2016'\n^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "unresolvedDate": {

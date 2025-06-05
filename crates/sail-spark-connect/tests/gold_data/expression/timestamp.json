@@ -79,7 +79,7 @@
     },
     {
       "input": "tImEstAmp_Ntz '2016-33-11 20:54:00.000'",
-      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIMESTAMP_NTZ\" is invalid: '2016-33-11 20:54:00.000'.(line 1, pos 0)\n\n== SQL ==\ntImEstAmp_Ntz '2016-33-11 20:54:00.000'\n^^^\n",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIMESTAMP_NTZ\" is invalid: '2016-33-11 20:54:00.000'. SQLSTATE: 42604\n== SQL (line 1, position 1) ==\ntImEstAmp_Ntz '2016-33-11 20:54:00.000'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "unresolvedTimestamp": {
@@ -91,7 +91,7 @@
     },
     {
       "input": "timestamP '2016-33-11 20:54:00.000'",
-      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIMESTAMP\" is invalid: '2016-33-11 20:54:00.000'.(line 1, pos 0)\n\n== SQL ==\ntimestamP '2016-33-11 20:54:00.000'\n^^^\n",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIMESTAMP\" is invalid: '2016-33-11 20:54:00.000'. SQLSTATE: 42604\n== SQL (line 1, position 1) ==\ntimestamP '2016-33-11 20:54:00.000'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "unresolvedTimestamp": {
@@ -103,7 +103,7 @@
     },
     {
       "input": "timestamP_LTZ '2016-33-11 20:54:00.000'",
-      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIMESTAMP_LTZ\" is invalid: '2016-33-11 20:54:00.000'.(line 1, pos 0)\n\n== SQL ==\ntimestamP_LTZ '2016-33-11 20:54:00.000'\n^^^\n",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIMESTAMP_LTZ\" is invalid: '2016-33-11 20:54:00.000'. SQLSTATE: 42604\n== SQL (line 1, position 1) ==\ntimestamP_LTZ '2016-33-11 20:54:00.000'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "unresolvedTimestamp": {

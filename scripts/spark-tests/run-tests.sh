@@ -2,6 +2,8 @@
 
 set -euo 'pipefail'
 
+spark_version="${SPARK_VERSION:-4.0.0}"
+
 project_path="$(git rev-parse --show-toplevel)"
 
 # Define the directory for test logs. The `tmp/` directory is in `.gitignore`.
@@ -37,7 +39,7 @@ function run_pytest() {
   echo "Test suite: ${name}"
   # We ignore the pytext exit code so that the command can complete successfully.
   # The plugins are available on `PYTHONPATH` for the `test` environment configured in `pyproject.toml`.
-  hatch run test:pytest \
+  hatch run test.spark-"${spark_version}":pytest \
     -p plugins.spark \
     -p plugins.ibis \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL NUMBER" \

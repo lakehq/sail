@@ -5446,7 +5446,7 @@
     },
     {
       "input": "foo(*) over (partition by a order by b rows exp(b) preceding)",
-      "exception": "\nFrame bound value must be a literal..(line 1, pos 44)\n\n== SQL ==\nfoo(*) over (partition by a order by b rows exp(b) preceding)\n--------------------------------------------^^^\n",
+      "exception": "\nFrame bound value must be a literal..\n== SQL (line 1, position 45) ==\n...(partition by a order by b rows exp(b) preceding)\n                                   ^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "window": {

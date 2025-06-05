@@ -2,30 +2,16 @@
   "tests": [
     {
       "input": "\nALTER TABLE t\nCHANGE COLUMN\ntest-col TYPE BIGINT\n        ",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-col is invalid. Please, consider quoting it with back-quotes as `test-col`.(line 4, pos 4)\n\n== SQL ==\n\nALTER TABLE t\nCHANGE COLUMN\ntest-col TYPE BIGINT\n----^^^\n        \n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-col is invalid and must be back quoted as: `test-col`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 4, pos 4)\n\n== SQL ==\n\nALTER TABLE t\nCHANGE COLUMN\ntest-col TYPE BIGINT\n----^^^\n        \n",
       "output": {
         "failure": "invalid argument: found - at 33:34 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
       }
     },
     {
       "input": "\nALTER TABLE t\nDROP COLUMN\ntest-col, test\n        ",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-col is invalid. Please, consider quoting it with back-quotes as `test-col`.(line 4, pos 4)\n\n== SQL ==\n\nALTER TABLE t\nDROP COLUMN\ntest-col, test\n----^^^\n        \n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-col is invalid and must be back quoted as: `test-col`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 4, pos 4)\n\n== SQL ==\n\nALTER TABLE t\nDROP COLUMN\ntest-col, test\n----^^^\n        \n",
       "output": {
         "failure": "invalid argument: found - at 31:32 expected '.', ',', ';', or end of input"
-      }
-    },
-    {
-      "input": "\nALTER TABLE t\nRENAME COLUMN\ntest TO test-col\n        ",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-col is invalid. Please, consider quoting it with back-quotes as `test-col`.(line 4, pos 12)\n\n== SQL ==\n\nALTER TABLE t\nRENAME COLUMN\ntest TO test-col\n------------^^^\n        \n",
-      "output": {
-        "failure": "invalid argument: found - at 41:42 expected '.', ';', or end of input"
-      }
-    },
-    {
-      "input": "\nALTER TABLE t\nRENAME COLUMN\ntest-col TO test\n        ",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-col is invalid. Please, consider quoting it with back-quotes as `test-col`.(line 4, pos 4)\n\n== SQL ==\n\nALTER TABLE t\nRENAME COLUMN\ntest-col TO test\n----^^^\n        \n",
-      "output": {
-        "failure": "invalid argument: found - at 33:34 expected '.', or 'TO'"
       }
     }
   ]

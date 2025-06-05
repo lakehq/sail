@@ -12,7 +12,7 @@ mod session_manager;
 
 pub use proto::data_type_json::JsonDataType;
 
-const SPARK_VERSION: &str = "3.5.5";
+const SPARK_VERSION: &str = "4.0.0";
 
 pub mod spark {
     #[allow(clippy::all)]

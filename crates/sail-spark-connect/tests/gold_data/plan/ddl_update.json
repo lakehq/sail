@@ -128,7 +128,7 @@
     },
     {
       "input": "UPDATE testcat.ns1.ns2.tbl AS t(a,b,c,d)\nSET b='Robert', c=32\nWHERE d=2",
-      "exception": "\n[COLUMN_ALIASES_IS_NOT_ALLOWED] Columns aliases are not allowed in UPDATE.(line 1, pos 31)\n\n== SQL ==\nUPDATE testcat.ns1.ns2.tbl AS t(a,b,c,d)\n-------------------------------^^^\nSET b='Robert', c=32\nWHERE d=2\n",
+      "exception": "\n[COLUMN_ALIASES_NOT_ALLOWED] Column aliases are not allowed in UPDATE. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nUPDATE testcat.ns1.ns2.tbl AS t(a,b,c,d)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nSET b='Robert', c=32\n^^^^^^^^^^^^^^^^^^^^\nWHERE d=2\n^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: column list must not appear in table alias for UPDATE"
       }
