@@ -11,6 +11,6 @@
 </SphinxPage>
 
 <script setup lang="ts">
-import SphinxIndexPage from "@theme/components/SphinxIndexPage.vue"
-import SphinxPage from "@theme/components/SphinxPage.vue"
+import SphinxIndexPage from "@theme/components/SphinxIndexPage.vue";
+import SphinxPage from "@theme/components/SphinxPage.vue";
 </script>

@@ -1,6 +1,6 @@
 ---
 title: MCP Server
-rank: 3
+rank: 1
 ---
 
 # MCP Server
@@ -50,7 +50,7 @@ Click on the hammer icon, and you will see a list of installed tools from the Sa
 
 ## Using the MCP Server
 
-You can now ask Claude to analyze data for you! For now, we support Parquet datasets. Any of the sources listed in the [Data Access](./data-access.md) guide can be used.
+You can now ask Claude to analyze data for you! For now, we support Parquet, CSV, and JSON datasets. Any of the sources listed in the [Storage](/guide/storage/) guide can be used.
 
 Point Claude to your dataset URI, and Claude will register the dataset as a temporary view in a Spark session. You can ask questions about your dataset, and Claude will write Spark SQL queries and request query execution via the Sail MCP server. Once the query result is returned, Claude will interpret the results for you.
 

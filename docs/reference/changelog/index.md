@@ -1,3 +1,8 @@
+---
+prev: false
+next: false
+---
+
 # Changelog
 
 ## 0.2.6
@@ -87,7 +92,7 @@ We continued extending coverage for Spark SQL functions and the Spark DataFrame 
 
 ### Breaking Changes
 
-This release comes with the new Sail CLI, and the way to launch the Spark Connect server and PySpark shell is different from the 0.1.x versions. Please refer to the [Getting Started](/guide/getting-started/) page for the updated instructions.
+This release comes with the new Sail CLI, and the way to launch the Spark Connect server and PySpark shell is different from the 0.1.x versions. Please refer to the [Getting Started](/introduction/getting-started/) page for the updated instructions.
 
 ## 0.1.7
 

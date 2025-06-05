@@ -1,11 +1,11 @@
 ---
-title: Tasks
-rank: 30
+title: Data Formats
+rank: 4
 ---
 
-# Tasks
+# Data Formats
 
-<PageList :data="data" :prefix="['guide', 'tasks']" />
+<PageList :data="data" :prefix="['guide', 'formats']" />
 
 <script setup>
 import PageList from "@theme/components/PageList.vue";
