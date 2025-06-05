@@ -7,10 +7,11 @@ use std::hash::Hash;
 use datafusion::arrow;
 use datafusion::arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray};
 use datafusion::arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Field, Float16Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    DataType, Date32Type, Date64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
 };
 use datafusion::common::cast::{as_primitive_array, as_string_array};
 use datafusion::common::not_impl_err;
@@ -67,12 +68,12 @@ impl AggregateUDFImpl for ModeFunction {
         Ok(arg_types[0].clone())
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        let value_type = args.input_types[0].clone();
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        let value_type = args.input_fields[0].data_type().clone();
 
         Ok(vec![
-            Field::new("values", value_type, true),
-            Field::new("frequencies", DataType::UInt64, true),
+            Field::new("values", value_type, true).into(),
+            Field::new("frequencies", DataType::UInt64, true).into(),
         ])
     }
 
