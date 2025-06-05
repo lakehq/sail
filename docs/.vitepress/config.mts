@@ -119,6 +119,9 @@ class TransformPageData {
     if (pageData.params?.sphinx) {
       pageData.title = pageData.params.current.text;
       pageData.titleTemplate = ":title - Sail Python API";
+      if (pageData.relativePath === "reference/python/index.md") {
+        pageData.frontmatter.prev = false;
+      }
     }
   }
 
@@ -186,6 +189,15 @@ class Sidebar {
     return Sidebar.items(TreeNode.fromPaths(pages));
   }
 
+  static async concepts(): Promise<DefaultTheme.SidebarItem[]> {
+    const pages = await loadPages(
+      this.srcDir,
+      "/concepts/**/*.md",
+      Site.srcExclude(),
+    );
+    return Sidebar.items(TreeNode.fromPaths(pages));
+  }
+
   static async development(): Promise<DefaultTheme.SidebarItem[]> {
     const pages = await loadPages(
       this.srcDir,
@@ -218,7 +230,17 @@ class Sidebar {
     ];
   }
 
-  static async pythonReference(): Promise<DefaultTheme.SidebarItem[]> {
+  static async backToReference(): Promise<DefaultTheme.SidebarItem[]> {
+    return [
+      {
+        text: "Back to Reference",
+        link: "/reference/",
+        items: [],
+      },
+    ];
+  }
+
+  static async pythonApi(): Promise<DefaultTheme.SidebarItem[]> {
     const pages = await loadSphinxPages();
     const trees = TreeNode.fromNodes(pages)
       .filter((tree) => {
@@ -231,6 +253,7 @@ class Sidebar {
         ),
       );
     return [
+      ...(await Sidebar.backToReference()),
       {
         text: "Python API",
         link: "/reference/python/",
@@ -281,12 +304,22 @@ export default async () => {
           activeMatch: "^/introduction/",
         },
         { text: "User Guide", link: "/guide/", activeMatch: "^/guide/" },
+        { text: "Concepts", link: "/concepts/", activeMatch: "^/concepts/" },
         {
-          text: "Development",
-          link: "/development/",
-          activeMatch: "^/development/",
+          text: "More",
+          items: [
+            {
+              text: "Development",
+              link: "/development/",
+              activeMatch: "^/development/",
+            },
+            {
+              text: "Reference",
+              link: "/reference/",
+              activeMatch: "^/reference/",
+            },
+          ],
         },
-        { text: "Reference", link: "/reference/", activeMatch: "^/reference/" },
       ],
       notFound: {
         quote: "The page does not exist.",
@@ -295,6 +328,7 @@ export default async () => {
         "/": [
           ...(await Sidebar.introduction()),
           ...(await Sidebar.userGuide()),
+          ...(await Sidebar.concepts()),
           {
             text: "Development",
             items: [],
@@ -308,7 +342,7 @@ export default async () => {
         ],
         "/development/": await Sidebar.development(),
         "/reference/": await Sidebar.reference(),
-        "/reference/python/": await Sidebar.pythonReference(),
+        "/reference/python/": await Sidebar.pythonApi(),
       },
       externalLinkIcon: true,
       socialLinks: [

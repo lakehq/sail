@@ -1,7 +1,7 @@
 ---
 outline: false
 description: >-
-  Sail: the computation framework with a mission to unify stream processing, batch processing,
+  Sail: unifying batch processing, stream processing,
   and compute-intensive (AI) workloads.
 ---
 
@@ -13,6 +13,6 @@ You can start with the [Introduction](/introduction/) to get an overview of Sail
 
 The [User Guide](/guide/) provides detailed information on how to use Sail.
 
-The [Development Guide](/development/) covers the development process and Sail internals, if you are interested in contributing to Sail.
+The [Development](/development/) handbook covers the development process and Sail internals, if you are interested in contributing to Sail.
 
 The [Reference](/reference/) can be handy when you want to look up the Sail API documentation.
