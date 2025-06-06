@@ -24,12 +24,13 @@ pub(crate) struct ConfigItem {
 }
 
 impl ConfigItem {
-    fn resolve_value(&self, user_options: &HashMap<String, String>) -> String {
-        if let Some(value) = user_options.get(&self.key) {
+    // user_options_normalized is expected to be a HashMap with all keys in lowercase
+    fn resolve_value(&self, user_options_normalized: &HashMap<String, String>) -> String {
+        if let Some(value) = user_options_normalized.get(&self.key.to_lowercase()) {
             return value.clone();
         }
         for alias in &self.alias {
-            if let Some(value) = user_options.get(alias) {
+            if let Some(value) = user_options_normalized.get(&alias.to_lowercase()) {
                 return value.clone();
             }
         }
