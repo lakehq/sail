@@ -59,6 +59,7 @@ log = { workspace = true }
 chumsky = { workspace = true }
 percent-encoding = { workspace = true }
 figment = { workspace = true }
+dashmap = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]

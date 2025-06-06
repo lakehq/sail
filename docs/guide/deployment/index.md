@@ -1,6 +1,6 @@
 ---
 title: Deployment
-rank: 40
+rank: 7
 ---
 
 # Deployment

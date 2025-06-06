@@ -1,13 +1,9 @@
 ---
-title: Overview
-rank: 1
+title: Performance
+rank: 2
 ---
 
-# Overview
-
-Sail provides comprehensive support for PySpark user-defined functions (UDFs) and user-defined table functions (UDTFs).
-
-## Performance Considerations
+# Performance
 
 In general, the Sail implementation of PySpark UDFs and UDTFs is more efficient than the original implementation. The Python interpreter running the UDF is in the same process as the Rust-based execution engine. Therefore, there is no data (de)serialization overhead, while the JVM-based implementation has to move data between the JVM and the Python worker.
 
@@ -24,33 +20,3 @@ In Sail, the implementation does not involve any data copy. The Python function 
 For all types of UDFs, in the JVM-based Spark implementation, the Python worker wraps the user-provided Python function with additional code for type conversion and data validation.
 To ensure full parity with PySpark, such wrappers are also used in Sail.
 It is recommended to use Pandas or Arrow UDFs so that the wrapper overhead is amortized over a batch of rows.
-
-## Supported APIs
-
-The following PySpark APIs are supported.
-
-- <PySparkApi name="pyspark.sql.DataFrame.mapInArrow" />
-- <PySparkApi name="pyspark.sql.DataFrame.mapInPandas" />
-- <PySparkApi name="pyspark.sql.functions.call_function" />
-- <PySparkApi name="pyspark.sql.functions.call_udf" />
-- <PySparkApi name="pyspark.sql.functions.pandas_udf" />
-- <PySparkApi name="pyspark.sql.functions.udf" />
-- <PySparkApi name="pyspark.sql.functions.udtf" />
-- <PySparkApi name="pyspark.sql.GroupedData.applyInPandas" />
-- <PySparkApi name="pyspark.sql.PandasCogroupedOps.applyInPandas" />
-- <PySparkApi name="pyspark.sql.UDFRegistration.register" />
-- <PySparkApi name="pyspark.sql.UDTFRegistration.register" />
-
-::: info
-The PySpark library uses different logic for input and output conversion, depending on whether Arrow optimization is enabled.
-Arrow optimization is controlled by the `useArrow` argument of the `udf()` and `udtf()` wrappers, and the `spark.sql.execution.pythonUDTF.arrow.enabled` configuration.
-Sail respects such configuration for input and output conversion. But note that Sail uses Arrow for query execution regardless of whether Arrow is enabled in PySpark.
-:::
-
-The following PySpark API is not supported yet.
-
-- <PySparkApi name=pyspark.sql.GroupedData.applyInPandasWithState />
-
-<script setup>
-import PySparkApi from '@theme/components/PySparkApi.vue';
-</script>

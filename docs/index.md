@@ -1,7 +1,7 @@
 ---
 outline: false
 description: >-
-  Sail: the computation framework with a mission to unify stream processing, batch processing,
+  Sail: unifying batch processing, stream processing,
   and compute-intensive (AI) workloads.
 ---
 
@@ -9,12 +9,10 @@ description: >-
 
 Welcome to the Sail documentation!
 
-The mission of Sail is to unify stream processing, batch processing, and compute-intensive (AI) workloads.
-Currently, Sail features a drop-in replacement for Spark SQL and the Spark DataFrame API in both single-host and distributed settings.
+You can start with the [Introduction](/introduction/) to get an overview of Sail.
 
-You can start with the [User Guide](/guide/) to learn more about Sail.
+The [User Guide](/guide/) provides detailed information on how to use Sail.
 
-The [Development Guide](/development/) provides information on how to contribute to Sail.
-It covers the development process and Sail internals.
+The [Development](/development/) handbook covers the development process and Sail internals, if you are interested in contributing to Sail.
 
 The [Reference](/reference/) can be handy when you want to look up the Sail API documentation.

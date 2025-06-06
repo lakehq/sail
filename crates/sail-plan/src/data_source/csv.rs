@@ -1,9 +1,11 @@
-use crate::error::{PlanError, PlanResult};
+use std::collections::HashMap;
+use std::str::FromStr;
+
 use figment::Figment;
 use sail_common::config::{deserialize_non_empty_string, ConfigDefinition, CSV_CONFIG};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::str::FromStr;
+
+use crate::error::{PlanError, PlanResult};
 
 fn deserialize_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where

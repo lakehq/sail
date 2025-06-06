@@ -1,5 +1,10 @@
+---
+prev: false
+next: false
+---
+
 # Reference
 
-- [Python API Reference](/reference/python/)
+- [Python API](/reference/python/)
 - [Configuration](/reference/configuration/)
 - [Changelog](/reference/changelog/)
