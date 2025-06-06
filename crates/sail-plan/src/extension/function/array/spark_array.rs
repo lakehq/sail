@@ -86,7 +86,7 @@ impl ScalarUDFImpl for SparkArray {
             .cloned()
             .collect::<Vec<_>>();
         let return_type = self.return_type(&data_types)?;
-        Ok(Arc::new(Field::new(self.name(), return_type, true)))
+        Ok(Arc::new(Field::new(self.name(), return_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
