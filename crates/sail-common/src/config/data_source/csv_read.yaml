@@ -7,14 +7,12 @@
 - key: delimiter
   alias:
     - sep
-  type: string
   default: ","
   description: |
     Sets a separator that can be one or more characters for each field and value.
   supported: true
 
 - key: quote
-  type: string
   default: "\""
   description: |
     Sets a single character used for escaping quoted values where the delimiter can be part of the value.
@@ -22,28 +20,26 @@
   supported: true
 
 - key: escape
-  type: string
   default: "\\"
   description: |
     Sets a single character used for escaping quotes inside an already quoted value.
   supported: true
 
 - key: comment
-  type: string
   default: ""
   description: |
     Sets a single character used for skipping lines that begin with this character. By default, it is disabled.
   supported: true
 
 - key: header
-  type: boolean
   default: "false"
   description: |
     For reading, uses the first line as names of columns. CSV built-in functions ignore this option.
   supported: true
 
 - key: null_value
-  type: string
+  alias:
+    - nullValue
   default: ""
   description: |
     Sets the string representation of a null value. Throws an exception if `null_regex` is also set.
@@ -51,7 +47,8 @@
   supported: true
 
 - key: null_regex
-  type: string
+  alias:
+    - nullRegex
   default: ""
   description: |
     CHECK HERE: DEFINE WHAT REGEX IS
@@ -60,7 +57,8 @@
   supported: true
 
 - key: line_sep
-  type: string
+  alias:
+    - lineSep
   default: ""
   description: |
     Defines the single character line separator that should be used for parsing.
@@ -69,7 +67,8 @@
   supported: true
 
 - key: infer_schema
-  type: boolean
+  alias:
+    - inferSchema
   default: "true"
   description: |
     Infers the input schema automatically from data. It requires one extra pass over the data.
@@ -78,14 +77,16 @@
   supported: true
 
 - key: schema_infer_max_records
-  type: number
+  alias:
+    - schemaInferMaxRecords
   default: "1000"
   description: |
     The maximum number of rows to read from CSV files for schema inference if needed.
   supported: true
 
 - key: newlines_in_values
-  type: boolean
+  alias:
+    - newlinesInValues
   default: "false"
   description: |
     Specifies whether newlines in quoted values are supported.
@@ -94,14 +95,16 @@
   supported: true
 
 - key: file_extension
-  type: string
+  alias:
+    - fileExtension
   default: ".csv"
   description: |
     Only files with this extension are selected for data input.
   supported: true
 
 - key: compression
-  type: string
+  alias:
+    - codec
   default: "UNCOMPRESSED"
   description: |
     Specifies the file compression type. The following compression types are supported:
@@ -115,7 +118,6 @@
 - key: encoding
   alias:
     - charset
-  type: string
   default: "UTF-8"
   description: |
     For reading, decodes the CSV files by the given encoding type. CSV built-in functions ignore this option.
@@ -124,7 +126,6 @@
 - key: prefer_date
   alias:
     - preferDate
-  type: boolean
   default: "true"
   description: |
     During schema inference (`infer_schema`), attempts to infer string columns that contain dates as `Date` if the
@@ -134,7 +135,8 @@
   supported: false
 
 - key: enforce_schema
-  type: boolean
+  alias:
+    - enforceSchema
   default: "true"
   description: |
     If it is set to true, the specified or inferred schema will be forcibly applied to datasource files, and headers in
@@ -146,55 +148,65 @@
   supported: false
 
 - key: ignore_leading_white_space
-  type: boolean
-  default: "false (for reading)"
+  alias:
+    - ignoreLeadingWhiteSpace
+  default: "false"
   description: |
     A flag indicating whether or not leading whitespaces from values being read should be skipped.
+    Defaults to false for reading.
   supported: false
 
 - key: ignore_trailing_white_space
-  type: boolean
-  default: "false (for reading)"
+  alias:
+    - ignoreTrailingWhiteSpace
+  default: "false"
   description: |
     A flag indicating whether or not trailing whitespaces from values being read should be skipped.
+    Defaults to false for reading.
   supported: false
 
 - key: nan_value
-  type: string
+  alias:
+    - nanValue
   default: "NaN"
   description: |
     Sets the string representation of a non-number value.
   supported: false
 
 - key: positive_inf
-  type: string
+  alias:
+    - positiveInf
   default: "Inf"
   description: |
     Sets the string representation of a positive infinity value.
   supported: false
 
 - key: negative_inf
-  type: string
+  alias:
+    - negativeInf
   default: "-Inf"
   description: |
     Sets the string representation of a negative infinity value.
   supported: false
 
 - key: date_format
-  type: string
+  alias:
+    - dateFormat
   default: "yyyy-MM-dd"
   description: |
     Sets the string that indicates a date format. Custom date formats follow the formats at `Datetime` Patterns.
   supported: false
 
 - key: timestamp_format
-  type: string
+  alias:
+    - timestampFormat
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
   description: |
     Sets the string that indicates a timestamp format. Custom date formats follow the formats at `Datetime` Patterns.
 
 - key: timestamp_ntz_format
-  type: string
+  alias:
+    - timestampNTZFormat
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
   description: |
     Sets the string that indicates a timestamp without timezone format. Custom date formats follow the formats at
@@ -202,22 +214,26 @@
   supported: false
 
 - key: enable_date_time_parsing_fallback
-  type: boolean
-  default: "Enabled if the time parser policy has legacy settings or if no custom date or timestamp pattern was provided."
+  alias:
+    - enableDateTimeParsingFallback
+  default: ""
   description: |
     Allows falling back to the backward compatible behavior of parsing dates and timestamps if values do not match the
-    set patterns.
+    set patterns. Defaults to being enabled if the time parser policy has legacy settings or if no custom date or
+    timestamp pattern was provided.
   supported: false
 
 - key: max_columns
-  type: number
+  alias:
+    - maxColumns
   default: "20480"
   description: |
     Defines a hard limit of how many columns a record can have.
   supported: false
 
 - key: max_chars_per_column
-  type: number
+  alias:
+    - maxCharsPerColumn
   default: "-1"
   description: |
     Defines the maximum number of characters allowed for any given value being read. By default, it is -1 meaning
@@ -225,7 +241,6 @@
   supported: false
 
 - key: mode
-  type: string
   default: "PERMISSIVE"
   description: |
     Allows a mode for dealing with corrupt records during parsing. It supports the following case-insensitive modes.
@@ -236,15 +251,18 @@
   supported: false
 
 - key: column_name_of_corrupt_record
-  type: string
-  default: "value of sail.sql.column_name_of_corrupt_record configuration"
+  alias:
+    - columnNameOfCorruptRecord
+  default: ""
   description: |
     Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
     This overrides `sail.sql.column_name_of_corrupt_record`.
+    Defaults to the value of `sail.sql.column_name_of_corrupt_record configuration`.
   supported: false
 
 - key: multi_line
-  type: boolean
+  alias:
+    - multiLine
   default: "false"
   description: |
     Allows a row to span multiple lines, by parsing line breaks within quoted values as part of the value itself.
@@ -252,36 +270,39 @@
   supported: false
 
 - key: char_to_escape_quote_escaping
-  type: string
-  default: "escape or \\0"
+  alias:
+    - charToEscapeQuoteEscaping
+  default: ""
   description: |
     Sets a single character used for escaping the escape for the quote character.
     The default value is escape character when escape and quote characters are different, \\0 otherwise.
   supported: false
 
 - key: sampling_ratio
-  type: number
+  alias:
+    - samplingRatio
   default: "1.0"
   description: |
     Defines fraction of rows used for schema inferring. CSV built-in functions ignore this option.
   supported: false
 
 - key: empty_value
-  type: string
+  alias:
+    - emptyValue
   default: ""
   description: |
     Sets the string representation of an empty value.
   supported: false
 
 - key: locale
-  type: string
   default: "en-US"
   description: |
     Sets a locale as language tag in IETF BCP 47 format. For instance, this is used while parsing dates and timestamps.
   supported: false
 
 - key: unescaped_quote_handling
-  type: string
+  alias:
+    - unescapedQuoteHandling
   default: "STOP_AT_DELIMITER"
   description: |
     Defines how the CSV Parser will handle values with unescaped quotes.
@@ -297,8 +318,9 @@
   supported: false
 
 - key: time_zone
-  type: string
-  default: "value of sail.sql.session.timeZone configuration"
+  alias:
+    - timeZone
+  default: ""
   description: |
     Sets the string that indicates a time zone ID to be used to format timestamps in the JSON datasources or
     partition values. The following formats of timeZone are supported:
@@ -306,4 +328,5 @@
       - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
         Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
     Other short names like 'CST' are not recommended to use because they can be ambiguous.
+    Defaults to the value of the `sail.sql.session.time_zone` configuration.
   supported: false

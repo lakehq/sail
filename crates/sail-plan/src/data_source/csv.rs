@@ -1,3 +1,4 @@
+use crate::data_source::{deserialize_data_source_bool, deserialize_data_source_usize};
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -6,30 +7,6 @@ use sail_common::config::{deserialize_non_empty_string, ConfigDefinition, CSV_CO
 use serde::{Deserialize, Serialize};
 
 use crate::error::{PlanError, PlanResult};
-
-fn deserialize_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?.to_lowercase();
-    match value.as_str() {
-        "true" | "1" => Ok(true),
-        "false" | "0" => Ok(false),
-        _ => Err(serde::de::Error::custom(format!(
-            "Invalid boolean value: {value}"
-        ))),
-    }
-}
-
-fn deserialize_usize<'de, D>(deserializer: D) -> Result<usize, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    value
-        .parse::<usize>()
-        .map_err(|_| serde::de::Error::custom(format!("Invalid usize value: {value}")))
-}
 
 /// Datasource Options that control the reading of CSV files.
 #[derive(Debug, Deserialize)]
@@ -41,7 +18,7 @@ pub struct CsvReadOptions {
     pub escape: Option<String>,
     #[serde(deserialize_with = "deserialize_non_empty_string")]
     pub comment: Option<String>,
-    #[serde(deserialize_with = "deserialize_bool")]
+    #[serde(deserialize_with = "deserialize_data_source_bool")]
     pub header: bool,
     #[serde(alias = "nullValue", deserialize_with = "deserialize_non_empty_string")]
     pub null_value: Option<String>,
@@ -51,10 +28,13 @@ pub struct CsvReadOptions {
     pub line_sep: Option<String>,
     #[serde(
         alias = "schemaInferMaxRecords",
-        deserialize_with = "deserialize_usize"
+        deserialize_with = "deserialize_data_source_usize"
     )]
     pub schema_infer_max_records: usize,
-    #[serde(alias = "newlinesInValues", deserialize_with = "deserialize_bool")]
+    #[serde(
+        alias = "newlinesInValues",
+        deserialize_with = "deserialize_data_source_bool"
+    )]
     pub newlines_in_values: bool,
     #[serde(alias = "fileExtension")]
     pub file_extension: String,
