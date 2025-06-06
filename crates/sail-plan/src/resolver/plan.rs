@@ -11,7 +11,7 @@ use datafusion::datasource::file_format::avro::AvroFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::json::JsonFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
-use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory};
+use datafusion::datasource::file_format::{format_as_file_type, FileFormat, FileFormatFactory};
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
@@ -842,32 +842,35 @@ impl PlanResolver<'_> {
         let Some(format) = format else {
             return Err(PlanError::invalid("missing data source format"));
         };
-        let options = Self::resolve_data_reader_options(&format, options)?;
-        let (format_factory, extension): (Box<dyn FileFormatFactory>, _) =
-            match format.to_lowercase().as_str() {
-                "json" => (Box::new(JsonFormatFactory::new()), ".json"),
-                "csv" => {
-                    // let options_json = serde_json::to_value(&options).unwrap();
-                    let default_csv_read_config = CsvReadOptions::default();
-                    let user_options = CsvReadOptions::load_csv_options(options.clone())?;
-                    let options = default_csv_read_config
-                        .merge_with(user_options)
-                        .map_err(|e| PlanError::internal(e.to_string()))?;
-                    println!("CHECK HERE default CSV read options: {default_csv_read_config:?}",);
-                    (Box::new(CsvFormatFactory::new()), ".csv")
-                }
-                "parquet" => (Box::new(ParquetFormatFactory::new()), ".parquet"),
-                "arrow" => (Box::new(ArrowFormatFactory::new()), ".arrow"),
-                "avro" => (Box::new(AvroFormatFactory::new()), ".avro"),
-                other => {
-                    return Err(PlanError::unsupported(format!(
-                        "unsupported data source format: {:?}",
-                        other
-                    )))
-                }
-            };
-        let format = format_factory.create(&self.ctx.state(), &options)?;
-        let options = ListingOptions::new(format).with_file_extension(extension);
+        let options: HashMap<String, String> = options.into_iter().collect();
+        let options: ListingOptions = match format.to_lowercase().as_str() {
+            "json" => {
+                ListingOptions::new(JsonFormatFactory::new().create(&self.ctx.state(), &options)?)
+                    .with_file_extension(".json")
+            }
+            "csv" => {
+                let csv_read_options = CsvReadOptions::load(options.clone())?;
+                Self::resolve_csv_read_options(csv_read_options)?
+            }
+            "parquet" => ListingOptions::new(
+                ParquetFormatFactory::new().create(&self.ctx.state(), &options)?,
+            )
+            .with_file_extension(".parquet"),
+            "arrow" => {
+                ListingOptions::new(ArrowFormatFactory::new().create(&self.ctx.state(), &options)?)
+                    .with_file_extension(".arrow")
+            }
+            "avro" => {
+                ListingOptions::new(AvroFormatFactory::new().create(&self.ctx.state(), &options)?)
+                    .with_file_extension(".avro")
+            }
+            other => {
+                return Err(PlanError::unsupported(format!(
+                    "unsupported data source format: {:?}",
+                    other
+                )))
+            }
+        };
         let schema = self
             .resolve_listing_schema(&urls, &options, schema, state)
             .await?;

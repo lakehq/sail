@@ -28,8 +28,27 @@ pub struct CsvReadOptions {
 impl TryFrom<HashMap<String, String>> for CsvReadOptions {
     type Error = PlanError;
 
+    // The options HashMap should already contain all supported keys with their resolved values
     fn try_from(mut options: HashMap<String, String>) -> Result<Self, Self::Error> {
-        // The options HashMap should already contain all supported keys with their resolved values
+        let null_value = options
+            .remove("null_value")
+            .ok_or_else(|| PlanError::internal("CSV `null_value` read option is required"))
+            .map(parse_non_empty_string)?;
+        let null_regex = options
+            .remove("null_regex")
+            .ok_or_else(|| PlanError::internal("CSV `null_regex` read option is required"))
+            .map(parse_non_empty_string)?;
+        if let Some(null_value) = &null_value {
+            if !null_value.is_empty() {
+                if let Some(null_regex) = &null_regex {
+                    if !null_regex.is_empty() {
+                        return Err(PlanError::internal(
+                            "CSV `null_value` and `null_regex` cannot be both set",
+                        ));
+                    }
+                }
+            }
+        }
         Ok(CsvReadOptions {
             delimiter: options
                 .remove("delimiter")
@@ -49,14 +68,8 @@ impl TryFrom<HashMap<String, String>> for CsvReadOptions {
                 .remove("header")
                 .ok_or_else(|| PlanError::missing("CSV `header` read option is required"))
                 .and_then(|v| parse_bool(&v))?,
-            null_value: options
-                .remove("null_value")
-                .ok_or_else(|| PlanError::internal("CSV `null_value` read option is required"))
-                .map(parse_non_empty_string)?,
-            null_regex: options
-                .remove("null_regex")
-                .ok_or_else(|| PlanError::internal("CSV `null_regex` read option is required"))
-                .map(parse_non_empty_string)?,
+            null_value,
+            null_regex,
             line_sep: options
                 .remove("line_sep")
                 .ok_or_else(|| PlanError::internal("CSV `line_sep` read option is required"))
@@ -89,7 +102,7 @@ impl TryFrom<HashMap<String, String>> for CsvReadOptions {
 }
 
 impl CsvReadOptions {
-    pub fn load_csv_options(user_options: HashMap<String, String>) -> PlanResult<Self> {
+    pub fn load(user_options: HashMap<String, String>) -> PlanResult<Self> {
         let user_options_normalized: HashMap<String, String> = user_options
             .into_iter()
             .map(|(k, v)| (k.to_lowercase(), v))

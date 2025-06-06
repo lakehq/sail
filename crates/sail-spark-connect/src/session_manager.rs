@@ -106,15 +106,6 @@ impl SessionManager {
                 job_runner,
             )?));
 
-        // catalog options
-        {
-            let catalog = &mut session_config.options_mut().catalog;
-
-            // Spark assumes that the CSV files have no header by default.
-            // https://spark.apache.org/docs/latest/sql-data-sources-csv.html
-            catalog.has_header = false;
-        }
-
         // execution options
         {
             let execution = &mut session_config.options_mut().execution;

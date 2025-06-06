@@ -59,6 +59,7 @@
 - key: line_sep
   alias:
     - lineSep
+    - terminator
   default: ""
   description: |
     Defines the single character line separator that should be used for parsing.
