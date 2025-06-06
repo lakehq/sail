@@ -1,6 +1,8 @@
-use crate::error::{PlanError, PlanResult};
-use serde::Deserialize;
 use std::collections::HashMap;
+
+use serde::Deserialize;
+
+use crate::error::{PlanError, PlanResult};
 
 pub mod csv;
 

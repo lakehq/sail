@@ -1,9 +1,10 @@
-use crate::data_source::{parse_bool, parse_non_empty_string, ConfigItem};
-use sail_common::config::CSV_CONFIG;
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
+use sail_common::config::CSV_CONFIG;
+use serde::Deserialize;
+
+use crate::data_source::{parse_bool, parse_non_empty_string, ConfigItem};
 use crate::error::{PlanError, PlanResult};
 
 /// Datasource Options that control the reading of CSV files.
@@ -38,17 +39,16 @@ impl TryFrom<HashMap<String, String>> for CsvReadOptions {
             .remove("null_regex")
             .ok_or_else(|| PlanError::internal("CSV `null_regex` read option is required"))
             .map(parse_non_empty_string)?;
-        if let Some(null_value) = &null_value {
-            if !null_value.is_empty() {
-                if let Some(null_regex) = &null_regex {
-                    if !null_regex.is_empty() {
-                        return Err(PlanError::internal(
-                            "CSV `null_value` and `null_regex` cannot be both set",
-                        ));
-                    }
-                }
+        match (&null_value, &null_regex) {
+            (Some(null_value), Some(null_regex))
+                if !null_value.is_empty() && !null_regex.is_empty() =>
+            {
+                Err(PlanError::internal(
+                    "CSV `null_value` and `null_regex` cannot be both set",
+                ))
             }
-        }
+            _ => Ok(()),
+        }?;
         Ok(CsvReadOptions {
             delimiter: options
                 .remove("delimiter")

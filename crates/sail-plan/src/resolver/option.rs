@@ -1,16 +1,33 @@
-use crate::data_source::csv::CsvReadOptions;
-use crate::error::{PlanError, PlanResult};
-use crate::resolver::PlanResolver;
-use crate::utils::spark_datetime_format_to_chrono_strftime;
-use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
-use datafusion::datasource::listing::ListingOptions;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::listing::ListingOptions;
+
+use crate::data_source::csv::CsvReadOptions;
+use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
+
 impl PlanResolver<'_> {
     pub(crate) fn resolve_csv_read_options(options: CsvReadOptions) -> PlanResult<ListingOptions> {
+        let null_regex = match (options.null_value, options.null_regex) {
+            (Some(null_value), Some(null_regex))
+                if !null_value.is_empty() && !null_regex.is_empty() =>
+            {
+                Err(PlanError::internal(
+                    "CSV `null_value` and `null_regex` cannot be both set",
+                ))
+            }
+            (Some(null_value), _) if !null_value.is_empty() => {
+                // Convert null_value to regex by escaping special characters
+                Ok(Some(regex::escape(&null_value)))
+            }
+            (_, Some(null_regex)) if !null_regex.is_empty() => Ok(Some(null_regex)),
+            _ => Ok(None),
+        }?;
+
         let file_format = CsvFormat::default()
             .with_has_header(options.header)
             .with_delimiter(options.delimiter.parse().map_err(|e| {
@@ -43,7 +60,7 @@ impl PlanResolver<'_> {
             .with_newlines_in_values(options.newlines_in_values)
             .with_schema_infer_max_rec(options.schema_infer_max_records)
             .with_file_compression_type(FileCompressionType::from_str(&options.compression)?)
-            .with_null_regex(options.null_regex);
+            .with_null_regex(null_regex);
 
         Ok(ListingOptions::new(Arc::new(file_format)).with_file_extension(".csv"))
     }
