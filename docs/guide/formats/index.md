@@ -11,7 +11,9 @@ rank: 4
 | [JSON](./json)       | :white_check_mark: | :white_check_mark: |
 | [Parquet](./parquet) | :white_check_mark: | :white_check_mark: |
 | Text                 | :construction:     | :construction:     |
+| Binary               | :construction:     | :construction:     |
 | Avro                 | :construction:     | :construction:     |
+| Protocol Buffers     | :construction:     | :construction:     |
 | ORC                  | :x:                | :x:                |
 | Delta Lake           | :construction:     | :construction:     |
 | Iceberg              | :construction:     | :construction:     |

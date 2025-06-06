@@ -22,3 +22,4 @@ Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) st
 | Azure Data Lake Storage (ADLS) | :construction:     | :construction:     |
 | Azure Blob Storage             | :construction:     | :construction:     |
 | Google Cloud Storage (GCS)     | :construction:     | :construction:     |
+| JDBC                           | :x:                | :x:                |

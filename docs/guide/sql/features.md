@@ -35,8 +35,8 @@ The following table lists the supported clauses in the `SELECT` statement.
 | `GROUP BY`                        | :white_check_mark: |
 | `HAVING`                          | :white_check_mark: |
 | `ORDER BY`                        | :white_check_mark: |
-| `LIMIT`                           | :white_check_mark: |
 | `OFFSET`                          | :white_check_mark: |
+| `LIMIT`                           | :white_check_mark: |
 | `JOIN`                            | :white_check_mark: |
 | `UNION`                           | :white_check_mark: |
 | `INTERSECT`                       | :white_check_mark: |
@@ -45,9 +45,9 @@ The following table lists the supported clauses in the `SELECT` statement.
 | `VALUES` (inline tables)          | :white_check_mark: |
 | `OVER <window>`                   | :white_check_mark: |
 | `/*+ ... */` (hints)              | :construction:     |
-| `SORT BY`                         | :construction:     |
 | `CLUSTER BY`                      | :construction:     |
 | `DISTRIBUTE BY`                   | :construction:     |
+| `SORT BY`                         | :construction:     |
 | `PIVOT`                           | :construction:     |
 | `UNPIVOT`                         | :construction:     |
 | `LATERAL VIEW`                    | :white_check_mark: |
@@ -87,8 +87,8 @@ The `DESCRIBE QUERY` statement is not supported yet.
 | `DROP TABLE`         | :white_check_mark:           |
 | `DROP VIEW`          | :white_check_mark:           |
 | `REFRESH <path>`     | :construction:               |
-| `REFRESH TABLE`      | :construction:               |
 | `REFRESH FUNCTION`   | :construction:               |
+| `REFRESH TABLE`      | :construction:               |
 | `REPAIR TABLE`       | :construction:               |
 | `SHOW COLUMNS`       | :construction:               |
 | `SHOW CREATE TABLE`  | :construction:               |
