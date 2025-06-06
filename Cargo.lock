@@ -5220,6 +5220,7 @@ dependencies = [
  "datafusion",
  "datafusion-functions-json",
  "datafusion-proto",
+ "datafusion-spark",
  "futures",
  "k8s-openapi",
  "kube",
