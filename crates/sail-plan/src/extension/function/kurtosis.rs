@@ -3,7 +3,7 @@ use std::fmt::Debug;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/kurtosis.rs>
 use datafusion::arrow::array::{ArrayRef, Float64Array, UInt64Array};
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::cast::as_float64_array;
 use datafusion::common::downcast_value;
 use datafusion::error::Result;
@@ -82,13 +82,13 @@ impl AggregateUDFImpl for KurtosisFunction {
         Ok(Box::new(KurtosisAccumulator::new()))
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
-            Field::new("count", DataType::UInt64, true),
-            Field::new("sum", DataType::Float64, true),
-            Field::new("sum_sqr", DataType::Float64, true),
-            Field::new("sum_cub", DataType::Float64, true),
-            Field::new("sum_four", DataType::Float64, true),
+            Field::new("count", DataType::UInt64, true).into(),
+            Field::new("sum", DataType::Float64, true).into(),
+            Field::new("sum_sqr", DataType::Float64, true).into(),
+            Field::new("sum_cub", DataType::Float64, true).into(),
+            Field::new("sum_four", DataType::Float64, true).into(),
         ])
     }
 }

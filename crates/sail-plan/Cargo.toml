@@ -14,6 +14,7 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+datafusion-spark = { workspace = true }
 datafusion-functions-json = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }

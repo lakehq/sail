@@ -9,7 +9,7 @@ use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::stddev::stddev_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
-use datafusion_common::{Column, ScalarValue};
+use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{col, expr, lit, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use sail_common::spec;

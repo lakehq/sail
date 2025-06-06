@@ -1200,38 +1200,40 @@ impl PlanResolver<'_> {
                 let plan = if is_all {
                     let left_row_number_alias = state.register_field_name("row_num");
                     let right_row_number_alias = state.register_field_name("row_num");
-                    let left_row_number_window = Expr::WindowFunction(expr::WindowFunction {
-                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                        params: WindowFunctionParams {
-                            args: vec![],
-                            partition_by: left
-                                .schema()
-                                .fields()
-                                .iter()
-                                .map(|field| Expr::Column(Column::from_name(field.name())))
-                                .collect::<Vec<_>>(),
-                            order_by: vec![],
-                            window_frame: WindowFrame::new(None),
-                            null_treatment: Some(NullTreatment::RespectNulls),
-                        },
-                    })
-                    .alias(left_row_number_alias.as_str());
-                    let right_row_number_window = Expr::WindowFunction(expr::WindowFunction {
-                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                        params: WindowFunctionParams {
-                            args: vec![],
-                            partition_by: right
-                                .schema()
-                                .fields()
-                                .iter()
-                                .map(|field| Expr::Column(Column::from_name(field.name())))
-                                .collect::<Vec<_>>(),
-                            order_by: vec![],
-                            window_frame: WindowFrame::new(None),
-                            null_treatment: Some(NullTreatment::RespectNulls),
-                        },
-                    })
-                    .alias(right_row_number_alias.as_str());
+                    let left_row_number_window =
+                        Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                            params: WindowFunctionParams {
+                                args: vec![],
+                                partition_by: left
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|field| Expr::Column(Column::from_name(field.name())))
+                                    .collect::<Vec<_>>(),
+                                order_by: vec![],
+                                window_frame: WindowFrame::new(None),
+                                null_treatment: Some(NullTreatment::RespectNulls),
+                            },
+                        }))
+                        .alias(left_row_number_alias.as_str());
+                    let right_row_number_window =
+                        Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                            params: WindowFunctionParams {
+                                args: vec![],
+                                partition_by: right
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|field| Expr::Column(Column::from_name(field.name())))
+                                    .collect::<Vec<_>>(),
+                                order_by: vec![],
+                                window_frame: WindowFrame::new(None),
+                                null_treatment: Some(NullTreatment::RespectNulls),
+                            },
+                        }))
+                        .alias(right_row_number_alias.as_str());
                     let left = LogicalPlanBuilder::from(left)
                         .window(vec![left_row_number_window])?
                         .build()?;

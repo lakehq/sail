@@ -108,6 +108,7 @@ datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "48.
 datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
 datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
 datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
+datafusion-spark = { git = "https://github.com/apache/datafusion.git", rev = "48.0.0-rc1" }
 datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "d76ad8d" }
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.24.2", features = ["auto-initialize", "serde"] }
