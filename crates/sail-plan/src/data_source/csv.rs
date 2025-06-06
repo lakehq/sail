@@ -1,137 +1,110 @@
-use crate::data_source::{deserialize_data_source_bool, deserialize_data_source_usize};
+use crate::data_source::{parse_bool, parse_non_empty_string, ConfigItem};
+use sail_common::config::CSV_CONFIG;
+use serde::Deserialize;
 use std::collections::HashMap;
-use std::str::FromStr;
-
-use figment::Figment;
-use sail_common::config::{deserialize_non_empty_string, ConfigDefinition, CSV_CONFIG};
-use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 
 use crate::error::{PlanError, PlanResult};
 
 /// Datasource Options that control the reading of CSV files.
 #[derive(Debug, Deserialize)]
-// #[serde(rename_all(deserialize = "camelCase"))]
+// Serde bypasses any individual field deserializers and instead uses the `TryFrom` implementation.
+#[serde(try_from = "HashMap<String, String>")]
 pub struct CsvReadOptions {
     pub delimiter: String,
     pub quote: String,
-    #[serde(deserialize_with = "deserialize_non_empty_string")]
     pub escape: Option<String>,
-    #[serde(deserialize_with = "deserialize_non_empty_string")]
     pub comment: Option<String>,
-    #[serde(deserialize_with = "deserialize_data_source_bool")]
     pub header: bool,
-    #[serde(alias = "nullValue", deserialize_with = "deserialize_non_empty_string")]
     pub null_value: Option<String>,
-    #[serde(alias = "nullRegex", deserialize_with = "deserialize_non_empty_string")]
     pub null_regex: Option<String>,
-    #[serde(alias = "lineSep", deserialize_with = "deserialize_non_empty_string")]
     pub line_sep: Option<String>,
-    #[serde(
-        alias = "schemaInferMaxRecords",
-        deserialize_with = "deserialize_data_source_usize"
-    )]
     pub schema_infer_max_records: usize,
-    #[serde(
-        alias = "newlinesInValues",
-        deserialize_with = "deserialize_data_source_bool"
-    )]
     pub newlines_in_values: bool,
-    #[serde(alias = "fileExtension")]
     pub file_extension: String,
     pub compression: String,
 }
 
-impl Default for CsvReadOptions {
-    fn default() -> Self {
-        let options: Vec<ConfigItem> = serde_yaml::from_str(CSV_CONFIG).unwrap();
-        let options: HashMap<String, String> = options
-            .into_iter()
-            .filter(|item| item.supported)
-            .map(|item| (item.key.to_lowercase(), item.default))
-            .collect();
-        serde_json::from_value(serde_json::to_value(options).unwrap()).unwrap()
+impl TryFrom<HashMap<String, String>> for CsvReadOptions {
+    type Error = PlanError;
+
+    fn try_from(mut options: HashMap<String, String>) -> Result<Self, Self::Error> {
+        // The options HashMap should already contain all supported keys with their resolved values
+        Ok(CsvReadOptions {
+            delimiter: options
+                .remove("delimiter")
+                .ok_or_else(|| PlanError::internal("CSV `delimiter` read option is required"))?,
+            quote: options
+                .remove("quote")
+                .ok_or_else(|| PlanError::internal("CSV `quote` read option is required"))?,
+            escape: options
+                .remove("escape")
+                .ok_or_else(|| PlanError::internal("CSV `escape` read option is required"))
+                .map(parse_non_empty_string)?,
+            comment: options
+                .remove("comment")
+                .ok_or_else(|| PlanError::internal("CSV `comment` read option is required"))
+                .map(parse_non_empty_string)?,
+            header: options
+                .remove("header")
+                .ok_or_else(|| PlanError::missing("CSV `header` read option is required"))
+                .and_then(|v| parse_bool(&v))?,
+            null_value: options
+                .remove("null_value")
+                .ok_or_else(|| PlanError::internal("CSV `null_value` read option is required"))
+                .map(parse_non_empty_string)?,
+            null_regex: options
+                .remove("null_regex")
+                .ok_or_else(|| PlanError::internal("CSV `null_regex` read option is required"))
+                .map(parse_non_empty_string)?,
+            line_sep: options
+                .remove("line_sep")
+                .ok_or_else(|| PlanError::internal("CSV `line_sep` read option is required"))
+                .map(parse_non_empty_string)?,
+            schema_infer_max_records: options
+                .remove("schema_infer_max_records")
+                .ok_or_else(|| {
+                    PlanError::internal("CSV `schema_infer_max_records` read option is required")
+                })?
+                .parse()
+                .map_err(|e| {
+                    PlanError::internal(format!(
+                        "Invalid CSV `schema_infer_max_records` read option: {e}"
+                    ))
+                })?,
+            newlines_in_values: options
+                .remove("newlines_in_values")
+                .ok_or_else(|| {
+                    PlanError::missing("CSV `newlines_in_values` read option is required")
+                })
+                .and_then(|v| parse_bool(&v))?,
+            file_extension: options.remove("file_extension").ok_or_else(|| {
+                PlanError::missing("CSV `file_extension` read option is required")
+            })?,
+            compression: options
+                .remove("compression")
+                .ok_or_else(|| PlanError::missing("CSV `compression` read option is required"))?,
+        })
     }
 }
 
 impl CsvReadOptions {
-    pub fn csv_options(options: HashMap<String, String>) -> PlanResult<Self> {
-        let options =
-            serde_json::to_value(options).map_err(|e| PlanError::internal(e.to_string()))?;
-        let options: CsvReadOptions =
-            serde_json::from_value(options).map_err(|e| PlanError::internal(e.to_string()))?;
-        Ok(options)
-    }
-
     pub fn load_csv_options(user_options: HashMap<String, String>) -> PlanResult<Self> {
-        let options: Vec<ConfigItem> =
+        let user_options_normalized: HashMap<String, String> = user_options
+            .into_iter()
+            .map(|(k, v)| (k.to_lowercase(), v))
+            .collect();
+        let config_items: Vec<ConfigItem> =
             serde_yaml::from_str(CSV_CONFIG).map_err(|e| PlanError::internal(e.to_string()))?;
-        let options: HashMap<String, String> = options
+        let options: HashMap<String, String> = config_items
             .into_iter()
             .filter(|item| item.supported)
             .map(|item| {
-                let key = item.key.to_lowercase();
-                let aliases = item.alias;
-                let value = if user_options.contains_key(&key) {
-                    user_options
-                        .get(&key)
-                        .ok_or_else(|| PlanError::missing(format!("Missing value for key: {key}")))?
-                        .to_string()
-                } else if aliases.iter().any(|alias| user_options.contains_key(alias)) {
-                    aliases
-                        .iter()
-                        .find_map(|alias| user_options.get(alias).cloned())
-                        .ok_or_else(|| {
-                            PlanError::missing(format!("Missing value for key: {key}"))
-                        })?
-                } else {
-                    item.default
-                };
+                let value = item.resolve_value(&user_options_normalized);
+                let key = item.key;
                 (key, value)
             })
             .collect();
-        let options =
-            serde_json::to_value(options).map_err(|e| PlanError::internal(e.to_string()))?;
-        let options: CsvReadOptions =
-            serde_json::from_value(options).map_err(|e| PlanError::internal(e.to_string()))?;
-        Ok(options)
+        CsvReadOptions::try_from(options)
     }
-}
-
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum ConfigType {
-    String,
-    Number,
-    Boolean,
-    Array,
-    Map,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ConfigItem {
-    key: String,
-    #[serde(default)]
-    alias: Vec<String>,
-    #[expect(unused)]
-    r#type: ConfigType,
-    default: String,
-    /// The description of the configuration item.
-    ///
-    /// The text should be written in Markdown format.
-    #[expect(unused)]
-    description: String,
-    #[expect(unused)]
-    #[serde(default)]
-    experimental: bool,
-    #[expect(unused)]
-    #[serde(default)]
-    hidden: bool,
-    #[expect(unused)]
-    #[serde(default = "default_true")]
-    supported: bool,
 }

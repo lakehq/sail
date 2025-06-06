@@ -5251,7 +5251,6 @@ dependencies = [
  "datafusion-functions-json",
  "datafusion-functions-nested",
  "either",
- "figment",
  "futures",
  "glob",
  "half",
