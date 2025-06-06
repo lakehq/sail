@@ -5,33 +5,20 @@ rank: 5
 
 # Storage
 
-Sail supports accessing data from various sources, including local files and cloud storage services.
-You can use the `SparkSession.read` and `SparkSession.write` API with the following types of paths.
+Sail supports various storage solutions, including file systems and cloud storage services.
 
-Relative file paths
+You can use the `SparkSession.read` and `SparkSession.write` API to load data from and write data to the storage.
 
-: These are file paths relative to the current working directory, such as `path/data.json`.
+You can also use the `CREATE TABLE` SQL statement to create a table that refers to data stored in the storage.
 
-`file://` URIs
+Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) storage features for reading and writing data. There are also features that are planned in our roadmap (:construction:).
 
-: These are absolute file paths on the local file system, such as `file:///path/to/file`.
-
-`s3://` URIs
-
-: These are paths in AWS S3 or an S3-compatible object storage, such as `s3://bucket/path/to/data`.
-
-`hdfs://` URIs
-
-: These are paths in HDFS, such as `hdfs://namenode:port/path/to/data`.
-
-`hf://` URIs
-
-: These are paths for Hugging Face datasets, such as `hf://datasets/username/dataset@~parquet/train`.
-
-::: info
-
-- For local file systems, the path can refer to a file or a directory.
-- For S3-compatible object storage services, the path can refer to an object or a key prefix.
-  We assume the key prefix is followed by `/` and represents a directory.
-
-:::
+| Storage                        | Read Support       | Write Support      |
+| ------------------------------ | ------------------ | ------------------ |
+| [File Systems](./fs)           | :white_check_mark: | :white_check_mark: |
+| [AWS S3](./s3)                 | :white_check_mark: | :white_check_mark: |
+| [HDFS](./hdfs)                 | :white_check_mark: | :white_check_mark: |
+| [Hugging Face](./hf)           | :white_check_mark: | :x:                |
+| Azure Data Lake Storage (ADLS) | :construction:     | :construction:     |
+| Azure Blob Storage             | :construction:     | :construction:     |
+| Google Cloud Storage (GCS)     | :construction:     | :construction:     |
