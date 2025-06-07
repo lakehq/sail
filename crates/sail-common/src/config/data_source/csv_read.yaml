@@ -3,7 +3,6 @@
 #   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L254-L290
 #   - [3] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L767-L787
 
-# CHECK HERE: ADD CAMEL CASE ALIAS FOR ALL KEYS BEFORE MERGING!!!!
 - key: delimiter
   alias:
     - sep
