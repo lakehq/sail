@@ -79,13 +79,15 @@ impl ScalarUDFImpl for SparkToBinary {
                 {
                     let ScalarFunctionArgs {
                         args,
+                        arg_fields,
                         number_rows,
-                        return_type,
+                        return_field,
                     } = args;
                     let args = ScalarFunctionArgs {
                         args: args[0..1].to_vec(),
+                        arg_fields: arg_fields[0..1].to_vec(),
                         number_rows,
-                        return_type,
+                        return_field,
                     };
                     SparkUnHex::new().invoke_with_args(args)
                 }
@@ -96,13 +98,15 @@ impl ScalarUDFImpl for SparkToBinary {
                 {
                     let ScalarFunctionArgs {
                         args,
+                        arg_fields,
                         number_rows,
-                        return_type,
+                        return_field,
                     } = args;
                     let args = ScalarFunctionArgs {
                         args: args[0..1].to_vec(),
+                        arg_fields: arg_fields[0..1].to_vec(),
                         number_rows,
-                        return_type,
+                        return_field,
                     };
                     SparkUnbase64::new().invoke_with_args(args)
                 }

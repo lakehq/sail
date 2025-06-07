@@ -1,9 +1,10 @@
 use std::any::Any;
+use std::sync::Arc;
 
 use datafusion::arrow::array::{
     make_array, Array, ArrayRef, AsArray, Capacities, MapArray, MutableArrayData,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions_nested::extract::ArrayElement;
@@ -76,20 +77,30 @@ impl ScalarUDFImpl for SparkElementAt {
         if !matches!(args.args[0].data_type(), DataType::Map(_, _)) {
             let ScalarFunctionArgs {
                 args,
+                arg_fields,
                 number_rows,
-                return_type,
+                return_field,
             } = args;
-            let args = match args[1].data_type() {
-                DataType::Int64 => args,
+            let (args, arg_fields) = match args[1].data_type() {
+                DataType::Int64 => (args, arg_fields),
                 DataType::Int8
                 | DataType::Int16
                 | DataType::Int32
                 | DataType::UInt8
                 | DataType::UInt16
                 | DataType::UInt32
-                | DataType::UInt64 => {
-                    [args[0].clone(), args[1].cast_to(&DataType::Int64, None)?].to_vec()
-                }
+                | DataType::UInt64 => (
+                    [args[0].clone(), args[1].cast_to(&DataType::Int64, None)?].to_vec(),
+                    [
+                        arg_fields[0].clone(),
+                        Arc::new(Field::new(
+                            arg_fields[1].name(),
+                            DataType::Int64,
+                            arg_fields[1].is_nullable(),
+                        )),
+                    ]
+                    .to_vec(),
+                ),
                 _ => {
                     return exec_err!(
                         "Spark `element_at` for array requires the second argument to be INT, got {}",
@@ -99,8 +110,9 @@ impl ScalarUDFImpl for SparkElementAt {
             };
             let args = ScalarFunctionArgs {
                 args,
+                arg_fields,
                 number_rows,
-                return_type,
+                return_field,
             };
             ArrayElement::new().invoke_with_args(args)
         } else {

@@ -271,7 +271,7 @@ impl WinFunctionBuilder {
                 function_context: _function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
-            Ok(expr::Expr::WindowFunction(expr::WindowFunction {
+            Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
                 fun: WindowFunctionDefinition::AggregateUDF(f()),
                 params: WindowFunctionParams {
                     args: arguments,
@@ -280,7 +280,7 @@ impl WinFunctionBuilder {
                     window_frame,
                     null_treatment,
                 },
-            }))
+            })))
         })
     }
 
@@ -298,7 +298,7 @@ impl WinFunctionBuilder {
                 function_context: _function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
-            Ok(expr::Expr::WindowFunction(expr::WindowFunction {
+            Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
                 fun: WindowFunctionDefinition::WindowUDF(f()),
                 params: WindowFunctionParams {
                     args: arguments,
@@ -307,7 +307,7 @@ impl WinFunctionBuilder {
                     window_frame,
                     null_treatment,
                 },
-            }))
+            })))
         })
     }
 

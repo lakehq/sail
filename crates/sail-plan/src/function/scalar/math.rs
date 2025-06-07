@@ -5,6 +5,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, BinaryExpr, Cast, Expr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_spark::function::math::expm1::SparkExpm1;
 use half::f16;
 
 use crate::error::{PlanError, PlanResult};
@@ -15,7 +16,6 @@ use crate::extension::function::math::random::Random;
 use crate::extension::function::math::spark_abs::SparkAbs;
 use crate::extension::function::math::spark_bin::SparkBin;
 use crate::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
-use crate::extension::function::math::spark_expm1::SparkExpm1;
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_pmod::SparkPmod;
 use crate::extension::function::math::spark_signum::SparkSignum;

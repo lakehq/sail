@@ -1253,7 +1253,7 @@ impl PlanResolver<'_> {
                         ))
                     }
                 };
-                let window = expr::Expr::WindowFunction(expr::WindowFunction {
+                let window = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
                     fun: function,
                     params: WindowFunctionParams {
                         args: arguments,
@@ -1262,7 +1262,7 @@ impl PlanResolver<'_> {
                         window_frame,
                         null_treatment: get_null_treatment(None),
                     },
-                });
+                }));
                 (window, function_name, argument_display_names, false)
             }
             _ => {
