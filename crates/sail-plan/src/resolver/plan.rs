@@ -845,6 +845,11 @@ impl PlanResolver<'_> {
         let options: HashMap<String, String> = options.into_iter().collect();
         let options: ListingOptions = match format.to_lowercase().as_str() {
             "json" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "JSON data source read options are not supported yet",
+                    ));
+                }
                 ListingOptions::new(JsonFormatFactory::new().create(&self.ctx.state(), &options)?)
                     .with_file_extension(".json")
             }
@@ -852,15 +857,32 @@ impl PlanResolver<'_> {
                 let csv_read_options = CsvReadOptions::load(options.clone())?;
                 Self::resolve_csv_read_options(csv_read_options)?
             }
-            "parquet" => ListingOptions::new(
-                ParquetFormatFactory::new().create(&self.ctx.state(), &options)?,
-            )
-            .with_file_extension(".parquet"),
+            "parquet" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "Parquet data source read options are not supported yet",
+                    ));
+                }
+                ListingOptions::new(
+                    ParquetFormatFactory::new().create(&self.ctx.state(), &options)?,
+                )
+                .with_file_extension(".parquet")
+            }
             "arrow" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "Arrow data source read options are not supported yet",
+                    ));
+                }
                 ListingOptions::new(ArrowFormatFactory::new().create(&self.ctx.state(), &options)?)
                     .with_file_extension(".arrow")
             }
             "avro" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "Avro data source read options are not supported yet",
+                    ));
+                }
                 ListingOptions::new(AvroFormatFactory::new().create(&self.ctx.state(), &options)?)
                     .with_file_extension(".avro")
             }
