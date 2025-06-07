@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 use sail_common::config::CSV_CONFIG;
 use serde::Deserialize;
 
-use crate::data_source::{parse_bool, parse_non_empty_string, ConfigItem};
+use crate::data_source::{parse_bool, parse_non_empty_char, parse_non_empty_string, ConfigItem};
 use crate::error::{PlanError, PlanResult};
 
 /// Datasource Options that control the reading of CSV files.
@@ -12,14 +12,14 @@ use crate::error::{PlanError, PlanResult};
 // Serde bypasses any individual field deserializers and instead uses the `TryFrom` implementation.
 #[serde(try_from = "HashMap<String, String>")]
 pub struct CsvReadOptions {
-    pub delimiter: String,
-    pub quote: String,
-    pub escape: Option<String>,
-    pub comment: Option<String>,
+    pub delimiter: char,
+    pub quote: char,
+    pub escape: Option<char>,
+    pub comment: Option<char>,
     pub header: bool,
     pub null_value: Option<String>,
     pub null_regex: Option<String>,
-    pub line_sep: Option<String>,
+    pub line_sep: Option<char>,
     pub schema_infer_max_records: usize,
     pub newlines_in_values: bool,
     pub file_extension: String,
@@ -34,18 +34,24 @@ impl TryFrom<HashMap<String, String>> for CsvReadOptions {
         Ok(CsvReadOptions {
             delimiter: options
                 .remove("delimiter")
-                .ok_or_else(|| PlanError::internal("CSV `delimiter` read option is required"))?,
+                .ok_or_else(|| PlanError::internal("CSV `delimiter` read option is required"))
+                .and_then(|v| parse_non_empty_char(&v))?
+                .ok_or_else(|| {
+                    PlanError::internal("CSV `delimiter` read option cannot be empty")
+                })?,
             quote: options
                 .remove("quote")
-                .ok_or_else(|| PlanError::internal("CSV `quote` read option is required"))?,
+                .ok_or_else(|| PlanError::internal("CSV `quote` read option is required"))
+                .and_then(|v| parse_non_empty_char(&v))?
+                .ok_or_else(|| PlanError::internal("CSV `quote` read option cannot be empty"))?,
             escape: options
                 .remove("escape")
                 .ok_or_else(|| PlanError::internal("CSV `escape` read option is required"))
-                .map(parse_non_empty_string)?,
+                .and_then(|v| parse_non_empty_char(&v))?,
             comment: options
                 .remove("comment")
                 .ok_or_else(|| PlanError::internal("CSV `comment` read option is required"))
-                .map(parse_non_empty_string)?,
+                .and_then(|v| parse_non_empty_char(&v))?,
             header: options
                 .remove("header")
                 .ok_or_else(|| PlanError::missing("CSV `header` read option is required"))
@@ -61,7 +67,7 @@ impl TryFrom<HashMap<String, String>> for CsvReadOptions {
             line_sep: options
                 .remove("line_sep")
                 .ok_or_else(|| PlanError::internal("CSV `line_sep` read option is required"))
-                .map(parse_non_empty_string)?,
+                .and_then(|v| parse_non_empty_char(&v))?,
             schema_infer_max_records: options
                 .remove("schema_infer_max_records")
                 .ok_or_else(|| {

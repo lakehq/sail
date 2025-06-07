@@ -30,33 +30,11 @@ impl PlanResolver<'_> {
 
         let file_format = CsvFormat::default()
             .with_has_header(options.header)
-            .with_delimiter(options.delimiter.parse().map_err(|e| {
-                PlanError::internal(format!("Invalid CSV `delimiter` read option: {e}"))
-            })?)
-            .with_quote(options.quote.parse().map_err(|e| {
-                PlanError::internal(format!("Invalid CSV `quote` read option: {e}"))
-            })?)
-            .with_terminator(
-                options
-                    .line_sep
-                    .map(|s| s.parse())
-                    .transpose()
-                    .map_err(|e| {
-                        PlanError::internal(format!("Invalid CSV `line_sep` read option: {e}"))
-                    })?,
-            )
-            .with_escape(options.escape.map(|s| s.parse()).transpose().map_err(|e| {
-                PlanError::internal(format!("Invalid CSV `escape` read option: {e}"))
-            })?)
-            .with_comment(
-                options
-                    .comment
-                    .map(|s| s.parse())
-                    .transpose()
-                    .map_err(|e| {
-                        PlanError::internal(format!("Invalid CSV `comment` read option: {e}"))
-                    })?,
-            )
+            .with_delimiter(options.delimiter as u8)
+            .with_quote(options.delimiter as u8)
+            .with_terminator(options.line_sep.map(|c| c as u8))
+            .with_escape(options.escape.map(|c| c as u8))
+            .with_comment(options.comment.map(|c| c as u8))
             .with_newlines_in_values(options.newlines_in_values)
             .with_schema_infer_max_rec(options.schema_infer_max_records)
             .with_file_compression_type(FileCompressionType::from_str(&options.compression)?)

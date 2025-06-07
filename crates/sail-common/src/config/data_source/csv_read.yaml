@@ -3,12 +3,13 @@
 #   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L254-L290
 #   - [3] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L767-L787
 
+# TODO: Delimiter can be one or more characters
 - key: delimiter
   alias:
     - sep
   default: ","
   description: |
-    Sets a separator that can be one or more characters for each field and value.
+    Sets a single character separator for each field and value.
   supported: true
 
 - key: quote
@@ -50,7 +51,6 @@
     - nullRegex
   default: ""
   description: |
-    CHECK HERE: DEFINE WHAT REGEX IS
     Optional regex to match null values. Throws an exception if `null_value` is also set.
     Defaults to treating empty values as null.
   supported: true
@@ -61,7 +61,7 @@
     - terminator
   default: ""
   description: |
-    Defines the single character line separator that should be used for parsing.
+    Sets the single character line separator that should be used for parsing.
     CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
     For reading, Defaults to None (CRLF: \\r, \\r\\n and \\n).
   supported: true

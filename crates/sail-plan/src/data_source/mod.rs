@@ -48,6 +48,16 @@ pub(crate) fn parse_non_empty_string(value: String) -> Option<String> {
     }
 }
 
+pub(crate) fn parse_non_empty_char(value: &str) -> PlanResult<Option<char>> {
+    match value.chars().count() {
+        0 => Ok(None),
+        1 => Ok(value.chars().next()),
+        _ => Err(PlanError::internal(format!(
+            "Expected a single character, but got: '{value}'"
+        ))),
+    }
+}
+
 pub(crate) fn parse_bool(value: &str) -> PlanResult<bool> {
     match value.to_lowercase().as_str() {
         "true" | "1" => Ok(true),
