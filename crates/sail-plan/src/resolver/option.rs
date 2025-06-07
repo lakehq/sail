@@ -11,6 +11,16 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
+    fn char_to_u8(c: char, field_name: &str) -> PlanResult<u8> {
+        if c.is_ascii() {
+            Ok(c as u8)
+        } else {
+            Err(PlanError::internal(format!(
+                "Invalid character '{c}' for {field_name}: must be an ASCII character"
+            )))
+        }
+    }
+
     pub(crate) fn resolve_csv_read_options(options: CsvReadOptions) -> PlanResult<ListingOptions> {
         let null_regex = match (options.null_value, options.null_regex) {
             (Some(null_value), Some(null_regex))
@@ -30,11 +40,26 @@ impl PlanResolver<'_> {
 
         let file_format = CsvFormat::default()
             .with_has_header(options.header)
-            .with_delimiter(options.delimiter as u8)
-            .with_quote(options.quote as u8)
-            .with_terminator(options.line_sep.map(|c| c as u8))
-            .with_escape(options.escape.map(|c| c as u8))
-            .with_comment(options.comment.map(|c| c as u8))
+            .with_delimiter(Self::char_to_u8(options.delimiter, "delimiter")?)
+            .with_quote(Self::char_to_u8(options.quote, "quote")?)
+            .with_terminator(
+                options
+                    .line_sep
+                    .map(|line_sep| Self::char_to_u8(line_sep, "line_sep"))
+                    .transpose()?,
+            )
+            .with_escape(
+                options
+                    .escape
+                    .map(|escape| Self::char_to_u8(escape, "escape"))
+                    .transpose()?,
+            )
+            .with_comment(
+                options
+                    .comment
+                    .map(|comment| Self::char_to_u8(comment, "comment"))
+                    .transpose()?,
+            )
             .with_newlines_in_values(options.newlines_in_values)
             .with_schema_infer_max_rec(options.schema_infer_max_records)
             .with_file_compression_type(FileCompressionType::from_str(&options.compression)?)
