@@ -31,7 +31,7 @@ impl PlanResolver<'_> {
         let file_format = CsvFormat::default()
             .with_has_header(options.header)
             .with_delimiter(options.delimiter as u8)
-            .with_quote(options.delimiter as u8)
+            .with_quote(options.quote as u8)
             .with_terminator(options.line_sep.map(|c| c as u8))
             .with_escape(options.escape.map(|c| c as u8))
             .with_comment(options.comment.map(|c| c as u8))
