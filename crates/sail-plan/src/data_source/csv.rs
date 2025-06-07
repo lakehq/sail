@@ -31,24 +31,6 @@ impl TryFrom<HashMap<String, String>> for CsvReadOptions {
 
     // The options HashMap should already contain all supported keys with their resolved values
     fn try_from(mut options: HashMap<String, String>) -> Result<Self, Self::Error> {
-        let null_value = options
-            .remove("null_value")
-            .ok_or_else(|| PlanError::internal("CSV `null_value` read option is required"))
-            .map(parse_non_empty_string)?;
-        let null_regex = options
-            .remove("null_regex")
-            .ok_or_else(|| PlanError::internal("CSV `null_regex` read option is required"))
-            .map(parse_non_empty_string)?;
-        match (&null_value, &null_regex) {
-            (Some(null_value), Some(null_regex))
-                if !null_value.is_empty() && !null_regex.is_empty() =>
-            {
-                Err(PlanError::internal(
-                    "CSV `null_value` and `null_regex` cannot be both set",
-                ))
-            }
-            _ => Ok(()),
-        }?;
         Ok(CsvReadOptions {
             delimiter: options
                 .remove("delimiter")
@@ -68,8 +50,14 @@ impl TryFrom<HashMap<String, String>> for CsvReadOptions {
                 .remove("header")
                 .ok_or_else(|| PlanError::missing("CSV `header` read option is required"))
                 .and_then(|v| parse_bool(&v))?,
-            null_value,
-            null_regex,
+            null_value: options
+                .remove("null_value")
+                .ok_or_else(|| PlanError::internal("CSV `null_value` read option is required"))
+                .map(parse_non_empty_string)?,
+            null_regex: options
+                .remove("null_regex")
+                .ok_or_else(|| PlanError::internal("CSV `null_regex` read option is required"))
+                .map(parse_non_empty_string)?,
             line_sep: options
                 .remove("line_sep")
                 .ok_or_else(|| PlanError::internal("CSV `line_sep` read option is required"))

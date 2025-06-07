@@ -26,6 +26,8 @@ pub(crate) struct ConfigItem {
 impl ConfigItem {
     // user_options_normalized is expected to be a HashMap with all keys in lowercase
     fn resolve_value(&self, user_options_normalized: &HashMap<String, String>) -> String {
+        // TODO: If both the key and its alias are present, this duplication is silently ignored,
+        //  and the user cannot tell which one is chosen without looking at the code.
         if let Some(value) = user_options_normalized.get(&self.key.to_lowercase()) {
             return value.clone();
         }
