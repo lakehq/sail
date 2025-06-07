@@ -51,6 +51,7 @@ use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
+use crate::data_source::csv::CsvReadOptions;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
@@ -841,23 +842,57 @@ impl PlanResolver<'_> {
         let Some(format) = format else {
             return Err(PlanError::invalid("missing data source format"));
         };
-        let options = Self::resolve_data_reader_options(&format, options)?;
-        let (format_factory, extension): (Box<dyn FileFormatFactory>, _) =
-            match format.to_lowercase().as_str() {
-                "json" => (Box::new(JsonFormatFactory::new()), ".json"),
-                "csv" => (Box::new(CsvFormatFactory::new()), ".csv"),
-                "parquet" => (Box::new(ParquetFormatFactory::new()), ".parquet"),
-                "arrow" => (Box::new(ArrowFormatFactory::new()), ".arrow"),
-                "avro" => (Box::new(AvroFormatFactory::new()), ".avro"),
-                other => {
-                    return Err(PlanError::unsupported(format!(
-                        "unsupported data source format: {:?}",
-                        other
-                    )))
+        let options: HashMap<String, String> = options.into_iter().collect();
+        let options: ListingOptions = match format.to_lowercase().as_str() {
+            "json" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "JSON data source read options are not supported yet",
+                    ));
                 }
-            };
-        let format = format_factory.create(&self.ctx.state(), &options)?;
-        let options = ListingOptions::new(format).with_file_extension(extension);
+                ListingOptions::new(JsonFormatFactory::new().create(&self.ctx.state(), &options)?)
+                    .with_file_extension(".json")
+            }
+            "csv" => {
+                let csv_read_options = CsvReadOptions::load(options.clone())?;
+                Self::resolve_csv_read_options(csv_read_options)?
+            }
+            "parquet" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "Parquet data source read options are not supported yet",
+                    ));
+                }
+                ListingOptions::new(
+                    ParquetFormatFactory::new().create(&self.ctx.state(), &options)?,
+                )
+                .with_file_extension(".parquet")
+            }
+            "arrow" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "Arrow data source read options are not supported yet",
+                    ));
+                }
+                ListingOptions::new(ArrowFormatFactory::new().create(&self.ctx.state(), &options)?)
+                    .with_file_extension(".arrow")
+            }
+            "avro" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "Avro data source read options are not supported yet",
+                    ));
+                }
+                ListingOptions::new(AvroFormatFactory::new().create(&self.ctx.state(), &options)?)
+                    .with_file_extension(".avro")
+            }
+            other => {
+                return Err(PlanError::unsupported(format!(
+                    "unsupported data source format: {:?}",
+                    other
+                )))
+            }
+        };
         let schema = self
             .resolve_listing_schema(&urls, &options, schema, state)
             .await?;
