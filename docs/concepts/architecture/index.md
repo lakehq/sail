@@ -12,7 +12,7 @@ The architecture of Sail allows for smooth transitions between these modes, enab
 Sail serves as a Spark Connect server that maintains a bidirectional gRPC connection with the PySpark client.
 The PySpark client submits execution requests and receives execution results through this connection.
 
-The Sail server performs semantic analysis on the submitted execution requests and generates an optimized physical execution plan, which is discussed in more detail on the [Query Planning](../query-planning) page.
+The Sail server performs semantic analysis on the submitted execution requests and generates an optimized physical execution plan, which is discussed in more detail on the [Query Planning](../query-planning/) page.
 The physical plan is then executed in different ways depending on the mode.
 
 ## Local Mode
