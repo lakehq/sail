@@ -1,0 +1,35 @@
+digraph architecture {
+  rankdir=LR;
+  node [shape=box, fontname="Sans-Serif"];
+  edge [fontname="Sans-Serif"];
+  compound=true;
+  fontname="Sans-Serif";
+  fontnames="svg";
+  fontsize=16;
+  splines="line";
+
+  legend [shape=note, label="Solid Line = Control Flow\nDashed Line = Data Flow"];
+
+  subgraph pyspark_client {
+    label="PySpark Client";
+    cluster=true;
+    spark_connect_client [label="Spark Connect Client"];
+  }
+
+  subgraph server {
+    label="Sail Server";
+    cluster=true;
+    subgraph session {
+      label="Session";
+      subgraph job_runner {
+        cluster=true;
+        label="Local Job Runner";
+
+        context [label="Execution Context"];
+      }
+    }
+  }
+
+  spark_connect_client -> context [label="gRPC\n(Spark Connect)", dir=both, ltail="pyspark_client", lhead="server"];
+  context:s -> spark_connect_client:s [style=dashed, dir=both, ltail="server", lhead="pyspark_client"];
+}
