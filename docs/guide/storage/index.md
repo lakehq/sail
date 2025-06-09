@@ -1,9 +1,9 @@
 ---
-title: Storage
+title: Data Storage
 rank: 5
 ---
 
-# Storage
+# Data Storage
 
 Sail supports various storage solutions, including file systems and cloud storage services.
 

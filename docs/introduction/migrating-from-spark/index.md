@@ -12,7 +12,7 @@ Suppose you have a Sail server running on `localhost:50051`, you only need to ch
 from pyspark.sql import SparkSession
 
 spark = SparkSession.builder.getOrCreate()  # [!code --]
-spark = SparkSession.builder.remote(f"sc://localhost:50051").getOrCreate()  # [!code ++]
+spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()  # [!code ++]
 ```
 
 ## Considerations
@@ -34,6 +34,13 @@ Here we recommend some practices to help you adopt Sail in your production envir
 
 ## Supported Features
 
+Here is a summary of Spark features that are supported in Sail (:white_check_mark:), planned in our roadmap (:construction:), or unsupported due to technical limitations or low priorities (:x:).
+
+As you can see, Sail has a focus on SQL and the DataFrame API,
+which are the most commonly used features in Spark applications.
+
+There is no support for Spark RDD in Sail since it relies on the JVM implementation of Spark internals and is not covered by the Spark Connect protocol.
+
 | Feature                  | PySpark API                | Supported          |
 | ------------------------ | -------------------------- | ------------------ |
 | RDD                      | `pyspark.SparkContext`     | :x:                |
@@ -44,3 +51,5 @@ Here we recommend some practices to help you adopt Sail in your production envir
 | MLlib (RDD-based)        | `pyspark.mllib`            | :x:                |
 | MLlib (DataFrame-based)  | `pyspark.ml`               | :x:                |
 | GraphX                   | -                          | :x:                |
+
+As you go through the rest of the documentation, you will find more details about the supported features as we cover different aspects of Sail.
