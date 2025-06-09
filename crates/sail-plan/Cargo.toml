@@ -25,11 +25,11 @@ lazy_static = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_arrow = { workspace = true }
+serde_yaml = { workspace = true }
 futures = { workspace = true }
 comfy-table = { workspace = true }
 html-escape = { workspace = true }
 chrono = { workspace = true }
-chrono-tz = { workspace = true }
 ryu = { workspace = true }
 either = { workspace = true }
 tokio = { workspace = true }
