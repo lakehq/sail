@@ -1,0 +1,79 @@
+digraph architecture {
+  rankdir=LR;
+  node [shape=box, fontname="Sans-Serif"];
+  edge [fontname="Sans-Serif"];
+  compound=true;
+  fontname="Sans-Serif";
+  fontnames="svg";
+  fontsize=16;
+  splines="line";
+
+  legend [shape=note, label="Solid Line = Control Flow\nDashed Line = Data Flow"];
+
+  subgraph pyspark_client {
+    label="PySpark Client";
+    cluster=true;
+    spark_connect_client [label="Spark Connect Client"];
+  }
+
+  subgraph server {
+    label="Sail Server";
+    cluster=true;
+    subgraph session {
+      label="Session";
+      subgraph job_runner {
+        cluster=true;
+        label="Cluster Job Runner";
+        subgraph driver_actor {
+          label="Driver Actor";
+          driver_event_loop [label="Event Loop"];
+          driver_state [label="Driver State"];
+          worker_manager [label="Worker Manager"];
+        }
+      }
+    }
+  }
+
+  subgraph worker_1 {
+    label="Worker 1";
+    cluster=true;
+    subgraph worker_actor_1 {
+      label="Worker Actor 1";
+      cluster=true;
+      rank=same;
+      worker_event_loop_1 [label="Event Loop"];
+      streams_1 [label="Arrow Streams", shape=box3d];
+      tasks_1 [label="Tasks", shape=box3d];
+    }
+  }
+
+  ellipsis [label="...", style=none, shape=plain];
+
+  subgraph worker_n {
+    label=<Worker <I>n</I>>;
+    cluster=true;
+    subgraph worker_actor_n {
+      label=<Worker Actor <I>n</I>>;
+      cluster=true;
+      rank=same;
+      worker_event_loop_n [label="Event Loop"];
+      streams_n [label="Arrow Streams", shape=box3d];
+      tasks_n [label="Tasks", shape=box3d];
+    }
+  }
+
+  worker_arrow_flight [label="gRPC\n(Arrow Flight)", shape=plain, style=none];
+
+  spark_connect_client -> driver_event_loop [label="gRPC\n(Spark Connect)", dir=both, ltail="pyspark_client", lhead="server"];
+  driver_event_loop:s -> spark_connect_client:s [style=dashed, dir=both, ltail="server", lhead="pyspark_client"];
+
+  driver_event_loop -> worker_event_loop_1 [dir=both, ltail="server", lhead="worker_1", label="gRPC\n(Sail)"];
+  driver_event_loop -> worker_event_loop_n [dir=both, ltail="server", lhead="worker_n"];
+  driver_event_loop -> ellipsis [style=invis];
+
+  driver_event_loop:s -> worker_event_loop_1:s [style=dashed, lhead="worker_1", ltail="server"];
+  driver_event_loop:s -> worker_event_loop_n:s [style=dashed, lhead="worker_n", ltail="server", label="gRPC\n(Arrow Flight)"];
+
+  worker_event_loop_1 -> worker_arrow_flight [dir=back, style=dashed, ltail="worker_1"];
+  worker_event_loop_n -> worker_arrow_flight [dir=back, style=dashed, ltail="worker_n"];
+}
