@@ -5,6 +5,8 @@ rank: 1
 
 # Why Sail?
 
+Today's cloud environments and data workloads pose challenges not anticipated by solutions developed a decade ago. Organizations choose Sail because it accelerates execution, reduces resource consumption, simplifies data infrastructure, and enables seamless migration.
+
 ## Performance
 
 Sail delivers predictable performance characteristics across diverse workloads.

@@ -1,10 +1,10 @@
 ---
-title: Next Steps
+title: What's Next?
 rank: 999
 next: false
 ---
 
-# Next Steps
+# What's Next?
 
 You have now completed the journey of understanding what Sail is, how to use it, and how it works.
 You are welcome to revisit the documentation site occasionally as we add more content in the future.
