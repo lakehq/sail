@@ -13,12 +13,27 @@ pip install "pysail=={{ libVersion }}"
 
 ## Installation from Source
 
-::: info
-This installation method is recommended when performance is critical for your application.
-:::
+You can install Sail from source when performance is critical for your application.
+Sail can be distributed as a Docker image or a standalone binary, besides being available as a Python package.
+
+### Building the Docker Image
+
+You can build the Sail Docker image for deployment in a containerized environment such as Kubernetes.
+More information can be found in the [Docker Images](/guide/deployment/docker-images/) guide.
+
+### Building the Standalone Binary
+
+You can build and run the Sail CLI as a standalone binary.
+Please refer to the [Standalone Binary](/development/recipes/standalone-binary) developer guide for more information.
+
+### Building the Python Package
 
 When the pre-built wheels is not available for your platform, the `pip install` command downloads the source distribution
-and builds Sail from source. You need the following build tools for this process.
+and builds Sail from source.
+
+::: details
+
+You need the following build tools for building the Python package from source.
 
 1. A recent version of the stable Rust toolchain. You can manage the Rust toolchain using [rustup](https://rustup.rs/).
 2. The [Protocol Buffers](https://protobuf.dev/) compiler (`protoc`).
@@ -34,14 +49,10 @@ For example, the following command builds Sail with all features of the current 
 env RUSTFLAGS="-C target-cpu=native" pip install "pysail=={{ libVersion }}" -v --no-binary pysail
 ```
 
-::: info
 You can refer to the [Rust documentation](https://doc.rust-lang.org/rustc/codegen-options/index.html)
 for more information about the compiler options that can be specified via the `RUSTFLAGS` environment variable.
+
 :::
-
-## Standalone Binary
-
-Please refer to the [Standalone Binary](/development/recipes/standalone-binary) guide for more information about building and running the Sail CLI as a standalone binary.
 
 <script setup>
 import { useData } from "vitepress";

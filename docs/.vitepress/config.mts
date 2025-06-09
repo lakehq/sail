@@ -307,6 +307,7 @@ export default async () => {
         { text: "Concepts", link: "/concepts/", activeMatch: "^/concepts/" },
         {
           text: "More",
+          activeMatch: "^/(development|reference)/",
           items: [
             {
               text: "Development",
