@@ -1,0 +1,320 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 100,
+  "data": [
+    {
+      "name": "events",
+      "url": { "signal": "'_data/events-' + lower(engine) + '.json'" }
+    },
+    {
+      "name": "timeline",
+      "source": "events",
+      "transform": [
+        {
+          "type": "formula",
+          "expr": "'start'",
+          "as": "start"
+        },
+        {
+          "type": "lookup",
+          "from": "events",
+          "key": "name",
+          "fields": ["start"],
+          "values": ["time"],
+          "as": ["base"]
+        },
+        {
+          "type": "formula",
+          "expr": "datum.time - datum.base",
+          "as": "delta"
+        },
+        {
+          "type": "filter",
+          "expr": "test(/^(q\\d+_start|end)$/, datum.name)"
+        }
+      ]
+    },
+    {
+      "name": "timeline-ticks",
+      "source": "timeline",
+      "transform": [
+        {
+          "type": "filter",
+          "expr": "test(/^q\\d+_start$/, datum.name)"
+        },
+        {
+          "type": "formula",
+          "expr": "parseInt(replace(datum.name, /^q(\\d+)_start$/, '$1'))",
+          "as": "q"
+        },
+        {
+          "type": "filter",
+          "expr": "(datum.q - 1) % 5 == 0 || datum.q == length(data('timeline')) - 1"
+        },
+        {
+          "type": "formula",
+          "expr": "'q' + datum.q",
+          "as": "label"
+        }
+      ]
+    },
+    {
+      "name": "table",
+      "url": {
+        "signal": "'_data/resource-utilization-' + lower(engine) + '.csv'"
+      },
+      "format": {
+        "type": "csv",
+        "parse": {
+          "label": "string",
+          "mem_total": "number",
+          "mem_used": "number",
+          "diskio_write_bytes": "number"
+        }
+      },
+      "transform": [
+        {
+          "type": "formula",
+          "expr": "'start'",
+          "as": "start"
+        },
+        {
+          "type": "lookup",
+          "from": "events",
+          "key": "name",
+          "fields": ["start"],
+          "values": ["time"],
+          "as": ["base"]
+        },
+        {
+          "type": "formula",
+          "expr": "time(utcParse(datum.label, '%Y/%m/%d %H:%M:%S')) / 1000 - datum.base",
+          "as": "delta"
+        },
+        {
+          "type": "formula",
+          "expr": "datum.mem_total / 1024 / 1024 / 1024",
+          "as": "mem_total_gb"
+        },
+        {
+          "type": "formula",
+          "expr": "datum.mem_used / 1024 / 1024 / 1024",
+          "as": "mem_used_gb"
+        },
+        {
+          "type": "formula",
+          "expr": "datum.diskio_write_bytes / 1024 / 1024 / 1024",
+          "as": "diskio_write_gb"
+        }
+      ]
+    }
+  ],
+  "scales": [
+    {
+      "name": "xscale",
+      "type": "linear",
+      "domain": { "data": "table", "field": "delta" },
+      "range": "width"
+    }
+  ],
+  "layout": {
+    "columns": 1,
+    "padding": 10
+  },
+  "marks": [
+    {
+      "type": "group",
+      "title": {
+        "text": { "signal": "'Memory Usage Over Time (' + engine + ')'" },
+        "frame": "group",
+        "dx": { "signal": "width / 2" }
+      },
+      "scales": [
+        {
+          "name": "yscale-mem",
+          "type": "linear",
+          "domain": { "data": "table", "field": "mem_total_gb" },
+          "nice": true,
+          "range": "height"
+        },
+        {
+          "name": "color",
+          "type": "ordinal",
+          "domain": ["Total", "Used"],
+          "range": ["steelblue", "salmon"]
+        }
+      ],
+      "axes": [
+        {
+          "orient": "left",
+          "scale": "yscale-mem",
+          "title": "Memory (GB)",
+          "tickCount": 5
+        }
+      ],
+      "marks": [
+        {
+          "type": "text",
+          "from": { "data": "timeline-ticks" },
+          "encode": {
+            "enter": {
+              "x": { "scale": "xscale", "field": "delta" },
+              "y": { "value": -15 },
+              "text": { "field": "label" },
+              "align": { "value": "center" },
+              "baseline": { "value": "top" }
+            }
+          }
+        },
+        {
+          "type": "rule",
+          "from": { "data": "timeline" },
+          "encode": {
+            "enter": {
+              "x": { "scale": "xscale", "field": "delta" },
+              "x2": { "scale": "xscale", "field": "delta" },
+              "y": { "value": 0 },
+              "y2": { "signal": "height" },
+              "strokeWidth": { "value": 0.5 },
+              "stroke": { "value": "#888" },
+              "strokeDash": { "value": [2, 2] }
+            }
+          }
+        },
+        {
+          "type": "line",
+          "from": { "data": "table" },
+          "encode": {
+            "enter": {
+              "x": { "scale": "xscale", "field": "delta" },
+              "y": { "scale": "yscale-mem", "field": "mem_total_gb" },
+              "stroke": { "scale": "color", "value": "Total" }
+            }
+          }
+        },
+        {
+          "type": "line",
+          "from": { "data": "table" },
+          "encode": {
+            "enter": {
+              "x": { "scale": "xscale", "field": "delta" },
+              "y": { "scale": "yscale-mem", "field": "mem_used_gb" },
+              "stroke": { "scale": "color", "value": "Used" }
+            }
+          }
+        },
+        {
+          "type": "rect",
+          "encode": {
+            "enter": {
+              "x": { "value": 0.5 },
+              "x2": { "signal": "width", "offset": 0.5 },
+              "y": { "value": 0.5 },
+              "y2": { "signal": "height", "offset": 0.5 },
+              "stroke": { "value": "#888" }
+            }
+          }
+        }
+      ],
+      "legends": [
+        {
+          "stroke": "color",
+          "orient": "none",
+          "legendX": 10,
+          "legendY": 10,
+          "padding": 4,
+          "cornerRadius": 2,
+          "symbolType": "stroke",
+          "strokeColor": "#CCC"
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "title": {
+        "text": { "signal": "'Disk Write Over Time (' + engine + ')'" },
+        "frame": "group",
+        "dx": { "signal": "width / 2" },
+        "offset": -5
+      },
+      "scales": [
+        {
+          "name": "yscale-diskio",
+          "type": "linear",
+          "domain": { "data": "table", "field": "diskio_write_gb" },
+          "padding": 10,
+          "nice": true,
+          "range": "height"
+        }
+      ],
+      "axes": [
+        {
+          "orient": "left",
+          "scale": "yscale-diskio",
+          "title": "Disk Write (GB/s)",
+          "tickCount": 5
+        },
+        {
+          "orient": "bottom",
+          "scale": "xscale",
+          "title": "Time (s)",
+          "offset": { "signal": "height" }
+        }
+      ],
+      "marks": [
+        {
+          "type": "text",
+          "from": { "data": "timeline-ticks" },
+          "encode": {
+            "enter": {
+              "x": { "scale": "xscale", "field": "delta" },
+              "y": { "value": -15 },
+              "text": { "field": "label" },
+              "align": { "value": "center" },
+              "baseline": { "value": "top" }
+            }
+          }
+        },
+        {
+          "type": "rule",
+          "from": { "data": "timeline" },
+          "encode": {
+            "enter": {
+              "x": { "scale": "xscale", "field": "delta" },
+              "x2": { "scale": "xscale", "field": "delta" },
+              "y": { "value": 0 },
+              "y2": { "signal": "height" },
+              "strokeWidth": { "value": 0.5 },
+              "stroke": { "value": "#888" },
+              "strokeDash": { "value": [2, 2] }
+            }
+          }
+        },
+        {
+          "type": "line",
+          "from": { "data": "table" },
+          "encode": {
+            "enter": {
+              "x": { "scale": "xscale", "field": "delta" },
+              "y": { "scale": "yscale-diskio", "field": "diskio_write_gb" },
+              "stroke": { "value": "orange" }
+            }
+          }
+        },
+        {
+          "type": "rect",
+          "encode": {
+            "enter": {
+              "x": { "value": 0.5 },
+              "x2": { "signal": "width", "offset": 0.5 },
+              "y": { "value": 0.5 },
+              "y2": { "signal": "height", "offset": 0.5 },
+              "stroke": { "value": "#888" }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

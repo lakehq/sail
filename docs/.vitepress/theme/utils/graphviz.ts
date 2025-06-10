@@ -2,42 +2,9 @@ import fs from "fs/promises";
 import path from "path";
 
 import { instance } from "@viz-js/viz";
-import { CustomPlugin, optimize } from "svgo";
+import { optimize } from "svgo";
 
-// An SVGO plugin to scale SVG size by a given factor.
-const scaleSize = (scale: number): CustomPlugin => {
-  if (scale <= 0) {
-    throw new Error(`invalid scale factor: ${scale}`);
-  }
-
-  // Scales a value with an optional unit.
-  function scaleValue(value?: string): string {
-    if (value === undefined || value === null || value === "") {
-      throw new Error("value must be a non-empty string");
-    }
-    return value.replace(/^([\d.]+)(.*)$/, (_, num, unit) => {
-      return `${num * scale}${unit}`;
-    });
-  }
-
-  return {
-    name: "scaleSize",
-    fn: () => {
-      return {
-        root: {
-          exit: (node) => {
-            for (const child of node.children) {
-              if (child.type === "element" && child.name === "svg") {
-                child.attributes.width = scaleValue(child.attributes.width);
-                child.attributes.height = scaleValue(child.attributes.height);
-              }
-            }
-          },
-        },
-      };
-    },
-  };
-};
+import { scaleSize, setClass } from "./svgo-plugins";
 
 function createGraphvizLoader(
   glob: string[],
@@ -59,6 +26,7 @@ function createGraphvizLoader(
             plugins: [
               "preset-default",
               ...(config?.scale !== undefined ? [scaleSize(config.scale)] : []),
+              setClass("viz"),
             ],
           }).data;
           return [key, value];

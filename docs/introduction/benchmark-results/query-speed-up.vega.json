@@ -1,0 +1,107 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 200,
+  "data": [
+    {
+      "name": "table-spark",
+      "url": "_data/query-time-spark.json"
+    },
+    {
+      "name": "table-sail",
+      "url": "_data/query-time-sail.json",
+      "transform": [
+        {
+          "type": "lookup",
+          "from": "table-spark",
+          "key": "query",
+          "fields": ["query"],
+          "values": ["time"],
+          "as": ["baseline"]
+        },
+        {
+          "type": "formula",
+          "expr": "round((datum.baseline > datum.time ? datum.baseline / datum.time - 1 : 1 - datum.time / datum.baseline) * 100)",
+          "as": "speedup"
+        }
+      ]
+    }
+  ],
+  "title": {
+    "text": ["Sail Speed-Up Over Spark"],
+    "frame": "group"
+  },
+  "scales": [
+    {
+      "name": "xscale",
+      "type": "band",
+      "domain": {
+        "data": "table-sail",
+        "field": "query",
+        "sort": { "op": "mean", "field": "speedup", "order": "descending" }
+      },
+      "range": "width",
+      "padding": 0.2
+    },
+    {
+      "name": "yscale",
+      "type": "linear",
+      "domain": { "data": "table-sail", "field": "speedup" },
+      "domainMax": 850,
+      "range": "height"
+    }
+  ],
+  "axes": [
+    {
+      "orient": "bottom",
+      "scale": "xscale",
+      "title": "Query"
+    },
+    {
+      "orient": "left",
+      "scale": "yscale",
+      "grid": true,
+      "title": ["Speed-Up (%)", "(100% speed-up = 2x faster)"]
+    }
+  ],
+  "marks": [
+    {
+      "type": "rect",
+      "from": { "data": "table-sail" },
+      "encode": {
+        "enter": {
+          "x": { "scale": "xscale", "field": "query" },
+          "width": { "scale": "xscale", "band": 1 },
+          "y": { "scale": "yscale", "field": "speedup" },
+          "y2": { "scale": "yscale", "value": 0 },
+          "fill": { "value": "#3695BF" }
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": { "data": "table-sail" },
+      "encode": {
+        "enter": {
+          "x": { "scale": "xscale", "field": "query", "offset": 5 },
+          "y": { "scale": "yscale", "field": "speedup", "offset": -5 },
+          "text": { "field": "speedup" },
+          "align": { "value": "left" },
+          "angle": { "value": -45 }
+        }
+      }
+    },
+    {
+      "type": "rect",
+      "encode": {
+        "enter": {
+          "x": { "value": 0.5 },
+          "x2": { "signal": "width", "offset": 0.5 },
+          "y": { "value": 0.5 },
+          "y2": { "signal": "height", "offset": 0.5 },
+          "stroke": { "value": "#888" }
+        }
+      }
+    }
+  ]
+}

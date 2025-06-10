@@ -18,39 +18,45 @@ const props = defineProps<{
   @apply mx-auto;
 }
 
-:deep(svg) > .graph > path {
+:deep(svg.viz) > .graph > path {
   @apply fill-white stroke-none dark:fill-zinc-800 dark:stroke-none;
 }
 
-:deep(svg) path {
+:deep(svg.viz) path {
   @apply stroke-gray-800 dark:stroke-gray-200;
 }
 
-:deep(svg) circle {
+:deep(svg.viz) circle {
   @apply stroke-gray-800 dark:stroke-gray-200;
 }
 
-:deep(svg) rect {
+:deep(svg.viz) rect {
   @apply stroke-gray-800 dark:stroke-gray-200;
 }
 
-:deep(svg) text {
+:deep(svg.viz) text {
   @apply fill-gray-800 dark:fill-gray-200;
 }
 
-:deep(svg) .node circle:not([fill="none"]) {
+:deep(svg.viz) .node circle:not([fill="none"]) {
   @apply fill-gray-800 dark:fill-gray-200;
 }
 
-:deep(svg) .node rect:not([fill="none"]) {
+:deep(svg.viz) .node rect:not([fill="none"]) {
   @apply fill-gray-800 dark:fill-gray-200;
 }
 
-:deep(svg) .edge path:not([fill="none"]) {
+:deep(svg.viz) .edge path:not([fill="none"]) {
   @apply fill-gray-800 dark:fill-gray-200;
 }
 
-:deep(svg) .node path {
+:deep(svg.viz) .node path {
   @apply fill-gray-200 dark:fill-gray-700;
+}
+
+@media (prefers-color-scheme: dark) {
+  :deep(svg.vega) {
+    filter: invert(1) hue-rotate(180deg);
+  }
 }
 </style>
