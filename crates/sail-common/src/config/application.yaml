@@ -1,0 +1,505 @@
+- key: mode
+  type: string
+  default: "local"
+  description: |
+    The running mode for Sail. Valid values are `local`, `local-cluster`, and `kubernetes-cluster`.
+    
+    * In `local` mode, Sail runs in a single process, while query execution is still parallelized via threads.
+    * In `local-cluster` mode, Sail starts a cluster within a single process. The driver and workers run on different threads
+      in the same process and communicate with each other via RPC.
+    * In `kubernetes-cluster` mode, Sail manages a cluster in Kubernetes. The driver and workers run in separate
+      pods and communicate with each other via RPC.
+
+- key: runtime.stack_size
+  type: number
+  default: "8388608"
+  description: The stack size in bytes for each thread.
+
+- key: runtime.enable_secondary
+  type: boolean
+  default: "false"
+  description: Whether to enable a secondary Tokio runtime for separating I/O and compute tasks.
+  experimental: true
+
+- key: cluster.enable_tls
+  type: boolean
+  default: "false"
+  description: Whether to enable TLS for cluster communication.
+  experimental: true
+
+- key: cluster.driver_listen_host
+  type: string
+  default: "127.0.0.1"
+  description: The host on which the driver listens.
+
+- key: cluster.driver_listen_port
+  type: number
+  default: "0"
+  description: |
+    The port on which the driver listens.
+    If the value is `0`, a random port is assigned by the operating system.
+
+- key: cluster.driver_external_host
+  type: string
+  default: "127.0.0.1"
+  description: The external host for the worker to connect to the driver.
+
+- key: cluster.driver_external_port
+  type: number
+  default: "0"
+  description: |
+    The external port for the worker to connect to the driver.
+    If the value is `0`, the port is assumed to be the same as the port
+    on which the driver listens.
+
+- key: cluster.worker_id
+  type: number
+  default: "0"
+  description:
+  hidden: true
+
+- key: cluster.worker_listen_host
+  type: string
+  default: "127.0.0.1"
+  description: The host on which the worker listens.
+
+- key: cluster.worker_listen_port
+  type: number
+  default: "0"
+  description: |
+    The port on which the worker listens.
+    If the value is `0`, a random port is assigned by the operating system.
+
+- key: cluster.worker_external_host
+  type: string
+  default: "127.0.0.1"
+  description: The external host for other workers to connect to the worker.
+
+- key: cluster.worker_external_port
+  type: number
+  default: "0"
+  description: |
+    The external port for other workers to connect to the worker.
+    If the value is `0`, the port is assumed to be the same as the port
+    on which the worker listens.
+
+- key: cluster.worker_initial_count
+  type: number
+  default: "4"
+  description: The initial number of workers to launch.
+
+- key: cluster.worker_max_count
+  type: number
+  default: "0"
+  description: The maximum number of workers that can be launched.
+
+- key: cluster.worker_max_idle_time_secs
+  type: number
+  default: "120"
+  description: The maximum idle time in seconds before a worker is removed.
+
+- key: cluster.worker_heartbeat_interval_secs
+  type: number
+  default: "30"
+  description: The interval in seconds for worker heartbeats.
+  experimental: true
+
+- key: cluster.worker_heartbeat_timeout_secs
+  type: number
+  default: "120"
+  description: The timeout in seconds for worker heartbeats.
+  experimental: true
+
+- key: cluster.worker_launch_timeout_secs
+  type: number
+  default: "300"
+  description: The timeout in seconds for launching a worker.
+
+- key: cluster.worker_task_slots
+  type: number
+  default: "8"
+  description: The maximum number of tasks that can be launched on a worker.
+
+- key: cluster.worker_stream_buffer
+  type: number
+  default: "16"
+  description: The number of batches to buffer in the worker shuffle stream.
+  experimental: true
+
+- key: cluster.task_launch_timeout_secs
+  type: number
+  default: "300"
+  description: The timeout in seconds for launching a task.
+
+- key: cluster.job_output_buffer
+  type: number
+  default: "16"
+  description: The number of batches to buffer in the job output stream.
+  experimental: true
+
+- key: cluster.rpc_retry_strategy.type
+  type: string
+  default: "fixed"
+  description: |
+    The retry strategy for driver and worker RPC requests.
+    Valid values are `fixed` and `exponential_backoff`.
+  hidden: true
+  experimental: true
+
+- key: cluster.rpc_retry_strategy.fixed.max_count
+  type: number
+  default: "3"
+  description: |
+    The maximum number of retries for RPC requests
+    when using the `fixed` retry strategy.
+  hidden: true
+  experimental: true
+
+- key: cluster.rpc_retry_strategy.fixed.delay_secs
+  type: number
+  default: "5"
+  description: |
+    The delay in seconds between retries for RPC requests
+    when using the `fixed` retry strategy.
+  hidden: true
+  experimental: true
+
+- key: cluster.rpc_retry_strategy.exponential_backoff.max_count
+  type: number
+  default: "3"
+  description: |
+    The maximum number of retries for RPC requests
+    when using the `exponential_backoff` retry strategy.
+  hidden: true
+  experimental: true
+
+- key: cluster.rpc_retry_strategy.exponential_backoff.initial_delay_secs
+  type: number
+  default: "1"
+  description: |
+    The initial delay in seconds between retries for RPC requests
+    when using the `exponential_backoff` retry strategy.
+  hidden: true
+  experimental: true
+
+- key: cluster.rpc_retry_strategy.exponential_backoff.max_delay_secs
+  type: number
+  default: "5"
+  description: |
+    The maximum delay in seconds between retries for RPC requests
+    when using the `exponential_backoff` retry strategy.
+  hidden: true
+  experimental: true
+
+- key: cluster.rpc_retry_strategy.exponential_backoff.factor
+  type: number
+  default: "2"
+  description: |
+    The factor by which the delay increases after each retry
+    when using the `exponential_backoff` retry strategy.
+  hidden: true
+  experimental: true
+
+- key: execution.batch_size
+  type: number
+  default: "16384"
+  description: The batch size for physical plan execution.
+  experimental: true
+
+- key: parquet.enable_page_index
+  type: boolean
+  default: "true"
+  description: |
+    (Reading) Whether to enable page index when reading Parquet files.
+    
+    If the value is `true`, the Parquet reader reads the page index if present.
+    This can reduce I/O and the number of rows decoded.
+  experimental: true
+
+- key: parquet.pruning
+  type: boolean
+  default: "true"
+  description: |
+    (Reading) Whether to prune row groups when reading Parquet files.
+    
+    If the value is `true`, the Parquet reader attempts to skip entire row groups based
+    on the predicate in the query and the metadata (minimum and maximum values) stored in
+    the Parquet file.
+  experimental: true
+
+- key: parquet.skip_metadata
+  type: boolean
+  default: "true"
+  description: |
+    (Reading) Whether to skip the metadata when reading Parquet files.
+    
+    If the value is `true`, the Parquet reader skip the optional embedded metadata that may be in
+    the file schema. This can help avoid schema conflicts when querying
+    multiple Parquet files with schemas containing compatible types but different metadata.
+  experimental: true
+
+- key: parquet.metadata_size_hint
+  type: number
+  default: "0"
+  description: |
+    (Reading) The metadata size hint in bytes when reading Parquet files.
+    
+    If the value `n` is greater than `8`, the Parquet reader will try and fetch the last `n`
+    bytes of the Parquet file optimistically. Otherwise, two reads are performed to fetch the
+    metadata. The first read fetches the 8-byte Parquet footer and the second read fetches
+    the metadata length encoded in the footer.
+  experimental: true
+
+- key: parquet.pushdown_filters
+  type: boolean
+  default: "false"
+  description: |
+    (Reading) Whether to push down filter expressions when reading Parquet files.
+    
+    If the value is `true`, the Parquet reader applies filter expressions in decoding operations to
+    reduce the number of rows decoded. This optimization is sometimes called "late materialization".
+  experimental: true
+
+- key: parquet.reorder_filters
+  type: boolean
+  default: "false"
+  description: |
+    (Reading) Whether to reorder filter expressions when reading Parquet files.
+    
+    If the value is `true`, the Parquet reader reorders filter expressions heuristically in decoding operations to
+    minimize the cost of evaluation. If the value is `false`, the filters are applied in the same order as written in the query.
+  experimental: true
+
+- key: parquet.schema_force_view_types
+  type: boolean
+  default: "true"
+  description: |
+    (Reading) Whether to force view types for binary and string columns when reading Parquet files.
+    
+    If the value is `true`, the Parquet reader will read columns of the `Utf8` or `Utf8Large` types as the `Utf8View` type,
+    and the `Binary` or `BinaryLarge` types as the `BinaryView` type.
+  experimental: true
+
+- key: parquet.binary_as_string
+  type: boolean
+  default: "false"
+  description: |
+    (Reading) Whether to read binary columns as string columns when reading Parquet files.
+    
+    If the value is `true`, the Parquet reader will read columns of
+    the `Binary` or `LargeBinary` as the `Utf8` type, and the `BinaryView` type as the `Utf8View` type.
+    This is helpful when reading Parquet files generated by some legacy writers, which do not correctly set
+    the UTF-8 flag for strings, causing string columns to be loaded as binary columns by default.
+  experimental: true
+
+- key: parquet.data_page_size_limit
+  type: number
+  default: "1048576"
+  description: |
+    (Writing) The best-effort maximum size of a data page in bytes.
+  hidden: true
+  experimental: true
+
+- key: parquet.write_batch_size
+  type: number
+  default: "1024"
+  description: |
+    (Writing) The Parquet writer batch size in bytes.
+  experimental: true
+
+- key: parquet.writer_version
+  type: string
+  default: '"1.0"'
+  description: |
+    (Writing) The Parquet writer version.
+    Valid values are `"1.0"` and `"2.0"`.
+  hidden: true
+  experimental: true
+
+- key: parquet.skip_arrow_metadata
+  type: boolean
+  default: "false"
+  description: |
+    (Writing) Whether to skip encoding the embedded arrow metadata when writing Parquet files.
+  experimental: true
+
+- key: parquet.compression
+  type: string
+  default: "zstd(3)"
+  description: |
+    (Writing) The default Parquet compression codec.
+    Valid values are `uncompressed`, `snappy`, `gzip(level)`,
+    `lzo`, `brotli(level)`, `lz4`, `zstd(level)`, and `lz4_raw`,
+    where `level` is an integer defining the compression level.
+    These values are not case-sensitive.
+  experimental: true
+
+- key: parquet.dictionary_enabled
+  type: boolean
+  default: "true"
+  description: |
+    (Writing) Whether to enable dictionary encoding for the Parquet writer.
+  experimental: true
+
+- key: parquet.dictionary_page_size_limit
+  type: number
+  default: "1048576"
+  description: |
+    (Writing) The best-effort maximum dictionary page size in bytes for the Parquet writer.
+  experimental: true
+
+- key: parquet.statistics_enabled
+  type: string
+  default: "page"
+  description: |
+    (Writing) Whether statistics are enabled for any column for the Parquet writer.
+    Valid values are `none`, `chunk`, and `page`.
+    These values are not case-sensitive.
+  experimental: true
+
+- key: parquet.max_row_group_size
+  type: number
+  default: "1048576"
+  description: |
+    (Writing) The target maximum number of rows in each row group for the Parquet writer.
+    
+    Larger row groups require more memory to write, but
+    can get better compression and be faster to read.
+  experimental: true
+
+- key: parquet.column_index_truncate_length
+  type: number
+  default: "64"
+  description: |
+    (Writing) The column index truncate length for the Parquet writer.
+  hidden: true
+  experimental: true
+
+- key: parquet.statistics_truncate_length
+  type: number
+  default: "0"
+  description: |
+    (Writing) The statistics truncate length for the Parquet writer.
+    
+    If the value is `0`, no truncation is applied.
+  hidden: true
+  experimental: true
+
+- key: parquet.data_page_row_count_limit
+  type: number
+  default: "20000"
+  description: |
+    (Writing) The best-effort maximum number of rows in data page for the Parquet writer.
+  experimental: true
+
+- key: parquet.encoding
+  type: string
+  default: ""
+  description: |
+    (Writing) The default encoding for any column.
+    Valid values are `plain`, `plain_dictionary`, `rle`,
+    `bit_packed` (deprecated), `delta_binary_packed`, `delta_length_byte_array`,
+    `delta_byte_array`, `rle_dictionary`, and `byte_stream_split`.
+    These values are not case sensitive.
+    
+    An empty value can also be used, which allows the Parquet writer to choose
+    the encoding for each column to achieve good performance.
+  hidden: true
+  experimental: true
+
+- key: parquet.bloom_filter_on_read
+  type: boolean
+  default: "true"
+  description: |
+    (Writing) Whether to use available bloom filters when reading Parquet files.
+  experimental: true
+
+- key: parquet.bloom_filter_on_write
+  type: boolean
+  default: "false"
+  description: |
+    (Writing) Whether to write bloom filters for all columns when writing Parquet files.
+  experimental: true
+
+- key: parquet.bloom_filter_fpp
+  type: number
+  default: "0.05"
+  description: |
+    (Writing) The false positive probability for bloom filters when writing Parquet files.
+  experimental: true
+
+- key: parquet.bloom_filter_ndv
+  type: number
+  default: "1000000"
+  description: |
+    (Writing) The number of distinct values for bloom filters when writing Parquet files.
+  experimental: true
+
+- key: parquet.allow_single_file_parallelism
+  type: boolean
+  default: "true"
+  description: |
+    (Writing) Whether to parallelize writing for each single Parquet file.
+    
+    If the value is `true`, each column in each row group in each file are serialized in parallel.
+  experimental: true
+
+- key: parquet.maximum_parallel_row_group_writers
+  type: number
+  default: "2"
+  description: |
+    (Writing) The maximum number of row group writers to use for the Parquet writer.
+    
+    This may improve performance when writing large Parquet files,
+    at the expense of higher memory usage.
+  experimental: true
+
+- key: parquet.maximum_buffered_record_batches_per_stream
+  type: number
+  default: "32"
+  description: |
+    (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
+    
+    This may improve performance when writing large Parquet files,
+    at the expense of higher memory usage.
+  experimental: true
+
+- key: kubernetes.image
+  type: string
+  default: "sail:latest"
+  description: The container image to use for the driver and worker pods.
+
+- key: kubernetes.image_pull_policy
+  type: string
+  default: "IfNotPresent"
+  description: The image pull policy for the driver and worker pods.
+
+- key: kubernetes.namespace
+  type: string
+  default: "default"
+  description: The Kubernetes namespace in which the driver and worker pods will be created.
+
+- key: kubernetes.driver_pod_name
+  type: string
+  default: ""
+  description: |
+    The name of the pod that runs the driver,
+    or empty if the driver pod name is not known.
+    This is used to set owner references for worker pods.
+
+- key: kubernetes.worker_pod_name_prefix
+  type: string
+  default: "sail-worker-"
+  description: |
+    The prefix of the name of worker pods.
+    This should usually end with a hyphen (`-`).
+
+- key: kubernetes.worker_service_account_name
+  type: string
+  default: "default"
+  description: The name of the service account to use for the worker pods.
+
+- key: spark.session_timeout_secs
+  type: number
+  default: "300"
+  description: The Spark session timeout in seconds.

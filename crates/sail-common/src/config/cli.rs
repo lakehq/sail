@@ -12,7 +12,7 @@ pub struct CliConfig {
 impl CliConfig {
     pub fn load() -> CommonResult<Self> {
         Figment::from(Serialized::defaults(CliConfig::default()))
-            .merge(Env::prefixed("SAIL_INTERNAL_").map(|p| p.as_str().replace("__", ".").into()))
+            .merge(Env::prefixed("SAIL_INTERNAL__").map(|p| p.as_str().replace("__", ".").into()))
             .extract()
             .map_err(|e| CommonError::InvalidArgument(e.to_string()))
     }
@@ -24,5 +24,5 @@ pub struct CliConfigEnv;
 impl CliConfigEnv {
     /// Turn Sail CLI into a Python interpreter.
     /// This allows the embedded Python interpreter to fork child Python processes.
-    pub const RUN_PYTHON: &'static str = "SAIL_INTERNAL_RUN_PYTHON";
+    pub const RUN_PYTHON: &'static str = "SAIL_INTERNAL__RUN_PYTHON";
 }

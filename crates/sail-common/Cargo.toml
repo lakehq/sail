@@ -14,8 +14,10 @@ arrow-schema = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 glob = { workspace = true }
 num_enum = { workspace = true }
+num-traits = { workspace = true }
 figment = { workspace = true }
 half = { workspace = true }
 iana-time-zone = { workspace = true }

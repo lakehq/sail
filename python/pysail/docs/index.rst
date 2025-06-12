@@ -1,6 +1,6 @@
-====================
-Python API Reference
-====================
+==========
+Python API
+==========
 
 .. toctree::
    :maxdepth: 2

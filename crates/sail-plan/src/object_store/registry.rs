@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
+use dashmap::DashMap;
 use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{plan_datafusion_err, Result};
 #[cfg(feature = "hdfs")]
@@ -32,13 +32,13 @@ impl ObjectStoreKey {
 
 #[derive(Debug)]
 pub struct DynamicObjectStoreRegistry {
-    stores: RwLock<HashMap<ObjectStoreKey, Arc<dyn ObjectStore>>>,
+    stores: DashMap<ObjectStoreKey, Arc<dyn ObjectStore>>,
     runtime: RuntimeHandle,
 }
 
 impl DynamicObjectStoreRegistry {
     pub fn new(runtime: RuntimeHandle) -> Self {
-        let mut stores: HashMap<_, Arc<dyn ObjectStore>> = HashMap::new();
+        let stores: DashMap<ObjectStoreKey, Arc<dyn ObjectStore>> = DashMap::new();
         stores.insert(
             ObjectStoreKey {
                 scheme: "file".to_string(),
@@ -46,10 +46,7 @@ impl DynamicObjectStoreRegistry {
             },
             Arc::new(LocalFileSystem::new()),
         );
-        Self {
-            stores: RwLock::new(stores),
-            runtime,
-        }
+        Self { stores, runtime }
     }
 }
 
@@ -60,28 +57,29 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         let key = ObjectStoreKey::new(url);
-        if let Ok(mut stores) = self.stores.write() {
-            stores.insert(key, store)
-        } else {
-            None
-        }
+        self.stores.insert(key, store)
     }
 
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let key = ObjectStoreKey::new(url);
-        let stores = self
+
+        // Use entry API for atomic get-or-insert
+        let store = self
             .stores
-            .read()
-            .map_err(|e| plan_datafusion_err!("failed to get object store: {e}"))?;
-        if let Some(store) = stores.get(&key) {
-            Ok(Arc::clone(store))
-        } else if let Some(handle) = self.runtime.secondary() {
-            let store =
-                RuntimeAwareObjectStore::try_new(|| get_dynamic_object_store(url), handle.clone())?;
-            Ok(Arc::new(store))
-        } else {
-            Ok(get_dynamic_object_store(url)?)
-        }
+            .entry(key)
+            .or_try_insert_with(|| {
+                if let Some(handle) = self.runtime.secondary() {
+                    Ok(Arc::new(RuntimeAwareObjectStore::try_new(
+                        || get_dynamic_object_store(url),
+                        handle.clone(),
+                    )?))
+                } else {
+                    get_dynamic_object_store(url)
+                }
+            })?
+            .clone();
+
+        Ok(store)
     }
 }
 
