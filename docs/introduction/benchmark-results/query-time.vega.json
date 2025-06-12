@@ -1,0 +1,126 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 400,
+  "height": 200,
+  "data": [
+    {
+      "name": "table-spark",
+      "url": "_data/query-time-spark.json"
+    },
+    {
+      "name": "table-sail",
+      "url": "_data/query-time-sail.json"
+    }
+  ],
+  "scales": [
+    {
+      "name": "xscale",
+      "type": "band",
+      "domain": {
+        "fields": [
+          { "data": "table-spark", "field": "query" },
+          { "data": "table-sail", "field": "query" }
+        ]
+      },
+      "range": "width",
+      "padding": 0.4
+    },
+    {
+      "name": "yscale",
+      "type": "linear",
+      "domain": {
+        "fields": [
+          { "data": "table-spark", "field": "time" },
+          { "data": "table-sail", "field": "time" }
+        ]
+      },
+      "range": "height",
+      "nice": true
+    },
+    {
+      "name": "color",
+      "type": "ordinal",
+      "domain": ["Spark", "Sail"],
+      "range": ["#E25A1C", "#3695BF"]
+    }
+  ],
+  "signals": [
+    {
+      "name": "w",
+      "update": "bandwidth('xscale') / 2"
+    }
+  ],
+  "axes": [
+    {
+      "orient": "bottom",
+      "scale": "xscale",
+      "title": "Query"
+    },
+    {
+      "orient": "left",
+      "scale": "yscale",
+      "title": "Query Time (s)"
+    }
+  ],
+  "title": {
+    "text": "Query Time Comparison",
+    "frame": "group"
+  },
+  "marks": [
+    {
+      "type": "rect",
+      "from": { "data": "table-spark" },
+      "encode": {
+        "enter": {
+          "x": { "scale": "xscale", "field": "query", "offset": 0 },
+          "width": { "signal": "w" },
+          "y": { "scale": "yscale", "value": 0 },
+          "y2": { "scale": "yscale", "field": "time" },
+          "fill": { "scale": "color", "value": "Spark" }
+        }
+      }
+    },
+    {
+      "type": "rect",
+      "from": { "data": "table-sail" },
+      "encode": {
+        "enter": {
+          "x": {
+            "scale": "xscale",
+            "field": "query",
+            "offset": { "signal": "w" }
+          },
+          "width": { "signal": "w" },
+          "y": { "scale": "yscale", "value": 0 },
+          "y2": { "scale": "yscale", "field": "time" },
+          "fill": { "scale": "color", "value": "Sail" }
+        }
+      }
+    },
+    {
+      "type": "rect",
+      "encode": {
+        "enter": {
+          "x": { "value": 0.5 },
+          "x2": { "signal": "width", "offset": 0.5 },
+          "y": { "value": 0.5 },
+          "y2": { "signal": "height", "offset": 0.5 },
+          "stroke": { "value": "#888" }
+        }
+      }
+    }
+  ],
+  "legends": [
+    {
+      "fill": "color",
+      "orient": "none",
+      "legendX": 336,
+      "legendY": 4,
+      "symbolType": "square",
+      "symbolSize": 30,
+      "padding": 2,
+      "cornerRadius": 2,
+      "strokeColor": { "value": "#CCC" }
+    }
+  ]
+}
