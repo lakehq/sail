@@ -27,7 +27,7 @@ impl Default for SparkSha1 {
 impl SparkSha1 {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }

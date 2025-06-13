@@ -25,7 +25,7 @@ impl Default for SparkCrc32 {
 impl SparkCrc32 {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
