@@ -10,6 +10,7 @@ use half::f16;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::error_utils::generic_exec_err;
 use crate::extension::function::math::least_greatest;
+use crate::extension::function::math::rand_poisson::RandPoisson;
 use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::math::spark_abs::SparkAbs;
@@ -571,6 +572,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("power", F::binary(power)),
         ("radians", F::unary(expr_fn::radians)),
         ("rand", F::udf(Random::new())),
+        ("rand_poisson", F::udf(RandPoisson::new())),
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
         ("rint", F::unary(rint)),

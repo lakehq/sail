@@ -9,17 +9,17 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use rand_distr::{Distribution, Poisson};
 
 #[derive(Debug)]
-pub struct PoissonRand {
+pub struct RandPoisson {
     signature: Signature,
 }
 
-impl Default for PoissonRand {
+impl Default for RandPoisson {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PoissonRand {
+impl RandPoisson {
     pub fn new() -> Self {
         Self {
             signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Volatile),
@@ -27,13 +27,13 @@ impl PoissonRand {
     }
 }
 
-impl ScalarUDFImpl for PoissonRand {
+impl ScalarUDFImpl for RandPoisson {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "poisson_rand"
+        "rand_poisson"
     }
 
     fn signature(&self) -> &Signature {
