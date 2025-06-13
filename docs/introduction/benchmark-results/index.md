@@ -28,4 +28,31 @@ From the results, we can see that Sail completes the workload nearly 4x faster t
 and Sail can run on 1/4 the instance size, leading to up to 94% cost reduction.
 Sail can handle larger datasets on the same hardware or achieve similar performance on smaller, cheaper infrastructure.
 
-More details on the benchmark results are available in the [blog post](https://lakesail.com/blog/supercharge-spark/).
+## Detailed Results
+
+### Query Time
+
+The following figure shows query time comparison between Sail and Spark for individual queries.
+
+<SvgDiagram :svg="data['query-time.vega.json']" />
+
+The following figure shows sorted relative improvements of Sail over Spark for each query.
+
+<SvgDiagram :svg="data['query-speed-up.vega.json']" />
+
+### Resource Utilization
+
+We analyze memory and disk usage during query execution, using AWS CloudWatch metrics with 1-second resolution.
+
+The following figure shows that Spark consumed about 54 GB of memory during query execution, and spilled to disk for shuffle operations. Despite of abundant available memory, Spark wrote over 110 GB of temporary data, peaking at over 46 GB in a rolling minute.
+
+<SvgDiagram :svg="data['resource-utilization.vega.json']['spark']" />
+
+In contrast, the following figure shows drastically different resource consumption characteristics of Sail. At peak, Sail utilized approximately 22 GB of memory, but this usage lasted for only one second. Sail released memory after executing each query and had zero disk usage, relying solely on the available memory for computation.
+
+<SvgDiagram :svg="data['resource-utilization.vega.json']['sail']" />
+
+<script setup lang="ts">
+import SvgDiagram from "@theme/components/SvgDiagram.vue";
+import { data } from "./index.data.ts";
+</script>

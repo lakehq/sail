@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "lint": "vue-tsc --noEmit && eslint docs",
-    "format": "prettier ${FORMAT_OPTIONS---write} \"*.{js,json,yml,yaml,md}\" \".github/**/*.{yml,yaml}\" \"docs/**/*.{ts,mts,vue,css,md}\"",
+    "format": "prettier ${FORMAT_OPTIONS---write} \"*.{js,json,yml,yaml,md}\" \".github/**/*.{yml,yaml}\" \"docs/**/*.{ts,mts,vue,css,md,json,yml,yaml}\"",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
@@ -36,6 +36,7 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.33.1",
+    "vega": "^6.1.2",
     "vite": "^5.4.19",
     "vitepress": "^1.6.3",
     "vue": "^3.5.16",
