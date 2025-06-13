@@ -6,6 +6,7 @@ use datafusion_expr::{expr, ScalarUDF};
 
 use crate::error::PlanResult;
 use crate::extension::function::math::spark_hex_unhex::SparkHex;
+use crate::extension::function::spark_crc32::SparkCrc32;
 use crate::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use crate::extension::function::spark_xxhash64::SparkXxhash64;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -37,7 +38,7 @@ pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, ScalarFunctio
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("crc32", F::unknown("crc32")),
+        ("crc32", F::udf(SparkCrc32::new())),
         ("hash", F::udf(SparkMurmur3Hash::new())),
         ("md5", F::unary(expr_fn::md5)),
         ("sha", F::unknown("sha")),

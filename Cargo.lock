@@ -5243,6 +5243,7 @@ dependencies = [
  "chrono",
  "chumsky",
  "comfy-table",
+ "crc32fast",
  "dashmap",
  "datafusion",
  "datafusion-common",

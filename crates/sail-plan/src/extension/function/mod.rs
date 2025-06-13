@@ -17,6 +17,7 @@ pub mod skewness;
 pub mod spark_aes;
 mod spark_hash_utils;
 pub mod spark_murmur3_hash;
+pub mod spark_crc32;
 pub mod spark_to_string;
 pub mod spark_xxhash64;
 pub mod string;

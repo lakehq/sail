@@ -51,6 +51,7 @@ aes-gcm = { workspace = true }
 cbc = { workspace = true }
 base64 = { workspace = true }
 half = { workspace = true }
+crc32fast = { workspace = true }
 num = { workspace = true }
 hf-hub = { workspace = true }
 reqwest = { workspace = true }
