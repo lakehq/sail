@@ -784,7 +784,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
             "spark_reverse" | "reverse" => Ok(Arc::new(ScalarUDF::from(SparkReverse::new()))),
             "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
-            "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
+            "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
             "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
             "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
