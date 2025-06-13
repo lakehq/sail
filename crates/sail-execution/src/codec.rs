@@ -87,7 +87,9 @@ use sail_plan::extension::function::skewness::SkewnessFunc;
 use sail_plan::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
+use sail_plan::extension::function::spark_crc32::SparkCrc32;
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
+use sail_plan::extension::function::spark_sha1::SparkSha1;
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::string::levenshtein::Levenshtein;
 use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
@@ -782,6 +784,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
             "spark_reverse" | "reverse" => Ok(Arc::new(ScalarUDF::from(SparkReverse::new()))),
             "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
+            "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
+            "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
             "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
             "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
@@ -865,6 +869,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkMurmur3Hash>()
             || node.inner().as_any().is::<SparkReverse>()
             || node.inner().as_any().is::<SparkXxhash64>()
+            || node.inner().as_any().is::<SparkSha1>()
+            || node.inner().as_any().is::<SparkCrc32>()
             || node.inner().as_any().is::<OverlayFunc>()
             || node.inner().as_any().is::<SparkBase64>()
             || node.inner().as_any().is::<SparkUnbase64>()
