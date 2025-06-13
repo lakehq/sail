@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: crc32"
+        "failure": "error in DataFusion: Execution error: crc32 function was called with unexpected type Utf8. This should have been coerced."
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sha"
+        "failure": "error in DataFusion: Execution error: sha1 function was called with unexpected type Utf8. This should have been coerced."
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sha1"
+        "failure": "error in DataFusion: Execution error: sha1 function was called with unexpected type Utf8. This should have been coerced."
       }
     },
     {
