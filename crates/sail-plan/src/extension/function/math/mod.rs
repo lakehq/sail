@@ -3,6 +3,7 @@ use std::cmp::{max, min};
 use datafusion::arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION};
 
 pub mod least_greatest;
+pub mod rand_poisson;
 pub mod randn;
 pub mod random;
 pub mod spark_abs;
