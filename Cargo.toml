@@ -80,6 +80,8 @@ aes-gcm = "0.10.3"
 cbc = { version = "0.1.2", features = ["std"] }
 base64 = "0.22.1"
 md-5 = "0.10.6"
+crc32fast = "1.4.2"
+sha1 = "0.10.6"
 half = { version = "2.6.0", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.63"
 chumsky = { version = "0.10.1", default-features = false, features = ["pratt"] }
