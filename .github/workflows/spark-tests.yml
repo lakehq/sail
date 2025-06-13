@@ -1,5 +1,8 @@
 name: Spark Tests
 
+env:
+  SPARK_VERSION: "3.5.5"
+
 on:
   workflow_call:
     inputs:
@@ -74,7 +77,7 @@ jobs:
             opt/spark/python/dist/pyspark-*.tar.gz
             opt/spark/python/test_support/
           # We must use `format()` to define the key here since nested variable substitution is not supported.
-          key: ${{ format('spark-tests-pyspark-{0}-{1}-{2}-{3}', inputs.spark_version, runner.os, runner.arch, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-pyspark.sh')) }}
+          key: ${{ format('spark-tests-pyspark-{0}-{1}-{2}-{3}', (inputs.spark_version || env.SPARK_VERSION), runner.os, runner.arch, hashFiles(format('scripts/spark-tests/spark-{0}.patch', (inputs.spark_version || env.SPARK_VERSION)), 'scripts/spark-tests/build-pyspark.sh')) }}
 
       - if: steps.cache-pyspark.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
@@ -82,7 +85,7 @@ jobs:
         with:
           repository: apache/spark
           path: opt/spark
-          ref: v${{ inputs.spark_version }}
+          ref: v${{ inputs.spark_version || env.SPARK_VERSION }}
           fetch-depth: 1
 
       - if: steps.cache-pyspark.outputs.cache-hit != 'true'
