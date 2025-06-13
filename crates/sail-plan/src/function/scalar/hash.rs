@@ -8,6 +8,7 @@ use crate::error::PlanResult;
 use crate::extension::function::math::spark_hex_unhex::SparkHex;
 use crate::extension::function::spark_crc32::SparkCrc32;
 use crate::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
+use crate::extension::function::spark_sha1::SparkSha1;
 use crate::extension::function::spark_xxhash64::SparkXxhash64;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
@@ -41,8 +42,8 @@ pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, ScalarFunctio
         ("crc32", F::udf(SparkCrc32::new())),
         ("hash", F::udf(SparkMurmur3Hash::new())),
         ("md5", F::unary(expr_fn::md5)),
-        ("sha", F::unknown("sha")),
-        ("sha1", F::unknown("sha1")),
+        ("sha", F::udf(SparkSha1::new())),
+        ("sha1", F::udf(SparkSha1::new())),
         ("sha2", F::custom(sha2)),
         ("xxhash64", F::udf(SparkXxhash64::new())),
     ]

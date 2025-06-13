@@ -45,6 +45,7 @@ aws-smithy-runtime-api = { workspace = true }
 aws-smithy-types = { workspace = true }
 aws-smithy-async = { workspace = true }
 hdfs-native-object-store = { workspace = true, optional = true }
+sha1 = { workspace = true}
 twox-hash = { workspace = true }
 aes = { workspace = true }
 aes-gcm = { workspace = true }

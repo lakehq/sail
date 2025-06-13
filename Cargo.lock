@@ -5276,6 +5276,7 @@ dependencies = [
  "serde",
  "serde_arrow",
  "serde_yaml",
+ "sha1",
  "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
