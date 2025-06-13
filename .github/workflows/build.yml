@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types:
+      - labeled
+      - opened
+      - reopened
+      - synchronize
 
 jobs:
   build:
