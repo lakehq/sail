@@ -35,7 +35,7 @@ jobs:
         with:
           script: |
             const labels = context.payload.pull_request?.labels?.map(label => label.name) || [];
-            core.setOutput('has_label', labels.includes('run-spark-tests') ? 'true' : 'false');
+            core.setOutput('has_label', labels.includes('run spark tests') ? 'true' : 'false');
 
   test:
     name: Test
