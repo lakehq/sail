@@ -1,11 +1,12 @@
+use std::any::Any;
+use std::sync::Arc;
+
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use rand_distr::{Distribution, Poisson};
-use std::any::Any;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct PoissonRand {
