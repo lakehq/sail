@@ -572,7 +572,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("power", F::binary(power)),
         ("radians", F::unary(expr_fn::radians)),
         ("rand", F::udf(Random::new())),
-        ("rand_poisson", F::udf(RandPoisson::new())),
+        ("random_poisson", F::udf(RandPoisson::new())),
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
         ("rint", F::unary(rint)),

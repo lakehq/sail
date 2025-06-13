@@ -70,6 +70,7 @@ use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::map::map_function::MapFunction;
 use sail_plan::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
 use sail_plan::extension::function::math::least_greatest::{Greatest, Least};
+use sail_plan::extension::function::math::rand_poisson::RandPoisson;
 use sail_plan::extension::function::math::randn::Randn;
 use sail_plan::extension::function::math::random::Random;
 use sail_plan::extension::function::math::spark_abs::SparkAbs;
@@ -770,6 +771,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "map" => Ok(Arc::new(ScalarUDF::from(MapFunction::new()))),
             "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
+            "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "spark_size" | "size" | "spark_cardinality" | "cardinality" => {
@@ -860,6 +862,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<MultiExpr>()
             || node.inner().as_any().is::<RaiseError>()
             || node.inner().as_any().is::<Randn>()
+            || node.inner().as_any().is::<RandPoisson>()
             || node.inner().as_any().is::<Random>()
             || node.inner().as_any().is::<SparkSize>()
             || node.inner().as_any().is::<SparkArray>()

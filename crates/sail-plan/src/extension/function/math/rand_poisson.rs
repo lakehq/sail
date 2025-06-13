@@ -33,7 +33,7 @@ impl ScalarUDFImpl for RandPoisson {
     }
 
     fn name(&self) -> &str {
-        "rand_poisson"
+        "random_poisson"
     }
 
     fn signature(&self) -> &Signature {
@@ -53,11 +53,7 @@ impl ScalarUDFImpl for RandPoisson {
         let new_array = i64s
             .iter()
             .map(|array_elem| {
-                array_elem.map(|value| {
-                    Poisson::new(value as f64) // 🧠 convierte a f64 si es i64
-                        .unwrap()
-                        .sample(&mut rng) as i64
-                })
+                array_elem.map(|value| Poisson::new(value as f64).unwrap().sample(&mut rng) as i64)
             })
             .collect::<Int64Array>();
 

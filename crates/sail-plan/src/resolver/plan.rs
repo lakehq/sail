@@ -1615,11 +1615,6 @@ impl PlanResolver<'_> {
                 "invalid sample bounds: [{lower_bound}, {upper_bound})"
             )));
         }
-        if with_replacement {
-            return Err(PlanError::todo(
-                "sampling with replacement is not supported yet",
-            ));
-        }
         // if defined seed use these values otherwise use random seed
 
         let input: LogicalPlan = self
@@ -1627,7 +1622,14 @@ impl PlanResolver<'_> {
             .await?;
 
         let rand_column_name: String = state.register_field_name("rand_value");
-        let rand_expr: Expr = random().alias(&rand_column_name);
+        let rand_expr: Expr = if with_replacement {
+            return Err(PlanError::todo(
+                "Try rand_poisson, sampling with replacement is not supported yet",
+            ));
+            /* random_poisson().alias(&rand_column_name)*/
+        } else {
+            random().alias(&rand_column_name)
+        };
 
         let init_exprs: Vec<Expr> = input
             .schema()
