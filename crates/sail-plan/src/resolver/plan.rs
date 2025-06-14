@@ -1655,6 +1655,11 @@ impl PlanResolver<'_> {
             .build()?;
         */
 
+        if with_replacement {
+            return Ok(LogicalPlanBuilder::from(plan_with_rand)
+                .filter(col(&rand_column_name).not_eq(lit(0)))?
+                .build()?);
+        }
         Ok(plan_with_rand)
     }
 

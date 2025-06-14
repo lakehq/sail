@@ -68,26 +68,6 @@ impl ScalarUDFImpl for RandPoisson {
 
         match seed {
             ColumnarValue::Scalar(scalar) => {
-                let seed = match scalar {
-                    ScalarValue::Int8(Some(value)) => *value as u64,
-                    ScalarValue::Int16(Some(value)) => *value as u64,
-                    ScalarValue::Int32(Some(value)) => *value as u64,
-                    ScalarValue::Int64(Some(value)) => *value as u64,
-                    ScalarValue::UInt8(Some(value)) => *value as u64,
-                    ScalarValue::UInt16(Some(value)) => *value as u64,
-                    ScalarValue::UInt32(Some(value)) => *value as u64,
-                    ScalarValue::UInt64(Some(value)) => *value,
-                    ScalarValue::Int8(None)
-                    | ScalarValue::Int16(None)
-                    | ScalarValue::Int32(None)
-                    | ScalarValue::Int64(None)
-                    | ScalarValue::UInt8(None)
-                    | ScalarValue::UInt16(None)
-                    | ScalarValue::UInt32(None)
-                    | ScalarValue::UInt64(None)
-                    | ScalarValue::Null => return invoke_no_seed(number_rows),
-                    _ => return exec_err!("`random` expects an integer seed, got {}", scalar),
-                };
                 return invoke_no_seed(number_rows);
             }
             _ => exec_err!(
@@ -108,6 +88,7 @@ impl ScalarUDFImpl for RandPoisson {
          */
     }
 }
+
 fn invoke_no_seed(number_rows: usize) -> Result<ColumnarValue> {
     use rand_distr::Poisson;
 
