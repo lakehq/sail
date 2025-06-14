@@ -1647,17 +1647,17 @@ impl PlanResolver<'_> {
         let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
             .project(all_exprs)?
             .build()?;
-        /* para ver aleatorios
-        let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
-            .filter(col(&rand_column_name).lt_eq(lit(upper_bound)))?
-            .filter(col(&rand_column_name).gt_eq(lit(lower_bound)))?
-            .build()?;
-        let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
-            .project(init_exprs)?
-            .build()?;
-        */
 
-        if with_replacement {
+        if !with_replacement {
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
+                .filter(col(&rand_column_name).lt_eq(lit(upper_bound)))?
+                .filter(col(&rand_column_name).gt_eq(lit(lower_bound)))?
+                .build()?;
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
+                .project(init_exprs)?
+                .build()?;
+            return Ok(plan);
+        } else {
             let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
                 .filter(col(&rand_column_name).not_eq(lit(0)))?
                 .build()?;
@@ -1703,8 +1703,6 @@ impl PlanResolver<'_> {
                 )?
                 .build()?);
         }
-
-        Ok(plan_with_rand)
     }
 
     async fn resolve_query_deduplicate(
