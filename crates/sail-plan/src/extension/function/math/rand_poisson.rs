@@ -1,15 +1,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, Int64Array};
+use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
-};
-use rand::RngCore;
-use rand_distr::{Distribution, Poisson};
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use rand::rng;
+use rand_distr::Distribution;
 
 #[derive(Debug)]
 pub struct RandPoisson {
@@ -67,7 +64,7 @@ impl ScalarUDFImpl for RandPoisson {
         };
 
         match seed {
-            ColumnarValue::Scalar(scalar) => {
+            ColumnarValue::Scalar(_scalar) => {
                 return invoke_no_seed(number_rows);
             }
             _ => exec_err!(
@@ -75,24 +72,13 @@ impl ScalarUDFImpl for RandPoisson {
                 seed.data_type()
             ),
         }
-        /*
-        use rand_distr::Poisson;
-
-        let mut rng = rand::thread_rng();
-        let poisson = Poisson::new(3.0).unwrap();
-
-        let values = std::iter::repeat_with(|| poisson.sample(&mut rng) as i64).take(number_rows);
-
-        let array = Int64Array::from_iter_values(values);
-        Ok(ColumnarValue::Array(Arc::new(array)))
-         */
     }
 }
 
 fn invoke_no_seed(number_rows: usize) -> Result<ColumnarValue> {
     use rand_distr::Poisson;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rng();
     let poisson = Poisson::new(1.0).unwrap();
 
     let values = std::iter::repeat_with(|| poisson.sample(&mut rng) as i64).take(number_rows);
