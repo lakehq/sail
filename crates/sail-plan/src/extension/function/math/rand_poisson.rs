@@ -56,7 +56,7 @@ impl ScalarUDFImpl for RandPoisson {
             );
         }
 
-        let [seed] = args.as_slice() else {
+        let [_seed] = args.as_slice() else {
             return exec_err!(
                 "random should be called with at most 1 argument, got {}",
                 args.len()
