@@ -6,5 +6,8 @@
   "editor.codeActionsOnSave": { "source.fixAll.eslint": "explicit" },
   "editor.quickSuggestions": { "strings": "on" },
   "eslint.validate": ["javascript", "typescript", "vue"],
-  "typescript.tsdk": "node_modules/typescript/lib"
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  }
 }
