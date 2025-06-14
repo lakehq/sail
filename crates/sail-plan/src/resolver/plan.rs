@@ -1656,7 +1656,7 @@ impl PlanResolver<'_> {
             let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
                 .project(init_exprs)?
                 .build()?;
-            return Ok(plan);
+            Ok(plan)
         } else {
             let plan: LogicalPlan = plan_with_rand.clone();
 
@@ -1692,14 +1692,14 @@ impl PlanResolver<'_> {
                 .unnest_column(array_column_name.clone())?
                 .build()?;
 
-            return Ok(LogicalPlanBuilder::from(plan)
+            Ok(LogicalPlanBuilder::from(plan)
                 .project(
                     init_exprs
                         .into_iter()
                         .map(Into::into)
                         .collect::<Vec<SelectExpr>>(),
                 )?
-                .build()?);
+                .build()?)
         }
     }
 
