@@ -54,6 +54,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::data_source::csv::CsvReadOptions;
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::math::rand_poisson::RandPoisson;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
     CatalogCommand, CatalogCommandNode, MapPartitionsNode, RangeNode, ShowStringFormat,
@@ -1623,10 +1624,11 @@ impl PlanResolver<'_> {
 
         let rand_column_name: String = state.register_field_name("rand_value");
         let rand_expr: Expr = if with_replacement {
-            return Err(PlanError::todo(
-                "Try rand_poisson, sampling with replacement is not supported yet",
-            ));
-            /* random_poisson().alias(&rand_column_name)*/
+            Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(RandPoisson::new())),
+                args: vec![Expr::Literal(ScalarValue::Int64(Some(3)))],
+            })
+            .alias(&rand_column_name)
         } else {
             random().alias(&rand_column_name)
         };
@@ -1643,6 +1645,7 @@ impl PlanResolver<'_> {
         let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
             .project(all_exprs)?
             .build()?;
+        /* para ver aleatorios
         let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
             .filter(col(&rand_column_name).lt_eq(lit(upper_bound)))?
             .filter(col(&rand_column_name).gt_eq(lit(lower_bound)))?
@@ -1650,8 +1653,9 @@ impl PlanResolver<'_> {
         let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
             .project(init_exprs)?
             .build()?;
+        */
 
-        Ok(plan)
+        Ok(plan_with_rand)
     }
 
     async fn resolve_query_deduplicate(
