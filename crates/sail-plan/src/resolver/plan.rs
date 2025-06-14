@@ -32,6 +32,7 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort, WindowFunctionParams};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
@@ -54,6 +55,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::data_source::csv::CsvReadOptions;
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::array::spark_sequence::SparkSequence;
 use crate::extension::function::math::rand_poisson::RandPoisson;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
@@ -1656,9 +1658,37 @@ impl PlanResolver<'_> {
         */
 
         if with_replacement {
-            return Ok(LogicalPlanBuilder::from(plan_with_rand)
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
                 .filter(col(&rand_column_name).not_eq(lit(0)))?
-                .build()?);
+                .build()?;
+
+            let init_exprs: Vec<Expr> = plan
+                .schema()
+                .columns()
+                .iter()
+                .map(|col| Expr::Column(col.clone()))
+                .collect();
+
+            let array_column_name: String = state.register_field_name("array_value");
+            let arr_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(SparkSequence::new())),
+                args: vec![
+                    Expr::Literal(ScalarValue::Int64(Some(1))),
+                    col(&rand_column_name),
+                ],
+            })
+            .alias(&array_column_name);
+
+            let plan = LogicalPlanBuilder::from(plan)
+                .project(
+                    init_exprs
+                        .into_iter()
+                        .chain(vec![arr_expr])
+                        .map(Into::into)
+                        .collect::<Vec<SelectExpr>>(),
+                )?
+                .build()?;
+            return Ok(plan);
         }
         Ok(plan_with_rand)
     }
