@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use aes_gcm::aead::rand_core::le;
 use async_recursion::async_recursion;
 use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
@@ -42,6 +43,7 @@ use datafusion_expr::{
     ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
     WindowFrame, WindowFunctionDefinition,
 };
+use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
@@ -1611,6 +1613,7 @@ impl PlanResolver<'_> {
             lower_bound,
             upper_bound,
             with_replacement,
+            seed,
             ..
         } = sample;
         if lower_bound >= upper_bound {
@@ -1619,6 +1622,11 @@ impl PlanResolver<'_> {
             )));
         }
         // if defined seed use these values otherwise use random seed
+        // to generate the random values in with_replacement mode, in lambda value
+        let seed: i64 = seed.unwrap_or_else(|| {
+            let mut rng = rng();
+            rng.random::<i64>()
+        });
 
         let input: LogicalPlan = self
             .resolve_query_plan_with_hidden_fields(*input, state)
@@ -1628,7 +1636,7 @@ impl PlanResolver<'_> {
         let rand_expr: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(RandPoisson::new())),
-                args: vec![Expr::Literal(ScalarValue::Int64(Some(3)))],
+                args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)))],
             })
             .alias(&rand_column_name)
         } else {
