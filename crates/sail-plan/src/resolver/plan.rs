@@ -1658,9 +1658,7 @@ impl PlanResolver<'_> {
                 .build()?;
             return Ok(plan);
         } else {
-            let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
-                .filter(col(&rand_column_name).not_eq(lit(0)))?
-                .build()?;
+            let plan: LogicalPlan = plan_with_rand.clone();
 
             let init_exprs_aux: Vec<Expr> = plan
                 .schema()
