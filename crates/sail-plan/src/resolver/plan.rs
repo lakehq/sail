@@ -1662,7 +1662,7 @@ impl PlanResolver<'_> {
                 .filter(col(&rand_column_name).not_eq(lit(0)))?
                 .build()?;
 
-            let init_exprs: Vec<Expr> = plan
+            let init_exprs_aux: Vec<Expr> = plan
                 .schema()
                 .columns()
                 .iter()
@@ -1681,15 +1681,29 @@ impl PlanResolver<'_> {
 
             let plan = LogicalPlanBuilder::from(plan)
                 .project(
-                    init_exprs
+                    init_exprs_aux
+                        .clone()
                         .into_iter()
                         .chain(vec![arr_expr])
                         .map(Into::into)
                         .collect::<Vec<SelectExpr>>(),
                 )?
                 .build()?;
-            return Ok(plan);
+
+            let plan = LogicalPlanBuilder::from(plan)
+                .unnest_column(array_column_name.clone())?
+                .build()?;
+
+            return Ok(LogicalPlanBuilder::from(plan)
+                .project(
+                    init_exprs
+                        .into_iter()
+                        .map(Into::into)
+                        .collect::<Vec<SelectExpr>>(),
+                )?
+                .build()?);
         }
+
         Ok(plan_with_rand)
     }
 
