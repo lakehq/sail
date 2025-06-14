@@ -63,7 +63,7 @@ impl ScalarUDFImpl for RandPoisson {
             );
         };
 
-        match seed {
+        /*match seed {
             ColumnarValue::Scalar(_scalar) => {
                 return invoke_no_seed(number_rows);
             }
@@ -71,7 +71,8 @@ impl ScalarUDFImpl for RandPoisson {
                 "`random` expects a scalar seed argument, got {}",
                 seed.data_type()
             ),
-        }
+        }*/
+        invoke_no_seed(number_rows)
     }
 }
 
