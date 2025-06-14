@@ -6,7 +6,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use rand::rng;
-use rand_distr::Distribution;
+use rand_distr::{Distribution, Poisson};
 
 #[derive(Debug)]
 pub struct RandPoisson {
@@ -22,7 +22,6 @@ impl Default for RandPoisson {
 impl RandPoisson {
     pub fn new() -> Self {
         Self {
-            //signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Volatile),
             signature: Signature::any(1, Volatility::Volatile),
         }
     }
@@ -62,28 +61,14 @@ impl ScalarUDFImpl for RandPoisson {
                 args.len()
             );
         };
-
-        /*match seed {
-            ColumnarValue::Scalar(_scalar) => {
-                return invoke_no_seed(number_rows);
-            }
-            _ => exec_err!(
-                "`random` expects a scalar seed argument, got {}",
-                seed.data_type()
-            ),
-        }*/
         invoke_no_seed(number_rows)
     }
 }
 
 fn invoke_no_seed(number_rows: usize) -> Result<ColumnarValue> {
-    use rand_distr::Poisson;
-
     let mut rng = rng();
     let poisson = Poisson::new(1.0).unwrap();
-
     let values = std::iter::repeat_with(|| poisson.sample(&mut rng) as i64).take(number_rows);
-
     let array = Int64Array::from_iter_values(values);
     Ok(ColumnarValue::Array(Arc::new(array)))
 }

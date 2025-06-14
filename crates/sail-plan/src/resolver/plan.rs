@@ -1630,7 +1630,6 @@ impl PlanResolver<'_> {
         let input: LogicalPlan = self
             .resolve_query_plan_with_hidden_fields(*input, state)
             .await?;
-
         let rand_column_name: String = state.register_field_name("rand_value");
         let rand_expr: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {
@@ -1641,7 +1640,6 @@ impl PlanResolver<'_> {
         } else {
             random().alias(&rand_column_name)
         };
-
         let init_exprs: Vec<Expr> = input
             .schema()
             .columns()
@@ -1650,7 +1648,6 @@ impl PlanResolver<'_> {
             .collect();
         let mut all_exprs: Vec<Expr> = init_exprs.clone();
         all_exprs.push(rand_expr);
-
         let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
             .project(all_exprs)?
             .build()?;
@@ -1666,14 +1663,12 @@ impl PlanResolver<'_> {
             Ok(plan)
         } else {
             let plan: LogicalPlan = plan_with_rand.clone();
-
             let init_exprs_aux: Vec<Expr> = plan
                 .schema()
                 .columns()
                 .iter()
                 .map(|col| Expr::Column(col.clone()))
                 .collect();
-
             let array_column_name: String = state.register_field_name("array_value");
             let arr_expr: Expr = Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(SparkSequence::new())),
@@ -1683,8 +1678,7 @@ impl PlanResolver<'_> {
                 ],
             })
             .alias(&array_column_name);
-
-            let plan = LogicalPlanBuilder::from(plan)
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
                 .project(
                     init_exprs_aux
                         .clone()
@@ -1694,8 +1688,7 @@ impl PlanResolver<'_> {
                         .collect::<Vec<SelectExpr>>(),
                 )?
                 .build()?;
-
-            let plan = LogicalPlanBuilder::from(plan)
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
                 .unnest_column(array_column_name.clone())?
                 .build()?;
 
