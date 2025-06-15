@@ -26,7 +26,7 @@ impl Default for RandPoisson {
 impl RandPoisson {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Volatile),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
