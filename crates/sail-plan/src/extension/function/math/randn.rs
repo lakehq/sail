@@ -66,8 +66,9 @@ impl ScalarUDFImpl for Randn {
         match seed {
             ColumnarValue::Scalar(scalar) => {
                 let seed = match scalar {
+                    ScalarValue::Int64(Some(value)) => *value as u64,
                     ScalarValue::UInt64(Some(value)) => *value,
-                    ScalarValue::UInt64(None) | ScalarValue::Null => {
+                    ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => {
                         return invoke_no_seed(number_rows)
                     }
                     _ => return exec_err!("`randn` expects an integer seed, got {scalar}"),
@@ -89,7 +90,9 @@ impl ScalarUDFImpl for Randn {
         if arg_types.is_empty() {
             Ok(vec![])
         } else if arg_types.len() == 1 {
-            if arg_types[0].is_integer() {
+            if arg_types[0].is_signed_integer() {
+                Ok(vec![DataType::Int64])
+            } else if arg_types[0].is_unsigned_integer() {
                 Ok(vec![DataType::UInt64])
             } else if arg_types[0].is_null() {
                 Ok(vec![DataType::Null])
