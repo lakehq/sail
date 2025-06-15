@@ -3,13 +3,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray};
 use datafusion::arrow::datatypes::{
-    DataType, Decimal128Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, Decimal128Type, Field, FieldRef, Float32Type, Float64Type, Int16Type, Int32Type,
+    Int64Type, Int8Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use num::integer::{div_ceil, div_floor};
 
@@ -48,11 +47,11 @@ fn ceil_floor_coerce_types(name: &str, arg_types: &[DataType]) -> Result<Vec<Dat
     }
 }
 
-fn ceil_floor_return_type_from_args(name: &str, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-    let arg_types = args.arg_types;
+fn ceil_floor_return_type_from_args(name: &str, args: ReturnFieldArgs) -> Result<FieldRef> {
+    let arg_fields = args.arg_fields;
     let scalar_arguments = args.scalar_arguments;
-    let return_type = if arg_types.len() == 1 {
-        match &arg_types[0] {
+    let return_type = if arg_fields.len() == 1 {
+        match &arg_fields[0].data_type() {
             DataType::Decimal128(precision, scale) => {
                 let (precision, scale) =
                     round_decimal_base(*precision as i32, *scale as i32, 0, true);
@@ -67,15 +66,15 @@ fn ceil_floor_return_type_from_args(name: &str, args: ReturnTypeArgs) -> Result<
                     Err(unsupported_data_type_exec_err(
                         name,
                         format!("Decimal Type must have precision <= {DECIMAL128_MAX_PRECISION} and scale <= {DECIMAL128_MAX_SCALE}").as_str(),
-                        &arg_types[0],
+                        arg_fields[0].data_type(),
                     ))
                 }
             }
             _ => Ok(DataType::Int64),
         }
-    } else if arg_types.len() == 2 {
+    } else if arg_fields.len() == 2 {
         if let Some(target_scale) = scalar_arguments[1] {
-            let expr = &arg_types[0];
+            let expr = &arg_fields[0].data_type();
             let target_scale: i32 = match target_scale {
                 ScalarValue::Int8(Some(v)) => Ok(*v as i32),
                 ScalarValue::Int16(Some(v)) => Ok(*v as i32),
@@ -111,7 +110,7 @@ fn ceil_floor_return_type_from_args(name: &str, args: ReturnTypeArgs) -> Result<
                         Err(unsupported_data_type_exec_err(
                             name,
                             format!("Decimal Type must have precision <= {DECIMAL128_MAX_PRECISION} and scale <= {DECIMAL128_MAX_SCALE}").as_str(),
-                            &arg_types[0],
+                            arg_fields[0].data_type(),
                         ))
                     }
                 }
@@ -130,9 +129,9 @@ fn ceil_floor_return_type_from_args(name: &str, args: ReturnTypeArgs) -> Result<
             ))
         }
     } else {
-        Err(invalid_arg_count_exec_err(name, (1, 2), arg_types.len()))
+        Err(invalid_arg_count_exec_err(name, (1, 2), arg_fields.len()))
     }?;
-    Ok(ReturnInfo::new_nullable(return_type))
+    Ok(Arc::new(Field::new(name.to_string(), return_type, true)))
 }
 
 fn ceil_floor_coerce_first_arg(name: &str, arg_type: &DataType) -> Result<DataType> {
@@ -212,7 +211,7 @@ impl ScalarUDFImpl for SparkCeil {
         ))
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         ceil_floor_return_type_from_args("ceil", args)
     }
 
@@ -234,7 +233,7 @@ impl ScalarUDFImpl for SparkCeil {
             Err(invalid_arg_count_exec_err("ceil", (1, 2), arg_len))
         }?;
         let arg = &args.args[0];
-        let return_type = args.return_type;
+        let return_type = args.return_field.data_type();
         spark_ceil_floor("ceil", arg, target_scale, return_type)
     }
 
@@ -281,7 +280,7 @@ impl ScalarUDFImpl for SparkFloor {
         ))
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         ceil_floor_return_type_from_args("floor", args)
     }
 
@@ -303,7 +302,7 @@ impl ScalarUDFImpl for SparkFloor {
             Err(invalid_arg_count_exec_err("floor", (1, 2), arg_len))
         }?;
         let arg = &args.args[0];
-        let return_type = args.return_type;
+        let return_type = args.return_field.data_type();
         spark_ceil_floor("floor", arg, target_scale, return_type)
     }
 

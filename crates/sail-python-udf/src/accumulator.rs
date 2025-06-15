@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{new_empty_array, ArrayRef, AsArray, ListArray};
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::concat;
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::logical_expr::Accumulator;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::function::StateFieldsArgs;
@@ -47,17 +47,17 @@ impl BatchAggregateAccumulator {
         }
     }
 
-    pub fn state_fields(args: StateFieldsArgs) -> Result<Vec<Field>> {
+    pub fn state_fields(args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         // We accumulate the inputs in the state.
         // Each state field corresponds to an input argument.
         let fields = args
-            .input_types
+            .input_fields
             .iter()
             .enumerate()
-            .map(|(i, dt)| {
+            .map(|(i, input_field)| {
                 let name = format_state_name(args.name, &i.to_string());
-                let field = Field::new_list_field(dt.clone(), true);
-                Field::new(name, DataType::List(Arc::new(field)), true)
+                let field = Field::new_list_field(input_field.data_type().clone(), true);
+                Field::new(name, DataType::List(Arc::new(field)), true).into()
             })
             .collect();
         Ok(fields)

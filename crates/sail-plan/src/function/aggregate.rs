@@ -42,7 +42,7 @@ fn get_arguments_and_null_treatment(
         }
         let (expr, ignore_nulls) = args.two()?;
         let null_treatment = match ignore_nulls {
-            expr::Expr::Literal(ScalarValue::Boolean(Some(ignore_nulls))) => {
+            expr::Expr::Literal(ScalarValue::Boolean(Some(ignore_nulls)), _metadata) => {
                 if ignore_nulls {
                     Some(NullTreatment::IgnoreNulls)
                 } else {

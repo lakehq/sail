@@ -1,5 +1,5 @@
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit};
+use datafusion_expr::expr;
 use datafusion_functions_json::udfs;
 
 use crate::error::PlanResult;
@@ -13,7 +13,7 @@ fn get_json_object(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let paths: Vec<expr::Expr> = paths
         .into_iter()
         .map(|path| match &path {
-            expr::Expr::Literal(ScalarValue::Utf8(Some(value))) => {
+            expr::Expr::Literal(ScalarValue::Utf8(Some(value)), metadata) => {
                 if value.starts_with("$") {
                     let nth = if value.starts_with("$.") { 2 } else { 1 };
                     let index = value
@@ -21,7 +21,10 @@ fn get_json_object(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                         .nth(nth)
                         .map(|(idx, _)| idx)
                         .unwrap_or(value.len());
-                    lit(ScalarValue::Utf8(Some(value[index..].to_string())))
+                    expr::Expr::Literal(
+                        ScalarValue::Utf8(Some(value[index..].to_string())),
+                        metadata.clone(),
+                    )
                 } else {
                     path
                 }

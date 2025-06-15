@@ -66,7 +66,7 @@ impl ScalarUDFImpl for TimestampNow {
             TimeUnit::Nanosecond => now.timestamp_nanos_opt(),
         };
         let expr = Expr::Cast(datafusion_expr::Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Int64(now))),
+            expr: Box::new(Expr::Literal(ScalarValue::Int64(now), None)),
             data_type: DataType::Timestamp(*self.time_unit(), Some(self.timezone().into())),
         });
         Ok(ExprSimplifyResult::Simplified(expr))

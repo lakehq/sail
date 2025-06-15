@@ -17,11 +17,11 @@ fn sha2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
     let (expr, bit_length) = arguments.two()?;
     let result = match bit_length {
-        expr::Expr::Literal(ScalarValue::Int32(Some(0)))
-        | expr::Expr::Literal(ScalarValue::Int32(Some(256))) => expr_fn::sha256(expr),
-        expr::Expr::Literal(ScalarValue::Int32(Some(224))) => expr_fn::sha224(expr),
-        expr::Expr::Literal(ScalarValue::Int32(Some(384))) => expr_fn::sha384(expr),
-        expr::Expr::Literal(ScalarValue::Int32(Some(512))) => expr_fn::sha512(expr),
+        expr::Expr::Literal(ScalarValue::Int32(Some(0)), _metadata)
+        | expr::Expr::Literal(ScalarValue::Int32(Some(256)), _metadata) => expr_fn::sha256(expr),
+        expr::Expr::Literal(ScalarValue::Int32(Some(224)), _metadata) => expr_fn::sha224(expr),
+        expr::Expr::Literal(ScalarValue::Int32(Some(384)), _metadata) => expr_fn::sha384(expr),
+        expr::Expr::Literal(ScalarValue::Int32(Some(512)), _metadata) => expr_fn::sha512(expr),
         _ => {
             return Err(crate::error::PlanError::invalid(
                 "The second argument of sha2 must be a literal integer.",
