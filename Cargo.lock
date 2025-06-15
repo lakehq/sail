@@ -632,15 +632,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sso"
-<<<<<<< HEAD
 version = "1.73.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2ac1674cba7872061a29baaf02209fefe499ff034dfd91bd4cc59e4d7741489"
-=======
-version = "1.72.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13118ad30741222f67b1a18e5071385863914da05124652b38e172d6d3d9ce31"
->>>>>>> d80752ad56b5ef1bb0e54530e526cdcf8e8779a2
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -660,15 +654,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssooidc"
-<<<<<<< HEAD
 version = "1.74.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a6a22f077f5fd3e3c0270d4e1a110346cddf6769e9433eb9e6daceb4ca3b149"
-=======
-version = "1.73.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f879a8572b4683a8f84f781695bebf2f25cf11a81a2693c31fc0e0215c2c1726"
->>>>>>> d80752ad56b5ef1bb0e54530e526cdcf8e8779a2
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -688,15 +676,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-<<<<<<< HEAD
 version = "1.74.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19d440e1d368759bd10df0dbdddbfff6473d7cd73e9d9ef2363dc9995ac2d711"
-=======
-version = "1.73.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1e9c3c24e36183e2f698235ed38dcfbbdff1d09b9232dc866c4be3011e0b47e"
->>>>>>> d80752ad56b5ef1bb0e54530e526cdcf8e8779a2
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -1194,15 +1176,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-<<<<<<< HEAD
 version = "1.2.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d487aa071b5f64da6f19a3e848e3578944b726ee5a4854b82172f02aa876bfdc"
-=======
-version = "1.2.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "956a5e21988b87f372569b66183b78babf23ebc2e744b733e4350a752c4dafac"
->>>>>>> d80752ad56b5ef1bb0e54530e526cdcf8e8779a2
 dependencies = [
  "jobserver",
  "libc",
@@ -2418,15 +2394,9 @@ dependencies = [
 
 [[package]]
 name = "fastrace"
-<<<<<<< HEAD
 version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673511744d199c22ce09ae4affd3f56e7775b05ab9679d78da0fe58dd7c86b4b"
-=======
-version = "0.7.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c763d68db9f6f19eab0e23c60fb7e768f5baa62e6ff2058154d147f91df442e"
->>>>>>> d80752ad56b5ef1bb0e54530e526cdcf8e8779a2
 dependencies = [
  "fastant",
  "fastrace-macro",
@@ -2439,15 +2409,9 @@ dependencies = [
 
 [[package]]
 name = "fastrace-macro"
-<<<<<<< HEAD
 version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d68abf039b9e06faa32dfef301562a5402f750f34e23e81e03f09a52c7bc91"
-=======
-version = "0.7.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ab37bb8cc32d659b7b283b4512632aca77e4323db5c6a866c3047122533e9c5"
->>>>>>> d80752ad56b5ef1bb0e54530e526cdcf8e8779a2
 dependencies = [
  "proc-macro-error2",
  "proc-macro2",
@@ -4274,11 +4238,7 @@ dependencies = [
  "snap",
  "thrift",
  "tokio",
-<<<<<<< HEAD
  "twox-hash",
-=======
- "twox-hash 2.1.1",
->>>>>>> d80752ad56b5ef1bb0e54530e526cdcf8e8779a2
  "zstd",
 ]
 
@@ -5381,11 +5341,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
-<<<<<<< HEAD
  "twox-hash",
-=======
- "twox-hash 2.1.1",
->>>>>>> d80752ad56b5ef1bb0e54530e526cdcf8e8779a2
  "url",
 ]
 
@@ -6379,19 +6335,6 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b907da542cbced5261bd3256de1b3a1bf340a3d37f93425a07362a1d687de56"
 dependencies = [
-<<<<<<< HEAD
-=======
- "cfg-if",
- "static_assertions",
-]
-
-[[package]]
-name = "twox-hash"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b907da542cbced5261bd3256de1b3a1bf340a3d37f93425a07362a1d687de56"
-dependencies = [
->>>>>>> d80752ad56b5ef1bb0e54530e526cdcf8e8779a2
  "rand 0.9.1",
 ]
 
