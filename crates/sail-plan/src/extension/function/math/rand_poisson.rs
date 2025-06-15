@@ -8,6 +8,10 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use rand::rng;
 use rand_distr::{Distribution, Poisson};
 
+use crate::extension::function::error_utils::{
+    invalid_arg_count_exec_err, unsupported_data_types_exec_err,
+};
+
 #[derive(Debug)]
 pub struct RandPoisson {
     signature: Signature,
@@ -48,7 +52,7 @@ impl ScalarUDFImpl for RandPoisson {
         let ScalarFunctionArgs {
             args, number_rows, ..
         } = args;
-        if args.is_empty() {
+        if args.len() > 1 {
             return exec_err!(
                 "random should be called with at most 1 argument, got {}",
                 args.len()
@@ -62,6 +66,32 @@ impl ScalarUDFImpl for RandPoisson {
             );
         };
         invoke_no_seed(number_rows)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.is_empty() {
+            Ok(vec![])
+        } else if arg_types.len() == 1 {
+            if arg_types[0].is_signed_integer() {
+                Ok(vec![DataType::Int64])
+            } else if arg_types[0].is_unsigned_integer() {
+                Ok(vec![DataType::UInt64])
+            } else if arg_types[0].is_null() {
+                Ok(vec![DataType::Null])
+            } else {
+                Err(unsupported_data_types_exec_err(
+                    "random_poisson",
+                    "Integer Type for seed",
+                    arg_types,
+                ))
+            }
+        } else {
+            Err(invalid_arg_count_exec_err(
+                "random_poisson",
+                (0, 1000),
+                arg_types.len(),
+            ))
+        }
     }
 }
 
