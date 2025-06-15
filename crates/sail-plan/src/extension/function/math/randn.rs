@@ -4,12 +4,14 @@ use std::sync::Arc;
 use datafusion::arrow::array::Float64Array;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
-};
-use rand::{rng, Rng, SeedableRng};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use rand::{rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, StandardNormal};
+
+use crate::extension::function::error_utils::{
+    invalid_arg_count_exec_err, unsupported_data_types_exec_err,
+};
 
 #[derive(Debug)]
 pub struct Randn {
@@ -25,26 +27,7 @@ impl Default for Randn {
 impl Randn {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![]),
-                    TypeSignature::Uniform(
-                        1,
-                        vec![
-                            DataType::Int8,
-                            DataType::Int16,
-                            DataType::Int32,
-                            DataType::Int64,
-                            DataType::UInt8,
-                            DataType::UInt16,
-                            DataType::UInt32,
-                            DataType::UInt64,
-                            DataType::Null,
-                        ],
-                    ),
-                ],
-                Volatility::Volatile,
-            ),
+            signature: Signature::user_defined(Volatility::Volatile),
         }
     }
 }
@@ -83,32 +66,42 @@ impl ScalarUDFImpl for Randn {
         match seed {
             ColumnarValue::Scalar(scalar) => {
                 let seed = match scalar {
-                    ScalarValue::Int8(Some(value)) => *value as u64,
-                    ScalarValue::Int16(Some(value)) => *value as u64,
-                    ScalarValue::Int32(Some(value)) => *value as u64,
-                    ScalarValue::Int64(Some(value)) => *value as u64,
-                    ScalarValue::UInt8(Some(value)) => *value as u64,
-                    ScalarValue::UInt16(Some(value)) => *value as u64,
-                    ScalarValue::UInt32(Some(value)) => *value as u64,
                     ScalarValue::UInt64(Some(value)) => *value,
-                    ScalarValue::Int8(None)
-                    | ScalarValue::Int16(None)
-                    | ScalarValue::Int32(None)
-                    | ScalarValue::Int64(None)
-                    | ScalarValue::UInt8(None)
-                    | ScalarValue::UInt16(None)
-                    | ScalarValue::UInt32(None)
-                    | ScalarValue::UInt64(None)
-                    | ScalarValue::Null => return invoke_no_seed(number_rows),
-                    _ => return exec_err!("`randn` expects an integer seed, got {}", scalar),
+                    ScalarValue::UInt64(None) | ScalarValue::Null => {
+                        return invoke_no_seed(number_rows)
+                    }
+                    _ => return exec_err!("`randn` expects an integer seed, got {scalar}"),
                 };
-                let value = ChaCha8Rng::seed_from_u64(seed).sample(StandardNormal);
-                Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(value))))
+                let mut rng = ChaCha8Rng::seed_from_u64(seed);
+                let values =
+                    std::iter::repeat_with(|| StandardNormal.sample(&mut rng)).take(number_rows);
+                let array = Float64Array::from_iter_values(values);
+                Ok(ColumnarValue::Array(Arc::new(array)))
             }
             _ => exec_err!(
                 "`randn` expects a scalar seed argument, got {}",
                 seed.data_type()
             ),
+        }
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.is_empty() {
+            Ok(vec![])
+        } else if arg_types.len() == 1 {
+            if arg_types[0].is_integer() {
+                Ok(vec![DataType::UInt64])
+            } else if arg_types[0].is_null() {
+                Ok(vec![DataType::Null])
+            } else {
+                Err(unsupported_data_types_exec_err(
+                    "randn",
+                    "Integer Type for seed",
+                    arg_types,
+                ))
+            }
+        } else {
+            Err(invalid_arg_count_exec_err("randn", (0, 1), arg_types.len()))
         }
     }
 }
