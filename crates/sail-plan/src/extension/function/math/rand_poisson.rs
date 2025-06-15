@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use rand::rng;
+use rand::{rng, rngs::StdRng, SeedableRng};
 use rand_distr::{Distribution, Poisson};
 
 use crate::extension::function::error_utils::{
@@ -52,20 +52,42 @@ impl ScalarUDFImpl for RandPoisson {
         let ScalarFunctionArgs {
             args, number_rows, ..
         } = args;
-        if args.len() > 1 {
-            return exec_err!(
-                "random should be called with at most 1 argument, got {}",
-                args.len()
-            );
+        if args.is_empty() {
+            return invoke_no_seed(number_rows);
         }
 
-        let [_seed] = args.as_slice() else {
+        let [seed] = args.as_slice() else {
             return exec_err!(
-                "random should be called with at most 1 argument, got {}",
+                "`random_poisson` should be called with at most 1 argument, got {}",
                 args.len()
             );
         };
-        invoke_no_seed(number_rows)
+
+        match seed {
+            ColumnarValue::Scalar(scalar) => {
+                let seed = match scalar {
+                    ScalarValue::Int64(Some(value)) => *value,
+                    ScalarValue::UInt64(Some(value)) => *value as i64,
+                    ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => {
+                        return invoke_no_seed(number_rows)
+                    }
+                    _ => {
+                        return exec_err!("`random_poisson` expects an integer seed, got {scalar}")
+                    }
+                };
+                let poisson = Poisson::new(1.0).unwrap();
+                let mut rng = StdRng::seed_from_u64(seed as u64);
+
+                let values = (0..number_rows).map(|_| poisson.sample(&mut rng) as i64);
+                let array = Int64Array::from_iter_values(values);
+
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+            _ => exec_err!(
+                "`random_poisson` expects a scalar seed argument, got {}",
+                seed.data_type()
+            ),
+        }
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
