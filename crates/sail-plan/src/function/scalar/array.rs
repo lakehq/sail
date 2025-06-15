@@ -50,11 +50,11 @@ fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
     let (array, asc) = arguments.two()?;
     let (sort, nulls) = match asc {
-        expr::Expr::Literal(ScalarValue::Boolean(Some(true))) => (
+        expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _metadata) => (
             lit(ScalarValue::Utf8(Some("ASC".to_string()))),
             lit(ScalarValue::Utf8(Some("NULLS FIRST".to_string()))),
         ),
-        expr::Expr::Literal(ScalarValue::Boolean(Some(false))) => (
+        expr::Expr::Literal(ScalarValue::Boolean(Some(false)), _metadata) => (
             lit(ScalarValue::Utf8(Some("DESC".to_string()))),
             lit(ScalarValue::Utf8(Some("NULLS LAST".to_string()))),
         ),

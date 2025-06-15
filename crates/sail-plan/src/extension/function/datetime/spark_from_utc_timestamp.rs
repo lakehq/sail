@@ -186,9 +186,9 @@ impl ScalarUDFImpl for SparkFromUtcTimestamp {
         }
         let (timestamp, timezone) = args.two()?;
         match timezone {
-            Expr::Literal(ScalarValue::Utf8(tz))
-            | Expr::Literal(ScalarValue::Utf8View(tz))
-            | Expr::Literal(ScalarValue::LargeUtf8(tz)) => {
+            Expr::Literal(ScalarValue::Utf8(tz), _metadata)
+            | Expr::Literal(ScalarValue::Utf8View(tz), _metadata)
+            | Expr::Literal(ScalarValue::LargeUtf8(tz), _metadata) => {
                 let expr = Expr::Cast(datafusion_expr::Cast {
                     expr: Box::new(timestamp),
                     data_type: DataType::Timestamp(

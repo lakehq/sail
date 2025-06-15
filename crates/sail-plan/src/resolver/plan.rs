@@ -1121,7 +1121,7 @@ impl PlanResolver<'_> {
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
                                     )),
-                                    Expr::Literal(ScalarValue::Null)
+                                    Expr::Literal(ScalarValue::Null, None)
                                         .alias(state.register_field_name(left_name)),
                                 )),
                                 None => Err(PlanError::invalid(format!(
@@ -1144,7 +1144,7 @@ impl PlanResolver<'_> {
                                 })
                                 .map(|(right_idx, right_name)| {
                                     (
-                                        Expr::Literal(ScalarValue::Null)
+                                        Expr::Literal(ScalarValue::Null, None)
                                             .alias(state.register_field_name(right_name)),
                                         Expr::Column(Column::from(
                                             right.schema().qualified_field(right_idx),
@@ -1790,15 +1790,15 @@ impl PlanResolver<'_> {
         let limit = self
             .resolve_expression(limit, input.schema(), state)
             .await?;
-        let limit_num = match limit {
-            Expr::Literal(ScalarValue::Int8(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int16(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int32(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
-            Expr::Literal(ScalarValue::UInt8(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt16(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt32(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt64(Some(value))) => Ok(value as i64),
+        let limit_num = match &limit {
+            Expr::Literal(ScalarValue::Int8(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int16(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int32(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int64(Some(value)), _metadata) => Ok(*value),
+            Expr::Literal(ScalarValue::UInt8(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt16(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt32(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt64(Some(value)), _metadata) => Ok(*value as i64),
             _ => Err(PlanError::invalid("`tail` limit must be an integer")),
         }?;
         // TODO: This can be expensive for large input datasets
@@ -1809,7 +1809,7 @@ impl PlanResolver<'_> {
         let count_expr = Expr::AggregateFunction(expr::AggregateFunction {
             func: count_udaf(),
             params: AggregateFunctionParams {
-                args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
                 distinct: false,
                 filter: None,
                 order_by: None,
@@ -3269,7 +3269,7 @@ impl PlanResolver<'_> {
                     None => table_source
                         .get_column_default(field.name())
                         .cloned()
-                        .unwrap_or_else(|| Expr::Literal(ScalarValue::Null))
+                        .unwrap_or_else(|| Expr::Literal(ScalarValue::Null, None))
                         .cast_to(field.data_type(), &DFSchema::empty())?,
                 };
                 Ok(expr.alias(field.name()))
@@ -3588,7 +3588,7 @@ impl PlanResolver<'_> {
             .map(|named_expr| {
                 let NamedExpr { expr, .. } = &named_expr;
                 match expr {
-                    Expr::Literal(scalar_value) => {
+                    Expr::Literal(scalar_value, _metadata) => {
                         let position = match scalar_value {
                             ScalarValue::Int32(Some(position)) => *position as i64,
                             ScalarValue::Int64(Some(position)) => *position,

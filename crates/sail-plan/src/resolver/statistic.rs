@@ -103,7 +103,7 @@ impl PlanResolver<'_> {
                             params: AggregateFunctionParams {
                                 args: vec![
                                     Expr::Column(column.clone()),
-                                    Expr::Literal(ScalarValue::Float64(Some(0.25_f64))),
+                                    Expr::Literal(ScalarValue::Float64(Some(0.25_f64)), None),
                                 ],
                                 distinct: false,
                                 filter: None,
@@ -134,7 +134,7 @@ impl PlanResolver<'_> {
                             params: AggregateFunctionParams {
                                 args: vec![
                                     Expr::Column(column.clone()),
-                                    Expr::Literal(ScalarValue::Float64(Some(0.75_f64))),
+                                    Expr::Literal(ScalarValue::Float64(Some(0.75_f64)), None),
                                 ],
                                 distinct: false,
                                 filter: None,
@@ -189,7 +189,7 @@ impl PlanResolver<'_> {
                 let stats_plan_clone = stats_plan.clone();
                 let mut projections =
                     vec![
-                        Expr::Literal(ScalarValue::Utf8(Some(stat_name.to_string())))
+                        Expr::Literal(ScalarValue::Utf8(Some(stat_name.to_string())), None)
                             .alias(&summary_alias),
                     ];
                 for (col_name, expr) in stats_by_column {

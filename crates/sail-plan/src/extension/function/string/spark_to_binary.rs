@@ -133,9 +133,9 @@ impl ScalarUDFImpl for SparkToBinary {
         } else {
             let (expr, format) = args.two()?;
             match &format {
-                Expr::Literal(ScalarValue::Utf8(Some(s)))
-                | Expr::Literal(ScalarValue::Utf8View(Some(s)))
-                | Expr::Literal(ScalarValue::LargeUtf8(Some(s)))
+                Expr::Literal(ScalarValue::Utf8(Some(s)), _metadata)
+                | Expr::Literal(ScalarValue::Utf8View(Some(s)), _metadata)
+                | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _metadata)
                     if s.trim().to_lowercase() == "utf-8" || s.trim().to_lowercase() == "utf8" =>
                 {
                     Ok(ExprSimplifyResult::Simplified(Expr::Cast(expr::Cast {
@@ -143,9 +143,9 @@ impl ScalarUDFImpl for SparkToBinary {
                         data_type: DataType::Binary,
                     })))
                 }
-                Expr::Literal(ScalarValue::Utf8(Some(s)))
-                | Expr::Literal(ScalarValue::Utf8View(Some(s)))
-                | Expr::Literal(ScalarValue::LargeUtf8(Some(s)))
+                Expr::Literal(ScalarValue::Utf8(Some(s)), _metadata)
+                | Expr::Literal(ScalarValue::Utf8View(Some(s)), _metadata)
+                | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _metadata)
                     if s.trim().to_lowercase() == "hex" =>
                 {
                     Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
@@ -155,9 +155,9 @@ impl ScalarUDFImpl for SparkToBinary {
                         },
                     )))
                 }
-                Expr::Literal(ScalarValue::Utf8(Some(s)))
-                | Expr::Literal(ScalarValue::Utf8View(Some(s)))
-                | Expr::Literal(ScalarValue::LargeUtf8(Some(s)))
+                Expr::Literal(ScalarValue::Utf8(Some(s)), _metadata)
+                | Expr::Literal(ScalarValue::Utf8View(Some(s)), _metadata)
+                | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _metadata)
                     if s.trim().to_lowercase() == "base64" =>
                 {
                     Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(

@@ -607,7 +607,10 @@ impl PlanResolver<'_> {
             .config
             .plan_formatter
             .literal_to_string(&literal, &self.config)?;
-        Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
+        Ok(NamedExpr::new(
+            vec![name],
+            expr::Expr::Literal(literal, None),
+        ))
     }
 
     fn resolve_expression_attribute(
@@ -1552,7 +1555,7 @@ impl PlanResolver<'_> {
             | DataType::LargeListView(_) => array_element(
                 expr,
                 expr::Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(expr::Expr::Literal(extraction)),
+                    Box::new(expr::Expr::Literal(extraction, None)),
                     Operator::Plus,
                     Box::new(lit(1i64)),
                 )),
@@ -2247,7 +2250,10 @@ mod tests {
             .await?,
             NamedExpr {
                 name: vec!["(NOT true)".to_string()],
-                expr: Expr::Not(Box::new(Expr::Literal(ScalarValue::Boolean(Some(true))))),
+                expr: Expr::Not(Box::new(Expr::Literal(
+                    ScalarValue::Boolean(Some(true)),
+                    None
+                ))),
                 metadata: Default::default(),
             }
         );
@@ -2297,13 +2303,13 @@ mod tests {
                     expr: Box::new(Expr::Alias(Alias {
                         expr: Box::new(Expr::BinaryExpr(BinaryExpr {
                             left: Box::new(Expr::Alias(Alias {
-                                expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+                                expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)), None)),
                                 name: "a".to_string(),
                                 relation: None,
                                 metadata: None,
                             })),
                             op: Operator::Plus,
-                            right: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)))),
+                            right: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)), None)),
                         })),
                         relation: None,
                         name: "b".to_string(),
