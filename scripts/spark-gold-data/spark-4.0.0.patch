@@ -1,0 +1,267 @@
+diff --git a/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala b/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
+index 54f05b959a4..59f635b4ae6 100644
+--- a/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
++++ b/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
+@@ -402,6 +402,8 @@ private[spark] object Logging {
+   @volatile private[spark] var sparkShellThresholdLevel: Level = null
+   @volatile private[spark] var setLogLevelPrinted: Boolean = false
+ 
++  var parserCallback: Option[(String, String, Option[String]) => Unit] = None
++
+   val initLock = new Object()
+   try {
+     // We use reflection here to handle the case where users remove the
+diff --git a/core/src/test/scala/org/apache/spark/SparkFunSuite.scala b/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
+index e38efc27b78..b43aea4b412 100644
+--- a/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
++++ b/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
+@@ -90,15 +90,54 @@ abstract class SparkFunSuite
+ 
+   protected val regenerateGoldenFiles: Boolean = System.getenv("SPARK_GENERATE_GOLDEN_FILES") == "1"
+ 
++  /**
++   * The environment variable for specifying the directory to write test suite data.
++   * It is recommended to use an absolute path, since `build/sbt` changes the working directory
++   * when running tests.
++   */
++  protected val SPARK_SUITE_OUTPUT_DIR = "SPARK_SUITE_OUTPUT_DIR"
++
++  protected def getTestDataFile: File = {
++    val outputDir = System.getenv(SPARK_SUITE_OUTPUT_DIR)
++    if (outputDir == null || outputDir.isEmpty) {
++      throw new IllegalStateException(
++        s"$SPARK_SUITE_OUTPUT_DIR environment variable is missing or empty"
++      )
++    }
++    val className = this.getClass.getName.stripSuffix("$").split('.').last
++    new java.io.File(outputDir, s"$className.jsonl")
++  }
++
++  /** Write test data to the output file. */
++  protected def writeTestData[T](kind: String, data: T, exception: Option[String]): Unit = {
++    val mapper = new com.fasterxml.jackson.databind.ObjectMapper()
++      .registerModule(new com.fasterxml.jackson.module.scala.DefaultScalaModule)
++    val json = mapper.writeValueAsString(Map(
++      "kind" -> kind, "data" -> data, "exception" -> exception))
++    val file = getTestDataFile
++    val writer = new java.io.PrintWriter(new java.io.FileWriter(file, true))
++    try {
++      // scalastyle:off println
++      writer.println(json)
++      // scalastyle:on println
++    } finally {
++      writer.close()
++    }
++  }
++
+   protected override def beforeAll(): Unit = {
+     System.setProperty(IS_TESTING.key, "true")
+     if (enableAutoThreadAudit) {
+       doThreadPreAudit()
+     }
++    Logging.parserCallback = Some(this.writeTestData[String])
++    // truncate the test data file
++    Files.write(getTestDataFile.toPath, Array.emptyByteArray)
+     super.beforeAll()
+   }
+ 
+   protected override def afterAll(): Unit = {
++    Logging.parserCallback = None
+     try {
+       // Avoid leaking map entries in tests that use accumulators without SparkContext
+       AccumulatorContext.clear()
+diff --git a/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala b/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
+index 54af195847d..400a912fb8e 100644
+--- a/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
++++ b/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
+@@ -32,13 +32,25 @@ import org.apache.spark.sql.errors.QueryParsingErrors
+ import org.apache.spark.sql.internal.SqlApiConf
+ import org.apache.spark.sql.types.{DataType, StructType}
+ 
++// scalastyle:off line.size.limit
+ /**
+  * Base SQL parsing infrastructure.
+  */
+ abstract class AbstractParser extends DataTypeParserInterface with Logging {
++  protected def parse[T](kind: String, command: String)(toResult: SqlBaseParser => T): T = {
++    try {
++      val out = parse(command)(toResult)
++      Logging.parserCallback.foreach(_.apply(kind, command, None))
++      out
++    } catch {
++      case e: Throwable =>
++        Logging.parserCallback.foreach(_.apply(kind, command, Some(e.getMessage)))
++        throw e
++    }
++  }
+ 
+   /** Creates/Resolves DataType for a given SQL string. */
+-  override def parseDataType(sqlText: String): DataType = parse(sqlText) { parser =>
++  override def parseDataType(sqlText: String): DataType = parse("data-type", sqlText) { parser =>
+     astBuilder.visitSingleDataType(parser.singleDataType())
+   }
+ 
+@@ -46,7 +58,7 @@ abstract class AbstractParser extends DataTypeParserInterface with Logging {
+    * Creates StructType for a given SQL string, which is a comma separated list of field
+    * definitions which will preserve the correct Hive metadata.
+    */
+-  override def parseTableSchema(sqlText: String): StructType = parse(sqlText) { parser =>
++  override def parseTableSchema(sqlText: String): StructType = parse("table-schema", sqlText) { parser =>
+     astBuilder.visitSingleTableSchema(parser.singleTableSchema())
+   }
+ 
+diff --git a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
+index 216136d8a7c..35d9aa9c7c4 100644
+--- a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
++++ b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/parser/AbstractSqlParser.scala
+@@ -27,6 +27,7 @@ import org.apache.spark.sql.errors.QueryParsingErrors
+ import org.apache.spark.sql.internal.SQLConf
+ import org.apache.spark.sql.types.StructType
+ 
++// scalastyle:off line.size.limit
+ /**
+  * Base class for all ANTLR4 [[ParserInterface]] implementations.
+  */
+@@ -35,7 +36,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+ 
+   /** Creates Expression for a given SQL string. */
+   override def parseExpression(sqlText: String): Expression =
+-    parse(sqlText) { parser =>
++    parse("expression", sqlText) { parser =>
+       val ctx = parser.singleExpression()
+       withErrorHandling(ctx, Some(sqlText)) {
+         astBuilder.visitSingleExpression(ctx)
+@@ -44,7 +45,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+ 
+   /** Creates TableIdentifier for a given SQL string. */
+   override def parseTableIdentifier(sqlText: String): TableIdentifier =
+-    parse(sqlText) { parser =>
++    parse("table-identifier", sqlText) { parser =>
+       val ctx = parser.singleTableIdentifier()
+       withErrorHandling(ctx, Some(sqlText)) {
+         astBuilder.visitSingleTableIdentifier(ctx)
+@@ -53,7 +54,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+ 
+   /** Creates FunctionIdentifier for a given SQL string. */
+   override def parseFunctionIdentifier(sqlText: String): FunctionIdentifier = {
+-    parse(sqlText) { parser =>
++    parse("function-identifier", sqlText) { parser =>
+       val ctx = parser.singleFunctionIdentifier()
+       withErrorHandling(ctx, Some(sqlText)) {
+         astBuilder.visitSingleFunctionIdentifier(ctx)
+@@ -63,7 +64,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+ 
+   /** Creates a multi-part identifier for a given SQL string */
+   override def parseMultipartIdentifier(sqlText: String): Seq[String] = {
+-    parse(sqlText) { parser =>
++    parse("multipart-identifier", sqlText) { parser =>
+       val ctx = parser.singleMultipartIdentifier()
+       withErrorHandling(ctx, Some(sqlText)) {
+         astBuilder.visitSingleMultipartIdentifier(ctx)
+@@ -73,7 +74,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+ 
+   /** Creates LogicalPlan for a given SQL string of query. */
+   override def parseQuery(sqlText: String): LogicalPlan =
+-    parse(sqlText) { parser =>
++    parse("query", sqlText) { parser =>
+       if (!SQLConf.get.getConf(SQLConf.LEGACY_PARSE_QUERY_WITHOUT_EOF)) {
+         val ctx = parser.singleQuery()
+ 
+@@ -90,7 +91,7 @@ abstract class AbstractSqlParser extends AbstractParser with ParserInterface {
+     }
+ 
+   /** Creates LogicalPlan for a given SQL string. */
+-  override def parsePlan(sqlText: String): LogicalPlan = parse(sqlText) { parser =>
++  override def parsePlan(sqlText: String): LogicalPlan = parse("plan", sqlText) { parser =>
+     val ctx = parser.compoundOrSingleStatement()
+     withErrorHandling(ctx, Some(sqlText)) {
+       astBuilder.visitCompoundOrSingleStatement(ctx) match {
+diff --git a/sql/core/src/test/scala/org/apache/spark/sql/FunctionCollectorSuite.scala b/sql/core/src/test/scala/org/apache/spark/sql/FunctionCollectorSuite.scala
+new file mode 100644
+index 00000000000..5de6a6970f0
+--- /dev/null
++++ b/sql/core/src/test/scala/org/apache/spark/sql/FunctionCollectorSuite.scala
+@@ -0,0 +1,83 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *    http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.spark.sql
++
++import java.util.Locale
++
++import org.apache.spark.sql.test.SharedSparkSession
++import org.apache.spark.sql.types.StructType
++
++
++case class FunctionExample(sql: String, result: List[String])
++
++class FunctionCollectorSuite extends QueryTest with SharedSparkSession {
++  private def parseExamples(examples: String): List[FunctionExample] = {
++    examples
++      .split("\n")
++      .map(_.trim)
++      .filter(_.nonEmpty)
++      .zipWithIndex
++      .foldLeft(List[FunctionExample]())((acc, x) => {
++        val (line, n) = x
++        if (n == 0) {
++          if (line != "Examples:") {
++            throw new IllegalStateException("missing header for examples")
++          }
++          acc
++        } else {
++          if (line.startsWith(">")) {
++            val sql = line.substring(1).trim
++            acc :+ FunctionExample(sql, List())
++          } else {
++            val result = acc.last.result :+ line
++            acc.init :+ FunctionExample(acc.last.sql, result)
++          }
++        }
++      })
++  }
++
++  test("collect") {
++    val functions = spark.sessionState.functionRegistry
++      .listFunction()
++      .map(spark.sessionState.catalog.lookupFunctionInfo(_))
++      .filter(_.getSource.toLowerCase(Locale.ROOT) == "built-in")
++      .map(f => Map(
++        "name" -> f.getName,
++        "group" -> f.getGroup,
++        "examples" -> parseExamples(f.getExamples)
++          .map(e => {
++            val schema = try {
++              spark.sql(e.sql).schema
++            } catch {
++              case _: Throwable => new StructType()
++            }
++            Map(
++              "sql" -> e.sql,
++              "result" -> e.result,
++              "schema" -> schema,
++              "schemaString" -> schema.catalogString
++            )
++          })
++      ))
++      .toList
++
++    functions.foreach { f =>
++      writeTestData("function", f, None)
++    }
++  }
++}

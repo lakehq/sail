@@ -2,21 +2,42 @@
   "tests": [
     {
       "input": "\nCREATE TABLE IF NOT EXISTS mydb.page-view\nUSING parquet\nCOMMENT 'This is the staging page view table'\nLOCATION '/user/external/page_view'\nTBLPROPERTIES ('p1'='v1', 'p2'='v2')\nAS SELECT * FROM src",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier page-view is invalid. Please, consider quoting it with back-quotes as `page-view`.(line 2, pos 36)\n\n== SQL ==\n\nCREATE TABLE IF NOT EXISTS mydb.page-view\n------------------------------------^^^\nUSING parquet\nCOMMENT 'This is the staging page view table'\nLOCATION '/user/external/page_view'\nTBLPROPERTIES ('p1'='v1', 'p2'='v2')\nAS SELECT * FROM src\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier page-view is invalid and must be back quoted as: `page-view`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 2, pos 36)\n\n== SQL ==\n\nCREATE TABLE IF NOT EXISTS mydb.page-view\n------------------------------------^^^\nUSING parquet\nCOMMENT 'This is the staging page view table'\nLOCATION '/user/external/page_view'\nTBLPROPERTIES ('p1'='v1', 'p2'='v2')\nAS SELECT * FROM src\n",
       "output": {
         "failure": "invalid argument: found - at 37:38 expected '.', '(', 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "\nCREATE TABLE IF NOT EXISTS tab\nUSING test-provider\nAS SELECT * FROM src",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-provider is invalid. Please, consider quoting it with back-quotes as `test-provider`.(line 3, pos 10)\n\n== SQL ==\n\nCREATE TABLE IF NOT EXISTS tab\nUSING test-provider\n----------^^^\nAS SELECT * FROM src\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-provider is invalid and must be back quoted as: `test-provider`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 3, pos 10)\n\n== SQL ==\n\nCREATE TABLE IF NOT EXISTS tab\nUSING test-provider\n----------^^^\nAS SELECT * FROM src\n",
       "output": {
         "failure": "invalid argument: found - at 42:43 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
+      "input": "CREATE TABLE IF ! EXISTS t(c1 INT)",
+      "exception": "\n[SYNTAX_DISCONTINUED.BANG_EQUALS_NOT] Support of the clause or keyword: ! has been discontinued in this context. The '!' keyword is only supported as an alias for the prefix operator 'NOT'.\nUse the 'NOT' keyword instead for infix clauses such as `NOT LIKE`, `NOT IN`, `NOT BETWEEN`, etc.\nTo re-enable the '!' keyword, set \"spark.sql.legacy.bangEqualsNot\" to \"true\". SQLSTATE: 42601\n== SQL (line 1, position 17) ==\nCREATE TABLE IF ! EXISTS t(c1 INT)\n                ^\n",
+      "output": {
+        "failure": "invalid argument: found ! at 16:17 expected 'NOT', '.', '(', 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE t(c1 INT ! NULL)",
+      "exception": "\n[SYNTAX_DISCONTINUED.BANG_EQUALS_NOT] Support of the clause or keyword: ! has been discontinued in this context. The '!' keyword is only supported as an alias for the prefix operator 'NOT'.\nUse the 'NOT' keyword instead for infix clauses such as `NOT LIKE`, `NOT IN`, `NOT BETWEEN`, etc.\nTo re-enable the '!' keyword, set \"spark.sql.legacy.bangEqualsNot\" to \"true\". SQLSTATE: 42601\n== SQL (line 1, position 23) ==\nCREATE TABLE t(c1 INT ! NULL)\n                      ^\n",
+      "output": {
+        "failure": "invalid argument: found ! at 22:23 expected 'NOT', 'DEFAULT', 'GENERATED', 'COMMENT', ',', or ')'"
+      }
+    },
+    {
+      "input": "CREATE TABLE t(c1 struct<test-test INT, c2 INT>)",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-test is invalid and must be back quoted as: `test-test`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 29)\n\n== SQL ==\nCREATE TABLE t(c1 struct<test-test INT, c2 INT>)\n-----------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: found - at 29:30 expected ':', or data type"
+      }
+    },
+    {
       "input": "CREATE TABLE test (attri-bute INT)",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier attri-bute is invalid. Please, consider quoting it with back-quotes as `attri-bute`.(line 1, pos 24)\n\n== SQL ==\nCREATE TABLE test (attri-bute INT)\n------------------------^^^\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier attri-bute is invalid and must be back quoted as: `attri-bute`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 24)\n\n== SQL ==\nCREATE TABLE test (attri-bute INT)\n------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found - at 24:25 expected data type"
       }

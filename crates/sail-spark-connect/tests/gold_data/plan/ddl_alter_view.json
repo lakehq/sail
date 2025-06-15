@@ -2,7 +2,7 @@
   "tests": [
     {
       "input": "ALTER VIEW a.b.c ADD IF NOT EXISTS PARTITION\n(dt='2008-08-08', country='us') PARTITION\n(dt='2009-09-09', country='uk')",
-      "exception": "\nOperation not allowed: ALTER VIEW ... ADD PARTITION.(line 1, pos 0)\n\n== SQL ==\nALTER VIEW a.b.c ADD IF NOT EXISTS PARTITION\n^^^\n(dt='2008-08-08', country='us') PARTITION\n(dt='2009-09-09', country='uk')\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: ALTER VIEW ... ADD PARTITION is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nALTER VIEW a.b.c ADD IF NOT EXISTS PARTITION\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(dt='2008-08-08', country='us') PARTITION\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(dt='2009-09-09', country='uk')\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found ADD at 17:20 expected '.', 'RENAME', 'SET', 'UNSET', 'AS', or query"
       }

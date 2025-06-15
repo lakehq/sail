@@ -96,6 +96,196 @@
       }
     },
     {
+      "input": "WITH RECURSIVE r(level) AS (\n  SELECT level FROM t\n  UNION ALL\n  SELECT level + 1 FROM r WHERE level < 9\n)\nSELECT * FROM r",
+      "output": {
+        "success": {
+          "query": {
+            "withCtes": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "r"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "planId": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null
+              },
+              "recursive": true,
+              "ctes": [
+                [
+                  "r",
+                  {
+                    "tableAlias": {
+                      "input": {
+                        "setOperation": {
+                          "left": {
+                            "project": {
+                              "input": {
+                                "read": {
+                                  "namedTable": {
+                                    "name": [
+                                      "t"
+                                    ],
+                                    "temporal": null,
+                                    "sample": null,
+                                    "options": []
+                                  },
+                                  "isStreaming": false
+                                },
+                                "planId": null
+                              },
+                              "expressions": [
+                                {
+                                  "unresolvedAttribute": {
+                                    "name": [
+                                      "level"
+                                    ],
+                                    "planId": null,
+                                    "isMetadataColumn": false
+                                  }
+                                }
+                              ]
+                            },
+                            "planId": null
+                          },
+                          "right": {
+                            "project": {
+                              "input": {
+                                "filter": {
+                                  "input": {
+                                    "read": {
+                                      "namedTable": {
+                                        "name": [
+                                          "r"
+                                        ],
+                                        "temporal": null,
+                                        "sample": null,
+                                        "options": []
+                                      },
+                                      "isStreaming": false
+                                    },
+                                    "planId": null
+                                  },
+                                  "condition": {
+                                    "unresolvedFunction": {
+                                      "functionName": [
+                                        "<"
+                                      ],
+                                      "arguments": [
+                                        {
+                                          "unresolvedAttribute": {
+                                            "name": [
+                                              "level"
+                                            ],
+                                            "planId": null,
+                                            "isMetadataColumn": false
+                                          }
+                                        },
+                                        {
+                                          "literal": {
+                                            "int32": {
+                                              "value": 9
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "namedArguments": [],
+                                      "isDistinct": false,
+                                      "isUserDefinedFunction": false,
+                                      "isInternal": null,
+                                      "ignoreNulls": null,
+                                      "filter": null,
+                                      "orderBy": null
+                                    }
+                                  }
+                                },
+                                "planId": null
+                              },
+                              "expressions": [
+                                {
+                                  "unresolvedFunction": {
+                                    "functionName": [
+                                      "+"
+                                    ],
+                                    "arguments": [
+                                      {
+                                        "unresolvedAttribute": {
+                                          "name": [
+                                            "level"
+                                          ],
+                                          "planId": null,
+                                          "isMetadataColumn": false
+                                        }
+                                      },
+                                      {
+                                        "literal": {
+                                          "int32": {
+                                            "value": 1
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "namedArguments": [],
+                                    "isDistinct": false,
+                                    "isUserDefinedFunction": false,
+                                    "isInternal": null,
+                                    "ignoreNulls": null,
+                                    "filter": null,
+                                    "orderBy": null
+                                  }
+                                }
+                              ]
+                            },
+                            "planId": null
+                          },
+                          "setOpType": "union",
+                          "isAll": true,
+                          "byName": false,
+                          "allowMissingColumns": false
+                        },
+                        "planId": null
+                      },
+                      "name": "r",
+                      "columns": [
+                        "level"
+                      ]
+                    },
+                    "planId": null
+                  }
+                ]
+              ]
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "WITH t(x) AS (SELECT c FROM a) SELECT * FROM t",
       "output": {
         "success": {
@@ -267,7 +457,7 @@
     },
     {
       "input": "with cte1 (select 1), cte1 as (select 1 from cte1) select * from cte1",
-      "exception": "\nCTE definition can't have duplicate names: 'cte1'.(line 1, pos 0)\n\n== SQL ==\nwith cte1 (select 1), cte1 as (select 1 from cte1) select * from cte1\n^^^\n",
+      "exception": "\n[DUPLICATED_CTE_NAMES] CTE definition can't have duplicate names: `cte1`. SQLSTATE: 42602\n== SQL (line 1, position 1) ==\nwith cte1 (select 1), cte1 as (select 1 from cte1) select * from cte1\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "query": {

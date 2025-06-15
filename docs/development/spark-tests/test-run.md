@@ -10,8 +10,8 @@ rank: 20
 Before running Spark tests, please create the `test` Hatch environment using the following commands.
 
 ```bash
-hatch env create test
-hatch run test:install-pyspark
+hatch env create test.spark-4.0.0
+hatch run test.spark-4.0.0:install-pyspark
 ```
 
 ::: info
@@ -45,7 +45,7 @@ The test logs will be written to `tmp/spark-tests/<name>` where `<name>` is defi
 the `TEST_RUN_NAME` environment variable whose default value is `latest`.
 
 ```bash
-scripts/spark-tests/run-tests.sh
+env SPARK_VERSION=4.0.0 scripts/spark-tests/run-tests.sh
 ```
 
 The command runs a default set of test suites for Spark Connect.
@@ -61,6 +61,7 @@ For example, `PYTEST_ADDOPTS="-k <expression>"` can be used to run specific test
 ```bash
 # Write the test logs to a different directory (`tmp/spark-tests/selected`).
 env TEST_RUN_NAME=selected \
+  SPARK_VERSION=4.0.0 \
   scripts/spark-tests/run-tests.sh --pyargs pyspark.sql.tests.connect -v -k test_sql
 ```
 
@@ -73,7 +74,9 @@ As a comparison, you can run the tests against the original Spark implementation
 by setting the `SPARK_TESTING_REMOTE_PORT` environment variable to an empty string.
 
 ```bash
-env SPARK_TESTING_REMOTE_PORT= scripts/spark-tests/run-tests.sh
+env SPARK_TESTING_REMOTE_PORT= \
+  SPARK_VERSION=4.0.0 \
+  scripts/spark-tests/run-tests.sh
 ```
 
 This can be useful for discovering issues in the test setup.

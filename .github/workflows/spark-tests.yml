@@ -6,7 +6,7 @@ on:
       spark_version:
         description: The Spark version to test
         type: string
-        default: "3.5.5"
+        default: "4.0.0"
 
 jobs:
   setup:
@@ -92,14 +92,18 @@ jobs:
       # We do not cache the environments since package installation via `uv` is fast, while downloading
       # the environments from the cache still takes time.
       - name: Set Up Hatch Environment
+        env:
+          SPARK_VERSION: ${{ inputs.spark_version }}
         run: |
-          hatch env create test
-          hatch run test:install-pyspark
-          hatch run test:install-pysail
+          hatch env create "test.spark-${SPARK_VERSION}"
+          hatch run "test.spark-${SPARK_VERSION}":install-pyspark
+          hatch run "test.spark-${SPARK_VERSION}":install-pysail
 
       - name: Run Spark Connect Server
+        env:
+          SPARK_VERSION: ${{ inputs.spark_version }}
         run: |
-          nohup hatch run test:sail spark server -C opt/spark > /dev/null 2>&1 < /dev/null &
+          nohup hatch run "test.spark-${SPARK_VERSION}":sail spark server -C opt/spark > /dev/null 2>&1 < /dev/null &
 
       - name: Wait for Spark Connect Server to Start
         run: |
@@ -109,10 +113,11 @@ jobs:
         # We set a timeout to prevent the tests from hanging indefinitely,
         # which can happen occasionally for unknown reasons.
         # The timeout value should be adjusted as we add more tests.
-        timeout-minutes: 5
+        timeout-minutes: 10
         env:
           TEST_RUN_GIT_COMMIT: ${{ github.sha }}
           TEST_RUN_GIT_REF: ${{ github.ref }}
+          SPARK_VERSION: ${{ inputs.spark_version }}
         run: |
           scripts/spark-tests/run-tests.sh
 

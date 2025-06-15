@@ -1,0 +1,206 @@
+diff --git a/python/packaging/classic/setup.py b/python/packaging/classic/setup.py
+index da4d25cc908..5e1a9e50ef8 100755
+--- a/python/packaging/classic/setup.py
++++ b/python/packaging/classic/setup.py
+@@ -204,6 +204,9 @@ try:
+     copyfile("pyspark/shell.py", "pyspark/python/pyspark/shell.py")
+ 
+     if in_spark:
++        # Copy the test support files to the package.
++        copytree("test_support", "pyspark/python/test_support", dirs_exist_ok=True)
++
+         # !!HACK ALTERT!!
+         # `setup.py` has to be located with the same directory with the package.
+         # Therefore, we copy the current file, and place it at `spark/python` directory.
+@@ -305,6 +308,7 @@ try:
+             "pyspark.pandas.spark",
+             "pyspark.pandas.typedef",
+             "pyspark.pandas.usage_logging",
++            "pyspark.python",
+             "pyspark.python.pyspark",
+             "pyspark.python.lib",
+             "pyspark.testing",
+@@ -315,6 +319,55 @@ try:
+             "pyspark.errors.exceptions",
+             "pyspark.examples.src.main.python",
+             "pyspark.logger",
++            "pyspark.errors.tests",
++            "pyspark.logger.tests",
++            "pyspark.logger.tests.connect",
++            "pyspark.ml.deepspeed.tests",
++            "pyspark.ml.tests",
++            "pyspark.ml.tests.connect",
++            "pyspark.ml.tests.tuning",
++            "pyspark.ml.torch.tests",
++            "pyspark.mllib.tests",
++            "pyspark.pandas.tests",
++            "pyspark.pandas.tests.computation",
++            "pyspark.pandas.tests.connect",
++            "pyspark.pandas.tests.connect.computation",
++            "pyspark.pandas.tests.connect.data_type_ops",
++            "pyspark.pandas.tests.connect.diff_frames_ops",
++            "pyspark.pandas.tests.connect.frame",
++            "pyspark.pandas.tests.connect.groupby",
++            "pyspark.pandas.tests.connect.indexes",
++            "pyspark.pandas.tests.connect.io",
++            "pyspark.pandas.tests.connect.plot",
++            "pyspark.pandas.tests.connect.resample",
++            "pyspark.pandas.tests.connect.reshape",
++            "pyspark.pandas.tests.connect.series",
++            "pyspark.pandas.tests.connect.window",
++            "pyspark.pandas.tests.data_type_ops",
++            "pyspark.pandas.tests.diff_frames_ops",
++            "pyspark.pandas.tests.frame",
++            "pyspark.pandas.tests.groupby",
++            "pyspark.pandas.tests.indexes",
++            "pyspark.pandas.tests.io",
++            "pyspark.pandas.tests.plot",
++            "pyspark.pandas.tests.resample",
++            "pyspark.pandas.tests.reshape",
++            "pyspark.pandas.tests.series",
++            "pyspark.pandas.tests.window",
++            "pyspark.resource.tests",
++            "pyspark.sql.tests",
++            "pyspark.sql.tests.arrow",
++            "pyspark.sql.tests.connect",
++            "pyspark.sql.tests.connect.arrow",
++            "pyspark.sql.tests.connect.client",
++            "pyspark.sql.tests.connect.pandas",
++            "pyspark.sql.tests.connect.shell",
++            "pyspark.sql.tests.connect.streaming",
++            "pyspark.sql.tests.pandas",
++            "pyspark.sql.tests.plot",
++            "pyspark.sql.tests.streaming",
++            "pyspark.streaming.tests",
++            "pyspark.tests",
+         ],
+         include_package_data=True,
+         package_dir={
+@@ -335,10 +388,29 @@ try:
+                 "start-history-server.sh",
+                 "stop-history-server.sh",
+             ],
++            "pyspark.python": [
++                "test_support/*.py",
++                "test_support/*.zip",
++                "test_support/hello/*.txt",
++                "test_support/hello/sub_hello/*.txt",
++                "test_support/sql/*.csv",
++                "test_support/sql/*.json",
++                "test_support/sql/*.txt",
++                "test_support/sql/orc_partitioned/_SUCCESS",
++                "test_support/sql/orc_partitioned/b=0/c=0/*.orc",
++                "test_support/sql/orc_partitioned/b=0/c=0/.*.orc.crc",
++                "test_support/sql/orc_partitioned/b=1/c=1/*.orc",
++                "test_support/sql/orc_partitioned/b=1/c=1/.*.orc.crc",
++                "test_support/streaming/*.txt",
++                "test_support/streaming/time/*.txt",
++            ],
+             "pyspark.python.lib": ["*.zip"],
+-            "pyspark.data": ["*.txt", "*.data"],
++            "pyspark.data": ["*.txt", "*.data", "artifact-tests/*.jar"],
+             "pyspark.licenses": ["*.txt"],
+             "pyspark.examples.src.main.python": ["*.py", "*/*.py"],
++            "pyspark.ml.tests": ["typing/*.yml"],
++            "pyspark.sql.tests": ["typing/*.yml"],
++            "pyspark.tests": ["typing/*.yml"],
+         },
+         scripts=scripts,
+         license="http://www.apache.org/licenses/LICENSE-2.0",
+diff --git a/python/pyspark/sql/connect/client/core.py b/python/pyspark/sql/connect/client/core.py
+index 4c5a262ebdc..0b1fdd21f33 100644
+--- a/python/pyspark/sql/connect/client/core.py
++++ b/python/pyspark/sql/connect/client/core.py
+@@ -329,6 +329,10 @@ class DefaultChannelBuilder(ChannelBuilder):
+             session = PySparkSession._instantiatedSession
+ 
+             if session is not None:
++                # override the remote port via the environment variable
++                if v := os.environ.get("SPARK_TESTING_REMOTE_PORT"):
++                    return int(v)
++
+                 jvm = PySparkSession._instantiatedSession._jvm  # type: ignore[union-attr]
+                 return getattr(
+                     getattr(
+@@ -1202,6 +1206,8 @@ class SparkConnectClient(object):
+         """
+         Close the channel.
+         """
++        if self._closed:
++            return
+         ExecutePlanResponseReattachableIterator.shutdown()
+         self._channel.close()
+         self._closed = True
+diff --git a/python/pyspark/sql/tests/connect/test_connect_basic.py b/python/pyspark/sql/tests/connect/test_connect_basic.py
+index f0637056ab8..35de4af86f4 100755
+--- a/python/pyspark/sql/tests/connect/test_connect_basic.py
++++ b/python/pyspark/sql/tests/connect/test_connect_basic.py
+@@ -89,6 +89,11 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
+         cls.spark_connect_clean_up_test_data()
+         # Load test data
+         cls.spark_connect_load_test_data()
++        # Load test data for connect
++        _spark = cls.spark
++        cls.spark = cls.connect
++        cls.spark_connect_load_test_data()
++        cls.spark = _spark
+ 
+     @classmethod
+     def tearDownClass(cls):
+@@ -123,8 +128,7 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
+                 StructField("lastname", StringType(), True),
+             ]
+         )
+-        emptyRDD = cls.spark.sparkContext.emptyRDD()
+-        empty_df = cls.spark.createDataFrame(emptyRDD, empty_table_schema)
++        empty_df = cls.spark.createDataFrame([], empty_table_schema)
+         empty_df.write.saveAsTable(cls.tbl_name_empty)
+ 
+     @classmethod
+diff --git a/python/pyspark/sql/tests/connect/test_connect_plan.py b/python/pyspark/sql/tests/connect/test_connect_plan.py
+index a03cd30c733..8ed3374572d 100644
+--- a/python/pyspark/sql/tests/connect/test_connect_plan.py
++++ b/python/pyspark/sql/tests/connect/test_connect_plan.py
+@@ -753,7 +753,7 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
+         self.assertIsInstance(col, Column)
+         self.assertEqual("Column<'UnresolvedRegex(col_name)'>", str(col))
+ 
+-        col_plan = col.to_plan(self.session.client)
++        col_plan = col.to_plan(None)
+         self.assertIsNotNone(col_plan)
+         self.assertEqual(col_plan.unresolved_regex.col_name, "col_name")
+ 
+@@ -933,7 +933,7 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
+         self.assertEqual("Column<'a AS martin'>", str(col0))
+ 
+         col0 = col("a").alias("martin", metadata={"pii": True})
+-        plan = col0.to_plan(self.session.client)
++        plan = col0.to_plan(None)
+         self.assertIsNotNone(plan)
+         self.assertEqual(plan.alias.metadata, '{"pii": true}')
+ 
+diff --git a/python/pyspark/testing/connectutils.py b/python/pyspark/testing/connectutils.py
+index 423a717e8ab..56545bfd9a0 100644
+--- a/python/pyspark/testing/connectutils.py
++++ b/python/pyspark/testing/connectutils.py
+@@ -121,7 +121,6 @@ class PlanOnlyTestFixture(unittest.TestCase, PySparkErrorTestUtils):
+         @classmethod
+         def setUpClass(cls):
+             cls.connect = MockRemoteSession()
+-            cls.session = SparkSession.builder.remote().getOrCreate()
+             cls.tbl_name = "test_connect_plan_only_table_1"
+ 
+             cls.connect.set_hook("readTable", cls._read_table)
+diff --git a/python/pyspark/testing/objects.py b/python/pyspark/testing/objects.py
+index 5b97664afbd..b9deeef91c8 100644
+--- a/python/pyspark/testing/objects.py
++++ b/python/pyspark/testing/objects.py
+@@ -45,7 +45,7 @@ class ExamplePointUDT(UserDefinedType):
+ 
+     @classmethod
+     def module(cls):
+-        return "pyspark.sql.tests"
++        return "pyspark.testing.objects"
+ 
+     @classmethod
+     def scalaUDT(cls):

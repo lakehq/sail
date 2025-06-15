@@ -1,6 +1,25 @@
 {
   "tests": [
     {
+      "input": "\nMERGE WITH SCHEMA EVOLUTION INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1\nWHEN NOT MATCHED BY SOURCE THEN DELETE\n    ",
+      "output": {
+        "success": {
+          "command": {
+            "mergeInto": {
+              "target": [
+                "testcat1",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "withSchemaEvolution": true
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
       "input": "COMMENT ON DATABASE a.b.c IS 'NULL'",
       "output": {
         "success": {
@@ -118,174 +137,6 @@
                 "a",
                 "b",
                 "c"
-              ]
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "SHOW COLUMNS FROM db1.t1 IN db1",
-      "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "columns"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "SHOW COLUMNS FROM t1",
-      "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "columns"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "SHOW COLUMNS FROM t1 IN db1",
-      "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "columns"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "SHOW COLUMNS IN db1.t1",
-      "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "columns"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
               ]
             },
             "planId": null
