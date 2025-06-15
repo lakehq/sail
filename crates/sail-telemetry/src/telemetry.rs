@@ -24,7 +24,7 @@ pub fn init_telemetry() -> TelemetryResult<()> {
 }
 
 pub fn init_tracer(use_collector: bool) -> TelemetryResult<()> {
-    let reporter_config = Config::default().tail_sampled(true);
+    let reporter_config = Config::default();
     if use_collector {
         let host = env::var("SAIL_OPENTELEMETRY_COLLECTOR_SERVICE_HOST")?;
         let port = env::var("SAIL_OPENTELEMETRY_COLLECTOR_SERVICE_PORT_OTLP_GRPC")?;

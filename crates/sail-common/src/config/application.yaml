@@ -95,7 +95,7 @@
 
 - key: cluster.worker_max_idle_time_secs
   type: number
-  default: "180"
+  default: "120"
   description: The maximum idle time in seconds before a worker is removed.
 
 - key: cluster.worker_heartbeat_interval_secs
@@ -202,7 +202,7 @@
 
 - key: execution.batch_size
   type: number
-  default: "8192"
+  default: "16384"
   description: The batch size for physical plan execution.
   experimental: true
 
@@ -456,7 +456,7 @@
 
 - key: parquet.maximum_buffered_record_batches_per_stream
   type: number
-  default: "16"
+  default: "32"
   description: |
     (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
     

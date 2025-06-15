@@ -1,0 +1,114 @@
+digraph planning {
+  rankdir=LR;
+  node [shape=box, fontname="Sans-Serif"];
+  edge [fontname="Sans-Serif"];
+  compound=true;
+  fontname="Sans-Serif";
+  fontnames="svg";
+  fontsize=16;
+  splines="line";
+  ranksep=0.5;
+  nodesep=1;
+
+  subgraph catalog {
+    label="Catalog";
+    cluster=true;
+
+    catalog_extension [label="Extension"];
+  }
+
+  subgraph storage {
+    label="Storage";
+    cluster=true;
+
+    storage_extension [label="Extension"];
+  }
+
+  input [label="{SQL}|{DataFrame}", shape=record];
+  spec [label="Sail Spec"];
+
+  subgraph logical_plan {
+    label="Logical Plan";
+    cluster=true;
+
+    logical_plan_extension [label="Extension"];
+  }
+
+  subgraph logical_optimizer {
+    label="Logical Optimizer";
+    cluster=true;
+
+    logical_optimizer_extension [label="Extension"];
+  }
+
+  subgraph physical_plan {
+    label="Physical Plan";
+    cluster=true;
+
+    physical_plan_extension [label="Extension"];
+  }
+
+  subgraph physical_optimizer {
+    label="Physical Optimizer";
+    cluster=true;
+
+    physical_optimizer_extension [label="Extension"];
+  }
+
+  subgraph stages {
+    label=<Distributed Physical Plan<BR /><I>(Cluster Mode)</I>>;
+    cluster=true;
+
+    subgraph stage_1 {
+      label="Stage";
+      cluster=true;
+
+      node_1 [shape=square, label="", width=.25, height=.25];
+      node_2 [shape=square, label="", width=.25, height=.25];
+    }
+
+    subgraph stage_2 {
+      label="Stage";
+      cluster=true;
+
+      node_3 [shape=square, label="", width=.25, height=.25];
+      node_4 [shape=square, label="", width=.25, height=.25];
+    }
+
+    subgraph stage_3 {
+      label="Stage";
+      cluster=true;
+
+      node_5 [shape=square, label="", width=.25, height=.25];
+    }
+
+    ellipsis [label="  ...  ", style=none, shape=plain];
+
+    subgraph stage_4 {
+      label="Stage";
+      cluster=true;
+
+      node_6 [shape=square, label="", width=.25, height=.25];
+    }
+
+    node_1 -> node_2;
+    node_3 -> node_4;
+    {node_2, node_4} -> node_5;
+    node_5 -> ellipsis [dir=none];
+    ellipsis -> node_6;
+  }
+
+  input -> spec [weight=5];
+  spec -> logical_plan_extension:n [lhead="logical_plan", weight=5];
+  catalog_extension:e -> logical_plan_extension [ltail="catalog", lhead="logical_plan"];
+  storage_extension:e -> logical_plan_extension [ltail="storage", lhead="logical_plan"];
+  logical_plan_extension:n -> physical_plan_extension:n [ltail="logical_plan", lhead="physical_plan", weight=5];
+
+  logical_optimizer_extension -> logical_plan_extension [ltail="logical_optimizer", lhead="logical_plan", constraint=false];
+  physical_optimizer_extension -> physical_plan_extension [ltail="physical_optimizer", lhead="physical_plan", constraint=false];
+
+  physical_plan_extension -> node_2 [ltail="physical_plan", lhead="stages"];
+
+  input -> {catalog_extension, storage_extension} [style=invis];
+  spec -> logical_optimizer_extension -> physical_optimizer_extension [style=invis];
+}

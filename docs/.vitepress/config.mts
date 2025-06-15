@@ -118,15 +118,10 @@ class TransformPageData {
   static sphinx(pageData: PageData): void {
     if (pageData.params?.sphinx) {
       pageData.title = pageData.params.current.text;
-      pageData.titleTemplate = ":title - Sail Python API Reference";
-      pageData.frontmatter.prev = pageData.params.prev ?? {
-        link: "/reference/",
-        text: "Reference",
-      };
-      pageData.frontmatter.next = pageData.params.next ?? {
-        link: "/reference/changelog/",
-        text: "Changelog",
-      };
+      pageData.titleTemplate = ":title - Sail Python API";
+      if (pageData.relativePath === "reference/python/index.md") {
+        pageData.frontmatter.prev = false;
+      }
     }
   }
 
@@ -176,10 +171,28 @@ class Sidebar {
     return trees.map((tree) => transform(tree, 1));
   }
 
+  static async introduction(): Promise<DefaultTheme.SidebarItem[]> {
+    const pages = await loadPages(
+      this.srcDir,
+      "/introduction/**/*.md",
+      Site.srcExclude(),
+    );
+    return Sidebar.items(TreeNode.fromPaths(pages));
+  }
+
   static async userGuide(): Promise<DefaultTheme.SidebarItem[]> {
     const pages = await loadPages(
       this.srcDir,
       "/guide/**/*.md",
+      Site.srcExclude(),
+    );
+    return Sidebar.items(TreeNode.fromPaths(pages));
+  }
+
+  static async concepts(): Promise<DefaultTheme.SidebarItem[]> {
+    const pages = await loadPages(
+      this.srcDir,
+      "/concepts/**/*.md",
       Site.srcExclude(),
     );
     return Sidebar.items(TreeNode.fromPaths(pages));
@@ -201,7 +214,7 @@ class Sidebar {
         link: "/reference/",
         items: [
           {
-            text: "Python API Reference",
+            text: "Python API",
             link: "/reference/python/",
           },
           {
@@ -217,7 +230,17 @@ class Sidebar {
     ];
   }
 
-  static async pythonReference(): Promise<DefaultTheme.SidebarItem[]> {
+  static async backToReference(): Promise<DefaultTheme.SidebarItem[]> {
+    return [
+      {
+        text: "Back to Reference",
+        link: "/reference/",
+        items: [],
+      },
+    ];
+  }
+
+  static async pythonApi(): Promise<DefaultTheme.SidebarItem[]> {
     const pages = await loadSphinxPages();
     const trees = TreeNode.fromNodes(pages)
       .filter((tree) => {
@@ -230,8 +253,9 @@ class Sidebar {
         ),
       );
     return [
+      ...(await Sidebar.backToReference()),
       {
-        text: "Python API Reference",
+        text: "Python API",
         link: "/reference/python/",
         items: Sidebar.items(trees, "/reference/python"),
       },
@@ -274,24 +298,52 @@ export default async () => {
       siteTitle: "Sail",
       logo: "/logo.png",
       nav: [
-        { text: "User Guide", link: "/guide/", activeMatch: "^/guide/" },
         {
-          text: "Development",
-          link: "/development/",
-          activeMatch: "^/development/",
+          text: "Introduction",
+          link: "/introduction/",
+          activeMatch: "^/introduction/",
         },
-        { text: "Reference", link: "/reference/", activeMatch: "^/reference/" },
+        { text: "User Guide", link: "/guide/", activeMatch: "^/guide/" },
+        { text: "Concepts", link: "/concepts/", activeMatch: "^/concepts/" },
+        {
+          text: "More",
+          activeMatch: "^/(development|reference)/",
+          items: [
+            {
+              text: "Development",
+              link: "/development/",
+              activeMatch: "^/development/",
+            },
+            {
+              text: "Reference",
+              link: "/reference/",
+              activeMatch: "^/reference/",
+            },
+          ],
+        },
       ],
       notFound: {
         quote: "The page does not exist.",
       },
       sidebar: {
         "/": [
+          ...(await Sidebar.introduction()),
           ...(await Sidebar.userGuide()),
-          ...(await Sidebar.development()),
-          ...(await Sidebar.reference()),
+          ...(await Sidebar.concepts()),
+          {
+            text: "Development",
+            items: [],
+            link: "/development/",
+          },
+          {
+            text: "Reference",
+            items: [],
+            link: "/reference/",
+          },
         ],
-        "/reference/python/": await Sidebar.pythonReference(),
+        "/development/": await Sidebar.development(),
+        "/reference/": await Sidebar.reference(),
+        "/reference/python/": await Sidebar.pythonApi(),
       },
       externalLinkIcon: true,
       socialLinks: [

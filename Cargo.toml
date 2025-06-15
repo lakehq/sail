@@ -66,7 +66,7 @@ num_enum = "0.7.3"
 num-traits = "0.2.19"
 log = "0.4.27"
 env_logger = "0.11.8"
-fastrace = { version = "0.7.9", features = ["enable"] }
+fastrace = { version = "0.7.10", features = ["enable"] }
 fastrace-opentelemetry = "0.9.0"
 opentelemetry = "0.28.0"
 opentelemetry_sdk = "0.28.0"
@@ -74,12 +74,14 @@ opentelemetry-otlp = { version = "0.28.0", features = ["tls", "tls-roots", "grpc
 figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "1.0.0"
 k8s-openapi = { version = "0.25.0", features = ["latest"] }
-twox-hash = "2.1.0"
+twox-hash = "2.1.1"
 aes = "0.8.4"
 aes-gcm = "0.10.3"
 cbc = { version = "0.1.2", features = ["std"] }
 base64 = "0.22.1"
 md-5 = "0.10.6"
+crc32fast = "1.4.2"
+sha1 = "0.10.6"
 half = { version = "2.6.0", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.63"
 chumsky = { version = "0.10.1", default-features = false, features = ["pratt"] }
@@ -115,7 +117,7 @@ pyo3 = { version = "0.24.2", features = ["auto-initialize", "serde"] }
 arrow-buffer = { version = "55.1.0" }
 arrow-schema = { version = "55.1.0", features = ["serde"] }
 arrow-flight = { version = "55.1.0" }
-serde_arrow = { version = "0.13.3", features = ["arrow-55"] }
+serde_arrow = { version = "0.13.4", features = ["arrow-55"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.1", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.14.2"
