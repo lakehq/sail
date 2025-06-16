@@ -1634,7 +1634,10 @@ impl PlanResolver<'_> {
         let rand_expr: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(RandPoisson::new())),
-                args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)))],
+                args: vec![
+                    Expr::Literal(ScalarValue::Float64(Some(upper_bound))),
+                    Expr::Literal(ScalarValue::Int64(Some(seed))),
+                ],
             })
             .alias(&rand_column_name)
         } else {
