@@ -1637,15 +1637,15 @@ impl PlanResolver<'_> {
             Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(RandPoisson::new())),
                 args: vec![
-                    Expr::Literal(ScalarValue::Float64(Some(upper_bound))),
-                    Expr::Literal(ScalarValue::Int64(Some(seed))),
+                    Expr::Literal(ScalarValue::Float64(Some(upper_bound)), None),
+                    Expr::Literal(ScalarValue::Int64(Some(seed)), None),
                 ],
             })
             .alias(&rand_column_name)
         } else {
             Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(Randn::new())),
-                args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)))],
+                args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
             })
             .alias(&rand_column_name)
         };
@@ -1682,7 +1682,7 @@ impl PlanResolver<'_> {
             let arr_expr: Expr = Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(SparkSequence::new())),
                 args: vec![
-                    Expr::Literal(ScalarValue::Int64(Some(1))),
+                    Expr::Literal(ScalarValue::Int64(Some(1)), None),
                     col(&rand_column_name),
                 ],
             })
