@@ -15,7 +15,6 @@ use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
 use datafusion::functions::core::expr_ext::FieldAccessor;
-use datafusion::functions::expr_fn::random;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::sqlparser::ast::NullTreatment;
@@ -58,6 +57,7 @@ use crate::data_source::csv::CsvReadOptions;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array::spark_sequence::SparkSequence;
 use crate::extension::function::math::rand_poisson::RandPoisson;
+use crate::extension::function::math::randn::Randn;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
     CatalogCommand, CatalogCommandNode, MapPartitionsNode, RangeNode, ShowStringFormat,
@@ -1638,7 +1638,11 @@ impl PlanResolver<'_> {
             })
             .alias(&rand_column_name)
         } else {
-            random().alias(&rand_column_name)
+            Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(Randn::new())),
+                args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)))],
+            })
+            .alias(&rand_column_name)
         };
         let init_exprs: Vec<Expr> = input
             .schema()
