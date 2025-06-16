@@ -5,6 +5,7 @@ use serde::Deserialize;
 use crate::error::{PlanError, PlanResult};
 
 pub mod csv;
+pub mod json;
 
 const fn default_true() -> bool {
     true

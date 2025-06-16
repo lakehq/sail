@@ -4,9 +4,11 @@ use std::sync::Arc;
 
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::listing::ListingOptions;
 
 use crate::data_source::csv::CsvReadOptions;
+use crate::data_source::json::JsonReadOptions;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
@@ -19,6 +21,15 @@ impl PlanResolver<'_> {
                 "Invalid character '{c}' for {field_name}: must be an ASCII character"
             )))
         }
+    }
+
+    pub(crate) fn resolve_json_read_options(
+        options: JsonReadOptions,
+    ) -> PlanResult<ListingOptions> {
+        let file_format = JsonFormat::default()
+            .with_schema_infer_max_rec(options.schema_infer_max_records)
+            .with_file_compression_type(FileCompressionType::from_str(&options.compression)?);
+        Ok(ListingOptions::new(Arc::new(file_format)).with_file_extension(".json"))
     }
 
     pub(crate) fn resolve_csv_read_options(options: CsvReadOptions) -> PlanResult<ListingOptions> {

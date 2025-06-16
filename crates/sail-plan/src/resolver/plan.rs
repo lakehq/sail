@@ -52,6 +52,7 @@ use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapI
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::data_source::csv::CsvReadOptions;
+use crate::data_source::json::JsonReadOptions;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
@@ -845,13 +846,8 @@ impl PlanResolver<'_> {
         let options: HashMap<String, String> = options.into_iter().collect();
         let options: ListingOptions = match format.to_lowercase().as_str() {
             "json" => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(
-                        "JSON data source read options are not supported yet",
-                    ));
-                }
-                ListingOptions::new(JsonFormatFactory::new().create(&self.ctx.state(), &options)?)
-                    .with_file_extension(".json")
+                let json_read_options = JsonReadOptions::load(options.clone())?;
+                Self::resolve_json_read_options(json_read_options)?
             }
             "csv" => {
                 let csv_read_options = CsvReadOptions::load(options.clone())?;

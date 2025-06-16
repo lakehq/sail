@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
-use sail_common::config::CSV_CONFIG;
+use sail_common::config::CSV_READ_CONFIG;
 use serde::Deserialize;
 
 use crate::data_source::{parse_bool, parse_non_empty_char, parse_non_empty_string, ConfigItem};
@@ -101,8 +101,8 @@ impl CsvReadOptions {
             .into_iter()
             .map(|(k, v)| (k.to_lowercase(), v))
             .collect();
-        let config_items: Vec<ConfigItem> =
-            serde_yaml::from_str(CSV_CONFIG).map_err(|e| PlanError::internal(e.to_string()))?;
+        let config_items: Vec<ConfigItem> = serde_yaml::from_str(CSV_READ_CONFIG)
+            .map_err(|e| PlanError::internal(e.to_string()))?;
         let options: HashMap<String, String> = config_items
             .into_iter()
             .filter(|item| item.supported)
