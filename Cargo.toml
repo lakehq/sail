@@ -50,7 +50,7 @@ phf = { version = "0.11.3", features = ["macros"] }
 ryu = "1.0.20"
 either = "1.15.0"
 num-bigint = "0.4.6"
-mimalloc = { version = "0.1.46", default-features = false }
+mimalloc = { version = "0.1.47", default-features = false }
 rand = "0.9.1"
 rand_chacha = "0.9.0"
 rand_distr = "0.5.1"
@@ -86,10 +86,10 @@ half = { version = "2.6.0", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.63"
 chumsky = { version = "0.10.1", default-features = false, features = ["pratt"] }
 num = "0.4.3"
-hf-hub = { version = "0.4.2", default-features = false, features = ["tokio"] }
+hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
 reqwest = "0.12.15"
 percent-encoding = "2.3.1"
-rustls = "0.23.27"
+rustls = "0.23.28"
 dashmap = "6.1.0"
 
 ######
