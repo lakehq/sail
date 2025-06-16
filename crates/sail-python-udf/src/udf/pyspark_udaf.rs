@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
 use datafusion::arrow::compute::cast;
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::Result;
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -130,7 +130,7 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
         )))
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         BatchAggregateAccumulator::state_fields(args)
     }
 }

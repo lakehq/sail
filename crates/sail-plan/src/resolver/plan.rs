@@ -1161,7 +1161,7 @@ impl PlanResolver<'_> {
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
                                     )),
-                                    Expr::Literal(ScalarValue::Null)
+                                    Expr::Literal(ScalarValue::Null, None)
                                         .alias(state.register_field_name(left_name)),
                                 )),
                                 None => Err(PlanError::invalid(format!(
@@ -1184,7 +1184,7 @@ impl PlanResolver<'_> {
                                 })
                                 .map(|(right_idx, right_name)| {
                                     (
-                                        Expr::Literal(ScalarValue::Null)
+                                        Expr::Literal(ScalarValue::Null, None)
                                             .alias(state.register_field_name(right_name)),
                                         Expr::Column(Column::from(
                                             right.schema().qualified_field(right_idx),
@@ -1240,38 +1240,40 @@ impl PlanResolver<'_> {
                 let plan = if is_all {
                     let left_row_number_alias = state.register_field_name("row_num");
                     let right_row_number_alias = state.register_field_name("row_num");
-                    let left_row_number_window = Expr::WindowFunction(expr::WindowFunction {
-                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                        params: WindowFunctionParams {
-                            args: vec![],
-                            partition_by: left
-                                .schema()
-                                .fields()
-                                .iter()
-                                .map(|field| Expr::Column(Column::from_name(field.name())))
-                                .collect::<Vec<_>>(),
-                            order_by: vec![],
-                            window_frame: WindowFrame::new(None),
-                            null_treatment: Some(NullTreatment::RespectNulls),
-                        },
-                    })
-                    .alias(left_row_number_alias.as_str());
-                    let right_row_number_window = Expr::WindowFunction(expr::WindowFunction {
-                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                        params: WindowFunctionParams {
-                            args: vec![],
-                            partition_by: right
-                                .schema()
-                                .fields()
-                                .iter()
-                                .map(|field| Expr::Column(Column::from_name(field.name())))
-                                .collect::<Vec<_>>(),
-                            order_by: vec![],
-                            window_frame: WindowFrame::new(None),
-                            null_treatment: Some(NullTreatment::RespectNulls),
-                        },
-                    })
-                    .alias(right_row_number_alias.as_str());
+                    let left_row_number_window =
+                        Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                            params: WindowFunctionParams {
+                                args: vec![],
+                                partition_by: left
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|field| Expr::Column(Column::from_name(field.name())))
+                                    .collect::<Vec<_>>(),
+                                order_by: vec![],
+                                window_frame: WindowFrame::new(None),
+                                null_treatment: Some(NullTreatment::RespectNulls),
+                            },
+                        }))
+                        .alias(left_row_number_alias.as_str());
+                    let right_row_number_window =
+                        Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                            params: WindowFunctionParams {
+                                args: vec![],
+                                partition_by: right
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|field| Expr::Column(Column::from_name(field.name())))
+                                    .collect::<Vec<_>>(),
+                                order_by: vec![],
+                                window_frame: WindowFrame::new(None),
+                                null_treatment: Some(NullTreatment::RespectNulls),
+                            },
+                        }))
+                        .alias(right_row_number_alias.as_str());
                     let left = LogicalPlanBuilder::from(left)
                         .window(vec![left_row_number_window])?
                         .build()?;
@@ -1928,15 +1930,15 @@ impl PlanResolver<'_> {
         let limit = self
             .resolve_expression(limit, input.schema(), state)
             .await?;
-        let limit_num = match limit {
-            Expr::Literal(ScalarValue::Int8(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int16(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int32(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
-            Expr::Literal(ScalarValue::UInt8(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt16(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt32(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt64(Some(value))) => Ok(value as i64),
+        let limit_num = match &limit {
+            Expr::Literal(ScalarValue::Int8(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int16(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int32(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int64(Some(value)), _metadata) => Ok(*value),
+            Expr::Literal(ScalarValue::UInt8(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt16(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt32(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt64(Some(value)), _metadata) => Ok(*value as i64),
             _ => Err(PlanError::invalid("`tail` limit must be an integer")),
         }?;
         // TODO: This can be expensive for large input datasets
@@ -1947,7 +1949,7 @@ impl PlanResolver<'_> {
         let count_expr = Expr::AggregateFunction(expr::AggregateFunction {
             func: count_udaf(),
             params: AggregateFunctionParams {
-                args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
                 distinct: false,
                 filter: None,
                 order_by: None,
@@ -3407,7 +3409,7 @@ impl PlanResolver<'_> {
                     None => table_source
                         .get_column_default(field.name())
                         .cloned()
-                        .unwrap_or_else(|| Expr::Literal(ScalarValue::Null))
+                        .unwrap_or_else(|| Expr::Literal(ScalarValue::Null, None))
                         .cast_to(field.data_type(), &DFSchema::empty())?,
                 };
                 Ok(expr.alias(field.name()))
@@ -3726,7 +3728,7 @@ impl PlanResolver<'_> {
             .map(|named_expr| {
                 let NamedExpr { expr, .. } = &named_expr;
                 match expr {
-                    Expr::Literal(scalar_value) => {
+                    Expr::Literal(scalar_value, _metadata) => {
                         let position = match scalar_value {
                             ScalarValue::Int32(Some(position)) => *position as i64,
                             ScalarValue::Int64(Some(position)) => *position,

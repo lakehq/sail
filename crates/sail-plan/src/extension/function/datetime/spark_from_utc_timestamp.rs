@@ -1,11 +1,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Expr, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Volatility,
 };
 use datafusion_expr_common::signature::{Signature, TypeSignature, TIMEZONE_WILDCARD};
 
@@ -147,23 +147,25 @@ impl ScalarUDFImpl for SparkFromUtcTimestamp {
         internal_err!("`return_type` should not be called, call `return_type_from_args` instead")
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        if args.arg_types.len() != 2 {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.len() != 2 {
             return exec_err!(
                 "Spark `from_utc_timestamp` function requires 2 arguments, got {}",
-                args.arg_types.len()
+                args.arg_fields.len()
             );
         }
         // FIXME: Second arg can be ColumnarValue::Array, but DataFusion doesn't support that.
         match &args.scalar_arguments[1] {
             Some(ScalarValue::Utf8(tz))
             | Some(ScalarValue::Utf8View(tz))
-            | Some(ScalarValue::LargeUtf8(tz)) => {
-                Ok(ReturnInfo::new_nullable(DataType::Timestamp(
+            | Some(ScalarValue::LargeUtf8(tz)) => Ok(Arc::new(Field::new(
+                self.name(),
+                DataType::Timestamp(
                     *self.time_unit(),
                     tz.as_ref().map(|tz| Arc::from(tz.to_string())),
-                )))
-            }
+                ),
+                true,
+            ))),
             other => exec_err!(
                 "Second argument for `from_utc_timestamp` must be string, received {other:?}"
             ),
@@ -184,9 +186,9 @@ impl ScalarUDFImpl for SparkFromUtcTimestamp {
         }
         let (timestamp, timezone) = args.two()?;
         match timezone {
-            Expr::Literal(ScalarValue::Utf8(tz))
-            | Expr::Literal(ScalarValue::Utf8View(tz))
-            | Expr::Literal(ScalarValue::LargeUtf8(tz)) => {
+            Expr::Literal(ScalarValue::Utf8(tz), _metadata)
+            | Expr::Literal(ScalarValue::Utf8View(tz), _metadata)
+            | Expr::Literal(ScalarValue::LargeUtf8(tz), _metadata) => {
                 let expr = Expr::Cast(datafusion_expr::Cast {
                     expr: Box::new(timestamp),
                     data_type: DataType::Timestamp(

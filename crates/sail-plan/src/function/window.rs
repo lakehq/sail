@@ -31,7 +31,7 @@ fn count(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
     let args = transform_count_star_wildcard_expr(arguments);
-    Ok(expr::Expr::WindowFunction(expr::WindowFunction {
+    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(count::count_udaf()),
         params: WindowFunctionParams {
             args,
@@ -40,7 +40,7 @@ fn count(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             window_frame,
             null_treatment,
         },
-    }))
+    })))
 }
 
 fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
