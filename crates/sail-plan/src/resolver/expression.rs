@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
-use std::ops::Div;
+use std::ops::{Div, Mul};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -1053,8 +1053,13 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type) {
+            (from, DataType::Timestamp(time_unit, tz)) if from.is_numeric() => int64_to_timestamp(
+                expr::Expr::Cast(expr::Cast::new(Box::new(expr), DataType::Int64)),
+                time_unit,
+                tz,
+            ),
             (DataType::Timestamp(time_unit, _), to) if to.is_numeric() => expr::Expr::Cast(
-                expr::Cast::new(Box::new(scale_timestamp(expr, &time_unit)), to),
+                expr::Cast::new(Box::new(timestamp_to_int64(expr, &time_unit)), to),
             ),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
@@ -2183,7 +2188,20 @@ fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableRe
     }
 }
 
-fn scale_timestamp(expr: expr::Expr, time_unit: &TimeUnit) -> expr::Expr {
+fn int64_to_timestamp(expr: expr::Expr, time_unit: TimeUnit, tz: Option<Arc<str>>) -> expr::Expr {
+    let expr = match time_unit {
+        TimeUnit::Second => expr,
+        TimeUnit::Millisecond => expr.mul(lit(1000i64)),
+        TimeUnit::Microsecond => expr.mul(lit(1_000_000i64)),
+        TimeUnit::Nanosecond => expr.mul(lit(1_000_000_000i64)),
+    };
+    expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr),
+        data_type: DataType::Timestamp(time_unit, tz),
+    })
+}
+
+fn timestamp_to_int64(expr: expr::Expr, time_unit: &TimeUnit) -> expr::Expr {
     let expr = expr::Expr::Cast(expr::Cast {
         expr: Box::new(expr),
         data_type: DataType::Int64,
