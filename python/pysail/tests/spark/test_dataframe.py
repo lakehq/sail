@@ -68,3 +68,12 @@ def test_dataframe_drop(sail):
             {"a.b.c": "int32"}
         ),
     )
+
+def test_dataframe_sample(sail):
+    df = sail.createDataFrame([(1), (2), (3), (4), (5), (6), (7), (8), (9), (10)], ["id"])
+    df2 = sail.sample(0.5, 1)
+
+    assert_frame_equal(
+        df.toPandas(),
+        pd.DataFrame({"id": ["2"]}),
+    )
