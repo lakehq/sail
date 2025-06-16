@@ -4,7 +4,9 @@ use std::convert::TryFrom;
 use sail_common::config::CSV_READ_CONFIG;
 use serde::Deserialize;
 
-use crate::data_source::{parse_bool, parse_non_empty_char, parse_non_empty_string, ConfigItem};
+use crate::data_source::{
+    parse_bool, parse_non_empty_char, parse_non_empty_string, DataSourceOptions,
+};
 use crate::error::{PlanError, PlanResult};
 
 /// Datasource Options that control the reading of CSV files.
@@ -95,23 +97,9 @@ impl TryFrom<HashMap<String, String>> for CsvReadOptions {
     }
 }
 
-impl CsvReadOptions {
-    pub fn load(user_options: HashMap<String, String>) -> PlanResult<Self> {
-        let user_options_normalized: HashMap<String, String> = user_options
-            .into_iter()
-            .map(|(k, v)| (k.to_lowercase(), v))
-            .collect();
-        let config_items: Vec<ConfigItem> = serde_yaml::from_str(CSV_READ_CONFIG)
-            .map_err(|e| PlanError::internal(e.to_string()))?;
-        let options: HashMap<String, String> = config_items
-            .into_iter()
-            .filter(|item| item.supported)
-            .map(|item| {
-                let value = item.resolve_value(&user_options_normalized);
-                let key = item.key;
-                (key, value)
-            })
-            .collect();
-        CsvReadOptions::try_from(options)
+impl DataSourceOptions for CsvReadOptions {
+    const SOURCE_CONFIG: &'static str = CSV_READ_CONFIG;
+    fn try_from_options(options: HashMap<String, String>) -> PlanResult<Self> {
+        Self::try_from(options)
     }
 }

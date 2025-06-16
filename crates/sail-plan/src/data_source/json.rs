@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 use sail_common::config::{JSON_READ_CONFIG, JSON_WRITE_CONFIG};
 use serde::Deserialize;
 
-use crate::data_source::ConfigItem;
+use crate::data_source::DataSourceOptions;
 use crate::error::{PlanError, PlanResult};
 
 /// Datasource Options that control the reading of JSON files.
@@ -40,24 +40,10 @@ impl TryFrom<HashMap<String, String>> for JsonReadOptions {
     }
 }
 
-impl JsonReadOptions {
-    pub fn load(user_options: HashMap<String, String>) -> PlanResult<Self> {
-        let user_options_normalized: HashMap<String, String> = user_options
-            .into_iter()
-            .map(|(k, v)| (k.to_lowercase(), v))
-            .collect();
-        let config_items: Vec<ConfigItem> = serde_yaml::from_str(JSON_READ_CONFIG)
-            .map_err(|e| PlanError::internal(e.to_string()))?;
-        let options: HashMap<String, String> = config_items
-            .into_iter()
-            .filter(|item| item.supported)
-            .map(|item| {
-                let value = item.resolve_value(&user_options_normalized);
-                let key = item.key;
-                (key, value)
-            })
-            .collect();
-        JsonReadOptions::try_from(options)
+impl DataSourceOptions for JsonReadOptions {
+    const SOURCE_CONFIG: &'static str = JSON_READ_CONFIG;
+    fn try_from_options(options: HashMap<String, String>) -> PlanResult<Self> {
+        Self::try_from(options)
     }
 }
 
@@ -82,23 +68,9 @@ impl TryFrom<HashMap<String, String>> for JsonWriteOptions {
     }
 }
 
-impl JsonWriteOptions {
-    pub fn load(user_options: HashMap<String, String>) -> PlanResult<Self> {
-        let user_options_normalized: HashMap<String, String> = user_options
-            .into_iter()
-            .map(|(k, v)| (k.to_lowercase(), v))
-            .collect();
-        let config_items: Vec<ConfigItem> = serde_yaml::from_str(JSON_WRITE_CONFIG)
-            .map_err(|e| PlanError::internal(e.to_string()))?;
-        let options: HashMap<String, String> = config_items
-            .into_iter()
-            .filter(|item| item.supported)
-            .map(|item| {
-                let value = item.resolve_value(&user_options_normalized);
-                let key = item.key;
-                (key, value)
-            })
-            .collect();
-        JsonWriteOptions::try_from(options)
+impl DataSourceOptions for JsonWriteOptions {
+    const SOURCE_CONFIG: &'static str = JSON_WRITE_CONFIG;
+    fn try_from_options(options: HashMap<String, String>) -> PlanResult<Self> {
+        Self::try_from(options)
     }
 }

@@ -53,6 +53,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::data_source::csv::CsvReadOptions;
 use crate::data_source::json::JsonReadOptions;
+use crate::data_source::load_options;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
@@ -846,11 +847,11 @@ impl PlanResolver<'_> {
         let options: HashMap<String, String> = options.into_iter().collect();
         let options: ListingOptions = match format.to_lowercase().as_str() {
             "json" => {
-                let json_read_options = JsonReadOptions::load(options.clone())?;
+                let json_read_options = load_options::<JsonReadOptions>(options.clone())?;
                 Self::resolve_json_read_options(json_read_options)?
             }
             "csv" => {
-                let csv_read_options = CsvReadOptions::load(options.clone())?;
+                let csv_read_options = load_options::<CsvReadOptions>(options.clone())?;
                 Self::resolve_csv_read_options(csv_read_options)?
             }
             "parquet" => {

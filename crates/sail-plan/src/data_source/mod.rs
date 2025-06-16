@@ -11,6 +11,32 @@ const fn default_true() -> bool {
     true
 }
 
+pub(crate) trait DataSourceOptions: Sized {
+    const SOURCE_CONFIG: &'static str;
+    fn try_from_options(options: HashMap<String, String>) -> PlanResult<Self>;
+}
+
+pub(crate) fn load_options<T: DataSourceOptions>(
+    user_options: HashMap<String, String>,
+) -> PlanResult<T> {
+    let user_options_normalized: HashMap<String, String> = user_options
+        .into_iter()
+        .map(|(k, v)| (k.to_lowercase(), v))
+        .collect();
+    let config_items: Vec<ConfigItem> =
+        serde_yaml::from_str(T::SOURCE_CONFIG).map_err(|e| PlanError::internal(e.to_string()))?;
+    let options: HashMap<String, String> = config_items
+        .into_iter()
+        .filter(|item| item.supported)
+        .map(|item| {
+            let value = item.resolve_value(&user_options_normalized);
+            let key = item.key;
+            (key, value)
+        })
+        .collect();
+    T::try_from_options(options)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ConfigItem {
