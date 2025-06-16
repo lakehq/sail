@@ -63,7 +63,7 @@
   description: |
     Sets the single character line separator that should be used for parsing.
     CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
-    For reading, Defaults to None (CRLF: \\r, \\r\\n and \\n).
+    For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
   supported: true
 
 - key: infer_schema
@@ -257,7 +257,7 @@
   description: |
     Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
     This overrides `sail.sql.column_name_of_corrupt_record`.
-    Defaults to the value of `sail.sql.column_name_of_corrupt_record configuration`.
+    Defaults to the value of `sail.sql.column_name_of_corrupt_record` configuration.
   supported: false
 
 - key: multi_line
@@ -322,7 +322,7 @@
     - timeZone
   default: ""
   description: |
-    Sets the string that indicates a time zone ID to be used to format timestamps in the JSON datasources or
+    Sets the string that indicates a time zone ID to be used to format timestamps in the CSV data sources or
     partition values. The following formats of timeZone are supported:
       - Region-based zone ID: It should have the form 'area/city', such as 'America/Los_Angeles'.
       - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
