@@ -1,4 +1,9 @@
 >>> df = spark.range(10)
+>>> df.sample(0.0000000001, 3).show()
++---+
+| id|
++---+
++---+
 >>> df.sample(0.5, 1).show()
 +---+
 | id|

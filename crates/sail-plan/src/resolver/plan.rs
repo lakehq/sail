@@ -1663,7 +1663,7 @@ impl PlanResolver<'_> {
 
         if !with_replacement {
             let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
-                .filter(col(&rand_column_name).lt_eq(lit(upper_bound)))?
+                .filter(col(&rand_column_name).lt(lit(upper_bound)))?
                 .filter(col(&rand_column_name).gt_eq(lit(lower_bound)))?
                 .build()?;
             let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
