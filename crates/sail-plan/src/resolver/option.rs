@@ -8,7 +8,7 @@ use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::listing::ListingOptions;
 
 use crate::data_source::csv::CsvReadOptions;
-use crate::data_source::json::JsonReadOptions;
+use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
@@ -30,6 +30,11 @@ impl PlanResolver<'_> {
             .with_schema_infer_max_rec(options.schema_infer_max_records)
             .with_file_compression_type(FileCompressionType::from_str(&options.compression)?);
         Ok(ListingOptions::new(Arc::new(file_format)).with_file_extension(".json"))
+    }
+
+    pub(crate) fn resolve_json_write_options(options: JsonWriteOptions) -> PlanResult<JsonFormat> {
+        Ok(JsonFormat::default()
+            .with_file_compression_type(FileCompressionType::from_str(&options.compression)?))
     }
 
     pub(crate) fn resolve_csv_read_options(options: CsvReadOptions) -> PlanResult<ListingOptions> {

@@ -37,8 +37,8 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
-    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
-    WindowFrame, WindowFunctionDefinition,
+    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, SortExpr,
+    TryCast, WindowFrame, WindowFunctionDefinition,
 };
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
@@ -52,7 +52,7 @@ use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapI
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::data_source::csv::CsvReadOptions;
-use crate::data_source::json::JsonReadOptions;
+use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
 use crate::data_source::load_options;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
@@ -2819,24 +2819,23 @@ impl PlanResolver<'_> {
             table_properties: _,
             overwrite_condition: _,
         } = write;
-        if !sort_columns.is_empty() {
-            return Err(PlanError::unsupported("sort column names"));
-        }
-        if !partitioning_columns.is_empty() {
-            return Err(PlanError::unsupported("partitioning columns"));
-        }
         if !clustering_columns.is_empty() {
             return Err(PlanError::unsupported("clustering columns"));
         }
         if bucket_by.is_some() {
             return Err(PlanError::unsupported("bucketing"));
         }
-        let partitioning_columns: Vec<String> =
-            partitioning_columns.into_iter().map(String::from).collect();
 
         let plan = self.resolve_query_plan(*input, state).await?;
         let fields = Self::get_field_names(plan.schema(), state)?;
         let plan = rename_logical_plan(plan, &fields)?;
+
+        let sort_columns = self
+            .resolve_sort_orders(sort_columns, true, plan.schema(), state)
+            .await?;
+        let partitioning_columns: Vec<String> =
+            partitioning_columns.into_iter().map(String::from).collect();
+
         let plan = match save_type {
             SaveType::Path(path) => {
                 // always write multi-file output
@@ -2848,14 +2847,27 @@ impl PlanResolver<'_> {
                 let Some(source) = source else {
                     return Err(PlanError::invalid("missing source"));
                 };
-                let options = Self::resolve_data_writer_options(&source, options)?;
+                let options: HashMap<String, String> = options.into_iter().collect();
                 let format_factory: Arc<dyn FileFormatFactory> = match source.as_str() {
-                    "json" => Arc::new(JsonFormatFactory::new()),
+                    "json" => {
+                        let json_format =
+                            Self::resolve_json_write_options(load_options::<JsonWriteOptions>(
+                                options.clone(),
+                            )?)?;
+                        Arc::new(JsonFormatFactory::new_with_options(
+                            json_format.options().clone(),
+                        ))
+                    }
                     "parquet" => Arc::new(ParquetFormatFactory::new()),
                     "csv" => Arc::new(CsvFormatFactory::new()),
                     "arrow" => Arc::new(ArrowFormatFactory::new()),
                     "avro" => Arc::new(AvroFormatFactory::new()),
                     _ => return Err(PlanError::invalid(format!("unsupported source: {source}"))),
+                };
+                let plan = if sort_columns.is_empty() {
+                    plan
+                } else {
+                    LogicalPlanBuilder::from(plan).sort(sort_columns)?.build()?
                 };
                 LogicalPlanBuilder::copy_to(
                     plan,
