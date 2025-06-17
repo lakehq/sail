@@ -37,8 +37,8 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
-    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, SortExpr,
-    TryCast, WindowFrame, WindowFunctionDefinition,
+    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
+    WindowFrame, WindowFunctionDefinition,
 };
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
