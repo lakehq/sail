@@ -244,7 +244,7 @@ pyspark.errors.exceptions.connect.AnalysisException: ...
 | Bob|  5|    85|
 +----+---+------+
 
->>> spark.sql("SELECT * FROM df1 NATURAL OUTER JOIN df2 ORDER BY name DESC").show()
+>>> spark.sql("SELECT * FROM df1 NATURAL OUTER JOIN df2 ORDER BY name DESC").show()  # doctest: +SAIL_ONLY
 +-----+----+------+
 | name| age|height|
 +-----+----+------+
@@ -269,14 +269,14 @@ pyspark.errors.exceptions.connect.AnalysisException: ...
 | Tom|NULL|    80|
 +----+----+------+
 
->>> spark.sql("SELECT * FROM df1 NATURAL LEFT SEMI JOIN df2").show()
+>>> spark.sql("SELECT * FROM df1 NATURAL LEFT SEMI JOIN df2").show()  # doctest: +SAIL_ONLY
 +----+---+
 |name|age|
 +----+---+
 | Bob|  5|
 +----+---+
 
->>> spark.sql("SELECT * FROM df1 NATURAL LEFT ANTI JOIN df2").show()
+>>> spark.sql("SELECT * FROM df1 NATURAL LEFT ANTI JOIN df2").show()  # doctest: +SAIL_ONLY
 +-----+---+
 | name|age|
 +-----+---+

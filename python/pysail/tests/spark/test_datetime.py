@@ -42,6 +42,6 @@ from pysail.tests.spark.utils import strict
     indirect=["session_timezone", "local_timezone"],
 )
 @pytest.mark.skipif(platform.system() == "Windows", reason="`time.tzset()` is not available on Windows")
-def test_datetime_literal(sail, session_timezone, local_timezone, data):  # noqa: ARG001
+def test_datetime_literal(spark, session_timezone, local_timezone, data):  # noqa: ARG001
     for dt, k, v in data:
-        assert sail.range(1).select(lit(dt)).collect() == [strict(Row(**{f"TIMESTAMP '{k}'": v}))]
+        assert spark.range(1).select(lit(dt)).collect() == [strict(Row(**{f"TIMESTAMP '{k}'": v}))]

@@ -7,8 +7,8 @@ from pandas.testing import assert_frame_equal
 
 
 @pytest.fixture(scope="module", autouse=True)
-def dealer_table(sail):
-    df = sail.createDataFrame(
+def dealer_table(spark):
+    df = spark.createDataFrame(
         [
             (100, "Fremont", "Honda Civic", 10),
             (100, "Fremont", "Honda Accord", 15),
@@ -24,39 +24,39 @@ def dealer_table(sail):
     name = "dealer"
     df.createOrReplaceTempView(name)
     yield
-    sail.catalog.dropTempView(name)
+    spark.catalog.dropTempView(name)
 
 
 @pytest.fixture(scope="module", autouse=True)
-def person_table(sail):
-    df = sail.createDataFrame(
+def person_table(spark):
+    df = spark.createDataFrame(
         [(100, "Mary", None), (200, "John", 30), (300, "Mike", 80), (400, "Dan", 50)],
         schema="id INT, name STRING, age INT",
     )
     name = "person"
     df.createOrReplaceTempView(name)
     yield
-    sail.catalog.dropTempView(name)
+    spark.catalog.dropTempView(name)
 
 
-def test_group_by(sail):
-    actual = sail.sql("SELECT id, sum(quantity) FROM dealer GROUP BY id ORDER BY id").toPandas()
+def test_group_by(spark):
+    actual = spark.sql("SELECT id, sum(quantity) FROM dealer GROUP BY id ORDER BY id").toPandas()
     expected = pd.DataFrame(
         {"id": [100, 200, 300], "sum(quantity)": [32, 33, 13]},
     ).astype({"id": "int32", "sum(quantity)": "int64"})
     assert_frame_equal(actual, expected)
 
 
-def test_group_by_column_position(sail):
-    actual = sail.sql("SELECT id, sum(quantity) FROM dealer GROUP BY 1 ORDER BY 1").toPandas()
+def test_group_by_column_position(spark):
+    actual = spark.sql("SELECT id, sum(quantity) FROM dealer GROUP BY 1 ORDER BY 1").toPandas()
     expected = pd.DataFrame(
         {"id": [100, 200, 300], "sum(quantity)": [32, 33, 13]},
     ).astype({"id": "int32", "sum(quantity)": "int64"})
     assert_frame_equal(actual, expected)
 
 
-def test_multiple_aggregations(sail):
-    actual = sail.sql("""
+def test_multiple_aggregations(spark):
+    actual = spark.sql("""
         SELECT id, sum(quantity) AS sum, max(quantity) AS max
         FROM dealer
         GROUP BY id
@@ -68,8 +68,8 @@ def test_multiple_aggregations(sail):
     assert_frame_equal(actual, expected)
 
 
-def test_count_distinct(sail):
-    actual = sail.sql("""
+def test_count_distinct(spark):
+    actual = spark.sql("""
         SELECT car_model, count(DISTINCT city) AS count
         FROM dealer
         GROUP BY car_model
@@ -83,8 +83,8 @@ def test_count_distinct(sail):
 
 
 @pytest.mark.skip(reason="not implemented")
-def test_aggregation_filter(sail):
-    actual = sail.sql("""
+def test_aggregation_filter(spark):
+    actual = spark.sql("""
         SELECT id, sum(quantity) FILTER (
             WHERE car_model IN ('Honda Civic', 'Honda CRV')
         ) AS `sum(quantity)`
@@ -98,8 +98,8 @@ def test_aggregation_filter(sail):
     assert_frame_equal(actual, expected)
 
 
-def test_grouping_sets(sail):
-    actual = sail.sql("""
+def test_grouping_sets(spark):
+    actual = spark.sql("""
         SELECT city, car_model, sum(quantity) AS sum
         FROM dealer
         GROUP BY GROUPING SETS ((city, car_model), (city), (car_model), ())
@@ -147,8 +147,8 @@ def test_grouping_sets(sail):
     assert_frame_equal(actual, expected)
 
 
-def test_rollup(sail):
-    actual = sail.sql("""
+def test_rollup(spark):
+    actual = spark.sql("""
         SELECT city, car_model, sum(quantity) AS sum
         FROM dealer
         GROUP BY city, car_model WITH ROLLUP
@@ -190,8 +190,8 @@ def test_rollup(sail):
     assert_frame_equal(actual, expected)
 
 
-def test_cube(sail):
-    actual = sail.sql("""
+def test_cube(spark):
+    actual = spark.sql("""
         SELECT city, car_model, sum(quantity) AS sum
         FROM dealer
         GROUP BY city, car_model WITH CUBE
@@ -239,14 +239,14 @@ def test_cube(sail):
     assert_frame_equal(actual, expected)
 
 
-def test_aggregation_with_nulls(sail):
-    actual = sail.sql("SELECT FIRST(age) FROM person").toPandas()
+def test_aggregation_with_nulls(spark):
+    actual = spark.sql("SELECT FIRST(age) FROM person").toPandas()
     expected = pd.DataFrame({"first(age)": [None]}).astype({"first(age)": "float64"})
     assert_frame_equal(actual, expected)
 
 
 @pytest.mark.skip(reason="not implemented")
-def test_aggregation_ignore_nulls(sail):
-    actual = sail.sql("SELECT FIRST(age IGNORE NULLS), LAST(id), SUM(id) FROM person").toPandas()
+def test_aggregation_ignore_nulls(spark):
+    actual = spark.sql("SELECT FIRST(age IGNORE NULLS), LAST(id), SUM(id) FROM person").toPandas()
     expected = pd.DataFrame({"first(age)": [30], "last(id)": [400], "sum(id)": [1000]})
     assert_frame_equal(actual, expected)
