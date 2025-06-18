@@ -2,7 +2,7 @@ import pandas as pd
 from pandas.testing import assert_frame_equal
 
 
-def test_sort(sail):
+def test_sort(spark):
     # Reference: pyspark.sql.tests.connect.test_connect_basic.SparkConnectBasicTests.test_sort
     # We need to make sure sorting works since we have patched PySpark tests to ignore row order.
     query = """
@@ -18,7 +18,7 @@ def test_sort(sail):
     # | NULL|   3| 3.0|
     # +-----+----+----+
 
-    df = sail.sql(query)
+    df = spark.sql(query)
     assert_frame_equal(
         df.sort("a").toPandas()[["a"]],
         pd.DataFrame({"a": [None, False, False]}),

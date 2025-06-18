@@ -82,27 +82,30 @@ fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> 
     });
     let interval = match unit.to_lowercase().as_str() {
         "years" | "year" => match interval {
-            Expr::Literal(ScalarValue::Int32(Some(years))) => lit(ScalarValue::IntervalYearMonth(
-                Some(IntervalYearMonthType::make_value(years, 0)),
-            )),
+            Expr::Literal(ScalarValue::Int32(Some(years)), metadata) => Expr::Literal(
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(years, 0))),
+                metadata,
+            ),
             _ => Expr::Cast(expr::Cast {
                 expr: Box::new(format_interval(interval, "years")),
                 data_type: DataType::Interval(IntervalUnit::YearMonth),
             }),
         },
         "months" | "month" => match interval {
-            Expr::Literal(ScalarValue::Int32(Some(months))) => lit(ScalarValue::IntervalYearMonth(
-                Some(IntervalYearMonthType::make_value(0, months)),
-            )),
+            Expr::Literal(ScalarValue::Int32(Some(months)), metadata) => Expr::Literal(
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, months))),
+                metadata,
+            ),
             _ => Expr::Cast(expr::Cast {
                 expr: Box::new(format_interval(interval, "months")),
                 data_type: DataType::Interval(IntervalUnit::YearMonth),
             }),
         },
         "days" | "day" => match interval {
-            Expr::Literal(ScalarValue::Int32(Some(days))) => lit(ScalarValue::IntervalDayTime(
-                Some(IntervalDayTimeType::make_value(days, 0)),
-            )),
+            Expr::Literal(ScalarValue::Int32(Some(days)), metadata) => Expr::Literal(
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(days, 0))),
+                metadata,
+            ),
             _ => Expr::Cast(expr::Cast {
                 expr: Box::new(format_interval(interval, "days")),
                 data_type: DataType::Interval(IntervalUnit::DayTime),
@@ -130,19 +133,19 @@ fn format_interval(interval: Expr, unit: &str) -> Expr {
 }
 
 fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
-    if matches!(&year, Expr::Literal(ScalarValue::Null))
-        || matches!(&month, Expr::Literal(ScalarValue::Null))
-        || matches!(&day, Expr::Literal(ScalarValue::Null))
-    {
-        Expr::Literal(ScalarValue::Null)
-    } else {
-        expr_fn::make_date(year, month, day)
+    match (&year, &month, &day) {
+        (Expr::Literal(ScalarValue::Null, metadata), _, _)
+        | (_, Expr::Literal(ScalarValue::Null, metadata), _)
+        | (_, _, Expr::Literal(ScalarValue::Null, metadata)) => {
+            Expr::Literal(ScalarValue::Null, metadata.clone())
+        }
+        _ => expr_fn::make_date(year, month, day),
     }
 }
 
 fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
     let (dt1, dt2) = match (&dt1, &dt2) {
-        (Expr::Literal(ScalarValue::Date32(_)), Expr::Literal(ScalarValue::Date32(_))) => {
+        (Expr::Literal(ScalarValue::Date32(_), _), Expr::Literal(ScalarValue::Date32(_), _)) => {
             (dt1, dt2)
         }
         _ => (
@@ -173,20 +176,23 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
 
 fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     input.arguments.zero()?;
-    Ok(Expr::Literal(ScalarValue::Utf8(Some(
-        input
-            .function_context
-            .plan_config
-            .session_timezone
-            .to_string(),
-    ))))
+    Ok(Expr::Literal(
+        ScalarValue::Utf8(Some(
+            input
+                .function_context
+                .plan_config
+                .session_timezone
+                .to_string(),
+        )),
+        None,
+    ))
 }
 
 fn to_chrono_fmt(format: Expr) -> PlanResult<Expr> {
     // FIXME: Implement UDFs for all callers of this function so that we have `format` as a string
     //  instead of some arbitrary expression
     match format {
-        Expr::Literal(ScalarValue::Utf8(Some(format))) => {
+        Expr::Literal(ScalarValue::Utf8(Some(format)), _metadata) => {
             let format = spark_datetime_format_to_chrono_strftime(&format)?;
             Ok(lit(ScalarValue::Utf8(Some(format))))
         }

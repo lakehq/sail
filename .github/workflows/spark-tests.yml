@@ -13,7 +13,7 @@ jobs:
     name: Setup
     runs-on: ubuntu-latest
     outputs:
-      run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
+      run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true' || steps.label.outputs.has_label == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +22,13 @@ jobs:
         with:
           pattern: "\\[(spark )?tests?\\]"
           ignore_case: true
+
+      - uses: actions/github-script@v7
+        id: label
+        with:
+          script: |
+            const labels = context.payload.pull_request?.labels?.map(label => label.name) || [];
+            core.setOutput('has_label', labels.includes('run spark tests') ? 'true' : 'false');
 
   test:
     name: Test

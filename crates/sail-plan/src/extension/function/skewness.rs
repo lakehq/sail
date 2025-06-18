@@ -4,8 +4,8 @@ use std::ops::{Div, Mul, Sub};
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/skewness.rs>
 use datafusion::arrow::array::{ArrayRef, AsArray};
-use datafusion::arrow::datatypes::{DataType, Field, Float64Type, UInt64Type};
-use datafusion::common::ScalarValue;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Float64Type, UInt64Type};
+use datafusion::common::{Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_common::types::{
@@ -84,12 +84,12 @@ impl AggregateUDFImpl for SkewnessFunc {
         Ok(Box::new(SkewnessAccumulator::new()))
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> datafusion::common::Result<Vec<Field>> {
+    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
-            Field::new("count", DataType::UInt64, true),
-            Field::new("sum", DataType::Float64, true),
-            Field::new("sum_sqr", DataType::Float64, true),
-            Field::new("sum_cub", DataType::Float64, true),
+            Field::new("count", DataType::UInt64, true).into(),
+            Field::new("sum", DataType::Float64, true).into(),
+            Field::new("sum_sqr", DataType::Float64, true).into(),
+            Field::new("sum_cub", DataType::Float64, true).into(),
         ])
     }
 }

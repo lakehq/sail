@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: crc32"
+        "success": "ok"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sha"
+        "success": "ok"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sha1"
+        "success": "ok"
       }
     },
     {
