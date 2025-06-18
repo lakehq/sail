@@ -5,8 +5,8 @@ from pyspark import Row
 
 
 @pytest.fixture(scope="module", autouse=True)
-def customer(sail):
-    sail.createDataFrame(
+def customer(spark):
+    spark.createDataFrame(
         [
             Row(id=1, name="Alice", age=34),
             Row(id=2, name="Bob", age=36),
@@ -14,12 +14,12 @@ def customer(sail):
         ]
     ).createOrReplaceTempView("customer")
     yield
-    sail.catalog.dropTempView("customer")
+    spark.catalog.dropTempView("customer")
 
 
 @pytest.fixture(scope="module", autouse=True)
-def order(sail):
-    sail.createDataFrame(
+def order(spark):
+    spark.createDataFrame(
         [
             Row(id=1, customer_id=1, amount=100),
             Row(id=2, customer_id=2, amount=200),
@@ -27,13 +27,13 @@ def order(sail):
         ]
     ).createOrReplaceTempView("order")
     yield
-    sail.catalog.dropTempView("order")
+    spark.catalog.dropTempView("order")
 
 
-def test_join_group_by(sail):
+def test_join_group_by(spark):
     # This example is inspired by the Ballista documentation:
     #   https://datafusion.apache.org/ballista/contributors-guide/architecture.html
-    actual = sail.sql(
+    actual = spark.sql(
         """
         SELECT customer.name AS name, SUM(order.amount) AS total
         FROM customer

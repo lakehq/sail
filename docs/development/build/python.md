@@ -58,3 +58,24 @@ To run the tests against a server launched externally, set the `SPARK_REMOTE` en
 ```bash
 env SPARK_REMOTE="sc://localhost:50051" hatch run pytest
 ```
+
+You can also run the tests against a JVM-based Spark Connect server
+by specifying a `local` Spark remote URL.
+This is useful to ensure that the tests are written correctly to reflect the Spark behavior.
+Note that tests written for extended features of Sail will be skipped in this case.
+
+```bash
+env SPARK_REMOTE="local" \
+  PYSPARK_SUBMIT_ARGS="--packages org.apache.spark:spark-connect_2.12:3.5.5 pyspark-shell" \
+  hatch run pytest
+```
+
+::: info
+
+- You can use any valid local Spark master URLs such as `local`, `local[2]`, or `local[*]`.
+- If tests involving catalog operations fail, you may need to clean up the local Spark warehouse and metastore in the project directory.
+  ```bash
+  rm -rf metastore_db spark-warehouse
+  ```
+
+:::
