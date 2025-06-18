@@ -5,7 +5,6 @@ use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use datafusion_spark::function::lambda;
 use rand::rngs::StdRng;
 use rand::{rng, SeedableRng};
 use rand_distr::{Distribution, Poisson};
