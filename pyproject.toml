@@ -104,6 +104,7 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pytest>=8.4,<9",
+    "duckdb>=1.1,<2",
 ]
 
 [tool.hatch.envs.test.overrides]

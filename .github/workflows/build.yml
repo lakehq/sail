@@ -50,6 +50,11 @@ jobs:
   spark-tests:
     name: Spark Tests
     uses: ./.github/workflows/spark-tests.yml
+    strategy:
+      matrix:
+        spark-version: ["3.5.5", "4.0.0"]
+    with:
+      spark_version: ${{ matrix.spark-version }}
     needs:
       - build
 

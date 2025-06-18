@@ -7,9 +7,11 @@ jobs:
   python-build:
     name: Python Build
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        spark-version: ["3.5.5", "4.0.0"]
     env:
-      # TODO: run tests against multiple Spark versions
-      HATCH_ENV: "test.spark-4.0.0"
+      HATCH_ENV: "test.spark-${{ matrix.spark-version }}"
     steps:
       - uses: actions/checkout@v4
 
