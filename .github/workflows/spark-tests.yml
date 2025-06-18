@@ -36,6 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - setup
+    env:
+      # Set the Hatch environment for `hatch run` commands.
+      HATCH_ENV: "test-parity.spark-${{ inputs.spark_version }}"
     steps:
       - uses: actions/checkout@v4
 
@@ -63,9 +66,7 @@ jobs:
         name: Cache PySpark
         id: cache-pyspark
         with:
-          path: |
-            opt/spark/python/dist/pyspark-*.tar.gz
-            opt/spark/python/test_support/
+          path: opt/spark/python/dist/pyspark-*.tar.gz
           # We must use `format()` to define the key here since nested variable substitution is not supported.
           key: ${{ format('spark-tests-pyspark-{0}-{1}-{2}-{3}', inputs.spark_version, runner.os, runner.arch, hashFiles(format('scripts/spark-tests/spark-{0}.patch', inputs.spark_version), 'scripts/spark-tests/build-pyspark.sh')) }}
 
@@ -92,18 +93,14 @@ jobs:
       # We do not cache the environments since package installation via `uv` is fast, while downloading
       # the environments from the cache still takes time.
       - name: Set Up Hatch Environment
-        env:
-          SPARK_VERSION: ${{ inputs.spark_version }}
         run: |
-          hatch env create "test.spark-${SPARK_VERSION}"
-          hatch run "test.spark-${SPARK_VERSION}":install-pyspark
-          hatch run "test.spark-${SPARK_VERSION}":install-pysail
+          hatch run install-pyspark
+          hatch run install-pysail
 
       - name: Run Spark Connect Server
-        env:
-          SPARK_VERSION: ${{ inputs.spark_version }}
         run: |
-          nohup hatch run "test.spark-${SPARK_VERSION}":sail spark server -C opt/spark > /dev/null 2>&1 < /dev/null &
+          work_dir="$(hatch run python -c 'import os, pyspark; print(os.path.dirname(pyspark.__file__))')"
+          nohup hatch run sail spark server -C "${work_dir}" > /dev/null 2>&1 < /dev/null &
 
       - name: Wait for Spark Connect Server to Start
         run: |
@@ -117,9 +114,8 @@ jobs:
         env:
           TEST_RUN_GIT_COMMIT: ${{ github.sha }}
           TEST_RUN_GIT_REF: ${{ github.ref }}
-          SPARK_VERSION: ${{ inputs.spark_version }}
         run: |
-          scripts/spark-tests/run-tests.sh
+          hatch run scripts/spark-tests/run-tests.sh
 
       - name: Upload Test Logs
         uses: actions/upload-artifact@v4

@@ -247,6 +247,14 @@ SKIPPED_SPARK_TESTS = [
         keywords=["test_parity_pandas_cogrouped_map.py", "test_with_local_data"],
         reason="Flaky test",
     ),
+    TestMarker(
+        keywords=["test_python_udf_segfault"],
+        reason="Segmentation fault",
+    ),
+    TestMarker(
+        keywords=["test_udtf_segfault"],
+        reason="Segmentation fault",
+    ),
 ]
 
 

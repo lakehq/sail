@@ -38,7 +38,7 @@ jobs:
 
       - name: Bootstrap Gold Data
         run: |
-          env SPARK_VERSION=4.0.0 scripts/spark-gold-data/bootstrap.sh
+          scripts/spark-gold-data/bootstrap.sh
 
       - name: Update Gold Data
         run: |

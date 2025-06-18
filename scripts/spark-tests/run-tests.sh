@@ -2,7 +2,27 @@
 
 set -euo 'pipefail'
 
-spark_version="${SPARK_VERSION:-4.0.0}"
+if [ -z "${VIRTUAL_ENV:-}" ]; then
+  echo "The tests must be run in a Python virtual environment."
+  echo "Please run the script via \`hatch run <env>:<command> <options>\`."
+  exit 1
+fi
+
+echo "Python environment: ${VIRTUAL_ENV}"
+
+case "$(basename "${VIRTUAL_ENV}")" in
+  test-parity.*)
+    plugin_args=("-p" "plugins.spark")
+    ;;
+  test-ibis)
+    export IBIS_TESTING_DATA_DIR="${project_path}/opt/ibis-testing-data"
+    plugin_args=("-p" "plugins.ibis")
+    ;;
+  *)
+    echo "Error: This is not a valid test environment."
+    exit 1
+    ;;
+esac
 
 project_path="$(git rev-parse --show-toplevel)"
 
@@ -24,6 +44,8 @@ fi
 # for better test log readability.
 export COLUMNS="120"
 
+# Make the plugins available on `PYTHONPATH`.
+export PYTHONPATH="${project_path}/scripts/spark-tests"
 export SPARK_TESTING="1"
 export PYARROW_IGNORE_TIMEZONE="1"
 # Define a few environment variables if they are not set.
@@ -38,10 +60,8 @@ function run_pytest() {
 
   echo "Test suite: ${name}"
   # We ignore the pytext exit code so that the command can complete successfully.
-  # The plugins are available on `PYTHONPATH` for the `test` environment configured in `pyproject.toml`.
-  hatch run test.spark-"${spark_version}":pytest \
-    -p plugins.spark \
-    -p plugins.ibis \
+  pytest \
+    "${plugin_args[@]}" \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL NUMBER" \
     -o "faulthandler_timeout=30" \
     --basetemp="${pytest_tmp_dir}" \
@@ -65,11 +85,17 @@ if [ "${#pytest_args[@]}" -ne 0 ]; then
   run_pytest test "${pytest_args[@]}"
 else
   pytest_args=("--tb=no" "-rN")
-  run_pytest test-connect --pyargs pyspark.sql.tests.connect "${pytest_args[@]}"
-  # The Ibis tests are not run for now due to setup errors related to Spark streaming.
-  # run_pytest test-ibis --pyargs ibis.backends -m pyspark "${pytest_args[@]}"
-  run_pytest doctest-catalog --doctest-modules --pyargs pyspark.sql.catalog "${pytest_args[@]}"
-  run_pytest doctest-column --doctest-modules --pyargs pyspark.sql.column "${pytest_args[@]}"
-  run_pytest doctest-dataframe --doctest-modules --pyargs pyspark.sql.dataframe "${pytest_args[@]}"
-  run_pytest doctest-functions --doctest-modules --pyargs pyspark.sql.functions "${pytest_args[@]}"
+  case "$(basename "${VIRTUAL_ENV}")" in
+    test-parity.*)
+      run_pytest test-connect --pyargs pyspark.sql.tests.connect "${pytest_args[@]}"
+      run_pytest doctest-catalog --doctest-modules --pyargs pyspark.sql.catalog "${pytest_args[@]}"
+      run_pytest doctest-column --doctest-modules --pyargs pyspark.sql.column "${pytest_args[@]}"
+      run_pytest doctest-dataframe --doctest-modules --pyargs pyspark.sql.dataframe "${pytest_args[@]}"
+      run_pytest doctest-functions --doctest-modules --pyargs pyspark.sql.functions "${pytest_args[@]}"
+      ;;
+    test-ibis)
+      # The Ibis tests are not run in CI for now due to setup errors related to Spark streaming.
+      run_pytest test-ibis --pyargs ibis.backends -m pyspark "${pytest_args[@]}"
+      ;;
+  esac
 fi
