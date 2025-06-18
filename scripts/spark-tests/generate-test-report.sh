@@ -7,6 +7,11 @@ if [ "$#" -ne 2 ]; then
     exit 1
 fi
 
+if [ -z "${SPARK_VERSION:-}" ]; then
+  echo "Missing environment variable: SPARK_VERSION"
+  exit 1
+fi
+
 after_dir="$1"
 before_dir="$2"
 
@@ -94,7 +99,7 @@ function show_code_block() {
   fi
 }
 
-printf '### Spark Test Report\n\n'
+printf '### Spark %s Test Report\n\n' "${SPARK_VERSION}"
 
 printf '#### Commit Information\n\n'
 
