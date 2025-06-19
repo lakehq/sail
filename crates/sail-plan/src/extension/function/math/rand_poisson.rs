@@ -55,13 +55,13 @@ impl ScalarUDFImpl for RandPoisson {
         } = args;
         if args.is_empty() {
             return exec_err!(
-                "`random_poisson` should be called with at most 2 argument, got {}",
+                "`random_poisson` must be called with either 1 or 2 arguments, got {}",
                 args.len()
             );
         }
         if args.len() > 2 {
             return exec_err!(
-                "`random_poisson` should be called with at most 2 argument, got {}",
+                "`random_poisson` must be called with either 1 or 2 arguments, got {}",
                 args.len()
             );
         }
@@ -70,9 +70,17 @@ impl ScalarUDFImpl for RandPoisson {
             ColumnarValue::Scalar(scalar) => match scalar {
                 ScalarValue::Float64(Some(value)) => *value,
                 ScalarValue::Float64(None) | ScalarValue::Null => 1.0,
-                _ => return exec_err!("`random_poisson` expects a float64 lambda, got {scalar}"),
+                _ => {
+                    return exec_err!(
+                        "`random_poisson` expects a scalar Float64 for `lambda`, got {scalar}"
+                    )
+                }
             },
-            _ => return exec_err!("`random_poisson` expects an float64 seed, got {lambda}"),
+            _ => {
+                return exec_err!(
+                    "`random_poisson` expects a scalar Float64 for `lambda`, got {lambda}"
+                )
+            }
         };
         if args.len() == 1 {
             return invoke_no_seed(lambda, number_rows);
@@ -142,7 +150,7 @@ impl ScalarUDFImpl for RandPoisson {
         } else {
             Err(invalid_arg_count_exec_err(
                 "random_poisson",
-                (0, 1000),
+                (1, 2),
                 arg_types.len(),
             ))
         }
