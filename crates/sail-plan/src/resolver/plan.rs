@@ -51,7 +51,7 @@ use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
-use crate::data_source::csv::CsvReadOptions;
+use crate::data_source::csv::{CsvReadOptions, CsvWriteOptions};
 use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
 use crate::data_source::load_options;
 use crate::error::{PlanError, PlanResult};
@@ -857,7 +857,7 @@ impl PlanResolver<'_> {
             "parquet" => {
                 if !options.is_empty() {
                     return Err(PlanError::unsupported(
-                        "Parquet data source read options are not supported yet",
+                        "Parquet data source read options are not yet supported.",
                     ));
                 }
                 ListingOptions::new(
@@ -868,7 +868,7 @@ impl PlanResolver<'_> {
             "arrow" => {
                 if !options.is_empty() {
                     return Err(PlanError::unsupported(
-                        "Arrow data source read options are not supported yet",
+                        "Arrow data source read options are not yet supported.",
                     ));
                 }
                 ListingOptions::new(ArrowFormatFactory::new().create(&self.ctx.state(), &options)?)
@@ -877,7 +877,7 @@ impl PlanResolver<'_> {
             "avro" => {
                 if !options.is_empty() {
                     return Err(PlanError::unsupported(
-                        "Avro data source read options are not supported yet",
+                        "Avro data source read options are not yet supported.",
                     ));
                 }
                 ListingOptions::new(AvroFormatFactory::new().create(&self.ctx.state(), &options)?)
@@ -2842,28 +2842,58 @@ impl PlanResolver<'_> {
                 let path = if path.ends_with(object_store::path::DELIMITER) {
                     path
                 } else {
-                    format!("{}{}", path, object_store::path::DELIMITER)
+                    format!("{path}{}", object_store::path::DELIMITER)
                 };
                 let Some(source) = source else {
                     return Err(PlanError::invalid("missing source"));
                 };
                 let options: HashMap<String, String> = options.into_iter().collect();
-                let format_factory: Arc<dyn FileFormatFactory> = match source.as_str() {
-                    "json" => {
-                        let json_format =
-                            Self::resolve_json_write_options(load_options::<JsonWriteOptions>(
-                                options.clone(),
-                            )?)?;
-                        Arc::new(JsonFormatFactory::new_with_options(
-                            json_format.options().clone(),
-                        ))
-                    }
-                    "parquet" => Arc::new(ParquetFormatFactory::new()),
-                    "csv" => Arc::new(CsvFormatFactory::new()),
-                    "arrow" => Arc::new(ArrowFormatFactory::new()),
-                    "avro" => Arc::new(AvroFormatFactory::new()),
-                    _ => return Err(PlanError::invalid(format!("unsupported source: {source}"))),
-                };
+                let (format_factory, options): (Arc<dyn FileFormatFactory>, Vec<(String, String)>) =
+                    match source.as_str() {
+                        "json" => {
+                            let (json_format, json_options_vec) = Self::resolve_json_write_options(
+                                load_options::<JsonWriteOptions>(options)?,
+                            )?;
+                            (
+                                Arc::new(JsonFormatFactory::new_with_options(
+                                    json_format.options().clone(),
+                                )),
+                                json_options_vec,
+                            )
+                        }
+                        // CHECK HERE: DO NOT MERGE IF THIS COMMENT IS HERE!!!
+                        "parquet" => (Arc::new(ParquetFormatFactory::new()), vec![]),
+                        "csv" => {
+                            let (csv_format, csv_options_vec) = Self::resolve_csv_write_options(
+                                load_options::<CsvWriteOptions>(options)?,
+                            )?;
+                            (
+                                Arc::new(CsvFormatFactory::new_with_options(
+                                    csv_format.options().clone(),
+                                )),
+                                csv_options_vec,
+                            )
+                        }
+                        "arrow" => {
+                            if !options.is_empty() {
+                                return Err(PlanError::unsupported(
+                                    "Arrow data source write options are not yet supported.",
+                                ));
+                            }
+                            (Arc::new(ArrowFormatFactory::new()), vec![])
+                        }
+                        "avro" => {
+                            if !options.is_empty() {
+                                return Err(PlanError::unsupported(
+                                    "Avro data source write options are not yet supported.",
+                                ));
+                            }
+                            (Arc::new(AvroFormatFactory::new()), vec![])
+                        }
+                        _ => {
+                            return Err(PlanError::invalid(format!("unsupported source: {source}")))
+                        }
+                    };
                 let plan = if sort_columns.is_empty() {
                     plan
                 } else {
@@ -2873,7 +2903,7 @@ impl PlanResolver<'_> {
                     plan,
                     path,
                     format_as_file_type(format_factory),
-                    options,
+                    options.into_iter().collect(),
                     partitioning_columns,
                 )?
                 .build()?
@@ -3023,27 +3053,62 @@ impl PlanResolver<'_> {
         }
         .await?;
 
-        let copy_to_plan = if let Some(query_logical_plan) = query_logical_plan {
-            let options = Self::resolve_data_writer_options(&file_format, options.clone())?;
-            let format_factory: Arc<dyn FileFormatFactory> =
-                match file_format.to_lowercase().as_str() {
-                    "json" => Arc::new(JsonFormatFactory::new()),
-                    "parquet" => Arc::new(ParquetFormatFactory::new()),
-                    "csv" => Arc::new(CsvFormatFactory::new()),
-                    "arrow" => Arc::new(ArrowFormatFactory::new()),
-                    "avro" => Arc::new(AvroFormatFactory::new()),
-                    _ => {
-                        return Err(PlanError::invalid(format!(
-                            "unsupported file format: {file_format}",
-                        )))
+        let options_map: HashMap<String, String> = options.clone().into_iter().collect();
+        let (format_factory, options): (Arc<dyn FileFormatFactory>, Vec<(String, String)>) =
+            match file_format.to_lowercase().as_str() {
+                "json" => {
+                    let (json_format, json_options_vec) = Self::resolve_json_write_options(
+                        load_options::<JsonWriteOptions>(options_map)?,
+                    )?;
+                    (
+                        Arc::new(JsonFormatFactory::new_with_options(
+                            json_format.options().clone(),
+                        )),
+                        json_options_vec,
+                    )
+                }
+                // CHECK HERE: DO NOT MERGE IF THIS COMMENT IS HERE!!!
+                "parquet" => (Arc::new(ParquetFormatFactory::new()), vec![]),
+                "csv" => {
+                    let (csv_format, csv_options_vec) = Self::resolve_csv_write_options(
+                        load_options::<CsvWriteOptions>(options_map)?,
+                    )?;
+                    (
+                        Arc::new(CsvFormatFactory::new_with_options(
+                            csv_format.options().clone(),
+                        )),
+                        csv_options_vec,
+                    )
+                }
+                "arrow" => {
+                    if !options.is_empty() {
+                        return Err(PlanError::unsupported(
+                            "Arrow data source write options are not yet supported.",
+                        ));
                     }
-                };
+                    (Arc::new(ArrowFormatFactory::new()), vec![])
+                }
+                "avro" => {
+                    if !options.is_empty() {
+                        return Err(PlanError::unsupported(
+                            "Avro data source write options are not yet supported.",
+                        ));
+                    }
+                    (Arc::new(AvroFormatFactory::new()), vec![])
+                }
+                _ => {
+                    return Err(PlanError::invalid(format!(
+                        "unsupported file format: {file_format}",
+                    )))
+                }
+            };
+        let copy_to_plan = if let Some(query_logical_plan) = query_logical_plan {
             Some(Arc::new(
                 LogicalPlanBuilder::copy_to(
                     query_logical_plan,
                     location.clone(),
                     format_as_file_type(format_factory),
-                    options,
+                    options.clone().into_iter().collect(),
                     table_partition_cols.clone(),
                 )?
                 .build()?,

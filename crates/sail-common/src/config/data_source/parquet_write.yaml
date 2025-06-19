@@ -1,0 +1,3 @@
+# References:
+#   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-parquet.html#data-source-option
+#   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L744-L750

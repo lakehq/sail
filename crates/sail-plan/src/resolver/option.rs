@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -6,8 +5,9 @@ use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::listing::ListingOptions;
+use datafusion_common::config::ConfigField;
 
-use crate::data_source::csv::CsvReadOptions;
+use crate::data_source::csv::{CsvReadOptions, CsvWriteOptions};
 use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -23,6 +23,7 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// Ref: [`datafusion::datasource::file_format::options::NdJsonReadOptions`]
     pub(crate) fn resolve_json_read_options(
         options: JsonReadOptions,
     ) -> PlanResult<ListingOptions> {
@@ -32,11 +33,18 @@ impl PlanResolver<'_> {
         Ok(ListingOptions::new(Arc::new(file_format)).with_file_extension(".json"))
     }
 
-    pub(crate) fn resolve_json_write_options(options: JsonWriteOptions) -> PlanResult<JsonFormat> {
-        Ok(JsonFormat::default()
-            .with_file_compression_type(FileCompressionType::from_str(&options.compression)?))
+    /// Ref: [`datafusion_common::file_options::json_writer::JsonWriterOptions`]
+    pub(crate) fn resolve_json_write_options(
+        options: JsonWriteOptions,
+    ) -> PlanResult<(JsonFormat, Vec<(String, String)>)> {
+        let json_format = JsonFormat::default()
+            .with_file_compression_type(FileCompressionType::from_str(&options.compression)?);
+        let json_options: Vec<(String, String)> =
+            vec![("format.compression".to_string(), options.compression)];
+        Ok((json_format, json_options))
     }
 
+    /// Ref: [`datafusion::datasource::file_format::options::CsvReadOptions`]
     pub(crate) fn resolve_csv_read_options(options: CsvReadOptions) -> PlanResult<ListingOptions> {
         let null_regex = match (options.null_value, options.null_regex) {
             (Some(null_value), Some(null_regex))
@@ -84,35 +92,48 @@ impl PlanResolver<'_> {
         Ok(ListingOptions::new(Arc::new(file_format)).with_file_extension(".csv"))
     }
 
-    fn resolve_data_writer_option(
-        format: &str,
-        key: &str,
-        value: &str,
-    ) -> PlanResult<(String, String)> {
-        let format = format.to_lowercase();
-        let key = key.to_lowercase();
-        let (key, value) = match (format.as_str(), key.as_str()) {
-            ("csv", "header") => ("format.has_header", value),
-            ("csv", "sep") => ("format.delimiter", value),
-            ("csv", "linesep") => return Err(PlanError::todo("CSV writer line seperator")),
-            _ => return Err(PlanError::unsupported(format!("data writer option: {key}"))),
-        };
-        Ok((key.to_string(), value.to_string()))
-    }
-
-    pub(crate) fn resolve_data_writer_options(
-        format: &str,
-        options: Vec<(String, String)>,
-    ) -> PlanResult<HashMap<String, String>> {
-        let mut output = HashMap::new();
-        for (key, value) in options {
-            let (k, v) = PlanResolver::resolve_data_writer_option(format, &key, &value)?;
-            if output.insert(k, v).is_some() {
-                return Err(PlanError::invalid(format!(
-                    "duplicated data writer option key: {key}"
-                )));
-            }
+    /// Ref: [`datafusion_common::file_options::csv_writer::CsvWriterOptions`]
+    pub(crate) fn resolve_csv_write_options(
+        options: CsvWriteOptions,
+    ) -> PlanResult<(CsvFormat, Vec<(String, String)>)> {
+        // DataFusion bug: `double_quote` and `null_value` not available in CsvFormat builder
+        let mut df_csv_options = datafusion_common::config::CsvOptions::default();
+        df_csv_options.set("double_quote", options.escape_quotes.to_string().as_str())?;
+        if let Some(null_value) = &options.null_value {
+            df_csv_options.set("null_value", null_value)?;
         }
-        Ok(output)
+
+        let csv_format = CsvFormat::default()
+            .with_options(df_csv_options)
+            .with_delimiter(Self::char_to_u8(options.delimiter, "delimiter")?)
+            .with_quote(Self::char_to_u8(options.quote, "quote")?)
+            .with_escape(
+                options
+                    .escape
+                    .map(|escape| Self::char_to_u8(escape, "escape"))
+                    .transpose()?,
+            )
+            .with_has_header(options.header)
+            .with_file_compression_type(FileCompressionType::from_str(&options.compression)?);
+
+        let mut csv_options: Vec<(String, String)> = vec![];
+        csv_options.push((
+            "format.delimiter".to_string(),
+            options.delimiter.to_string(),
+        ));
+        csv_options.push(("format.quote".to_string(), options.quote.to_string()));
+        if let Some(escape) = options.escape {
+            csv_options.push(("format.escape".to_string(), escape.to_string()));
+        }
+        csv_options.push((
+            "format.double_quote".to_string(),
+            options.escape_quotes.to_string(),
+        ));
+        csv_options.push(("format.has_header".to_string(), options.header.to_string()));
+        if let Some(null_value) = options.null_value {
+            csv_options.push(("format.null_value".to_string(), null_value));
+        }
+        csv_options.push(("format.compression".to_string(), options.compression));
+        Ok((csv_format, csv_options))
     }
 }

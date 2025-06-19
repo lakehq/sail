@@ -1,7 +1,6 @@
 # References:
 #   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-csv.html#data-source-option
 #   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L254-L290
-#   - [3] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L767-L787
 
 # TODO: Delimiter can be one or more characters
 - key: delimiter
@@ -203,6 +202,7 @@
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
   description: |
     Sets the string that indicates a timestamp format. Custom date formats follow the formats at `Datetime` Patterns.
+  supported: false
 
 - key: timestamp_ntz_format
   alias:
