@@ -1424,7 +1424,7 @@ impl PlanResolver<'_> {
                     sorts.push(sort_expr);
                 }
                 if sorts.len() != 1 {
-                    Err(PlanError::invalid(format!("sort expression: {sort:?}",)))
+                    Err(PlanError::invalid(format!("sort expression: {sort:?}")))
                 } else {
                     Ok(sorts.one()?)
                 }
@@ -2848,52 +2848,52 @@ impl PlanResolver<'_> {
                     return Err(PlanError::invalid("missing source"));
                 };
                 let options: HashMap<String, String> = options.into_iter().collect();
-                let (format_factory, options): (Arc<dyn FileFormatFactory>, Vec<(String, String)>) =
-                    match source.as_str() {
-                        "json" => {
-                            let (json_format, json_options_vec) = Self::resolve_json_write_options(
-                                load_options::<JsonWriteOptions>(options)?,
-                            )?;
-                            (
-                                Arc::new(JsonFormatFactory::new_with_options(
-                                    json_format.options().clone(),
-                                )),
-                                json_options_vec,
-                            )
+                let (format_factory, _options): (
+                    Arc<dyn FileFormatFactory>,
+                    Vec<(String, String)>,
+                ) = match source.as_str() {
+                    "json" => {
+                        let (json_format, json_options_vec) = Self::resolve_json_write_options(
+                            load_options::<JsonWriteOptions>(options)?,
+                        )?;
+                        (
+                            Arc::new(JsonFormatFactory::new_with_options(
+                                json_format.options().clone(),
+                            )),
+                            json_options_vec,
+                        )
+                    }
+                    // CHECK HERE: DO NOT MERGE IF THIS COMMENT IS HERE!!!
+                    "parquet" => (Arc::new(ParquetFormatFactory::new()), vec![]),
+                    "csv" => {
+                        let (csv_format, csv_options_vec) = Self::resolve_csv_write_options(
+                            load_options::<CsvWriteOptions>(options)?,
+                        )?;
+                        (
+                            Arc::new(CsvFormatFactory::new_with_options(
+                                csv_format.options().clone(),
+                            )),
+                            csv_options_vec,
+                        )
+                    }
+                    "arrow" => {
+                        if !options.is_empty() {
+                            return Err(PlanError::unsupported(
+                                "Arrow data source write options are not yet supported.",
+                            ));
                         }
-                        // CHECK HERE: DO NOT MERGE IF THIS COMMENT IS HERE!!!
-                        "parquet" => (Arc::new(ParquetFormatFactory::new()), vec![]),
-                        "csv" => {
-                            let (csv_format, csv_options_vec) = Self::resolve_csv_write_options(
-                                load_options::<CsvWriteOptions>(options)?,
-                            )?;
-                            (
-                                Arc::new(CsvFormatFactory::new_with_options(
-                                    csv_format.options().clone(),
-                                )),
-                                csv_options_vec,
-                            )
+                        (Arc::new(ArrowFormatFactory::new()), vec![])
+                    }
+                    "avro" => {
+                        if !options.is_empty() {
+                            return Err(PlanError::unsupported(
+                                "Avro data source write options are not yet supported.",
+                            ));
                         }
-                        "arrow" => {
-                            if !options.is_empty() {
-                                return Err(PlanError::unsupported(
-                                    "Arrow data source write options are not yet supported.",
-                                ));
-                            }
-                            (Arc::new(ArrowFormatFactory::new()), vec![])
-                        }
-                        "avro" => {
-                            if !options.is_empty() {
-                                return Err(PlanError::unsupported(
-                                    "Avro data source write options are not yet supported.",
-                                ));
-                            }
-                            (Arc::new(AvroFormatFactory::new()), vec![])
-                        }
-                        _ => {
-                            return Err(PlanError::invalid(format!("unsupported source: {source}")))
-                        }
-                    };
+                        (Arc::new(AvroFormatFactory::new()), vec![])
+                    }
+                    _ => return Err(PlanError::invalid(format!("unsupported source: {source}"))),
+                };
                 let plan = if sort_columns.is_empty() {
                     plan
                 } else {
@@ -3130,7 +3130,7 @@ impl PlanResolver<'_> {
             if_not_exists,
             or_replace,
             unbounded,
-            options,
+            options, // CHECK HERE: DO NOT MERGE IF THIS COMMENT IS HERE!!!
             definition,
             copy_to_plan,
         };
