@@ -81,6 +81,8 @@ jobs:
 
       - if: steps.cache-pyspark.outputs.cache-hit != 'true'
         name: Build PySpark
+        env:
+          SPARK_VERSION: ${{ inputs.spark_version }}
         run: |
           scripts/spark-tests/build-pyspark.sh
 

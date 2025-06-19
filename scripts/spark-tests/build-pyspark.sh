@@ -2,7 +2,10 @@
 
 set -euo 'pipefail'
 
-spark_version="${SPARK_VERSION:-4.0.0}"
+if [ -z "${SPARK_VERSION:-}" ]; then
+  echo "Missing environment variable: SPARK_VERSION"
+  exit 1
+fi
 
 project_path="$(git rev-parse --show-toplevel)"
 
@@ -10,7 +13,7 @@ scripts_path="${project_path}/scripts/spark-tests"
 
 source "${project_path}/scripts/shell-tools/git-patch.sh"
 
-apply_git_patch "${project_path}"/opt/spark "v${spark_version}" "${scripts_path}/spark-${spark_version}.patch"
+apply_git_patch "${project_path}"/opt/spark "v${SPARK_VERSION}" "${scripts_path}/spark-${SPARK_VERSION}.patch"
 
 cd "${project_path}"/opt/spark
 
