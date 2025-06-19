@@ -5320,6 +5320,7 @@ dependencies = [
  "lazy_static",
  "log",
  "num",
+ "num-traits",
  "object_store",
  "percent-encoding",
  "rand 0.9.1",

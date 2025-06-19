@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use num_traits::Zero;
 use serde::Deserialize;
 
 use crate::error::{PlanError, PlanResult};
@@ -104,5 +105,17 @@ pub(crate) fn parse_bool(value: &str) -> PlanResult<bool> {
         _ => Err(PlanError::internal(format!(
             "Invalid boolean value: '{value}'"
         ))),
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn parse_non_zero_usize(value: &str) -> PlanResult<Option<usize>> {
+    let value: usize = value
+        .parse()
+        .map_err(|e| PlanError::internal(format!("Invalid usize value: {e}")))?;
+    if value.is_zero() {
+        Ok(None)
+    } else {
+        Ok(Some(value))
     }
 }

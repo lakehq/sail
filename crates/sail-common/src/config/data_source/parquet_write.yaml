@@ -1,3 +1,140 @@
 # References:
 #   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-parquet.html#data-source-option
 #   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L744-L750
+
+- key: data_page_size_limit
+  default: "1048576"
+  description: |
+    (Writing) The best-effort maximum size of a data page in bytes.
+  supported: true
+
+- key: write_batch_size
+  default: "1024"
+  description: |
+    (Writing) The Parquet writer batch size in bytes.
+  supported: true
+
+- key: writer_version
+  default: '"1.0"'
+  description: |
+    (Writing) The Parquet writer version.
+    Valid values are `"1.0"` and `"2.0"`.
+  supported: true
+
+- key: skip_arrow_metadata
+  default: "false"
+  description: |
+    (Writing) Whether to skip encoding the embedded arrow metadata when writing Parquet files.
+  supported: true
+
+- key: compression
+  alias:
+    - codec
+  default: "zstd(3)"
+  description: |
+    (Writing) The default Parquet compression codec.
+    Valid values are `uncompressed`, `snappy`, `gzip(level)`,
+    `lzo`, `brotli(level)`, `lz4`, `zstd(level)`, and `lz4_raw`,
+    where `level` is an integer defining the compression level.
+    These values are not case-sensitive.
+  supported: true
+
+- key: dictionary_enabled
+  default: "true"
+  description: |
+    (Writing) Whether to enable dictionary encoding for the Parquet writer.
+  supported: true
+
+- key: dictionary_page_size_limit
+  default: "1048576"
+  description: |
+    (Writing) The best-effort maximum dictionary page size in bytes for the Parquet writer.
+  supported: true
+
+- key: statistics_enabled
+  default: "page"
+  description: |
+    (Writing) Whether statistics are enabled for any column for the Parquet writer.
+    Valid values are `none`, `chunk`, and `page`.
+    These values are not case-sensitive.
+  supported: true
+
+- key: max_row_group_size
+  default: "1048576"
+  description: |
+    (Writing) The target maximum number of rows in each row group for the Parquet writer.
+    Larger row groups require more memory to write, but
+    can get better compression and be faster to read.
+  supported: true
+
+- key: column_index_truncate_length
+  default: "64"
+  description: |
+    (Writing) The column index truncate length for the Parquet writer.
+  supported: true
+
+- key: statistics_truncate_length
+  default: "0"
+  description: |
+    (Writing) The statistics truncate length for the Parquet writer.
+    If the value is `0`, no truncation is applied.
+  supported: true
+
+- key: data_page_row_count_limit
+  default: "20000"
+  description: |
+    (Writing) The best-effort maximum number of rows in data page for the Parquet writer.
+  supported: true
+
+- key: encoding
+  default: ""
+  description: |
+    (Writing) The default encoding for any column.
+    Valid values are `plain`, `plain_dictionary`, `rle`,
+    `bit_packed` (deprecated), `delta_binary_packed`, `delta_length_byte_array`,
+    `delta_byte_array`, `rle_dictionary`, and `byte_stream_split`.
+    These values are not case sensitive.
+    An empty value can also be used, which allows the Parquet writer to choose
+    the encoding for each column to achieve good performance.
+  supported: true
+
+- key: bloom_filter_on_write
+  default: "false"
+  description: |
+    (Writing) Whether to write bloom filters for all columns when writing Parquet files.
+  supported: true
+
+- key: bloom_filter_fpp
+  default: "0.05"
+  description: |
+    (Writing) The false positive probability for bloom filters when writing Parquet files.
+  supported: true
+
+- key: bloom_filter_ndv
+  default: "1000000"
+  description: |
+    (Writing) The number of distinct values for bloom filters when writing Parquet files.
+  supported: true
+
+- key: allow_single_file_parallelism
+  default: "true"
+  description: |
+    (Writing) Whether to parallelize writing for each single Parquet file.
+    If the value is `true`, each column in each row group in each file are serialized in parallel.
+  supported: true
+
+- key: maximum_parallel_row_group_writers
+  default: "2"
+  description: |
+    (Writing) The maximum number of row group writers to use for the Parquet writer.
+    This may improve performance when writing large Parquet files,
+    at the expense of higher memory usage.
+  supported: true
+
+- key: maximum_buffered_record_batches_per_stream
+  default: "32"
+  description: |
+    (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
+    This may improve performance when writing large Parquet files,
+    at the expense of higher memory usage.
+  supported: true

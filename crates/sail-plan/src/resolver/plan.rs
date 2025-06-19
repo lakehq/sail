@@ -2903,7 +2903,7 @@ impl PlanResolver<'_> {
                     plan,
                     path,
                     format_as_file_type(format_factory),
-                    options.into_iter().collect(),
+                    HashMap::new(),
                     partitioning_columns,
                 )?
                 .build()?
@@ -3108,7 +3108,7 @@ impl PlanResolver<'_> {
                     query_logical_plan,
                     location.clone(),
                     format_as_file_type(format_factory),
-                    options.clone().into_iter().collect(),
+                    HashMap::new(),
                     table_partition_cols.clone(),
                 )?
                 .build()?,
