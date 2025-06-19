@@ -115,7 +115,18 @@ impl ScalarUDFImpl for RandPoisson {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() == 2 {
+        if arg_types.len() == 1 {
+            let lambda_type = if arg_types[0].is_floating() {
+                Ok(DataType::Float64)
+            } else {
+                Err(unsupported_data_types_exec_err(
+                    "random_poisson",
+                    "Floating Type for lambda",
+                    arg_types,
+                ))
+            }?;
+            Ok(vec![lambda_type])
+        } else if arg_types.len() == 2 {
             if arg_types[0].is_floating() && arg_types[1].is_numeric() {
                 let seed_type = if arg_types[1].is_signed_integer() {
                     Ok(DataType::Int64)
