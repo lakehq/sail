@@ -23,7 +23,7 @@ maven_opts=(
   -DskipTests
 )
 
-case "${spark_version}" in
+case "${SPARK_VERSION}" in
   4.*)
     ./build/mvn "${maven_opts[@]}" -Phive clean package
     cd python
@@ -35,7 +35,7 @@ case "${spark_version}" in
     python setup.py sdist
     ;;
   *)
-    echo "unsupported Spark version: ${spark_version}"
+    echo "unsupported Spark version: ${SPARK_VERSION}"
     exit 1
     ;;
 esac
