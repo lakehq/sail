@@ -1,12 +1,14 @@
+import doctest
 import os
 import time
 
 import pyspark.sql.connect.session
 import pytest
-from pyspark.context import SparkContext
+from _pytest.doctest import DoctestItem
 from pyspark.sql import SparkSession
 
 from pysail.spark import SparkConnectServer
+from pysail.tests.spark.utils import SAIL_ONLY, is_jvm_spark
 
 
 @pytest.fixture(scope="session")
@@ -22,30 +24,15 @@ def remote():
 
 
 @pytest.fixture(scope="module")
-def sail(remote):
-    if "SPARK_LOCAL_REMOTE" in os.environ:
-        del os.environ["SPARK_LOCAL_REMOTE"]
-    sail = SparkSession.builder.remote(remote).appName("Sail").getOrCreate()
-    configure_spark_session(sail)
-    patch_spark_connect_session(sail)
-    yield sail
-    sail.stop()
-
-
-@pytest.fixture(scope="module")
-def spark():
-    os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
-    os.environ["SPARK_LOCAL_REMOTE"] = "true"
-    sc = SparkContext("local", "Spark")
-    spark = SparkSession(sc)
+def spark(remote):
+    spark = SparkSession.builder.remote(remote).getOrCreate()
     configure_spark_session(spark)
+    patch_spark_connect_session(spark)
     yield spark
     spark.stop()
-    if "SPARK_LOCAL_REMOTE" in os.environ:
-        del os.environ["SPARK_LOCAL_REMOTE"]
 
 
-def configure_spark_session(session: SparkSession):
+def configure_spark_session(session):
     # Set the Spark session time zone to UTC by default.
     # Some test data (e.g. TPC-DS data) may generate timestamps that is invalid
     # in some local time zones. This would result in `pytz.exceptions.NonExistentTimeError`
@@ -70,18 +57,18 @@ def patch_spark_connect_session(session: pyspark.sql.connect.session.SparkSessio
 
 
 @pytest.fixture(scope="module", autouse=True)
-def sail_doctest(doctest_namespace, sail):
+def spark_doctest(doctest_namespace, spark):
     # The Spark session is scoped to each module, so that the registered
     # temporary views and UDFs do not interfere with each other.
-    doctest_namespace["spark"] = sail
+    doctest_namespace["spark"] = spark
 
 
 @pytest.fixture
-def session_timezone(sail, request):
-    tz = sail.conf.get("spark.sql.session.timeZone")
-    sail.conf.set("spark.sql.session.timeZone", request.param)
+def session_timezone(spark, request):
+    tz = spark.conf.get("spark.sql.session.timeZone")
+    spark.conf.set("spark.sql.session.timeZone", request.param)
     yield
-    sail.conf.set("spark.sql.session.timeZone", tz)
+    spark.conf.set("spark.sql.session.timeZone", tz)
 
 
 @pytest.fixture
@@ -95,3 +82,12 @@ def local_timezone(request):
     else:
         os.environ["TZ"] = tz
     time.tzset()
+
+
+def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
+    if is_jvm_spark():
+        for item in items:
+            if isinstance(item, DoctestItem):
+                for example in item.dtest.examples:
+                    if example.options.get(SAIL_ONLY):
+                        example.options[doctest.SKIP] = True
