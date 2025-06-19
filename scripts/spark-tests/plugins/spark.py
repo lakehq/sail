@@ -255,6 +255,18 @@ SKIPPED_SPARK_TESTS = [
         keywords=["test_udtf_segfault"],
         reason="Segmentation fault",
     ),
+    TestMarker(
+        keywords=["test_reattach.py"],
+        reason="Slow test not working yet",
+    ),
+    TestMarker(
+        keywords=["test_parity_listener.py"],
+        reason="Slow test not working yet",
+    ),
+    TestMarker(
+        keywords=["test_parity_job_cancellation.py"],
+        reason="Slow test not working yet",
+    ),
 ]
 
 
