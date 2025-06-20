@@ -23,7 +23,7 @@ pub struct CsvReadOptions {
     pub null_regex: Option<String>,
     pub line_sep: Option<char>,
     pub schema_infer_max_records: usize,
-    pub newlines_in_values: bool,
+    pub multi_line: bool,
     pub file_extension: String,
     pub compression: String,
 }
@@ -81,11 +81,9 @@ impl TryFrom<HashMap<String, String>> for CsvReadOptions {
                         "Invalid CSV `schema_infer_max_records` read option: {e}"
                     ))
                 })?,
-            newlines_in_values: options
-                .remove("newlines_in_values")
-                .ok_or_else(|| {
-                    PlanError::missing("CSV `newlines_in_values` read option is required")
-                })
+            multi_line: options
+                .remove("multi_line")
+                .ok_or_else(|| PlanError::missing("CSV `multi_line` read option is required"))
                 .and_then(|v| parse_bool(&v))?,
             file_extension: options.remove("file_extension").ok_or_else(|| {
                 PlanError::missing("CSV `file_extension` read option is required")

@@ -83,12 +83,13 @@
     The maximum number of rows to read from CSV files for schema inference if needed.
   supported: true
 
-- key: newlines_in_values
+- key: multi_line
   alias:
-    - newlinesInValues
+    - multiLine
   default: "false"
   description: |
     Specifies whether newlines in quoted values are supported.
+    Allows a row to span multiple lines, by parsing line breaks within quoted values as part of the value itself.
     Parsing newlines in quoted values may be affected by execution behavior such as parallel file scanning.
     Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
   supported: true
@@ -258,15 +259,6 @@
     Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
     This overrides `sail.sql.column_name_of_corrupt_record`.
     Defaults to the value of `sail.sql.column_name_of_corrupt_record` configuration.
-  supported: false
-
-- key: multi_line
-  alias:
-    - multiLine
-  default: "false"
-  description: |
-    Allows a row to span multiple lines, by parsing line breaks within quoted values as part of the value itself.
-    CSV built-in functions ignore this option.
   supported: false
 
 - key: char_to_escape_quote_escaping

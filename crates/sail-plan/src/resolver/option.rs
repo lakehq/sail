@@ -84,7 +84,7 @@ impl PlanResolver<'_> {
                     .map(|comment| Self::char_to_u8(comment, "comment"))
                     .transpose()?,
             )
-            .with_newlines_in_values(options.newlines_in_values)
+            .with_newlines_in_values(options.multi_line)
             .with_schema_infer_max_rec(options.schema_infer_max_records)
             .with_file_compression_type(FileCompressionType::from_str(&options.compression)?)
             .with_null_regex(null_regex);
