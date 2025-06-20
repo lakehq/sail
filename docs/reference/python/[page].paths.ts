@@ -103,10 +103,15 @@ function transform(
 }
 
 export default {
-  async paths() {
+  async paths(): Promise<SphinxPageConfig[]> {
     const links = (await loadSphinxPages()).map(
       (page) => new SphinxPagePath(page.inner),
     );
+    if (!links.length) {
+      // Return if empty, this should only happen during development,
+      // For production builds the custom Vite plugin should throw an error
+      return [];
+    }
     const root = links.find((link) => link.inner.current.link === "/");
     if (root === undefined) {
       throw new Error("root page not found");

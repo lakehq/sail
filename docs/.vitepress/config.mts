@@ -8,7 +8,7 @@ import { defineConfig, HeadConfig } from "vitepress";
 import PyCon from "./theme/languages/pycon";
 import { PageLink } from "./theme/utils/link";
 import { loadPages } from "./theme/utils/page";
-import { loadSphinxPages } from "./theme/utils/sphinx";
+import { hasSphinxPages, loadSphinxPages } from "./theme/utils/sphinx";
 import { TreeNode } from "./theme/utils/tree";
 
 // The documentation build process can be configured using the following environment variables:
@@ -55,7 +55,23 @@ class Site {
   static srcExclude(): string[] {
     // Exclude directories starting with an underscore. Such directories are
     // internal (e.g. containing pages to be included in other pages).
-    return ["**/_*/**/*.md"];
+    return ["**/_*/**/*.md", ...Site.srcExcludeAlways()];
+  }
+
+  /**
+   * Glob patterns that should be excluded both in prod as during development
+   *
+   * Difference with srcExclude is that srcExclude only works during prod builds,
+   * for dev builds we also need to configure the vite server
+   * @returns List of glob patterns.
+   */
+  static srcExcludeAlways() {
+    if (hasSphinxPages()) {
+      // If Sphinx pages exists, ignore the placeholder index
+      // to ensure that index is loaded from Sphinx pages
+      return ["**/reference/python/index.md"];
+    }
+    return [];
   }
 }
 
@@ -359,6 +375,34 @@ export default async () => {
     },
     sitemap: {
       hostname: Site.url(),
+    },
+    vite: {
+      plugins: [
+        {
+          name: "SphinxBuildOutputCheck",
+          buildStart() {
+            if (hasSphinxPages()) {
+              return;
+            }
+
+            if (
+              !process.env.NODE_ENV ||
+              process.env.NODE_ENV === "development"
+            ) {
+              this.warn(
+                "SPHINX_BUILD_OUTPUT folder not found (this causes a build error in production)",
+              );
+            } else {
+              this.error("SPHINX_BUILD_OUTPUT folder not found");
+            }
+          },
+        },
+      ],
+      server: {
+        fs: {
+          deny: Site.srcExcludeAlways(),
+        },
+      },
     },
   });
 };
