@@ -7,6 +7,11 @@ jobs:
   python-build:
     name: Python Build
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        spark-version: ["3.5.5", "4.0.0"]
+    env:
+      HATCH_ENV: "test.spark-${{ matrix.spark-version }}"
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +33,6 @@ jobs:
 
       - name: Set Up Hatch Environment
         run: |
-          hatch env create
           hatch run install-pysail
 
       - name: Verify Package Version

@@ -189,16 +189,20 @@ pub(crate) async fn handle_execute_sql_command(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let spark = SparkExtension::get(ctx)?;
-    let relation = Relation {
-        common: None,
-        #[expect(deprecated)]
-        rel_type: Some(relation::RelType::Sql(sc::Sql {
-            query: sql.sql,
-            args: sql.args,
-            pos_args: sql.pos_args,
-            named_arguments: sql.named_arguments,
-            pos_arguments: sql.pos_arguments,
-        })),
+    let relation = if let Some(input) = sql.input {
+        input
+    } else {
+        Relation {
+            common: None,
+            #[expect(deprecated)]
+            rel_type: Some(relation::RelType::Sql(sc::Sql {
+                query: sql.sql,
+                args: sql.args,
+                pos_args: sql.pos_args,
+                named_arguments: sql.named_arguments,
+                pos_arguments: sql.pos_arguments,
+            })),
+        }
     };
     let plan: spec::Plan = relation.clone().try_into()?;
     let relation = match plan {

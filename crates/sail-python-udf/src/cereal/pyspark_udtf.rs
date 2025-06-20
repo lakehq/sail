@@ -6,7 +6,9 @@ use pyo3::types::PyModule;
 use pyo3::{intern, Bound, IntoPyObject, PyAny, PyResult, Python};
 use sail_common::spec;
 
-use crate::cereal::{check_python_udf_version, should_write_config};
+use crate::cereal::{
+    check_python_udf_version, get_pyspark_version, should_write_config, PySparkVersion,
+};
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
 
@@ -45,17 +47,18 @@ impl PySparkUdtfPayload {
         config: &PySparkUdfConfig,
     ) -> PyUdfResult<Vec<u8>> {
         check_python_udf_version(python_version)?;
+        let pyspark_version = get_pyspark_version()?;
         let mut data: Vec<u8> = Vec::new();
 
-        data.extend(&i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
+        data.extend(i32::from(eval_type).to_be_bytes()); // Add eval_type for extraction in visit_bytes
 
         if should_write_config(eval_type) {
             let config = config.to_key_value_pairs();
             data.extend((config.len() as i32).to_be_bytes()); // number of configuration options
             for (key, value) in config {
-                data.extend(&(key.len() as i32).to_be_bytes()); // length of the key
+                data.extend((key.len() as i32).to_be_bytes()); // length of the key
                 data.extend(key.as_bytes());
-                data.extend(&(value.len() as i32).to_be_bytes()); // length of the value
+                data.extend((value.len() as i32).to_be_bytes()); // length of the value
                 data.extend(value.as_bytes());
             }
         }
@@ -63,12 +66,21 @@ impl PySparkUdtfPayload {
         let num_args: i32 = num_args
             .try_into()
             .map_err(|e| PyUdfError::invalid(format!("num_args: {e}")))?;
-        data.extend(&num_args.to_be_bytes()); // number of arguments
+        data.extend(num_args.to_be_bytes()); // number of arguments
         for index in 0..num_args {
-            data.extend(&index.to_be_bytes()); // argument offset
+            // TODO: support keyword arguments
+            data.extend(index.to_be_bytes()); // argument offset
+            if matches!(pyspark_version, PySparkVersion::V4) {
+                data.extend(0u8.to_be_bytes()); // not a keyword argument
+            }
         }
 
-        data.extend(&(command.len() as i32).to_be_bytes()); // length of the function
+        if matches!(pyspark_version, PySparkVersion::V4) {
+            data.extend(0i32.to_be_bytes()); // number of partition child indexes
+            data.extend(0u8.to_be_bytes()); // pickled analyze result is not present
+        }
+
+        data.extend((command.len() as i32).to_be_bytes()); // length of the function
         data.extend_from_slice(command);
 
         let type_string = Python::with_gil(|py| -> PyResult<String> {
@@ -80,8 +92,13 @@ impl PySparkUdtfPayload {
                 .call0()?
                 .extract()
         })?;
-        data.extend(&(type_string.len() as u32).to_be_bytes());
+        data.extend((type_string.len() as u32).to_be_bytes());
         data.extend(type_string.as_bytes());
+
+        if matches!(pyspark_version, PySparkVersion::V4) {
+            // TODO: support UDTF name
+            data.extend(0u32.to_be_bytes()); // length of UDTF name
+        }
 
         Ok(data)
     }

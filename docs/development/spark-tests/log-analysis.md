@@ -1,9 +1,9 @@
 ---
-title: Analyzing Spark Test Logs
+title: Analyzing Test Logs
 rank: 30
 ---
 
-# Analyzing Spark Test Logs
+# Analyzing Test Logs
 
 Here are some useful commands to analyze Spark test logs.
 You can replace `test.jsonl` with a different log file name if you are analyzing a different test suite.

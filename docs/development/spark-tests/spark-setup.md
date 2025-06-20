@@ -9,17 +9,32 @@ Run the following command to clone the projects required for the Spark tests.
 All the projects are stored in the `opt` directory and ignored by Git.
 
 ```bash
-git clone --branch v3.5.5 --depth 1 git@github.com:apache/spark.git opt/spark
-git clone --depth 1 git@github.com:ibis-project/testing-data.git opt/ibis-testing-data
+git clone git@github.com:apache/spark.git opt/spark
+git clone git@github.com:ibis-project/testing-data.git opt/ibis-testing-data
 ```
 
-Run the following command to build the Spark project.
-The command creates a patched PySpark package containing Python code along with the JAR files.
+::: info
+
+You may use options such as `--branch v4.0.0 --depth 1` to get a shallow copy of the Spark repository. But you would need to take care of fetching other branches if you need to work with multiple Spark versions.
+
+:::
+
+Run the following commands to build the Spark project.
+The commands create a patched PySpark package containing Python code along with the JAR files.
 Python tests are also included in the patched package.
 
+You can choose to run any or all of the commands, depending on the Spark versions you want to test against.
+
 ```bash
-scripts/spark-tests/build-pyspark.sh
+env SPARK_VERSION=4.0.0 scripts/spark-tests/build-pyspark.sh
+env SPARK_VERSION=3.5.5 scripts/spark-tests/build-pyspark.sh
 ```
+
+::: info
+
+If you have cloned the Spark repository a while ago and encounter the error `unknown revision or path not in the working tree` when running the `build-pyspark.sh` script, please run `git fetch` in the `opt/spark` directory to update the repository.
+
+:::
 
 ::: info
 
@@ -31,12 +46,6 @@ using the following heuristics.
 
 - For Linux, the Java installation is assumed to be the location of `javac`.
 - For macOS, the Java installation is retrieved from the output of the `/usr/libexec/java_home` command.
-
-:::
-
-::: info
-
-If you have previously cloned the Spark repository and encounter the error `unknown revision or path not in the working tree` when running the `build-pyspark.sh` script, please run `git fetch` in the `opt/spark` directory to update the repository.
 
 :::
 

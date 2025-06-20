@@ -54,7 +54,7 @@ def patch_ibis_spark_session():
         import ibis
         from pyspark.sql import SparkSession
 
-        spark = SparkSession.builder.appName("ibis").remote("local").getOrCreate()
+        spark = SparkSession.builder.getOrCreate()
         return ibis.pyspark.connect(spark, **kw)
 
     TestConf.connect = staticmethod(connect)

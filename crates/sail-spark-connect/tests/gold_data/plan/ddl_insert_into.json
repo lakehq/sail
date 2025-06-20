@@ -149,14 +149,14 @@
     },
     {
       "input": "INSERT INTO TABLE t1 BY NAME (c1,c2) SELECT * FROM tmp_view",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'c1'.(line 1, pos 30)\n\n== SQL ==\nINSERT INTO TABLE t1 BY NAME (c1,c2) SELECT * FROM tmp_view\n------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'c1'. SQLSTATE: 42601 (line 1, pos 30)\n\n== SQL ==\nINSERT INTO TABLE t1 BY NAME (c1,c2) SELECT * FROM tmp_view\n------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found c1 at 30:32 expected query"
       }
     },
     {
       "input": "INSERT INTO TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3) IF NOT EXISTS\nSELECT * FROM source",
-      "exception": "\nOperation not allowed: INSERT INTO ... IF NOT EXISTS.(line 1, pos 0)\n\n== SQL ==\nINSERT INTO TABLE testcat.ns1.ns2.tbl\n^^^\nPARTITION (p1 = 3) IF NOT EXISTS\nSELECT * FROM source\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: INSERT INTO ... IF NOT EXISTS is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nINSERT INTO TABLE testcat.ns1.ns2.tbl\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPARTITION (p1 = 3) IF NOT EXISTS\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {

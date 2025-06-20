@@ -2,6 +2,227 @@
   "tests": [
     {
       "input": {
+        "query": "SELECT from_xml('<p><a>1</a><b>0.8</b></p>', 'a INT, b DOUBLE');",
+        "result": [
+          "{\"a\":1,\"b\":0.8}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "from_xml(<p><a>1</a><b>0.8</b></p>)",
+              "nullable": true,
+              "type": {
+                "type": "struct",
+                "fields": [
+                  {
+                    "name": "a",
+                    "nullable": true,
+                    "type": "integer",
+                    "metadata": {}
+                  },
+                  {
+                    "name": "b",
+                    "nullable": true,
+                    "type": "double",
+                    "metadata": {}
+                  }
+                ]
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: from_xml"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT from_xml('<p><teacher>Alice</teacher><student><name>Bob</name><rank>1</rank></student><student><name>Charlie</name><rank>2</rank></student></p>', 'STRUCT<teacher: STRING, student: ARRAY<STRUCT<name: STRING, rank: INT>>>');",
+        "result": [
+          "{\"teacher\":\"Alice\",\"student\":[{\"name\":\"Bob\",\"rank\":1},{\"name\":\"Charlie\",\"rank\":2}]}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "from_xml(<p><teacher>Alice</teacher><student><name>Bob</name><rank>1</rank></student><student><name>Charlie</name><rank>2</rank></student></p>)",
+              "nullable": true,
+              "type": {
+                "type": "struct",
+                "fields": [
+                  {
+                    "name": "teacher",
+                    "nullable": true,
+                    "type": "string",
+                    "metadata": {}
+                  },
+                  {
+                    "name": "student",
+                    "nullable": true,
+                    "type": {
+                      "type": "array",
+                      "elementType": {
+                        "type": "struct",
+                        "fields": [
+                          {
+                            "name": "name",
+                            "nullable": true,
+                            "type": "string",
+                            "metadata": {}
+                          },
+                          {
+                            "name": "rank",
+                            "nullable": true,
+                            "type": "integer",
+                            "metadata": {}
+                          }
+                        ]
+                      },
+                      "containsNull": true
+                    },
+                    "metadata": {}
+                  }
+                ]
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: from_xml"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT from_xml('<p><time>26/08/2015</time></p>', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));",
+        "result": [
+          "{\"time\":2015-08-26 00:00:00}"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "from_xml(<p><time>26/08/2015</time></p>)",
+              "nullable": true,
+              "type": {
+                "type": "struct",
+                "fields": [
+                  {
+                    "name": "time",
+                    "nullable": true,
+                    "type": "timestamp",
+                    "metadata": {}
+                  }
+                ]
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: from_xml"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT schema_of_xml('<p><a attr=\"2\">1</a><a>3</a></p>', map('excludeAttribute', 'true'));",
+        "result": [
+          "STRUCT<a: ARRAY<BIGINT>>"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "schema_of_xml(<p><a attr=\"2\">1</a><a>3</a></p>)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: schema_of_xml"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT schema_of_xml('<p><a>1</a></p>');",
+        "result": [
+          "STRUCT<a: BIGINT>"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "schema_of_xml(<p><a>1</a></p>)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: schema_of_xml"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_xml(named_struct('a', 1, 'b', 2));",
+        "result": [
+          "<ROW>",
+          "<a>1</a>",
+          "<b>2</b>",
+          "</ROW>"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_xml(named_struct(a, 1, b, 2))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_xml"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));",
+        "result": [
+          "<ROW>",
+          "<time>26/08/2015</time>",
+          "</ROW>"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_xml(named_struct(time, to_timestamp(2015-08-26, yyyy-MM-dd)))",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_xml"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b');",
         "result": [
           "[null,null,null]"

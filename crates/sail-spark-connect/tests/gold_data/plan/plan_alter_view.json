@@ -2,14 +2,14 @@
   "tests": [
     {
       "input": "ALTER VIEW testView AS FROM jt\nINSERT INTO tbl1 SELECT * WHERE jt.id < 5\nINSERT INTO tbl2 SELECT * WHERE jt.id > 4",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'INSERT'.(line 2, pos 0)\n\n== SQL ==\nALTER VIEW testView AS FROM jt\nINSERT INTO tbl1 SELECT * WHERE jt.id < 5\n^^^\nINSERT INTO tbl2 SELECT * WHERE jt.id > 4\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'INSERT'. SQLSTATE: 42601 (line 2, pos 0)\n\n== SQL ==\nALTER VIEW testView AS FROM jt\nINSERT INTO tbl1 SELECT * WHERE jt.id < 5\n^^^\nINSERT INTO tbl2 SELECT * WHERE jt.id > 4\n",
       "output": {
         "failure": "invalid argument: found FROM at 23:27 expected query"
       }
     },
     {
       "input": "ALTER VIEW testView AS INSERT INTO jt VALUES(1, 1)",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'INSERT'.(line 1, pos 23)\n\n== SQL ==\nALTER VIEW testView AS INSERT INTO jt VALUES(1, 1)\n-----------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'INSERT'. SQLSTATE: 42601 (line 1, pos 23)\n\n== SQL ==\nALTER VIEW testView AS INSERT INTO jt VALUES(1, 1)\n-----------------------^^^\n",
       "output": {
         "failure": "invalid argument: found INSERT at 23:29 expected query"
       }

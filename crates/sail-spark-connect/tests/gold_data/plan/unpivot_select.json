@@ -2,28 +2,28 @@
   "tests": [
     {
       "input": "SELECT * FROM t UNPIVOT (() FOR col in ((a, b), (c, d)))",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 26)\n\n== SQL ==\nSELECT * FROM t UNPIVOT (() FOR col in ((a, b), (c, d)))\n--------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 1, pos 26)\n\n== SQL ==\nSELECT * FROM t UNPIVOT (() FOR col in ((a, b), (c, d)))\n--------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found ) at 26:27 expected identifier"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in (()))",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 51)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in (()))\n---------------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 1, pos 51)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in (()))\n---------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found ) at 51:52 expected identifier"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a A, b), (c, d)))",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'A': extra input 'A'.(line 1, pos 53)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a A, b), (c, d)))\n-----------------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'A': extra input 'A'. SQLSTATE: 42601 (line 1, pos 53)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a A, b), (c, d)))\n-----------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found A at 53:54 expected ',', or ')'"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a AS A, b), (c, d)))",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'AS'.(line 1, pos 53)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a AS A, b), (c, d)))\n-----------------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'AS'. SQLSTATE: 42601 (line 1, pos 53)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in ((a AS A, b), (c, d)))\n-----------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found AS at 53:55 expected ',', or ')'"
       }
@@ -333,14 +333,14 @@
     },
     {
       "input": "SELECT * FROM t UNPIVOT ((val1, val2) FOR col in ())",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 50)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in ())\n--------------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 1, pos 50)\n\n== SQL ==\nSELECT * FROM t UNPIVOT ((val1, val2) FOR col in ())\n--------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found ) at 50:51 expected '('"
       }
     },
     {
       "input": "SELECT * FROM t UNPIVOT (val FOR col in ())",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 41)\n\n== SQL ==\nSELECT * FROM t UNPIVOT (val FOR col in ())\n-----------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 1, pos 41)\n\n== SQL ==\nSELECT * FROM t UNPIVOT (val FOR col in ())\n-----------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found ) at 41:42 expected identifier"
       }

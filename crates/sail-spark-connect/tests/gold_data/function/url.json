@@ -68,6 +68,116 @@
     },
     {
       "input": {
+        "query": "SELECT try_parse_url('http://spark.apache.org/path?query=1', 'HOST');",
+        "result": [
+          "spark.apache.org"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_parse_url(http://spark.apache.org/path?query=1, HOST)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_parse_url"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY');",
+        "result": [
+          "query=1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_parse_url(http://spark.apache.org/path?query=1, QUERY)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_parse_url"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY', 'query');",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_parse_url(http://spark.apache.org/path?query=1, QUERY, query)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_parse_url"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_parse_url(inva lid://spark.apache.org/path?query=1, QUERY)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_parse_url"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_url_decode('https%3A%2F%2Fspark.apache.org');",
+        "result": [
+          "https://spark.apache.org"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_url_decode(https%3A%2F%2Fspark.apache.org)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_url_decode"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT url_decode('https%3A%2F%2Fspark.apache.org');",
         "result": [
           "https://spark.apache.org"
