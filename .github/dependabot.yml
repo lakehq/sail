@@ -21,3 +21,21 @@ updates:
       - dependency-name: "sqlparser"
       - dependency-name: "pyo3"
       - dependency-name: "object_store"
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    target-branch: main
+    groups:
+      all:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      breaking:
+        update-types:
+          - "major"
+    ignore:
+      - dependency-name: "@types/node"
