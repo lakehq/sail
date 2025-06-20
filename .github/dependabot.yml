@@ -4,7 +4,7 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 5
     target-branch: main
     groups:
       all:
@@ -13,6 +13,9 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      breaking:
+        update-types:
+          - "major"
     ignore:
       - dependency-name: "datafusion"
       - dependency-name: "datafusion-*"
