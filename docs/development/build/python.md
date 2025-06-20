@@ -127,4 +127,3 @@ env SPARK_REMOTE="local" \
   ```
 
 :::
-
