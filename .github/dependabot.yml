@@ -6,7 +6,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps(cargo)"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     target-branch: main
     groups:
       all:
@@ -32,7 +32,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps(npm)"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     target-branch: main
     groups:
       all:
