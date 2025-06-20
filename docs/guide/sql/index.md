@@ -7,6 +7,8 @@ rank: 2
 
 You can use Spark SQL to run SQL queries on data stored in various formats and storage systems. A common way to get started is to create a temporary view from a DataFrame and then run SQL queries against that view.
 
+<!--@include: ../_common/spark-session.md-->
+
 ```python
 from pyspark.sql import SparkSession
 
