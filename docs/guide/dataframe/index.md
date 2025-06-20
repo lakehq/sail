@@ -7,6 +7,8 @@ rank: 1
 
 You can use the Spark DataFrame API to work with structured data. Here is an example of reading a Parquet dataset and querying it in PySpark.
 
+<!--@include: ../_common/spark-session.md-->
+
 ```python
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
