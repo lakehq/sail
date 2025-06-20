@@ -1,0 +1,35 @@
+name: Build Docs
+
+on:
+  pull_request:
+    branches: [main]
+    # Only trigger this flow if only docs related files have been updated
+    # If also other files have been updated then run the normal build flow
+    paths:
+      - "docs/"
+      - "*.js"
+      - "*.json"
+      - "pnpm-lock.yaml"
+      - "!crates/**"
+      - "!docker/**"
+      - "!k8s/**"
+      - "!python/**"
+    types:
+      - labeled
+      - opened
+      - reopened
+      - synchronize
+
+jobs:
+  docs-build:
+    name: Docs Build
+    uses: ./.github/workflows/docs-build.yml
+    strategy:
+      matrix:
+        stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["test"]') }}
+    needs:
+      - build
+    with:
+      stage: ${{ matrix.stage }}
+      version: main
+      python_ref: refs-heads-main
