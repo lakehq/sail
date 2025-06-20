@@ -8,6 +8,13 @@ rank: 1
 This page provides examples for all types of PySpark UDFs supported by Sail.
 For more information about the API, please refer to the Spark documentation and user guide.
 
+<!--@include: ../_common/spark-session.md-->
+
+```python-console
+>>> from pyspark.sql import SparkSession
+>>> spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()
+```
+
 ## Python UDF
 
 You can define a Python scalar UDF by wrapping a Python lambda function with `udf()`,
