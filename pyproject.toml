@@ -121,7 +121,7 @@ matrix.spark.extra-dependencies = [
 ]
 env.CI.installer = "uv"
 
-[tool.hatch.envs.test-parity]
+[tool.hatch.envs.test-spark]
 matrix-name-format = "{variable}-{value}"
 python = "3.11"
 installer = "pip"
@@ -133,16 +133,16 @@ dependencies = [
     "pytest-reportlog>=0.4,<0.5",
 ]
 
-[[tool.hatch.envs.test-parity.matrix]]
+[[tool.hatch.envs.test-spark.matrix]]
 spark = ["3.5.5", "4.0.0"]
 
-[tool.hatch.envs.test-parity.extra-scripts]
+[tool.hatch.envs.test-spark.extra-scripts]
 install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz'"
 
-[tool.hatch.envs.test-parity.overrides]
+[tool.hatch.envs.test-spark.overrides]
 matrix.spark.path = [
-    { value = ".venvs/test-parity.spark-3.5.5", if = ["3.5.5"] },
-    { value = ".venvs/test-parity.spark-4.0.0", if = ["4.0.0"] },
+    { value = ".venvs/test-spark.spark-3.5.5", if = ["3.5.5"] },
+    { value = ".venvs/test-spark.spark-4.0.0", if = ["4.0.0"] },
 ]
 env.CI.installer = "uv"
 

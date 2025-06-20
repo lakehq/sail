@@ -38,7 +38,7 @@ jobs:
       - setup
     env:
       # Set the Hatch environment for `hatch run` commands.
-      HATCH_ENV: "test-parity.spark-${{ inputs.spark_version }}"
+      HATCH_ENV: "test-spark.spark-${{ inputs.spark_version }}"
     steps:
       - uses: actions/checkout@v4
 

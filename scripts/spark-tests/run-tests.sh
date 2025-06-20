@@ -13,7 +13,7 @@ echo "Python environment: ${VIRTUAL_ENV}"
 project_path="$(git rev-parse --show-toplevel)"
 
 case "$(basename "${VIRTUAL_ENV}")" in
-  test-parity.*)
+  test-spark.*)
     plugin_args=("-p" "plugins.spark")
     test_run_name="${TEST_RUN_NAME:-latest}"
     export SPARK_TESTING="1"
@@ -87,7 +87,7 @@ if [ "${#pytest_args[@]}" -ne 0 ]; then
   run_pytest test "${pytest_args[@]}"
 else
   case "$(basename "${VIRTUAL_ENV}")" in
-    test-parity.*)
+    test-spark.*)
       run_pytest test-connect --pyargs pyspark.sql.tests.connect --tb=no -rN
       run_pytest doctest-catalog --doctest-modules --pyargs pyspark.sql.catalog --tb=no -rN
       run_pytest doctest-column --doctest-modules --pyargs pyspark.sql.column --tb=no -rN
