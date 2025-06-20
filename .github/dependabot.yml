@@ -4,6 +4,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "deps(cargo)"
     open-pull-requests-limit: 5
     target-branch: main
     groups:
@@ -28,6 +30,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "deps(npm)"
     open-pull-requests-limit: 5
     target-branch: main
     groups:
