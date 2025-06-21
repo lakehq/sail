@@ -41,6 +41,7 @@ use datafusion_expr::{
     ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
     WindowFrame, WindowFunctionDefinition,
 };
+use log::debug;
 use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::{Literal, TableFileFormat};
@@ -71,7 +72,7 @@ use crate::function::{
 use crate::literal::LiteralEvaluator;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdtf;
-use crate::resolver::state::{AggregateState, PlanResolverState};
+use crate::resolver::state::{AggregateState, NameID, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
@@ -3849,10 +3850,12 @@ impl PlanResolver<'_> {
         if total_fraction > 1.0 {
             return Err(PlanError::invalid("All fraction sum is more than 1"));
         }
+
+        let plan_id: i64 = input.plan_id.unwrap();
         let input: LogicalPlan = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let _colname: &str = match &column {
+        let col_name: &str = match &column {
             spec::Expr::UnresolvedAttribute { name, .. } => {
                 let colname = name
                     .parts()
@@ -3892,6 +3895,9 @@ impl PlanResolver<'_> {
             .project(all_exprs)?
             .build()?;
 
+        let col_id_for_plan: NameID = state.find_plan_id_by_field_name(plan_id, col_name).unwrap();
+        debug!("Value of col_id_for_plan: {:?}", col_id_for_plan);
+
         let mut lower_bound: f64 = 0.0;
         let mut disjuncts: Vec<Expr> = vec![];
         for frac in &fractions {
@@ -3907,7 +3913,7 @@ impl PlanResolver<'_> {
                 }
             };
             let conj: Vec<Expr> = vec![
-                col("#1").eq(lit(key_value)),
+                col(col_id_for_plan.as_str()).eq(lit(key_value)),
                 col(&rand_column_name).gt_eq(lit(lower_bound)),
                 col(&rand_column_name).lt(lit(upper_bound)),
             ];
@@ -3926,12 +3932,12 @@ impl PlanResolver<'_> {
             .build()?;
 
         Ok(LogicalPlanBuilder::from(plan)
-            // .project(
-            //     init_exprs
-            //         .into_iter()
-            //         .map(Into::into)
-            //         .collect::<Vec<SelectExpr>>(),
-            // )?
+            .project(
+                init_exprs
+                    .into_iter()
+                    .map(Into::into)
+                    .collect::<Vec<SelectExpr>>(),
+            )?
             .build()?)
     }
     fn rewrite_aggregate(
