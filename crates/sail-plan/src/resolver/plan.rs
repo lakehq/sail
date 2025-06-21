@@ -3833,6 +3833,16 @@ impl PlanResolver<'_> {
         seed: Option<i64>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        if fractions.iter().any(|f| f.fraction < 0.0 || f.fraction > 1.0) {
+            return Err(PlanError::invalid("All fraction values must be >= 0.0 or > 1.0"));
+        }
+        let total_fraction: f64 = fractions.iter().map(|f| f.fraction).sum();
+        if total_fraction > 1.0 {
+            return Err(PlanError::invalid("All fraction sum is more than 1"));
+        }
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
         let colname: &str = match &column {
             spec::Expr::UnresolvedAttribute { name, .. } => {
                 let colname = name
@@ -3850,21 +3860,6 @@ impl PlanResolver<'_> {
                 )));
             }
         };
-        if fractions.iter().any(|f| f.fraction < 0.0 || f.fraction > 1.0) {
-            return Err(PlanError::invalid("All fraction values must be >= 0.0 or > 1.0"));
-        }
-        let total_fraction: f64 = fractions.iter().map(|f| f.fraction).sum();
-        if total_fraction > 1.0 {
-            return Err(PlanError::invalid("All fraction sum is more than 1"));
-        }
-
-        let seed: i64 = seed.unwrap_or_else(|| {
-            let mut rng = rng();
-            rng.random::<i64>()
-        });
-        let input: LogicalPlan = self
-            .resolve_query_plan_with_hidden_fields(input, state)
-            .await?;
         let init_exprs: Vec<Expr> = input
             .schema()
             .columns()
@@ -3873,6 +3868,10 @@ impl PlanResolver<'_> {
             .collect();
         let rand_column_name: String = state.register_field_name("rand_value");
 
+        let seed: i64 = seed.unwrap_or_else(|| {
+            let mut rng = rng();
+            rng.random::<i64>()
+        });
         let rand_expr: Expr =
             Expr::ScalarFunction(ScalarFunction {
                 func: Arc::new(ScalarUDF::from(Random::new())),
@@ -3883,13 +3882,11 @@ impl PlanResolver<'_> {
         let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
             .project(all_exprs)?
             .build()?;
-        ////
+
         let mut lower_bound: f64 = 0.0;
         let mut disjuncts: Vec<Expr> = vec![];
-
         for frac in &fractions {
             let upper_bound: f64 = lower_bound + frac.fraction;
-
             let key_value: ScalarValue = match &frac.stratum {
                 Literal::Int32 { value } => ScalarValue::Int32(*value),
                 Literal::Float32 { value } => ScalarValue::Float32(*value),
@@ -3898,16 +3895,13 @@ impl PlanResolver<'_> {
                     return Err(PlanError::unsupported(format!("Unsupported literal: {other:?}")));
                 }
             };
-
             let conj: Vec<Expr> = vec![
                 col("#1").eq(lit(key_value)),
                 col(&rand_column_name).gt_eq(lit(lower_bound)),
                 col(&rand_column_name).lt(lit(upper_bound)),
             ];
-
             let and_expr: Expr = conjunction(conj).expect("should not be empty");
             disjuncts.push(and_expr);
-
             lower_bound = upper_bound;
         }
 
