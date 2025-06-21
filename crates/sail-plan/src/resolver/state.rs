@@ -224,9 +224,7 @@ impl PlanResolverState {
         self.fields
             .iter()
             .find(|(_, info)| info.name() == name && info.plan_ids().contains(&plan_id))
-            .map(|(field_id, _)| 
-               field_id.clone()
-            )
+            .map(|(field_id, _)| field_id.clone())
     }
 }
 
