@@ -3838,11 +3838,6 @@ impl PlanResolver<'_> {
         seed: Option<i64>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        debug!("input--> {:?}", input);
-        debug!("column--> {:?}", column);
-        debug!("fractions--> {:?}", fractions);
-        debug!("seed--> {:?}", seed);
-        debug!("state--> {:?}", state);
         if fractions
             .iter()
             .any(|f| f.fraction < 0.0 || f.fraction > 1.0)
