@@ -33,3 +33,4 @@ jobs:
     with:
       stage: ${{ matrix.stage }}
       version: main
+      base_sha: ${{ github.event.pull_request.base.sha }}
