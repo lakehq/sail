@@ -220,23 +220,13 @@ impl PlanResolverState {
         &mut self.config
     }
 
-    pub fn find_plan_id_by_field_name(&self, plan_id: i64, name: &str) -> Option<NameID> {
+    pub fn find_plan_id_by_field_name(&self, plan_id: i64, name: &str) -> Option<String> {
         self.fields
             .iter()
             .find(|(_, info)| info.name() == name && info.plan_ids().contains(&plan_id))
-            .map(|(field_id, _)| NameID {
-                id: field_id.clone(),
-            })
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct NameID {
-    id: String,
-}
-
-impl NameID {
-    pub fn as_str(&self) -> &str {
-        &self.id
+            .map(|(field_id, _)| 
+               field_id.clone()
+            )
     }
 }
 

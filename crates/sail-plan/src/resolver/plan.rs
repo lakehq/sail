@@ -72,7 +72,7 @@ use crate::function::{
 use crate::literal::LiteralEvaluator;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdtf;
-use crate::resolver::state::{AggregateState, NameID, PlanResolverState};
+use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
@@ -3895,7 +3895,7 @@ impl PlanResolver<'_> {
             .project(all_exprs)?
             .build()?;
 
-        let col_id_for_plan: NameID = state.find_plan_id_by_field_name(plan_id, col_name).unwrap();
+        let col_id_for_plan: String = state.find_plan_id_by_field_name(plan_id, col_name).unwrap();
         debug!("Value of col_id_for_plan: {:?}", col_id_for_plan);
 
         let mut lower_bound: f64 = 0.0;
