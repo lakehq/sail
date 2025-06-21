@@ -37,13 +37,14 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
+    build_join_schema, col, expr, ident, lit, or, when, Aggregate, AggregateUDF, BinaryExpr,
     ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
     WindowFrame, WindowFunctionDefinition,
 };
+use log::debug;
 use rand::{rng, Rng};
 use sail_common::spec;
-use sail_common::spec::TableFileFormat;
+use sail_common::spec::{Literal, TableFileFormat};
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
@@ -350,8 +351,14 @@ impl PlanResolver<'_> {
             QueryNode::StatFreqItems { .. } => {
                 return Err(PlanError::todo("freq items"));
             }
-            QueryNode::StatSampleBy { .. } => {
-                return Err(PlanError::todo("sample by"));
+            QueryNode::StatSampleBy {
+                input,
+                column,
+                fractions,
+                seed,
+            } => {
+                self.resolve_query_sample_by(*input, column, fractions, seed, state)
+                    .await?
             }
             QueryNode::Empty { produce_one_row } => {
                 LogicalPlan::EmptyRelation(plan::EmptyRelation {
@@ -3823,7 +3830,101 @@ impl PlanResolver<'_> {
             .aggregate(Vec::<Expr>::new(), vec![corr])?
             .build()?)
     }
+    async fn resolve_query_sample_by(
+        &self,
+        input: spec::QueryPlan,
+        column: spec::Expr,
+        fractions: Vec<spec::Fraction>,
+        seed: Option<i64>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if fractions
+            .iter()
+            .any(|f| f.fraction < 0.0 || f.fraction > 1.0)
+        {
+            return Err(PlanError::invalid(
+                "All fraction values must be >= 0.0 or > 1.0",
+            ));
+        }
+        let total_fraction: f64 = fractions.iter().map(|f| f.fraction).sum();
+        if total_fraction > 1.0 {
+            return Err(PlanError::invalid("All fraction sum is more than 1"));
+        }
 
+        let plan_id: i64 = input.plan_id.unwrap();
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let spec::Expr::UnresolvedAttribute { name, .. } = column else {
+            return Err(PlanError::invalid("Expected UnresolvedAttribute"));
+        };
+        let col_name: &str = name
+            .parts()
+            .first()
+            .map(|id| id.as_ref())
+            .unwrap_or("<unknown>");
+
+        let init_exprs: Vec<Expr> = input
+            .schema()
+            .columns()
+            .iter()
+            .map(|col| Expr::Column(col.clone()))
+            .collect();
+        let rand_column_name: String = state.register_hidden_field_name("rand_value");
+
+        let seed: i64 = seed.unwrap_or_else(|| {
+            let mut rng = rng();
+            rng.random::<i64>()
+        });
+        let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::from(Random::new())),
+            args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
+        })
+        .alias(&rand_column_name);
+        let mut all_exprs: Vec<Expr> = init_exprs.clone();
+        all_exprs.push(rand_expr);
+        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
+            .project(all_exprs)?
+            .build()?;
+
+        let col_id_for_plan: String = state.find_plan_id_by_field_name(plan_id, col_name).unwrap();
+        debug!("Value of col_id_for_plan: {:?}", col_id_for_plan);
+
+        let mut lower_bound: f64 = 0.0;
+        let mut disjuncts: Vec<Expr> = vec![];
+        for frac in &fractions {
+            let upper_bound: f64 = lower_bound + frac.fraction;
+            let key_value: ScalarValue = match &frac.stratum {
+                Literal::Int32 { value } => ScalarValue::Int32(*value),
+                Literal::Float32 { value } => ScalarValue::Float32(*value),
+                Literal::Float64 { value } => ScalarValue::Float64(*value),
+                other => {
+                    return Err(PlanError::unsupported(format!(
+                        "Unsupported literal: {other:?}"
+                    )));
+                }
+            };
+            let conj: Vec<Expr> = vec![
+                col(col_id_for_plan.as_str()).eq(lit(key_value)),
+                col(&rand_column_name).gt_eq(lit(lower_bound)),
+                col(&rand_column_name).lt(lit(upper_bound)),
+            ];
+            let and_expr: Expr = conjunction(conj).expect("should not be empty");
+            disjuncts.push(and_expr);
+            lower_bound = upper_bound;
+        }
+
+        let final_expr: Expr = disjuncts
+            .into_iter()
+            .reduce(or)
+            .ok_or_else(|| PlanError::invalid("No valid fractions"))?;
+
+        let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
+            .filter(final_expr)?
+            .build()?;
+
+        Ok(LogicalPlanBuilder::from(plan).build()?)
+    }
     fn rewrite_aggregate(
         &self,
         input: LogicalPlan,

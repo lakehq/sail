@@ -23,3 +23,20 @@
 |  4|
 |  8|
 +---+
+
+>>> from pyspark.sql.functions import col
+>>> dataset = spark.range(0, 100).select((col("id") % 3).alias("key"))
+>>> dataset.sampleBy("key", fractions={0: 0.1, 1: 0.2}, seed=0).show()
++---+
+|key|
++---+
+|  0|
+|  1|
+|  0|
+|  1|
+|  1|
+|  1|
+|  1|
+|  1|
+|  1|
++---+
