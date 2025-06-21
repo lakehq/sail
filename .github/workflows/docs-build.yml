@@ -14,8 +14,8 @@ on:
         description: The documentation version ("main", "latest", or a version number)
         type: string
         required: true
-      base_sha:
-        description: If provided, use the python-package artifact from this commit
+      package_run_id:
+        description: Download the python-package artifact from this workflow run
         type: string
 
 jobs:
@@ -50,33 +50,13 @@ jobs:
       - name: Run Code Linter
         run: pnpm run lint
 
-      # IF
-      - name: Download Python Package (Current)
-        if: ${{ ! inputs.base_sha }}
+      - name: Download Python Package
         uses: actions/download-artifact@v4
         with:
           name: python-package
           path: target/wheels
-
-      # ELSE
-      - name: Find Baseline Workflow Run Id
-        if: ${{ inputs.base_sha }}
-        uses: ./.github/actions/commit-workflow
-        id: baseline-workflow
-        with:
-          sha: ${{ steps.baseline.outputs.sha }}
-          workflow_name: Build
-          artifact_name: python-package
-
-      - name: Download Python Package (Baseline)
-        if: ${{ inputs.base_sha && steps.baseline-workflow.outputs.workflow_run_id != '' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: python-package
-          path: target/wheels
-          run-id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
+          run-id: ${{ inputs.package_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      # ENDIF
 
       - name: Build Python Documentation
         run: |

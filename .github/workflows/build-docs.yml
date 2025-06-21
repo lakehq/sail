@@ -22,6 +22,24 @@ on:
       - synchronize
 
 jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      package_run_id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/commit-baseline
+        id: baseline
+
+      - uses: ./.github/actions/commit-workflow
+        id: baseline-workflow
+        with:
+          sha: ${{ steps.baseline.outputs.sha }}
+          workflow_name: Build
+          artifact_name: python-package
+
   docs-build:
     name: Docs Build
     uses: ./.github/workflows/docs-build.yml
@@ -29,8 +47,8 @@ jobs:
       matrix:
         stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["test"]') }}
     needs:
-      - build
+      - setup
     with:
       stage: ${{ matrix.stage }}
       version: main
-      base_sha: ${{ github.event.pull_request.base.sha }}
+      package_run_id: ${{ needs.setup.outputs.package_run_id }}

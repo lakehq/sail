@@ -78,6 +78,7 @@ jobs:
     with:
       stage: ${{ matrix.stage }}
       version: main
+      package_run_id: ${{ github.run_id }}
 
   docs-deploy:
     name: Docs Deploy
