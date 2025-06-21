@@ -36,7 +36,11 @@ use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
 };
-use datafusion_expr::{build_join_schema, col, expr, ident, lit, or, when, Aggregate, AggregateUDF, BinaryExpr, ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast, WindowFrame, WindowFunctionDefinition};
+use datafusion_expr::{
+    build_join_schema, col, expr, ident, lit, or, when, Aggregate, AggregateUDF, BinaryExpr,
+    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
+    WindowFrame, WindowFunctionDefinition,
+};
 use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::{Literal, TableFileFormat};
@@ -3833,8 +3837,13 @@ impl PlanResolver<'_> {
         seed: Option<i64>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        if fractions.iter().any(|f| f.fraction < 0.0 || f.fraction > 1.0) {
-            return Err(PlanError::invalid("All fraction values must be >= 0.0 or > 1.0"));
+        if fractions
+            .iter()
+            .any(|f| f.fraction < 0.0 || f.fraction > 1.0)
+        {
+            return Err(PlanError::invalid(
+                "All fraction values must be >= 0.0 or > 1.0",
+            ));
         }
         let total_fraction: f64 = fractions.iter().map(|f| f.fraction).sum();
         if total_fraction > 1.0 {
@@ -3872,11 +3881,11 @@ impl PlanResolver<'_> {
             let mut rng = rng();
             rng.random::<i64>()
         });
-        let rand_expr: Expr =
-            Expr::ScalarFunction(ScalarFunction {
-                func: Arc::new(ScalarUDF::from(Random::new())),
-                args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
-            }).alias(&rand_column_name);
+        let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::from(Random::new())),
+            args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
+        })
+        .alias(&rand_column_name);
         let mut all_exprs: Vec<Expr> = init_exprs.clone();
         all_exprs.push(rand_expr);
         let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
@@ -3892,7 +3901,9 @@ impl PlanResolver<'_> {
                 Literal::Float32 { value } => ScalarValue::Float32(*value),
                 Literal::Float64 { value } => ScalarValue::Float64(*value),
                 other => {
-                    return Err(PlanError::unsupported(format!("Unsupported literal: {other:?}")));
+                    return Err(PlanError::unsupported(format!(
+                        "Unsupported literal: {other:?}"
+                    )));
                 }
             };
             let conj: Vec<Expr> = vec![
