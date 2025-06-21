@@ -5,13 +5,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    # Do not run this flow if only docs related files have been updated,
-    # in that case the build-docs.yml flow should run
-    paths-ignore:
-      - "docs/"
-      - "*.js"
-      - "*.json"
-      - "pnpm-lock.yaml"
     types:
       - labeled
       - opened
@@ -22,8 +15,6 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    outputs:
-      python_ref: ${{ steps.set_python_ref.outputs.safe_ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,26 +40,18 @@ jobs:
       - name: Build Python Package
         uses: PyO3/maturin-action@v1
 
-      - name: Create safe Python Package reference
-        id: set_python_ref
-        run: |
-          ref=$(echo -n "${{ github.ref }}" | sed -e 's/[ \t:\/\\"<>|*?]/-/g' -e 's/--*/-/g')
-          echo "safe_ref=$ref" >> $GITHUB_OUTPUT
-
       - name: Upload Python Package
         uses: actions/upload-artifact@v4
         with:
-          name: python-package-${{ steps.set_python_ref.outputs.ref }}
+          name: python-package
           path: target/wheels
-          retention-days: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 30 || 1 }}
+          retention-days: 1
 
   spark-tests:
     name: Spark Tests
     uses: ./.github/workflows/spark-tests.yml
     needs:
       - build
-    with:
-      python_ref: ${{ needs.build.outputs.python_ref }}
 
   python-build:
     name: Python Build
@@ -87,7 +70,6 @@ jobs:
     with:
       stage: ${{ matrix.stage }}
       version: main
-      python_ref: ${{ needs.build.outputs.python_ref }}
 
   docs-deploy:
     name: Docs Deploy

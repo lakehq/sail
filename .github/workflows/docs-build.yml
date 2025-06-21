@@ -14,10 +14,6 @@ on:
         description: The documentation version ("main", "latest", or a version number)
         type: string
         required: true
-      python_ref:
-        description: The ref for the Python package artifact to use
-        type: string
-        required: true
 
 jobs:
   docs-build:
@@ -54,7 +50,7 @@ jobs:
       - name: Download Python Package
         uses: actions/download-artifact@v4
         with:
-          name: python-package-${{ inputs.python_ref }}
+          name: python-package
           path: target/wheels
 
       - name: Build Python Documentation

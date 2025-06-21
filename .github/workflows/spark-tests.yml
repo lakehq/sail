@@ -7,10 +7,6 @@ on:
         description: The Spark version to test
         type: string
         default: "3.5.5"
-      python_ref:
-        description: The ref for the Python package artifact to use
-        type: string
-        required: true
 
 jobs:
   setup:
@@ -90,7 +86,7 @@ jobs:
       - name: Download Python Package
         uses: actions/download-artifact@v4
         with:
-          name: python-package-${{ inputs.python_ref }}
+          name: python-package
           path: target/wheels
 
       # We do not cache the environments since package installation via `uv` is fast, while downloading

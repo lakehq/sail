@@ -2,11 +2,6 @@ name: Python Build
 
 on:
   workflow_call:
-    inputs:
-      python_ref:
-        description: The ref for the Python package artifact to use
-        type: string
-        required: true
 
 jobs:
   python-build:
@@ -28,7 +23,7 @@ jobs:
       - name: Download Python Package
         uses: actions/download-artifact@v4
         with:
-          name: python-package-${{ inputs.python_ref }}
+          name: python-package
           path: target/wheels
 
       - name: Set Up Hatch Environment
