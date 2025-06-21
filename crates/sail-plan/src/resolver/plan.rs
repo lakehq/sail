@@ -3855,23 +3855,18 @@ impl PlanResolver<'_> {
         let input: LogicalPlan = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let col_name: &str = match &column {
-            spec::Expr::UnresolvedAttribute { name, .. } => {
-                let colname = name
-                    .parts()
-                    .first()
-                    .map(|id| id.as_ref())
-                    .unwrap_or("<unknown>");
-                log::debug!("sampleBy: column = {}", colname);
-                colname
-            }
-            other => {
-                return Err(PlanError::invalid(format!(
-                    "Expected UnresolvedAttribute, got: {:?}",
-                    other
-                )));
-            }
+        let spec::Expr::UnresolvedAttribute {
+            name,
+            ..
+        } = column else {
+            return Err(PlanError::invalid("Expected UnresolvedAttribute"));
         };
+        let col_name: &str = name
+            .parts()
+            .first()
+            .map(|id| id.as_ref())
+            .unwrap_or("<unknown>");
+        
         let init_exprs: Vec<Expr> = input
             .schema()
             .columns()
