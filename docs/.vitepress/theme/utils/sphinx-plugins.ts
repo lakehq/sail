@@ -1,10 +1,10 @@
-import { writeFile } from "fs/promises";
 import path from "path";
 
 import type { Plugin } from "vite";
 import type { UserConfig } from "vitepress";
 
 import type { SphinxPage } from "./sphinx";
+import { writeFile } from "./file";
 import { loadSphinxPages, requireSphinxPages } from "./sphinx";
 
 declare module "vitepress" {
