@@ -36,11 +36,7 @@ use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
 };
-use datafusion_expr::{
-    build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
-    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
-    WindowFrame, WindowFunctionDefinition,
-};
+use datafusion_expr::{build_join_schema, col, expr, ident, lit, or, when, Aggregate, AggregateUDF, BinaryExpr, ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast, WindowFrame, WindowFunctionDefinition};
 use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::{Literal, TableFileFormat};
@@ -3837,7 +3833,6 @@ impl PlanResolver<'_> {
         seed: Option<i64>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        
         let colname: &str = match &column {
             spec::Expr::UnresolvedAttribute { name, .. } => {
                 let colname = name
@@ -3890,41 +3885,40 @@ impl PlanResolver<'_> {
             .build()?;
         ////
         let mut lower_bound: f64 = 0.0;
-        let mut sampled_plans: Vec<LogicalPlan> = vec![];
+        let mut disjuncts: Vec<Expr> = vec![];
 
         for frac in &fractions {
             let upper_bound: f64 = lower_bound + frac.fraction;
 
-            let key_value = match &frac.stratum {
-                Literal::Int32 { value: f } => ScalarValue::Int32(*f),
-                Literal::Float32 { value: f } => ScalarValue::Float32(*f),
-                Literal::Float64 { value: f } => ScalarValue::Float64(*f),
-                other => return Err(PlanError::unsupported(format!("Unsupported literal: {other:?}"))),
+            let key_value: ScalarValue = match &frac.stratum {
+                Literal::Int32 { value } => ScalarValue::Int32(*value),
+                Literal::Float32 { value } => ScalarValue::Float32(*value),
+                Literal::Float64 { value } => ScalarValue::Float64(*value),
+                other => {
+                    return Err(PlanError::unsupported(format!("Unsupported literal: {other:?}")));
+                }
             };
 
-            let registered_colname: String = state.register_field_name(colname);
-            // Construye plan con el filtro correspondiente
-            let filtered: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand.clone())
-                .filter(col("#1").eq(lit(key_value)))?
-                .filter(col(&rand_column_name).gt_eq(lit(lower_bound)))?
-                .filter(col(&rand_column_name).lt(lit(upper_bound)))?
-                .build()?;
+            let conj: Vec<Expr> = vec![
+                col("#1").eq(lit(key_value)),
+                col(&rand_column_name).gt_eq(lit(lower_bound)),
+                col(&rand_column_name).lt(lit(upper_bound)),
+            ];
 
-            sampled_plans.push(filtered);
+            let and_expr: Expr = conjunction(conj).expect("should not be empty");
+            disjuncts.push(and_expr);
 
             lower_bound = upper_bound;
         }
 
-        let mut combined = sampled_plans.into_iter();
-        let mut plan = combined.next().ok_or_else(|| PlanError::invalid("No sampling filters"))?;
+        let final_expr: Expr = disjuncts
+            .into_iter()
+            .reduce(|acc, expr| or(acc, expr))
+            .ok_or_else(|| PlanError::invalid("No valid fractions"))?;
 
-        for next_plan in combined {
-            plan = LogicalPlan::Union(plan::Union {
-                inputs: vec![Arc::new(plan), Arc::new(next_plan)],
-                schema: plan_with_rand.schema().clone(),
-            });
-        }
-        /////
+        let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
+            .filter(final_expr)?
+            .build()?;
 
         Ok(LogicalPlanBuilder::from(plan)
             // .project(
