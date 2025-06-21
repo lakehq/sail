@@ -1,7 +1,6 @@
 # References:
 #   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-csv.html#data-source-option
 #   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L254-L290
-#   - [3] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L767-L787
 
 # TODO: Delimiter can be one or more characters
 - key: delimiter
@@ -63,7 +62,7 @@
   description: |
     Sets the single character line separator that should be used for parsing.
     CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
-    For reading, Defaults to None (CRLF: \\r, \\r\\n and \\n).
+    For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
   supported: true
 
 - key: infer_schema
@@ -84,12 +83,13 @@
     The maximum number of rows to read from CSV files for schema inference if needed.
   supported: true
 
-- key: newlines_in_values
+- key: multi_line
   alias:
-    - newlinesInValues
+    - multiLine
   default: "false"
   description: |
     Specifies whether newlines in quoted values are supported.
+    Allows a row to span multiple lines, by parsing line breaks within quoted values as part of the value itself.
     Parsing newlines in quoted values may be affected by execution behavior such as parallel file scanning.
     Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
   supported: true
@@ -203,6 +203,7 @@
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
   description: |
     Sets the string that indicates a timestamp format. Custom date formats follow the formats at `Datetime` Patterns.
+  supported: false
 
 - key: timestamp_ntz_format
   alias:
@@ -257,16 +258,7 @@
   description: |
     Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
     This overrides `sail.sql.column_name_of_corrupt_record`.
-    Defaults to the value of `sail.sql.column_name_of_corrupt_record configuration`.
-  supported: false
-
-- key: multi_line
-  alias:
-    - multiLine
-  default: "false"
-  description: |
-    Allows a row to span multiple lines, by parsing line breaks within quoted values as part of the value itself.
-    CSV built-in functions ignore this option.
+    Defaults to the value of `sail.sql.column_name_of_corrupt_record` configuration.
   supported: false
 
 - key: char_to_escape_quote_escaping
@@ -322,7 +314,7 @@
     - timeZone
   default: ""
   description: |
-    Sets the string that indicates a time zone ID to be used to format timestamps in the JSON datasources or
+    Sets the string that indicates a time zone ID to be used to format timestamps in the CSV data sources or
     partition values. The following formats of timeZone are supported:
       - Region-based zone ID: It should have the form 'area/city', such as 'America/Los_Angeles'.
       - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.

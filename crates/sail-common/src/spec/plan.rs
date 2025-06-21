@@ -800,7 +800,7 @@ pub struct Write {
     pub source: Option<String>, // TODO: is this the same as "provider" in `WriteOperationV2`?
     pub save_type: SaveType,
     pub mode: SaveMode,
-    pub sort_columns: Vec<Identifier>,
+    pub sort_columns: Vec<SortOrder>,
     pub partitioning_columns: Vec<Identifier>,
     pub clustering_columns: Vec<Identifier>,
     pub bucket_by: Option<SaveBucketBy>,
