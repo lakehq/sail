@@ -3891,13 +3891,26 @@ impl PlanResolver<'_> {
         debug!("Value of col_id_for_plan: {:?}", col_id_for_plan);
 
         let mut lower_bound: f64 = 0.0;
-        let mut disjuncts: Vec<Expr> = vec![];
+        let mut acc_exprs: Vec<Expr> = vec![];
         for frac in &fractions {
             let upper_bound: f64 = lower_bound + frac.fraction;
             let key_value: ScalarValue = match &frac.stratum {
+                Literal::Null => ScalarValue::Null,
+                Literal::Boolean { value } => ScalarValue::Boolean(*value),
+                Literal::Int8 { value } => ScalarValue::Int8(*value),
+                Literal::Int16 { value } => ScalarValue::Int16(*value),
                 Literal::Int32 { value } => ScalarValue::Int32(*value),
+                Literal::Int64 { value } => ScalarValue::Int64(*value),
+                Literal::UInt8 { value } => ScalarValue::UInt8(*value),
+                Literal::UInt16 { value } => ScalarValue::UInt16(*value),
+                Literal::UInt32 { value } => ScalarValue::UInt32(*value),
+                Literal::UInt64 { value } => ScalarValue::UInt64(*value),
+                Literal::Float16 { value } => ScalarValue::Float16(*value),
                 Literal::Float32 { value } => ScalarValue::Float32(*value),
                 Literal::Float64 { value } => ScalarValue::Float64(*value),
+                Literal::Utf8 { value } => ScalarValue::Utf8(value.clone()),
+                Literal::Utf8View { value } => ScalarValue::Utf8View(value.clone()),
+                Literal::LargeUtf8 { value } => ScalarValue::LargeUtf8(value.clone()),
                 other => {
                     return Err(PlanError::unsupported(format!(
                         "Unsupported literal: {other:?}"
@@ -3910,20 +3923,21 @@ impl PlanResolver<'_> {
                 col(&rand_column_name).lt(lit(upper_bound)),
             ];
             let and_expr: Expr = conjunction(conj).expect("should not be empty");
-            disjuncts.push(and_expr);
+            acc_exprs.push(and_expr);
             lower_bound = upper_bound;
         }
 
-        let final_expr: Expr = disjuncts
+        let final_expr: Expr = acc_exprs
             .into_iter()
             .reduce(or)
             .ok_or_else(|| PlanError::invalid("No valid fractions"))?;
 
-        let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
-            .filter(final_expr)?
-            .build()?;
-
-        Ok(LogicalPlanBuilder::from(plan).build()?)
+        Ok(LogicalPlanBuilder::from(
+            LogicalPlanBuilder::from(plan_with_rand)
+                .filter(final_expr)?
+                .build()?,
+        )
+        .build()?)
     }
     fn rewrite_aggregate(
         &self,
