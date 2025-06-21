@@ -3852,7 +3852,7 @@ impl PlanResolver<'_> {
         let input: LogicalPlan = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let colname: &str = match &column {
+        let _colname: &str = match &column {
             spec::Expr::UnresolvedAttribute { name, .. } => {
                 let colname = name
                     .parts()
@@ -3918,7 +3918,7 @@ impl PlanResolver<'_> {
 
         let final_expr: Expr = disjuncts
             .into_iter()
-            .reduce(|acc, expr| or(acc, expr))
+            .reduce(or)
             .ok_or_else(|| PlanError::invalid("No valid fractions"))?;
 
         let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
