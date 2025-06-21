@@ -43,7 +43,7 @@ use datafusion_expr::{
 };
 use rand::{rng, Rng};
 use sail_common::spec;
-use sail_common::spec::TableFileFormat;
+use sail_common::spec::{Literal, TableFileFormat};
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
@@ -350,8 +350,14 @@ impl PlanResolver<'_> {
             QueryNode::StatFreqItems { .. } => {
                 return Err(PlanError::todo("freq items"));
             }
-            QueryNode::StatSampleBy { .. } => {
-                return Err(PlanError::todo("sample by"));
+            QueryNode::StatSampleBy {
+                input,
+                column,
+                fractions,
+                seed,
+            } => {
+                self.resolve_query_sample_by(*input, column, fractions, seed, state)
+                    .await?
             }
             QueryNode::Empty { produce_one_row } => {
                 LogicalPlan::EmptyRelation(plan::EmptyRelation {
@@ -3823,7 +3829,112 @@ impl PlanResolver<'_> {
             .aggregate(Vec::<Expr>::new(), vec![corr])?
             .build()?)
     }
+    async fn resolve_query_sample_by(
+        &self,
+        input: spec::QueryPlan,
+        column: spec::Expr,
+        fractions: Vec<spec::Fraction>,
+        seed: Option<i64>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        
+        let colname: &str = match &column {
+            spec::Expr::UnresolvedAttribute { name, .. } => {
+                let colname = name
+                    .parts()
+                    .first()
+                    .map(|id| id.as_ref())
+                    .unwrap_or("<unknown>");
+                log::debug!("sampleBy: column = {}", colname);
+                colname
+            }
+            other => {
+                return Err(PlanError::invalid(format!(
+                    "Expected UnresolvedAttribute, got: {:?}",
+                    other
+                )));
+            }
+        };
+        if fractions.iter().any(|f| f.fraction < 0.0 || f.fraction > 1.0) {
+            return Err(PlanError::invalid("All fraction values must be >= 0.0 or > 1.0"));
+        }
+        let total_fraction: f64 = fractions.iter().map(|f| f.fraction).sum();
+        if total_fraction > 1.0 {
+            return Err(PlanError::invalid("All fraction sum is more than 1"));
+        }
 
+        let seed: i64 = seed.unwrap_or_else(|| {
+            let mut rng = rng();
+            rng.random::<i64>()
+        });
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let init_exprs: Vec<Expr> = input
+            .schema()
+            .columns()
+            .iter()
+            .map(|col| Expr::Column(col.clone()))
+            .collect();
+        let rand_column_name: String = state.register_field_name("rand_value");
+
+        let rand_expr: Expr =
+            Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(Random::new())),
+                args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
+            }).alias(&rand_column_name);
+        let mut all_exprs: Vec<Expr> = init_exprs.clone();
+        all_exprs.push(rand_expr);
+        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
+            .project(all_exprs)?
+            .build()?;
+        ////
+        let mut lower_bound: f64 = 0.0;
+        let mut sampled_plans: Vec<LogicalPlan> = vec![];
+
+        for frac in &fractions {
+            let upper_bound: f64 = lower_bound + frac.fraction;
+
+            let key_value = match &frac.stratum {
+                Literal::Int32 { value: f } => ScalarValue::Int32(*f),
+                Literal::Float32 { value: f } => ScalarValue::Float32(*f),
+                Literal::Float64 { value: f } => ScalarValue::Float64(*f),
+                other => return Err(PlanError::unsupported(format!("Unsupported literal: {other:?}"))),
+            };
+
+            let registered_colname: String = state.register_field_name(colname);
+            // Construye plan con el filtro correspondiente
+            let filtered: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand.clone())
+                .filter(col("#1").eq(lit(key_value)))?
+                .filter(col(&rand_column_name).gt_eq(lit(lower_bound)))?
+                .filter(col(&rand_column_name).lt(lit(upper_bound)))?
+                .build()?;
+
+            sampled_plans.push(filtered);
+
+            lower_bound = upper_bound;
+        }
+
+        let mut combined = sampled_plans.into_iter();
+        let mut plan = combined.next().ok_or_else(|| PlanError::invalid("No sampling filters"))?;
+
+        for next_plan in combined {
+            plan = LogicalPlan::Union(plan::Union {
+                inputs: vec![Arc::new(plan), Arc::new(next_plan)],
+                schema: plan_with_rand.schema().clone(),
+            });
+        }
+        /////
+
+        Ok(LogicalPlanBuilder::from(plan)
+            // .project(
+            //     init_exprs
+            //         .into_iter()
+            //         .map(Into::into)
+            //         .collect::<Vec<SelectExpr>>(),
+            // )?
+            .build()?)
+    }
     fn rewrite_aggregate(
         &self,
         input: LogicalPlan,
