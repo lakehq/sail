@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # Do not run this flow if only docs related files have been updated,
+    # in that case the build-docs.yml flow should run
+    paths-ignore:
+      - "docs/"
+      - "*.js"
+      - "*.json"
+      - "pnpm-lock.yaml"
+      - "README.md"
     types:
       - labeled
       - opened

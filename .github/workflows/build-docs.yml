@@ -10,6 +10,7 @@ on:
       - "*.js"
       - "*.json"
       - "pnpm-lock.yaml"
+      - "!README.md"
       - "!crates/**"
       - "!docker/**"
       - "!k8s/**"
@@ -32,4 +33,3 @@ jobs:
     with:
       stage: ${{ matrix.stage }}
       version: main
-      python_ref: refs-heads-main
