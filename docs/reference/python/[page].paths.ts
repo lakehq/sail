@@ -1,7 +1,6 @@
-import {
-  loadSphinxPages,
-  SphinxPageData,
-} from "../../.vitepress/theme/utils/sphinx";
+import type { SphinxPageData } from "../../.vitepress/theme/utils/sphinx";
+import { sphinxPages } from "../../.vitepress/cache/sphinx-pages";
+import { requireSphinxPages } from "../../.vitepress/theme/utils/sphinx";
 import { PathLike, TreeNode } from "../../.vitepress/theme/utils/tree";
 
 /**
@@ -103,13 +102,15 @@ function transform(
 }
 
 export default {
-  async paths() {
-    const links = (await loadSphinxPages()).map(
-      (page) => new SphinxPagePath(page.inner),
-    );
+  async paths(): Promise<SphinxPageConfig[]> {
+    const links = sphinxPages.map((pageData) => new SphinxPagePath(pageData));
     const root = links.find((link) => link.inner.current.link === "/");
     if (root === undefined) {
-      throw new Error("root page not found");
+      if (requireSphinxPages()) {
+        throw new Error("Python Api: root page not found");
+      } else {
+        return [];
+      }
     }
     // Generate the page tree from the paths so that we can generate any missing index pages
     // for intermediate directories.
