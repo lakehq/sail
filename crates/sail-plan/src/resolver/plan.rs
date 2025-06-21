@@ -3838,6 +3838,11 @@ impl PlanResolver<'_> {
         seed: Option<i64>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        debug!("input--> {:?}", input);
+        debug!("column--> {:?}", column);
+        debug!("fractions--> {:?}", fractions);
+        debug!("seed--> {:?}", seed);
+        debug!("state--> {:?}", state);
         if fractions
             .iter()
             .any(|f| f.fraction < 0.0 || f.fraction > 1.0)
@@ -3870,7 +3875,7 @@ impl PlanResolver<'_> {
             .iter()
             .map(|col| Expr::Column(col.clone()))
             .collect();
-        let rand_column_name: String = state.register_field_name("rand_value");
+        let rand_column_name: String = state.register_hidden_field_name("rand_value");
 
         let seed: i64 = seed.unwrap_or_else(|| {
             let mut rng = rng();
@@ -3923,14 +3928,7 @@ impl PlanResolver<'_> {
             .filter(final_expr)?
             .build()?;
 
-        Ok(LogicalPlanBuilder::from(plan)
-            .project(
-                init_exprs
-                    .into_iter()
-                    .map(Into::into)
-                    .collect::<Vec<SelectExpr>>(),
-            )?
-            .build()?)
+        Ok(LogicalPlanBuilder::from(plan).build()?)
     }
     fn rewrite_aggregate(
         &self,
