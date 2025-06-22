@@ -88,6 +88,28 @@ async function loadSphinxPages(): Promise<SphinxPage[]> {
   const files = await glob(
     path.join(SPHINX_BUILD_OUTPUT, "**/!(search|genindex).fjson"),
   );
+  if (files.length == 0) {
+    if (!!process.env.NODE_ENV && process.env.NODE_ENV !== "development") {
+      throw new Error(
+        `No Sphinx pages are found in ${SPHINX_BUILD_OUTPUT}. Please run the Sphinx build first.`,
+      );
+    }
+    return [
+      new SphinxPage({
+        current: { link: "/", title: "Error" },
+        content: `
+::: danger
+
+The Python documentation is not found.
+This is allowed in development mode, so that you can work on other parts of the documentation
+without building the \`pysail\` Python library.
+However, missing Python documentation will result in an error when building the documentation for production.
+
+:::
+`,
+      }),
+    ];
+  }
   return await Promise.all(
     files.map(async (file): Promise<SphinxPage> => {
       const content = await fs.readFile(file, "utf-8");
