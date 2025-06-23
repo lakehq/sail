@@ -3854,7 +3854,6 @@ impl PlanResolver<'_> {
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
         let schema = input.schema();
-
         let column_expr: Column = match &column {
             spec::Expr::UnresolvedAttribute {
                 name,
@@ -3863,10 +3862,8 @@ impl PlanResolver<'_> {
             } => {
                 let name: Vec<String> = name.clone().into();
                 let Ok(name) = name.one() else {
-                    // Ignora columnas con nombre compuesto.
                     return Err(PlanError::invalid("Expected simple column name"));
                 };
-
                 match self.resolve_optional_column(schema, &name, *plan_id, state)? {
                     Some(col) => col,
                     None => {
@@ -3888,7 +3885,6 @@ impl PlanResolver<'_> {
             .map(|col| Expr::Column(col.clone()))
             .collect();
         let rand_column_name: String = state.register_hidden_field_name("rand_value");
-
         let seed: i64 = seed.unwrap_or_else(|| {
             let mut rng = rng();
             rng.random::<i64>()
@@ -3945,7 +3941,6 @@ impl PlanResolver<'_> {
             .into_iter()
             .reduce(or)
             .ok_or_else(|| PlanError::invalid("No valid fractions"))?;
-
         Ok(LogicalPlanBuilder::from(
             LogicalPlanBuilder::from(plan_with_rand)
                 .filter(final_expr)?
