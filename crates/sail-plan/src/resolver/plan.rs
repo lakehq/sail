@@ -3851,18 +3851,36 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("All fraction sum is more than 1"));
         }
 
-        let plan_id: i64 = input.plan_id.unwrap();
         let input: LogicalPlan = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let spec::Expr::UnresolvedAttribute { name, .. } = column else {
-            return Err(PlanError::invalid("Expected UnresolvedAttribute"));
+        let schema = input.schema();
+
+        let column_expr: Column = match &column {
+            spec::Expr::UnresolvedAttribute {
+                name,
+                plan_id,
+                is_metadata_column: false,
+            } => {
+                let name: Vec<String> = name.clone().into();
+                let Ok(name) = name.one() else {
+                    // Ignora columnas con nombre compuesto.
+                    return Err(PlanError::invalid("Expected simple column name"));
+                };
+
+                match self.resolve_optional_column(schema, &name, *plan_id, state)? {
+                    Some(col) => col,
+                    None => {
+                        return Err(PlanError::invalid(format!(
+                            "Could not resolve column: {name}"
+                        )));
+                    }
+                }
+            }
+            _ => {
+                return Err(PlanError::invalid("Expected UnresolvedAttribute"));
+            }
         };
-        let col_name: &str = name
-            .parts()
-            .first()
-            .map(|id| id.as_ref())
-            .unwrap_or("<unknown>");
 
         let init_exprs: Vec<Expr> = input
             .schema()
@@ -3886,9 +3904,6 @@ impl PlanResolver<'_> {
         let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
             .project(all_exprs)?
             .build()?;
-
-        let col_id_for_plan: String = state.find_plan_id_by_field_name(plan_id, col_name).unwrap();
-        debug!("Value of col_id_for_plan: {:?}", col_id_for_plan);
 
         let mut lower_bound: f64 = 0.0;
         let mut acc_exprs: Vec<Expr> = vec![];
@@ -3918,7 +3933,7 @@ impl PlanResolver<'_> {
                 }
             };
             let conj: Vec<Expr> = vec![
-                col(col_id_for_plan.as_str()).eq(lit(key_value)),
+                col(&column_expr.name).eq(lit(key_value)),
                 col(&rand_column_name).gt_eq(lit(lower_bound)),
                 col(&rand_column_name).lt(lit(upper_bound)),
             ];
