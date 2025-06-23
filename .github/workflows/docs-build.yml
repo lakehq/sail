@@ -15,7 +15,7 @@ on:
         type: string
         required: true
       package_run_id:
-        description: Download the python-package artifact from this workflow run
+        description: The workflow run to download the python package artifact
         type: string
 
 jobs:
