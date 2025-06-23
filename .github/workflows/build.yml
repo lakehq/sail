@@ -113,7 +113,7 @@ jobs:
     with:
       stage: ${{ matrix.stage }}
       version: main
-      package_run_id: ${{ needs.setup.outputs.build_package && github.run_id || needs.setup.outputs.baseline_run_id }}
+      package_run_id: ${{ needs.setup.outputs.build_package == 'true' && github.run_id || needs.setup.outputs.baseline_run_id }}
 
   docs-deploy:
     name: Docs Deploy
