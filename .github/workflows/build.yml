@@ -47,7 +47,7 @@ jobs:
 
   build:
     name: Build
-    if: ${{ needs.setup.outputs.build_package }}
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
     runs-on: ubuntu-latest
     needs:
       - setup
@@ -85,7 +85,7 @@ jobs:
 
   spark-tests:
     name: Spark Tests
-    if: ${{ needs.setup.outputs.build_package }}
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/spark-tests.yml
     needs:
       - setup
@@ -93,7 +93,7 @@ jobs:
 
   python-build:
     name: Python Build
-    if: ${{ needs.setup.outputs.build_package }}
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/python-build.yml
     needs:
       - setup
@@ -102,7 +102,7 @@ jobs:
   docs-build:
     name: Docs Build
     # We must specify an explicit condition so that the job still runs when the build is skipped.
-    if: ${{ !failure() }}
+    if: ${{ !failure() && !cancelled() }}
     uses: ./.github/workflows/docs-build.yml
     needs:
       - setup
