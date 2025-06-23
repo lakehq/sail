@@ -26,7 +26,7 @@ kbd {
 }
 
 dl dt {
-  @apply mt-8 font-bold leading-7;
+  @apply mt-8 leading-7 font-bold;
 }
 
 dl dd {
