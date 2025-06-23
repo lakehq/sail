@@ -16,18 +16,27 @@ See also: https://github.com/vuejs/core/issues/7789
   content: " ";
 }
 
-/* Sphinx styles translated to Tailwind CSS */
+/* Sphinx styles */
 /*
 Note that we define "scoped" styles here, so we must use "slotted"
 to apply styles to the content inside the slot.
 */
 
 :slotted(.rubric) {
-  @apply text-xl font-bold;
+  font-size: 1.25rem;
+  font-weight: 700;
 }
 
 :slotted(a.headerlink) {
-  @apply invisible px-2 text-slate-200 no-underline hover:text-slate-600;
+  visibility: hidden;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  color: rgb(226, 232, 240);
+  text-decoration: none;
+}
+
+:slotted(a.headerlink:hover) {
+  color: rgb(71, 85, 105);
 }
 
 :slotted(h1:hover > a.headerlink),
@@ -41,6 +50,6 @@ to apply styles to the content inside the slot.
 :slotted(p.caption:hover > a.headerlink),
 :slotted(div.code-block-caption:hover > a.headerlink),
 :slotted(div.math:hover > a.headerlink) {
-  @apply visible;
+  visibility: visible;
 }
 </style>
