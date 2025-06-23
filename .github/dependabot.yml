@@ -4,7 +4,9 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps(cargo)"
+    open-pull-requests-limit: 3
     target-branch: main
     groups:
       all:
@@ -13,6 +15,9 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      breaking:
+        update-types:
+          - "major"
     ignore:
       - dependency-name: "datafusion"
       - dependency-name: "datafusion-*"
@@ -21,3 +26,23 @@ updates:
       - dependency-name: "sqlparser"
       - dependency-name: "pyo3"
       - dependency-name: "object_store"
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps(npm)"
+    open-pull-requests-limit: 3
+    target-branch: main
+    groups:
+      all:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      breaking:
+        update-types:
+          - "major"
+    ignore:
+      - dependency-name: "@types/node"
