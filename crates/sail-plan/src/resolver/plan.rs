@@ -41,7 +41,6 @@ use datafusion_expr::{
     ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
     WindowFrame, WindowFunctionDefinition,
 };
-use log::debug;
 use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::{Literal, TableFileFormat};
