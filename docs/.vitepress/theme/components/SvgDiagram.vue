@@ -11,88 +11,47 @@ const props = defineProps<{
 
 <style scoped>
 .diagram {
-  margin-top: 1rem;
-  margin-bottom: 1rem;
-  overflow: scroll;
+  @apply my-4 overflow-scroll;
 }
 
 :deep(svg) {
-  margin-left: auto;
-  margin-right: auto;
+  @apply mx-auto;
 }
 
 :deep(svg.viz) > .graph > path {
-  fill: white;
-  stroke: none;
-}
-
-.dark :deep(svg.viz) > .graph > path {
-  fill: rgb(39, 39, 42);
-  stroke: none;
+  @apply fill-white stroke-none dark:fill-zinc-800 dark:stroke-none;
 }
 
 :deep(svg.viz) path {
-  stroke: rgb(31, 41, 55);
-}
-
-.dark :deep(svg.viz) path {
-  stroke: rgb(229, 231, 235);
+  @apply stroke-gray-800 dark:stroke-gray-200;
 }
 
 :deep(svg.viz) circle {
-  stroke: rgb(31, 41, 55);
-}
-
-.dark :deep(svg.viz) circle {
-  stroke: rgb(229, 231, 235);
+  @apply stroke-gray-800 dark:stroke-gray-200;
 }
 
 :deep(svg.viz) rect {
-  stroke: rgb(31, 41, 55);
-}
-
-.dark :deep(svg.viz) rect {
-  stroke: rgb(229, 231, 235);
+  @apply stroke-gray-800 dark:stroke-gray-200;
 }
 
 :deep(svg.viz) text {
-  fill: rgb(31, 41, 55);
-}
-
-.dark :deep(svg.viz) text {
-  fill: rgb(229, 231, 235);
+  @apply fill-gray-800 dark:fill-gray-200;
 }
 
 :deep(svg.viz) .node circle:not([fill="none"]) {
-  fill: rgb(31, 41, 55);
-}
-
-.dark :deep(svg.viz) .node circle:not([fill="none"]) {
-  fill: rgb(229, 231, 235);
+  @apply fill-gray-800 dark:fill-gray-200;
 }
 
 :deep(svg.viz) .node rect:not([fill="none"]) {
-  fill: rgb(31, 41, 55);
-}
-
-.dark :deep(svg.viz) .node rect:not([fill="none"]) {
-  fill: rgb(229, 231, 235);
+  @apply fill-gray-800 dark:fill-gray-200;
 }
 
 :deep(svg.viz) .edge path:not([fill="none"]) {
-  fill: rgb(31, 41, 55);
-}
-
-.dark :deep(svg.viz) .edge path:not([fill="none"]) {
-  fill: rgb(229, 231, 235);
+  @apply fill-gray-800 dark:fill-gray-200;
 }
 
 :deep(svg.viz) .node path {
-  fill: rgb(229, 231, 235);
-}
-
-.dark :deep(svg.viz) .node path {
-  fill: rgb(55, 65, 81);
+  @apply fill-gray-200 dark:fill-gray-700;
 }
 
 @media (prefers-color-scheme: dark) {

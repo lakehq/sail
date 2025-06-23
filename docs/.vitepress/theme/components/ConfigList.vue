@@ -52,143 +52,63 @@ function configEnvVar(key: string): string {
 
 <style scoped>
 .config-list {
-  overflow: hidden;
-  border-radius: 0.375rem;
-  border: 1px solid;
-  border-color: rgb(229, 231, 235);
-}
-
-.dark .config-list {
-  border-color: rgb(55, 65, 81);
+  @apply overflow-hidden rounded-md border border-gray-200 dark:border-gray-700;
 }
 
 .config-item {
-  border-bottom: 1px solid;
-  border-color: rgb(229, 231, 235);
-  padding: 1rem;
-}
-
-.config-item:hover {
-  background-color: rgb(249, 250, 251);
-}
-
-.dark .config-item {
-  border-color: rgb(55, 65, 81);
-}
-
-.dark .config-item:hover {
-  background-color: rgb(31, 41, 55);
+  @apply border-b border-gray-200 p-4 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800;
 }
 
 .config-item:last-child {
-  border-bottom: none;
+  @apply border-b-0;
 }
 
 .property-row {
-  margin-bottom: 0.5rem;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem;
+  @apply mb-2 flex flex-wrap items-baseline gap-x-2;
 }
 
 .property-name {
-  font-size: 0.75rem;
-  font-weight: 500;
-  white-space: nowrap;
-  color: rgb(107, 114, 128);
-}
-
-.dark .property-name {
-  color: rgb(156, 163, 175);
+  @apply whitespace-nowrap text-xs font-medium text-gray-500 dark:text-gray-400;
 }
 
 .property-value {
-  word-break: break-all;
+  @apply break-all;
 }
 
 .property-label {
-  margin-top: 0.25rem;
-  margin-bottom: 0.25rem;
-  border-radius: 0.25rem;
-  padding-left: 0.5rem;
-  padding-right: 0.5rem;
-  padding-top: 0.125rem;
-  padding-bottom: 0.125rem;
-  font-size: 0.75rem;
-  font-weight: 600;
+  @apply my-1 rounded px-2 py-0.5 text-xs font-semibold;
 }
 
 .config-key {
-  font-weight: bold;
+  @apply font-bold;
 }
 
 .config-type-string {
-  background-color: rgb(219, 234, 254);
-  color: rgb(30, 64, 175);
-}
-
-.dark .config-type-string {
-  background-color: rgb(30, 58, 138);
-  color: rgb(191, 219, 254);
+  @apply bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200;
 }
 
 .config-type-number {
-  background-color: rgb(220, 252, 231);
-  color: rgb(22, 101, 52);
-}
-
-.dark .config-type-number {
-  background-color: rgb(20, 83, 45);
-  color: rgb(187, 247, 208);
+  @apply bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200;
 }
 
 .config-type-boolean {
-  background-color: rgb(254, 249, 195);
-  color: rgb(113, 63, 18);
-}
-
-.dark .config-type-boolean {
-  background-color: rgb(113, 63, 18);
-  color: rgb(254, 240, 138);
+  @apply bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200;
 }
 
 .config-type-array {
-  background-color: rgb(243, 232, 255);
-  color: rgb(107, 33, 168);
-}
-
-.dark .config-type-array {
-  background-color: rgb(88, 28, 135);
-  color: rgb(233, 213, 255);
+  @apply bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200;
 }
 
 .config-type-map {
-  background-color: rgb(252, 231, 243);
-  color: rgb(157, 23, 77);
-}
-
-.dark .config-type-map {
-  background-color: rgb(112, 26, 117);
-  color: rgb(251, 207, 232);
+  @apply bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200;
 }
 
 .description {
-  margin-bottom: 0.5rem;
+  @apply mb-2;
 }
 
 .experimental-note {
-  margin-bottom: 0.5rem;
-  font-size: 0.875rem;
-  color: rgb(194, 65, 12);
-}
-
-.dark .experimental-note {
-  color: rgb(254, 215, 170);
-}
-
-.experimental-note::before {
-  content: "⚠";
-  margin-right: 0.25rem;
+  @apply mb-2 text-sm text-orange-600 dark:text-orange-200;
+  @apply before:mr-1 before:content-['⚠'];
 }
 </style>

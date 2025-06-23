@@ -11,7 +11,6 @@
   "devDependencies": {
     "@eslint/js": "^9.29.0",
     "@ianvs/prettier-plugin-sort-imports": "^4.4.2",
-    "@tailwindcss/postcss": "^4.1.10",
     "@types/eslint__js": "^8.42.3",
     "@types/js-yaml": "^4.0.9",
     "@types/markdown-it": "^14.1.2",
@@ -45,7 +44,7 @@
   },
   "postcss": {
     "plugins": {
-      "@tailwindcss/postcss": {},
+      "tailwindcss": {},
       "autoprefixer": {}
     }
   },
