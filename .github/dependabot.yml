@@ -48,4 +48,4 @@ updates:
     ignore:
       - dependency-name: "@types/node"
       - dependency-name: "vite"
-        versions: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major"]
