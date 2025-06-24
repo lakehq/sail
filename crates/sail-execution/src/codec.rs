@@ -7,9 +7,9 @@ use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
-#[allow(deprecated)]
-use datafusion::datasource::physical_plan::{ArrowExec, NdJsonExec};
-use datafusion::datasource::physical_plan::{ArrowSource, FileScanConfig, JsonSource};
+use datafusion::datasource::physical_plan::{
+    ArrowSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
+};
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
@@ -37,6 +37,7 @@ use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
+use datafusion_spark::function::math::expm1::SparkExpm1;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::udf::StreamUDF;
@@ -70,12 +71,12 @@ use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::map::map_function::MapFunction;
 use sail_plan::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
 use sail_plan::extension::function::math::least_greatest::{Greatest, Least};
+use sail_plan::extension::function::math::rand_poisson::RandPoisson;
 use sail_plan::extension::function::math::randn::Randn;
 use sail_plan::extension::function::math::random::Random;
 use sail_plan::extension::function::math::spark_abs::SparkAbs;
 use sail_plan::extension::function::math::spark_bin::SparkBin;
 use sail_plan::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
-use sail_plan::extension::function::math::spark_expm1::SparkExpm1;
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::math::spark_pmod::SparkPmod;
 use sail_plan::extension::function::math::spark_signum::SparkSignum;
@@ -87,7 +88,9 @@ use sail_plan::extension::function::skewness::SkewnessFunc;
 use sail_plan::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
+use sail_plan::extension::function::spark_crc32::SparkCrc32;
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
+use sail_plan::extension::function::spark_sha1::SparkSha1;
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::string::levenshtein::Levenshtein;
 use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
@@ -275,29 +278,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 file_compression_type,
             }) => {
-                let base_config = parse_protobuf_file_scan_config(
+                let file_compression_type: FileCompressionType =
+                    self.try_decode_file_compression_type(file_compression_type)?;
+                let source = parse_protobuf_file_scan_config(
                     &self.try_decode_message(&base_config)?,
                     registry,
                     self,
                     Arc::new(JsonSource::new()), // TODO: Look into configuring this if needed
                 )?;
-                let file_compression_type: FileCompressionType =
-                    self.try_decode_file_compression_type(file_compression_type)?;
-                #[allow(deprecated)]
-                Ok(Arc::new(NdJsonExec::new(
-                    base_config,
-                    file_compression_type,
-                )))
+                let source = FileScanConfigBuilder::from(source)
+                    .with_file_compression_type(file_compression_type)
+                    .build();
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
-                let base_config = parse_protobuf_file_scan_config(
+                let source = parse_protobuf_file_scan_config(
                     &self.try_decode_message(&base_config)?,
                     registry,
                     self,
                     Arc::new(ArrowSource::default()), // TODO: Look into configuring this if needed
                 )?;
-                #[allow(deprecated)]
-                Ok(Arc::new(ArrowExec::new(base_config)))
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {
                 let schema = self.try_decode_schema(&schema)?;
@@ -474,19 +475,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let data = write_record_batches(&values.data(), &values.schema())?;
             let schema = self.try_encode_schema(values.schema().as_ref())?;
             NodeKind::Values(gen::ValuesExecNode { data, schema })
-        } else if let Some(nd_json) = node.as_any().downcast_ref::<NdJsonExec>() {
-            let base_config =
-                self.try_encode_message(serialize_file_scan_config(nd_json.base_config(), self)?)?;
-            let file_compression_type =
-                self.try_encode_file_compression_type(*nd_json.file_compression_type())?;
-            NodeKind::NdJson(gen::NdJsonExecNode {
-                base_config,
-                file_compression_type,
-            })
-        } else if let Some(arrow) = node.as_any().downcast_ref::<ArrowExec>() {
-            let base_config =
-                self.try_encode_message(serialize_file_scan_config(arrow.base_config(), self)?)?;
-            NodeKind::Arrow(gen::ArrowExecNode { base_config })
         } else if let Some(work_table) = node.as_any().downcast_ref::<WorkTableExec>() {
             let name = work_table.name().to_string();
             let schema = self.try_encode_schema(work_table.schema().as_ref())?;
@@ -768,6 +756,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "map" => Ok(Arc::new(ScalarUDF::from(MapFunction::new()))),
             "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
+            "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "spark_size" | "size" | "spark_cardinality" | "cardinality" => {
@@ -782,6 +771,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
             "spark_reverse" | "reverse" => Ok(Arc::new(ScalarUDF::from(SparkReverse::new()))),
             "spark_xxhash64" | "xxhash64" => Ok(Arc::new(ScalarUDF::from(SparkXxhash64::new()))),
+            "spark_sha1" | "sha" | "sha1" => Ok(Arc::new(ScalarUDF::from(SparkSha1::new()))),
+            "crc32" => Ok(Arc::new(ScalarUDF::from(SparkCrc32::new()))),
             "overlay" => Ok(Arc::new(ScalarUDF::from(OverlayFunc::new()))),
             "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
             "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
@@ -856,6 +847,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<MultiExpr>()
             || node.inner().as_any().is::<RaiseError>()
             || node.inner().as_any().is::<Randn>()
+            || node.inner().as_any().is::<RandPoisson>()
             || node.inner().as_any().is::<Random>()
             || node.inner().as_any().is::<SparkSize>()
             || node.inner().as_any().is::<SparkArray>()
@@ -865,6 +857,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkMurmur3Hash>()
             || node.inner().as_any().is::<SparkReverse>()
             || node.inner().as_any().is::<SparkXxhash64>()
+            || node.inner().as_any().is::<SparkSha1>()
+            || node.inner().as_any().is::<SparkCrc32>()
             || node.inner().as_any().is::<OverlayFunc>()
             || node.inner().as_any().is::<SparkBase64>()
             || node.inner().as_any().is::<SparkUnbase64>()

@@ -31,6 +31,7 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort, WindowFunctionParams};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
@@ -40,6 +41,7 @@ use datafusion_expr::{
     ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
     WindowFrame, WindowFunctionDefinition,
 };
+use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
@@ -53,6 +55,9 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::data_source::csv::CsvReadOptions;
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::array::spark_sequence::SparkSequence;
+use crate::extension::function::math::rand_poisson::RandPoisson;
+use crate::extension::function::math::random::Random;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
     CatalogCommand, CatalogCommandNode, MapPartitionsNode, RangeNode, ShowStringFormat,
@@ -1156,7 +1161,7 @@ impl PlanResolver<'_> {
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
                                     )),
-                                    Expr::Literal(ScalarValue::Null)
+                                    Expr::Literal(ScalarValue::Null, None)
                                         .alias(state.register_field_name(left_name)),
                                 )),
                                 None => Err(PlanError::invalid(format!(
@@ -1179,7 +1184,7 @@ impl PlanResolver<'_> {
                                 })
                                 .map(|(right_idx, right_name)| {
                                     (
-                                        Expr::Literal(ScalarValue::Null)
+                                        Expr::Literal(ScalarValue::Null, None)
                                             .alias(state.register_field_name(right_name)),
                                         Expr::Column(Column::from(
                                             right.schema().qualified_field(right_idx),
@@ -1235,38 +1240,40 @@ impl PlanResolver<'_> {
                 let plan = if is_all {
                     let left_row_number_alias = state.register_field_name("row_num");
                     let right_row_number_alias = state.register_field_name("row_num");
-                    let left_row_number_window = Expr::WindowFunction(expr::WindowFunction {
-                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                        params: WindowFunctionParams {
-                            args: vec![],
-                            partition_by: left
-                                .schema()
-                                .fields()
-                                .iter()
-                                .map(|field| Expr::Column(Column::from_name(field.name())))
-                                .collect::<Vec<_>>(),
-                            order_by: vec![],
-                            window_frame: WindowFrame::new(None),
-                            null_treatment: Some(NullTreatment::RespectNulls),
-                        },
-                    })
-                    .alias(left_row_number_alias.as_str());
-                    let right_row_number_window = Expr::WindowFunction(expr::WindowFunction {
-                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                        params: WindowFunctionParams {
-                            args: vec![],
-                            partition_by: right
-                                .schema()
-                                .fields()
-                                .iter()
-                                .map(|field| Expr::Column(Column::from_name(field.name())))
-                                .collect::<Vec<_>>(),
-                            order_by: vec![],
-                            window_frame: WindowFrame::new(None),
-                            null_treatment: Some(NullTreatment::RespectNulls),
-                        },
-                    })
-                    .alias(right_row_number_alias.as_str());
+                    let left_row_number_window =
+                        Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                            params: WindowFunctionParams {
+                                args: vec![],
+                                partition_by: left
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|field| Expr::Column(Column::from_name(field.name())))
+                                    .collect::<Vec<_>>(),
+                                order_by: vec![],
+                                window_frame: WindowFrame::new(None),
+                                null_treatment: Some(NullTreatment::RespectNulls),
+                            },
+                        }))
+                        .alias(left_row_number_alias.as_str());
+                    let right_row_number_window =
+                        Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                            params: WindowFunctionParams {
+                                args: vec![],
+                                partition_by: right
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|field| Expr::Column(Column::from_name(field.name())))
+                                    .collect::<Vec<_>>(),
+                                order_by: vec![],
+                                window_frame: WindowFrame::new(None),
+                                null_treatment: Some(NullTreatment::RespectNulls),
+                            },
+                        }))
+                        .alias(right_row_number_alias.as_str());
                     let left = LogicalPlanBuilder::from(left)
                         .window(vec![left_row_number_window])?
                         .build()?;
@@ -1599,10 +1606,110 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_sample(
         &self,
-        _sample: spec::Sample,
-        _state: &mut PlanResolverState,
+        sample: spec::Sample,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("sample"))
+        let spec::Sample {
+            input,
+            lower_bound,
+            upper_bound,
+            with_replacement,
+            seed,
+            ..
+        } = sample;
+        if lower_bound >= upper_bound {
+            return Err(PlanError::invalid(format!(
+                "invalid sample bounds: [{lower_bound}, {upper_bound})"
+            )));
+        }
+        // if defined seed use these values otherwise use random seed
+        // to generate the random values in with_replacement mode, in lambda value
+        let seed: i64 = seed.unwrap_or_else(|| {
+            let mut rng = rng();
+            rng.random::<i64>()
+        });
+
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(*input, state)
+            .await?;
+        let rand_column_name: String = state.register_field_name("rand_value");
+        let rand_expr: Expr = if with_replacement {
+            Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(RandPoisson::new())),
+                args: vec![
+                    Expr::Literal(ScalarValue::Float64(Some(upper_bound)), None),
+                    Expr::Literal(ScalarValue::Int64(Some(seed)), None),
+                ],
+            })
+            .alias(&rand_column_name)
+        } else {
+            Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(Random::new())),
+                args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
+            })
+            .alias(&rand_column_name)
+        };
+        let init_exprs: Vec<Expr> = input
+            .schema()
+            .columns()
+            .iter()
+            .map(|col| Expr::Column(col.clone()))
+            .collect();
+        let mut all_exprs: Vec<Expr> = init_exprs.clone();
+        all_exprs.push(rand_expr);
+        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
+            .project(all_exprs)?
+            .build()?;
+
+        if !with_replacement {
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
+                .filter(col(&rand_column_name).lt(lit(upper_bound)))?
+                .filter(col(&rand_column_name).gt_eq(lit(lower_bound)))?
+                .build()?;
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
+                .project(init_exprs)?
+                .build()?;
+            Ok(plan)
+        } else {
+            let plan: LogicalPlan = plan_with_rand.clone();
+            let init_exprs_aux: Vec<Expr> = plan
+                .schema()
+                .columns()
+                .iter()
+                .map(|col| Expr::Column(col.clone()))
+                .collect();
+            let array_column_name: String = state.register_field_name("array_value");
+            let arr_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(SparkSequence::new())),
+                args: vec![
+                    Expr::Literal(ScalarValue::Int64(Some(1)), None),
+                    col(&rand_column_name),
+                ],
+            })
+            .alias(&array_column_name);
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
+                .project(
+                    init_exprs_aux
+                        .clone()
+                        .into_iter()
+                        .chain(vec![arr_expr])
+                        .map(Into::into)
+                        .collect::<Vec<SelectExpr>>(),
+                )?
+                .build()?;
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
+                .unnest_column(array_column_name.clone())?
+                .build()?;
+
+            Ok(LogicalPlanBuilder::from(plan)
+                .project(
+                    init_exprs
+                        .into_iter()
+                        .map(Into::into)
+                        .collect::<Vec<SelectExpr>>(),
+                )?
+                .build()?)
+        }
     }
 
     async fn resolve_query_deduplicate(
@@ -1823,15 +1930,15 @@ impl PlanResolver<'_> {
         let limit = self
             .resolve_expression(limit, input.schema(), state)
             .await?;
-        let limit_num = match limit {
-            Expr::Literal(ScalarValue::Int8(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int16(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int32(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
-            Expr::Literal(ScalarValue::UInt8(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt16(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt32(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt64(Some(value))) => Ok(value as i64),
+        let limit_num = match &limit {
+            Expr::Literal(ScalarValue::Int8(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int16(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int32(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int64(Some(value)), _metadata) => Ok(*value),
+            Expr::Literal(ScalarValue::UInt8(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt16(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt32(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt64(Some(value)), _metadata) => Ok(*value as i64),
             _ => Err(PlanError::invalid("`tail` limit must be an integer")),
         }?;
         // TODO: This can be expensive for large input datasets
@@ -1842,7 +1949,7 @@ impl PlanResolver<'_> {
         let count_expr = Expr::AggregateFunction(expr::AggregateFunction {
             func: count_udaf(),
             params: AggregateFunctionParams {
-                args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
                 distinct: false,
                 filter: None,
                 order_by: None,
@@ -3302,7 +3409,7 @@ impl PlanResolver<'_> {
                     None => table_source
                         .get_column_default(field.name())
                         .cloned()
-                        .unwrap_or_else(|| Expr::Literal(ScalarValue::Null))
+                        .unwrap_or_else(|| Expr::Literal(ScalarValue::Null, None))
                         .cast_to(field.data_type(), &DFSchema::empty())?,
                 };
                 Ok(expr.alias(field.name()))
@@ -3621,7 +3728,7 @@ impl PlanResolver<'_> {
             .map(|named_expr| {
                 let NamedExpr { expr, .. } = &named_expr;
                 match expr {
-                    Expr::Literal(scalar_value) => {
+                    Expr::Literal(scalar_value, _metadata) => {
                         let position = match scalar_value {
                             ScalarValue::Int32(Some(position)) => *position as i64,
                             ScalarValue::Int64(Some(position)) => *position,

@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
-use std::ops::Div;
+use std::ops::{Div, Mul};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -607,7 +607,10 @@ impl PlanResolver<'_> {
             .config
             .plan_formatter
             .literal_to_string(&literal, &self.config)?;
-        Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal)))
+        Ok(NamedExpr::new(
+            vec![name],
+            expr::Expr::Literal(literal, None),
+        ))
     }
 
     fn resolve_expression_attribute(
@@ -1053,8 +1056,13 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type) {
+            (from, DataType::Timestamp(time_unit, tz)) if from.is_numeric() => int64_to_timestamp(
+                expr::Expr::Cast(expr::Cast::new(Box::new(expr), DataType::Int64)),
+                time_unit,
+                tz,
+            ),
             (DataType::Timestamp(time_unit, _), to) if to.is_numeric() => expr::Expr::Cast(
-                expr::Cast::new(Box::new(scale_timestamp(expr, &time_unit)), to),
+                expr::Cast::new(Box::new(timestamp_to_int64(expr, &time_unit)), to),
             ),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
@@ -1253,7 +1261,7 @@ impl PlanResolver<'_> {
                         ))
                     }
                 };
-                let window = expr::Expr::WindowFunction(expr::WindowFunction {
+                let window = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
                     fun: function,
                     params: WindowFunctionParams {
                         args: arguments,
@@ -1262,7 +1270,7 @@ impl PlanResolver<'_> {
                         window_frame,
                         null_treatment: get_null_treatment(None),
                     },
-                });
+                }));
                 (window, function_name, argument_display_names, false)
             }
             _ => {
@@ -1552,7 +1560,7 @@ impl PlanResolver<'_> {
             | DataType::LargeListView(_) => array_element(
                 expr,
                 expr::Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(expr::Expr::Literal(extraction)),
+                    Box::new(expr::Expr::Literal(extraction, None)),
                     Operator::Plus,
                     Box::new(lit(1i64)),
                 )),
@@ -2183,7 +2191,20 @@ fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableRe
     }
 }
 
-fn scale_timestamp(expr: expr::Expr, time_unit: &TimeUnit) -> expr::Expr {
+fn int64_to_timestamp(expr: expr::Expr, time_unit: TimeUnit, tz: Option<Arc<str>>) -> expr::Expr {
+    let expr = match time_unit {
+        TimeUnit::Second => expr,
+        TimeUnit::Millisecond => expr.mul(lit(1000i64)),
+        TimeUnit::Microsecond => expr.mul(lit(1_000_000i64)),
+        TimeUnit::Nanosecond => expr.mul(lit(1_000_000_000i64)),
+    };
+    expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr),
+        data_type: DataType::Timestamp(time_unit, tz),
+    })
+}
+
+fn timestamp_to_int64(expr: expr::Expr, time_unit: &TimeUnit) -> expr::Expr {
     let expr = expr::Expr::Cast(expr::Cast {
         expr: Box::new(expr),
         data_type: DataType::Int64,
@@ -2247,7 +2268,10 @@ mod tests {
             .await?,
             NamedExpr {
                 name: vec!["(NOT true)".to_string()],
-                expr: Expr::Not(Box::new(Expr::Literal(ScalarValue::Boolean(Some(true))))),
+                expr: Expr::Not(Box::new(Expr::Literal(
+                    ScalarValue::Boolean(Some(true)),
+                    None
+                ))),
                 metadata: Default::default(),
             }
         );
@@ -2297,13 +2321,13 @@ mod tests {
                     expr: Box::new(Expr::Alias(Alias {
                         expr: Box::new(Expr::BinaryExpr(BinaryExpr {
                             left: Box::new(Expr::Alias(Alias {
-                                expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)))),
+                                expr: Box::new(Expr::Literal(ScalarValue::Int32(Some(1)), None)),
                                 name: "a".to_string(),
                                 relation: None,
                                 metadata: None,
                             })),
                             op: Operator::Plus,
-                            right: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)))),
+                            right: Box::new(Expr::Literal(ScalarValue::Int32(Some(2)), None)),
                         })),
                         relation: None,
                         name: "b".to_string(),

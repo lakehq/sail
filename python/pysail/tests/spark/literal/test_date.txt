@@ -40,7 +40,7 @@
 |1970-01-01|
 +----------+
 
->>> spark.sql("SELECT DATE '1970-01-'").show()
+>>> spark.sql("SELECT DATE '1970-01-'").show()  # doctest: +SAIL_ONLY
 Traceback (most recent call last):
 ...
 pyspark.errors.exceptions.connect.IllegalArgumentException: ...
