@@ -57,6 +57,7 @@ use crate::data_source::csv::CsvReadOptions;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array::spark_sequence::SparkSequence;
 use crate::extension::function::math::rand_poisson::RandPoisson;
+use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
@@ -3895,16 +3896,13 @@ impl PlanResolver<'_> {
 
         let mut acc_exprs: Vec<Expr> = vec![];
         for frac in &fractions {
-            let upper_bound: f64 = frac.fraction;
-
-            let key_value: ScalarValue = self.resolve_literal(frac.stratum.clone(), state)?;
-            let conj: Vec<Expr> = vec![
-                col(&column_expr.name).eq(lit(key_value)),
-                col(&rand_column_name).gt_eq(lit(0.0)),
-                col(&rand_column_name).lt_eq(lit(upper_bound)),
-            ];
-            let and_expr: Expr = conjunction(conj).expect("should not be empty");
-            acc_exprs.push(and_expr);
+            let key_val = self.resolve_literal(frac.stratum.clone(), state)?;
+            let f = conjunction(vec![
+                Expr::Column(column_expr.clone()).eq(lit(key_val)),
+                col(&rand_column_name).lt_eq(lit(frac.fraction)),
+            ])
+            .expect("non-empty conjunction");
+            acc_exprs.push(f);
         }
 
         let final_expr: Expr = acc_exprs
