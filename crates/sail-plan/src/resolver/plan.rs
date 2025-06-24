@@ -43,7 +43,7 @@ use datafusion_expr::{
 };
 use rand::{rng, Rng};
 use sail_common::spec;
-use sail_common::spec::{Literal, TableFileFormat};
+use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
@@ -3842,12 +3842,8 @@ impl PlanResolver<'_> {
             .any(|f| f.fraction < 0.0 || f.fraction > 1.0)
         {
             return Err(PlanError::invalid(
-                "All fraction values must be >= 0.0 or > 1.0",
+                "All fraction values must be >= 0.0 and <= 1.0",
             ));
-        }
-        let total_fraction: f64 = fractions.iter().map(|f| f.fraction).sum();
-        if total_fraction > 1.0 {
-            return Err(PlanError::invalid("All fraction sum is more than 1"));
         }
 
         let input: LogicalPlan = self
@@ -3881,17 +3877,14 @@ impl PlanResolver<'_> {
         let init_exprs: Vec<Expr> = input
             .schema()
             .columns()
-            .iter()
-            .map(|col| Expr::Column(col.clone()))
+            .into_iter()
+            .map(Expr::Column)
             .collect();
-        let rand_column_name: String = state.register_hidden_field_name("rand_value");
-        let seed: i64 = seed.unwrap_or_else(|| {
-            let mut rng = rng();
-            rng.random::<i64>()
-        });
+        let rand_column_name: String = state.register_field_name("rand_value");
+
         let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
             func: Arc::new(ScalarUDF::from(Random::new())),
-            args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
+            args: vec![Expr::Literal(ScalarValue::Int64(seed), None)],
         })
         .alias(&rand_column_name);
         let mut all_exprs: Vec<Expr> = init_exprs.clone();
@@ -3900,41 +3893,18 @@ impl PlanResolver<'_> {
             .project(all_exprs)?
             .build()?;
 
-        let mut lower_bound: f64 = 0.0;
         let mut acc_exprs: Vec<Expr> = vec![];
         for frac in &fractions {
-            let upper_bound: f64 = lower_bound + frac.fraction;
-            let key_value: ScalarValue = match &frac.stratum {
-                Literal::Null => ScalarValue::Null,
-                Literal::Boolean { value } => ScalarValue::Boolean(*value),
-                Literal::Int8 { value } => ScalarValue::Int8(*value),
-                Literal::Int16 { value } => ScalarValue::Int16(*value),
-                Literal::Int32 { value } => ScalarValue::Int32(*value),
-                Literal::Int64 { value } => ScalarValue::Int64(*value),
-                Literal::UInt8 { value } => ScalarValue::UInt8(*value),
-                Literal::UInt16 { value } => ScalarValue::UInt16(*value),
-                Literal::UInt32 { value } => ScalarValue::UInt32(*value),
-                Literal::UInt64 { value } => ScalarValue::UInt64(*value),
-                Literal::Float16 { value } => ScalarValue::Float16(*value),
-                Literal::Float32 { value } => ScalarValue::Float32(*value),
-                Literal::Float64 { value } => ScalarValue::Float64(*value),
-                Literal::Utf8 { value } => ScalarValue::Utf8(value.clone()),
-                Literal::Utf8View { value } => ScalarValue::Utf8View(value.clone()),
-                Literal::LargeUtf8 { value } => ScalarValue::LargeUtf8(value.clone()),
-                other => {
-                    return Err(PlanError::unsupported(format!(
-                        "Unsupported literal: {other:?}"
-                    )));
-                }
-            };
+            let upper_bound: f64 = frac.fraction;
+
+            let key_value: ScalarValue = self.resolve_literal(frac.stratum.clone(), state)?;
             let conj: Vec<Expr> = vec![
                 col(&column_expr.name).eq(lit(key_value)),
-                col(&rand_column_name).gt_eq(lit(lower_bound)),
-                col(&rand_column_name).lt(lit(upper_bound)),
+                col(&rand_column_name).gt_eq(lit(0.0)),
+                col(&rand_column_name).lt_eq(lit(upper_bound)),
             ];
             let and_expr: Expr = conjunction(conj).expect("should not be empty");
             acc_exprs.push(and_expr);
-            lower_bound = upper_bound;
         }
 
         let final_expr: Expr = acc_exprs
