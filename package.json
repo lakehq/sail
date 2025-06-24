@@ -12,7 +12,6 @@
     "@eslint/js": "^9.29.0",
     "@ianvs/prettier-plugin-sort-imports": "^4.4.2",
     "@tailwindcss/vite": "^4.1.10",
-    "@types/eslint__js": "^9.14.0",
     "@types/js-yaml": "^4.0.9",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^24.0.3",
