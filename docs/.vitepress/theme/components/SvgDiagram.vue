@@ -10,6 +10,8 @@ const props = defineProps<{
 </script>
 
 <style scoped>
+@reference "../app.css";
+
 .diagram {
   @apply my-4 overflow-scroll;
 }

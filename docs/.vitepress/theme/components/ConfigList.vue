@@ -51,6 +51,8 @@ function configEnvVar(key: string): string {
 </script>
 
 <style scoped>
+@reference "../app.css";
+
 .config-list {
   @apply overflow-hidden rounded-md border border-gray-200 dark:border-gray-700;
 }

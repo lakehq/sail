@@ -5,6 +5,8 @@
 <script setup></script>
 
 <style scoped>
+@reference "../app.css";
+
 /*
 HTML such as `<span> </span>` is incorrectly parsed as `<span></span>` in Vue.
 This is a workaround for this Vue issue.
