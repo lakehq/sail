@@ -58,7 +58,7 @@ runs:
         path: ${{ steps.config.outputs.path }}
         key: setup-rust-${{ steps.config.outputs.label }}-${{ steps.config.outputs.hash }}
 
-    # We do not save the cache for pull requests, so that more cache space can be reserved
+    # We save the cache only for push events, so that more cache space can be reserved
     # for the default branch and cache eviction is less likely to happen.
     # We always use caches of the default branch for pull requests. The cache is still useful
     # if the dependencies do not differ too much between the default branch and the feature branch.
@@ -72,7 +72,9 @@ runs:
 
     # Incremental compilation is not beneficial for CI builds.
     # So we turn it off to speed up the build and reduce the cache size.
-    - name: Set environment variables
+    # This step is skipped for Claude Code setup.
+    - name: Turn off incremental compilation
+      if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
       run: |
         echo CARGO_INCREMENTAL=0 >> "$GITHUB_ENV"
       shell: bash

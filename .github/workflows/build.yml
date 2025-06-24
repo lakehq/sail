@@ -26,6 +26,7 @@ jobs:
         with:
           filters: |
             package:
+              - ".github/**"
               - "crates/**"
               - "python/**"
               - "scripts/**"
