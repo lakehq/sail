@@ -1,6 +1,7 @@
 import path from "path";
 
 import type { DefaultTheme, MarkdownOptions, PageData } from "vitepress";
+import tailwindcss from "@tailwindcss/vite";
 import markdownItDeflist from "markdown-it-deflist";
 import markdownItFootnote from "markdown-it-footnote";
 import { defineConfig, HeadConfig } from "vitepress";
@@ -375,6 +376,9 @@ export default async () => {
       },
       sitemap: {
         hostname: Site.url(),
+      },
+      vite: {
+        plugins: [tailwindcss()],
       },
     }),
   );

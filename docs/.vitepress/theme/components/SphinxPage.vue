@@ -28,8 +28,18 @@ to apply styles to the content inside the slot.
   @apply text-xl font-bold;
 }
 
+/*
+TailwindCSS bug workaround: When including a class with a state prefix
+then a scoped class is generated but not slotted. I.e. class name will
+be data-v-[sha] and not data-v-[sha]-s
+Keep below two a.headerlink statements separate!
+*/
 :slotted(a.headerlink) {
-  @apply invisible px-2 text-slate-200 no-underline hover:text-slate-600;
+  @apply invisible px-2 text-slate-200 no-underline;
+}
+
+:slotted(a.headerlink) {
+  @apply hover:text-slate-600;
 }
 
 :slotted(h1:hover > a.headerlink),

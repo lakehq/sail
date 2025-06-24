@@ -11,11 +11,11 @@
   "devDependencies": {
     "@eslint/js": "^9.29.0",
     "@ianvs/prettier-plugin-sort-imports": "^4.4.2",
-    "@tailwindcss/postcss": "^4.1.10",
-    "@types/eslint__js": "^8.42.3",
+    "@tailwindcss/vite": "^4.1.10",
+    "@types/eslint__js": "^9.14.0",
     "@types/js-yaml": "^4.0.9",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^22.15.32",
+    "@types/node": "^24.0.3",
     "@typescript-eslint/eslint-plugin": "^8.35.0",
     "@typescript-eslint/parser": "^8.35.0",
     "@viz-js/viz": "^3.14.0",
@@ -38,16 +38,11 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.35.0",
     "vega": "^6.1.2",
-    "vite": "^6.3.5",
+    "vite": "<6",
     "vitepress": "^1.6.3",
     "vue": "^3.5.17",
     "vue-eslint-parser": "^10.1.4",
     "vue-tsc": "^2.2.10"
-  },
-  "postcss": {
-    "plugins": {
-      "@tailwindcss/postcss": {}
-    }
   },
   "prettier": {
     "plugins": [
@@ -67,5 +62,5 @@
       "^[.]"
     ]
   },
-  "packageManager": "pnpm@10.12.1+sha512.f0dda8580f0ee9481c5c79a1d927b9164f2c478e90992ad268bbb2465a736984391d6333d2c327913578b2804af33474ca554ba29c04a8b13060a717675ae3ac"
+  "packageManager": "pnpm@10.12.3"
 }
