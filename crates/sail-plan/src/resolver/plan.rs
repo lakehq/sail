@@ -3880,7 +3880,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(Expr::Column)
             .collect();
-        let rand_column_name: String = state.register_field_name("rand_value");
+        let rand_column_name: String = state.register_hidden_field_name("rand_value");
 
         let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
             func: Arc::new(ScalarUDF::from(Random::new())),
