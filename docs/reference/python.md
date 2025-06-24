@@ -1,7 +1,7 @@
 <slot>
 
 <!-- Even if this page would be included in a production build, it would not show
-anything as the pages under pyton/* would fill this slot content -->
+anything as the pages under python/* would fill this slot content -->
 
 ::: info
 This page acts as a placeholder during development and should not be included in the
