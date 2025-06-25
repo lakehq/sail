@@ -7,7 +7,6 @@ use datafusion::datasource::file_format::file_compression_type::FileCompressionT
 use datafusion::datasource::file_format::json::JsonFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
-use datafusion_common::config::{ConfigField, TableOptions};
 
 use crate::data_source::csv::{CsvReadOptions, CsvWriteOptions};
 use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
