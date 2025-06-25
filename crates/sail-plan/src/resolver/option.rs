@@ -215,7 +215,7 @@ impl PlanResolver<'_> {
         let mut table_options = self.ctx.copied_table_options();
         table_options.set_config_format(datafusion_common::config::ConfigFileType::PARQUET);
         parquet_options.insert(
-            "format.data_page_size_limit".to_owned(),
+            "format.data_pagesize_limit".to_owned(),
             options.data_page_size_limit.to_string(),
         );
         parquet_options.insert(
