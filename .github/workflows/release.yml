@@ -17,6 +17,9 @@ jobs:
   setup:
     name: Setup
     runs-on: ubuntu-latest
+    permissions:
+      # This is required for calling the GitHub API to generate release notes.
+      contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       is_pre_release: ${{ steps.version.outputs.pre_release }}
