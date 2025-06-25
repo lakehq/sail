@@ -51,6 +51,8 @@ function configEnvVar(key: string): string {
 </script>
 
 <style scoped>
+@reference "../app.css";
+
 .config-list {
   @apply overflow-hidden rounded-md border border-gray-200 dark:border-gray-700;
 }
@@ -68,7 +70,7 @@ function configEnvVar(key: string): string {
 }
 
 .property-name {
-  @apply whitespace-nowrap text-xs font-medium text-gray-500 dark:text-gray-400;
+  @apply text-xs font-medium whitespace-nowrap text-gray-500 dark:text-gray-400;
 }
 
 .property-value {
