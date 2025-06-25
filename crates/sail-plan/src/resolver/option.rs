@@ -294,3 +294,33 @@ impl PlanResolver<'_> {
         Ok((parquet_format, parquet_options.into_iter().collect()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::PlanConfig;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::parsers::CompressionTypeVariant;
+    #[test]
+    fn test_resolve_json_read_options() -> PlanResult<()> {
+        let ctx = SessionContext::default();
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let options = JsonReadOptions {
+            schema_infer_max_records: 100,
+            compression: "gzip".to_string(),
+        };
+        let listing_options = resolver.resolve_json_read_options(options)?;
+        let format = listing_options
+            .format
+            .as_any()
+            .downcast_ref::<JsonFormat>()
+            .expect("Expected JsonFormat");
+
+        assert_eq!(listing_options.file_extension, ".json");
+        assert_eq!(format.options().schema_infer_max_rec, Some(100));
+        assert_eq!(format.options().compression, CompressionTypeVariant::GZIP);
+
+        Ok(())
+    }
+}
