@@ -43,32 +43,10 @@ jobs:
         id: previous
         uses: actions/github-script@v7
         with:
+          result-encoding: string
           script: |
-            const tags = await github.paginate(github.rest.repos.listTags.endpoint.merge({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              per_page: 100,
-            }));
-            const pattern = /^v(\d+)\.(\d+)\.(\d+)$/;
-            const versions = tags
-              .map(tag => tag.name)
-              .filter(tag => pattern.test(tag))
-              .sort((a, b) => {
-                const [, majorA, minorA, patchA] = a.match(pattern).map(Number);
-                const [, majorB, minorB, patchB] = b.match(pattern).map(Number);
-                if (majorA !== majorB) {
-                  return majorB - majorA;
-                }
-                if (minorA !== minorB) {
-                  return minorB - minorA;
-                }
-                return patchB - patchA;
-              });
-            if (versions.length < 2) {
-              core.setOutput("previous_version", "");
-            } else {
-              core.setOutput("previous_version", versions[1].replace(/^v/, ""));
-            }
+            const script = require('scripts/releases/get-previous-version.js');
+            return script({ github, context });
 
       - name: Verify Version
         env:
@@ -100,12 +78,23 @@ jobs:
           fi
 
       - name: Generate Release Notes
+        id: notes
+        uses: actions/github-script@v7
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-          PREVIOUS_RELEASE_VERSION: ${{ steps.previous.outputs.previous_version }}
+          PREVIOUS_RELEASE_VERSION: ${{ steps.previous.outputs.result }}
+        with:
+          result-encoding: string
+          script: |
+            const script = require('scripts/releases/generate-release-notes.js');
+            return script({ github, context });
+
+      - name: Write Release Notes
+        env:
+          RELEASE_NOTES: ${{ steps.notes.outputs.result }}
         run: |
           output="/tmp/release-notes.md"
-          scripts/releases/generate-release-notes.sh > "$output"
+          printf '%s' "${RELEASE_NOTES}" > "$output"
           cat "$output" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Release Notes
