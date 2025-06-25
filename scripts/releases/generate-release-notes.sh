@@ -6,7 +6,7 @@ if [ -z "${RELEASE_VERSION:-}" ]; then
 fi
 
 printf 'More information about the release can be found in the [documentation](%s).\n\n' \
-  "https://docs.lakesail.com/sail/latest/reference/changelog/"
+  "https://docs.lakesail.com/sail/latest/reference/changelog/#_${RELEASE_VERSION//./-}"
 
 printf '* **PyPI**: [pysail %s](https://pypi.org/project/pysail/%s/)\n' \
   "${RELEASE_VERSION}" \
