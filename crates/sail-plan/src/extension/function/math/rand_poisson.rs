@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use rand::rngs::StdRng;
 use rand::{rng, SeedableRng};
@@ -99,7 +99,9 @@ impl ScalarUDFImpl for RandPoisson {
                         return exec_err!("`random_poisson` expects an integer seed, got {scalar}")
                     }
                 };
-                let poisson = Poisson::new(lambda).unwrap();
+                let poisson = Poisson::new(lambda).map_err(|e| {
+                    exec_datafusion_err!("Failed to create Poisson distribution: {e}")
+                })?;
                 let mut rng = StdRng::seed_from_u64(seed);
 
                 let values = (0..number_rows).map(|_| poisson.sample(&mut rng) as i64);
@@ -170,7 +172,8 @@ impl ScalarUDFImpl for RandPoisson {
 
 fn invoke_no_seed(lambda: f64, number_rows: usize) -> Result<ColumnarValue> {
     let mut rng = rng();
-    let poisson = Poisson::new(lambda).unwrap();
+    let poisson = Poisson::new(lambda)
+        .map_err(|e| exec_datafusion_err!("Failed to create Poisson distribution: {e}"))?;
     let values = std::iter::repeat_with(|| poisson.sample(&mut rng) as i64).take(number_rows);
     let array = Int64Array::from_iter_values(values);
     Ok(ColumnarValue::Array(Arc::new(array)))
