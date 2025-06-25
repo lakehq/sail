@@ -1,14 +1,17 @@
 import path from "path";
 
 import type { DefaultTheme, MarkdownOptions, PageData } from "vitepress";
+import tailwindcss from "@tailwindcss/vite";
 import markdownItDeflist from "markdown-it-deflist";
 import markdownItFootnote from "markdown-it-footnote";
 import { defineConfig, HeadConfig } from "vitepress";
 
+import type { SphinxPage } from "./theme/utils/sphinx";
 import PyCon from "./theme/languages/pycon";
 import { PageLink } from "./theme/utils/link";
 import { loadPages } from "./theme/utils/page";
-import { loadSphinxPages } from "./theme/utils/sphinx";
+import { SPHINX_BUILD_OUTPUT } from "./theme/utils/sphinx";
+import { withSphinxPages } from "./theme/utils/sphinx-plugins";
 import { TreeNode } from "./theme/utils/tree";
 
 // The documentation build process can be configured using the following environment variables:
@@ -240,8 +243,10 @@ class Sidebar {
     ];
   }
 
-  static async pythonApi(): Promise<DefaultTheme.SidebarItem[]> {
-    const pages = await loadSphinxPages();
+  static async pythonApi(
+    baseHref: string,
+    pages: SphinxPage[],
+  ): Promise<DefaultTheme.SidebarItem[]> {
     const trees = TreeNode.fromNodes(pages)
       .filter((tree) => {
         return tree.name != "/";
@@ -256,109 +261,125 @@ class Sidebar {
       ...(await Sidebar.backToReference()),
       {
         text: "Python API",
-        link: "/reference/python/",
-        items: Sidebar.items(trees, "/reference/python"),
+        link: baseHref,
+        items: Sidebar.items(
+          trees,
+          baseHref.endsWith("/") ? baseHref.slice(0, -1) : baseHref,
+        ),
       },
     ];
   }
 }
 
 export default async () => {
-  return defineConfig({
-    base: Site.base(),
-    lang: "en-US",
-    title: "Sail",
-    titleTemplate: ":title - Sail Documentation",
-    description: "The Sail documentation site",
-    head: [
-      [
-        "link",
-        { rel: "icon", type: "image/png", href: `${Site.base()}favicon.png` },
+  return withSphinxPages(
+    defineConfig({
+      base: Site.base(),
+      lang: "en-US",
+      title: "Sail",
+      titleTemplate: ":title - Sail Documentation",
+      description: "The Sail documentation site",
+      head: [
+        [
+          "link",
+          { rel: "icon", type: "image/png", href: `${Site.base()}favicon.png` },
+        ],
+        ...Analytics.head(),
       ],
-      ...Analytics.head(),
-    ],
-    transformPageData(pageData) {
-      TransformPageData.robots(pageData);
-      TransformPageData.sphinx(pageData);
-      // Add common meta tags at the end of the transformation.
-      TransformPageData.meta(pageData);
-    },
-    markdown: Markdown.options(),
-    srcExclude: Site.srcExclude(),
-    ignoreDeadLinks: [
-      /^https?:\/\/localhost(:\d+)?(\/.*)?$/,
-      // The Python documentation is generated dynamically.
-      /^\/reference\/python\//,
-    ],
-    contentProps: {
-      version: Site.version(),
-      libVersion: Site.libVersion(),
-    },
-    themeConfig: {
-      siteTitle: "Sail",
-      logo: "/logo.png",
-      nav: [
-        {
-          text: "Introduction",
-          link: "/introduction/",
-          activeMatch: "^/introduction/",
+      transformPageData(pageData) {
+        TransformPageData.robots(pageData);
+        TransformPageData.sphinx(pageData);
+        // Add common meta tags at the end of the transformation.
+        TransformPageData.meta(pageData);
+      },
+      markdown: Markdown.options(),
+      sphinx: {
+        placeholderPage: "**/reference/python.md",
+        outputFolder: SPHINX_BUILD_OUTPUT,
+        async pagesLoaded(pages) {
+          const baseHref = "/reference/python/";
+          const items = await Sidebar.pythonApi(baseHref, pages);
+          this.themeConfig.sidebar[baseHref] = items;
         },
-        { text: "User Guide", link: "/guide/", activeMatch: "^/guide/" },
-        { text: "Concepts", link: "/concepts/", activeMatch: "^/concepts/" },
-        {
-          text: "More",
-          activeMatch: "^/(development|reference)/",
-          items: [
+      },
+      srcExclude: Site.srcExclude(),
+      ignoreDeadLinks: [
+        /^https?:\/\/localhost(:\d+)?(\/.*)?$/,
+        // The Python documentation is generated dynamically.
+        /^\/reference\/python\//,
+      ],
+      contentProps: {
+        version: Site.version(),
+        libVersion: Site.libVersion(),
+      },
+      themeConfig: {
+        siteTitle: "Sail",
+        logo: "/logo.png",
+        nav: [
+          {
+            text: "Introduction",
+            link: "/introduction/",
+            activeMatch: "^/introduction/",
+          },
+          { text: "User Guide", link: "/guide/", activeMatch: "^/guide/" },
+          { text: "Concepts", link: "/concepts/", activeMatch: "^/concepts/" },
+          {
+            text: "More",
+            activeMatch: "^/(development|reference)/",
+            items: [
+              {
+                text: "Development",
+                link: "/development/",
+                activeMatch: "^/development/",
+              },
+              {
+                text: "Reference",
+                link: "/reference/",
+                activeMatch: "^/reference/",
+              },
+            ],
+          },
+        ],
+        notFound: {
+          quote: "The page does not exist.",
+        },
+        sidebar: {
+          "/": [
+            ...(await Sidebar.introduction()),
+            ...(await Sidebar.userGuide()),
+            ...(await Sidebar.concepts()),
             {
               text: "Development",
+              items: [],
               link: "/development/",
-              activeMatch: "^/development/",
             },
             {
               text: "Reference",
+              items: [],
               link: "/reference/",
-              activeMatch: "^/reference/",
             },
           ],
+          "/development/": await Sidebar.development(),
+          "/reference/": await Sidebar.reference(),
         },
-      ],
-      notFound: {
-        quote: "The page does not exist.",
-      },
-      sidebar: {
-        "/": [
-          ...(await Sidebar.introduction()),
-          ...(await Sidebar.userGuide()),
-          ...(await Sidebar.concepts()),
+        externalLinkIcon: true,
+        socialLinks: [
           {
-            text: "Development",
-            items: [],
-            link: "/development/",
-          },
-          {
-            text: "Reference",
-            items: [],
-            link: "/reference/",
+            icon: "github",
+            link: "https://github.com/lakehq/sail",
+            ariaLabel: "GitHub",
           },
         ],
-        "/development/": await Sidebar.development(),
-        "/reference/": await Sidebar.reference(),
-        "/reference/python/": await Sidebar.pythonApi(),
-      },
-      externalLinkIcon: true,
-      socialLinks: [
-        {
-          icon: "github",
-          link: "https://github.com/lakehq/sail",
-          ariaLabel: "GitHub",
+        search: {
+          provider: "local",
         },
-      ],
-      search: {
-        provider: "local",
       },
-    },
-    sitemap: {
-      hostname: Site.url(),
-    },
-  });
+      sitemap: {
+        hostname: Site.url(),
+      },
+      vite: {
+        plugins: [tailwindcss()],
+      },
+    }),
+  );
 };

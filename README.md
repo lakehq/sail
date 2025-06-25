@@ -19,7 +19,7 @@ pip install "pysail[spark]"
 ```
 
 Alternatively, you can install Sail from source for better performance for your hardware architecture.
-You can follow the [Installation](https://docs.lakesail.com/sail/latest/guide/installation/) guide for more information.
+You can follow the [Installation](https://docs.lakesail.com/sail/latest/introduction/installation/) guide for more information.
 
 ## Getting Started
 
@@ -60,7 +60,7 @@ spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()
 spark.sql("SELECT 1 + 1").show()
 ```
 
-Please refer to the [Getting Started](https://docs.lakesail.com/sail/latest/guide/getting-started/) guide for further details.
+Please refer to the [Getting Started](https://docs.lakesail.com/sail/latest/introduction/getting-started/) guide for further details.
 
 ## Documentation
 
