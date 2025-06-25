@@ -57,7 +57,6 @@ use crate::data_source::csv::CsvReadOptions;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array::spark_sequence::SparkSequence;
 use crate::extension::function::math::rand_poisson::RandPoisson;
-use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
