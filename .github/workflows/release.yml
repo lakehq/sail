@@ -45,7 +45,7 @@ jobs:
         with:
           result-encoding: string
           script: |
-            const script = require('scripts/releases/get-previous-version.js');
+            const script = require('./scripts/releases/get-previous-version.js');
             return script({ github, context });
 
       - name: Verify Version
@@ -86,7 +86,7 @@ jobs:
         with:
           result-encoding: string
           script: |
-            const script = require('scripts/releases/generate-release-notes.js');
+            const script = require('./scripts/releases/generate-release-notes.js');
             return script({ github, context });
 
       - name: Write Release Notes
