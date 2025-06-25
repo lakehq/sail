@@ -44,16 +44,26 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const semver = require("semver");
             const tags = await github.paginate(github.rest.repos.listTags.endpoint.merge({
               owner: context.repo.owner,
               repo: context.repo.repo,
               per_page: 100,
             }));
+            const pattern = /^v(\d+)\.(\d+)\.(\d+)$/;
             const versions = tags
               .map(tag => tag.name)
-              .filter(tag => /^v\d+\.\d+\.\d+$/.test(tag))
-              .sort((a, b) => semver.rcompare(a, b));
+              .filter(tag => pattern.test(tag))
+              .sort((a, b) => {
+                const [, majorA, minorA, patchA] = a.match(pattern).map(Number);
+                const [, majorB, minorB, patchB] = b.match(pattern).map(Number);
+                if (majorA !== majorB) {
+                  return majorB - majorA;
+                }
+                if (minorA !== minorB) {
+                  return minorB - minorA;
+                }
+                return patchB - patchA;
+              });
             if (versions.length < 2) {
               core.setOutput("previous_version", "");
             } else {
