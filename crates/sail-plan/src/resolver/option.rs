@@ -301,6 +301,7 @@ mod tests {
     use crate::config::PlanConfig;
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
+
     #[test]
     fn test_resolve_json_read_options() -> PlanResult<()> {
         let ctx = SessionContext::default();
