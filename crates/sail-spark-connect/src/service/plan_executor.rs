@@ -57,6 +57,7 @@ impl Stream for ExecutePlanResponseStream {
             poll.map(|item| {
                 let mut response = ExecutePlanResponse::default();
                 response.session_id.clone_from(&self.session_id);
+                response.server_side_session_id.clone_from(&self.session_id);
                 response.operation_id.clone_from(&self.operation_id.clone());
                 response.response_id = item.id;
                 match item.batch {
