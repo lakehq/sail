@@ -123,6 +123,9 @@ serde_arrow = { version = "0.13.4", features = ["arrow-55"] }
 object_store = { version = "0.12.2", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.14.2"
 
+# Lakehouse
+deltalake = { version = "0.26.2" }
+
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.

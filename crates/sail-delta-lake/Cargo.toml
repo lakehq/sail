@@ -1,0 +1,7 @@
+[package]
+name = "sail-delta-lake"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+deltalake = { workspace = true }
