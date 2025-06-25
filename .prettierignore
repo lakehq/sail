@@ -2,7 +2,6 @@
 
 !.github/
 !docs/
-!scripts/
 !/*.js
 !/*.json
 !/*.yml

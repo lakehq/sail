@@ -44,7 +44,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const script = require('./scripts/releases/get-previous-version.js');
+            const script = require('./.github/workflow/release/get-previous-version.js');
             await script({ github, context, core });
 
       - name: Verify Version
@@ -84,7 +84,7 @@ jobs:
           PREVIOUS_RELEASE_VERSION: ${{ steps.previous.outputs.version }}
         with:
           script: |
-            const script = require('./scripts/releases/generate-release-notes.js');
+            const script = require('./.github/workflow/release/generate-release-notes.js');
             await script({ github, context, core });
 
       - name: Write Release Notes
