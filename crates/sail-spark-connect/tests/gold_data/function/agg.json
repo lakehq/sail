@@ -1230,6 +1230,160 @@
     },
     {
       "input": {
+        "query": "SELECT listagg(DISTINCT col) FROM VALUES ('a'), ('a'), ('b') AS tab(col);",
+        "result": [
+          "ab"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "listagg(DISTINCT col, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: listagg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT listagg(col) FROM VALUES ('a'), ('a') AS tab(col);",
+        "result": [
+          "aa"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "listagg(col, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: listagg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT listagg(col) FROM VALUES ('a'), ('b'), ('c') AS tab(col);",
+        "result": [
+          "abc"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "listagg(col, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: listagg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT listagg(col) FROM VALUES ('a'), (NULL), ('b') AS tab(col);",
+        "result": [
+          "ab"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "listagg(col, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: listagg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT listagg(col) FROM VALUES (NULL), (NULL) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "listagg(col, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: listagg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT listagg(col) WITHIN GROUP (ORDER BY col DESC) FROM VALUES ('a'), ('b'), ('c') AS tab(col);",
+        "result": [
+          "cba"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "listagg(col, NULL) WITHIN GROUP (ORDER BY col DESC NULLS LAST)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: listagg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT listagg(col, ', ') FROM VALUES ('a'), ('b'), ('c') AS tab(col);",
+        "result": [
+          "a, b, c"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "listagg(col, , )",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: listagg"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT max(col) FROM VALUES (10), (50), (20) AS tab(col);",
         "result": [
           "50"
@@ -1406,6 +1560,72 @@
     },
     {
       "input": {
+        "query": "SELECT mode() WITHIN GROUP (ORDER BY col DESC) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);",
+        "result": [
+          "20"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode() WITHIN GROUP (ORDER BY col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: 'mode' does not support zero arguments No function matches the given name and argument types 'mode()'. You might need to add explicit type casts.\n\tCandidate functions:\n\tmode(Any, .., Any)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode() WITHIN GROUP (ORDER BY col DESC)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: 'mode' does not support zero arguments No function matches the given name and argument types 'mode()'. You might need to add explicit type casts.\n\tCandidate functions:\n\tmode(Any, .., Any)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);",
+        "result": [
+          "10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode() WITHIN GROUP (ORDER BY col DESC)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: 'mode' does not support zero arguments No function matches the given name and argument types 'mode()'. You might need to add explicit type casts.\n\tCandidate functions:\n\tmode(Any, .., Any)"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT mode(col) FROM VALUES (0), (10), (10) AS tab(col);",
         "result": [
           "10"
@@ -1468,6 +1688,50 @@
       },
       "output": {
         "failure": "error in DataFusion: This feature is not implemented: Unsupported data type: Interval(YearMonth) for mode function"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mode(col, false) FROM VALUES (-10), (0), (10) AS tab(col);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode(col)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT mode(col, true) FROM VALUES (-10), (0), (10) AS tab(col);",
+        "result": [
+          "-10"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "mode() WITHIN GROUP (ORDER BY col DESC)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
       }
     },
     {
@@ -1742,6 +2006,94 @@
       },
       "output": {
         "failure": "error in DataFusion: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from [Duration(Microsecond), List(Field { name: \"item\", data_type: Decimal128(1, 1), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32] to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed No function matches the given name and argument types 'approx_percentile_cont(Duration(Microsecond), List(Field { name: \"item\", data_type: Decimal128(1, 1), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Int8, Float64)\n\tapprox_percentile_cont(Int8, Float64, Int8)\n\tapprox_percentile_cont(Int8, Float64, Int16)\n\tapprox_percentile_cont(Int8, Float64, Int32)\n\tapprox_percentile_cont(Int8, Float64, Int64)\n\tapprox_percentile_cont(Int8, Float64, UInt8)\n\tapprox_percentile_cont(Int8, Float64, UInt16)\n\tapprox_percentile_cont(Int8, Float64, UInt32)\n\tapprox_percentile_cont(Int8, Float64, UInt64)\n\tapprox_percentile_cont(Int16, Float64)\n\tapprox_percentile_cont(Int16, Float64, Int8)\n\tapprox_percentile_cont(Int16, Float64, Int16)\n\tapprox_percentile_cont(Int16, Float64, Int32)\n\tapprox_percentile_cont(Int16, Float64, Int64)\n\tapprox_percentile_cont(Int16, Float64, UInt8)\n\tapprox_percentile_cont(Int16, Float64, UInt16)\n\tapprox_percentile_cont(Int16, Float64, UInt32)\n\tapprox_percentile_cont(Int16, Float64, UInt64)\n\tapprox_percentile_cont(Int32, Float64)\n\tapprox_percentile_cont(Int32, Float64, Int8)\n\tapprox_percentile_cont(Int32, Float64, Int16)\n\tapprox_percentile_cont(Int32, Float64, Int32)\n\tapprox_percentile_cont(Int32, Float64, Int64)\n\tapprox_percentile_cont(Int32, Float64, UInt8)\n\tapprox_percentile_cont(Int32, Float64, UInt16)\n\tapprox_percentile_cont(Int32, Float64, UInt32)\n\tapprox_percentile_cont(Int32, Float64, UInt64)\n\tapprox_percentile_cont(Int64, Float64)\n\tapprox_percentile_cont(Int64, Float64, Int8)\n\tapprox_percentile_cont(Int64, Float64, Int16)\n\tapprox_percentile_cont(Int64, Float64, Int32)\n\tapprox_percentile_cont(Int64, Float64, Int64)\n\tapprox_percentile_cont(Int64, Float64, UInt8)\n\tapprox_percentile_cont(Int64, Float64, UInt16)\n\tapprox_percentile_cont(Int64, Float64, UInt32)\n\tapprox_percentile_cont(Int64, Float64, UInt64)\n\tapprox_percentile_cont(UInt8, Float64)\n\tapprox_percentile_cont(UInt8, Float64, Int8)\n\tapprox_percentile_cont(UInt8, Float64, Int16)\n\tapprox_percentile_cont(UInt8, Float64, Int32)\n\tapprox_percentile_cont(UInt8, Float64, Int64)\n\tapprox_percentile_cont(UInt8, Float64, UInt8)\n\tapprox_percentile_cont(UInt8, Float64, UInt16)\n\tapprox_percentile_cont(UInt8, Float64, UInt32)\n\tapprox_percentile_cont(UInt8, Float64, UInt64)\n\tapprox_percentile_cont(UInt16, Float64)\n\tapprox_percentile_cont(UInt16, Float64, Int8)\n\tapprox_percentile_cont(UInt16, Float64, Int16)\n\tapprox_percentile_cont(UInt16, Float64, Int32)\n\tapprox_percentile_cont(UInt16, Float64, Int64)\n\tapprox_percentile_cont(UInt16, Float64, UInt8)\n\tapprox_percentile_cont(UInt16, Float64, UInt16)\n\tapprox_percentile_cont(UInt16, Float64, UInt32)\n\tapprox_percentile_cont(UInt16, Float64, UInt64)\n\tapprox_percentile_cont(UInt32, Float64)\n\tapprox_percentile_cont(UInt32, Float64, Int8)\n\tapprox_percentile_cont(UInt32, Float64, Int16)\n\tapprox_percentile_cont(UInt32, Float64, Int32)\n\tapprox_percentile_cont(UInt32, Float64, Int64)\n\tapprox_percentile_cont(UInt32, Float64, UInt8)\n\tapprox_percentile_cont(UInt32, Float64, UInt16)\n\tapprox_percentile_cont(UInt32, Float64, UInt32)\n\tapprox_percentile_cont(UInt32, Float64, UInt64)\n\tapprox_percentile_cont(UInt64, Float64)\n\tapprox_percentile_cont(UInt64, Float64, Int8)\n\tapprox_percentile_cont(UInt64, Float64, Int16)\n\tapprox_percentile_cont(UInt64, Float64, Int32)\n\tapprox_percentile_cont(UInt64, Float64, Int64)\n\tapprox_percentile_cont(UInt64, Float64, UInt8)\n\tapprox_percentile_cont(UInt64, Float64, UInt16)\n\tapprox_percentile_cont(UInt64, Float64, UInt32)\n\tapprox_percentile_cont(UInt64, Float64, UInt64)\n\tapprox_percentile_cont(Float32, Float64)\n\tapprox_percentile_cont(Float32, Float64, Int8)\n\tapprox_percentile_cont(Float32, Float64, Int16)\n\tapprox_percentile_cont(Float32, Float64, Int32)\n\tapprox_percentile_cont(Float32, Float64, Int64)\n\tapprox_percentile_cont(Float32, Float64, UInt8)\n\tapprox_percentile_cont(Float32, Float64, UInt16)\n\tapprox_percentile_cont(Float32, Float64, UInt32)\n\tapprox_percentile_cont(Float32, Float64, UInt64)\n\tapprox_percentile_cont(Float64, Float64)\n\tapprox_percentile_cont(Float64, Float64, Int8)\n\tapprox_percentile_cont(Float64, Float64, Int16)\n\tapprox_percentile_cont(Float64, Float64, Int32)\n\tapprox_percentile_cont(Float64, Float64, Int64)\n\tapprox_percentile_cont(Float64, Float64, UInt8)\n\tapprox_percentile_cont(Float64, Float64, UInt16)\n\tapprox_percentile_cont(Float64, Float64, UInt32)\n\tapprox_percentile_cont(Float64, Float64, UInt64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col);",
+        "result": [
+          "2.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_cont(0.25) WITHIN GROUP (ORDER BY col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile_cont"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_cont(0.25) WITHIN GROUP (ORDER BY col)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile_cont"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_disc(0.25) WITHIN GROUP (ORDER BY col)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile_disc"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);",
+        "result": [
+          "0-0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "percentile_disc(0.25) WITHIN GROUP (ORDER BY col)",
+              "nullable": true,
+              "type": "interval year to month",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: percentile_disc"
       }
     },
     {
@@ -2032,9 +2384,53 @@
     },
     {
       "input": {
-        "query": "SELECT regr_intercept(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "query": "SELECT regr_count(y, x) FROM VALUES (1, null) AS tab(y, x);",
         "result": [
-          "NULL"
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_count(y, x)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_count(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_count(y, x)",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, 2), (3, 3), (4, 4) AS tab(y, x);",
+        "result": [
+          "0.0"
         ],
         "schema": {
           "type": "struct",
@@ -2054,9 +2450,53 @@
     },
     {
       "input": {
-        "query": "SELECT regr_intercept(y, x) FROM VALUES (1,1), (2,2), (3,3) AS tab(y, x);",
+        "query": "SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, null), (3, 3), (4, 4) AS tab(y, x);",
         "result": [
           "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_intercept(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, null), (null, 3), (4, 4) AS tab(y, x);",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_intercept(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_intercept(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
         ],
         "schema": {
           "type": "struct",
@@ -2208,9 +2648,9 @@
     },
     {
       "input": {
-        "query": "SELECT regr_slope(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "query": "SELECT regr_slope(y, x) FROM VALUES (1, 1), (2, 2), (3, 3), (4, 4) AS tab(y, x);",
         "result": [
-          "NULL"
+          "1.0"
         ],
         "schema": {
           "type": "struct",
@@ -2230,9 +2670,53 @@
     },
     {
       "input": {
-        "query": "SELECT regr_slope(y, x) FROM VALUES (1,1), (2,2), (3,3) AS tab(y, x);",
+        "query": "SELECT regr_slope(y, x) FROM VALUES (1, 1), (2, null), (3, 3), (4, 4) AS tab(y, x);",
         "result": [
           "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_slope(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_slope(y, x) FROM VALUES (1, 1), (2, null), (null, 3), (4, 4) AS tab(y, x);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_slope(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_slope(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
         ],
         "schema": {
           "type": "struct",
@@ -2340,6 +2824,50 @@
     },
     {
       "input": {
+        "query": "SELECT regr_sxx(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxx(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxx(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
         "result": [
           "0.75"
@@ -2406,6 +2934,50 @@
     },
     {
       "input": {
+        "query": "SELECT regr_sxy(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_sxy(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_sxy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);",
         "result": [
           "0.75"
@@ -2453,6 +3025,50 @@
         "query": "SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);",
         "result": [
           "0.5"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_syy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_syy(y, x) FROM VALUES (1, null) AS tab(y, x);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regr_syy(y, x)",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regr_syy(y, x) FROM VALUES (null, 1) AS tab(y, x);",
+        "result": [
+          "NULL"
         ],
         "schema": {
           "type": "struct",
@@ -2666,6 +3282,160 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT string_agg(DISTINCT col) FROM VALUES ('a'), ('a'), ('b') AS tab(col);",
+        "result": [
+          "ab"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "string_agg(DISTINCT col, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: string_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT string_agg(col) FROM VALUES ('a'), ('a') AS tab(col);",
+        "result": [
+          "aa"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "string_agg(col, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: string_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT string_agg(col) FROM VALUES ('a'), ('b'), ('c') AS tab(col);",
+        "result": [
+          "abc"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "string_agg(col, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: string_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT string_agg(col) FROM VALUES ('a'), (NULL), ('b') AS tab(col);",
+        "result": [
+          "ab"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "string_agg(col, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: string_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT string_agg(col) FROM VALUES (NULL), (NULL) AS tab(col);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "string_agg(col, NULL)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: string_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT string_agg(col) WITHIN GROUP (ORDER BY col DESC) FROM VALUES ('a'), ('b'), ('c') AS tab(col);",
+        "result": [
+          "cba"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "listagg(col, NULL) WITHIN GROUP (ORDER BY col DESC NULLS LAST)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: string_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT string_agg(col, ', ') FROM VALUES ('a'), ('b'), ('c') AS tab(col);",
+        "result": [
+          "a, b, c"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "string_agg(col, , )",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: string_agg"
       }
     },
     {

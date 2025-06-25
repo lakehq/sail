@@ -2,28 +2,28 @@
   "tests": [
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"",
-      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"COMMENT\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"\n--------------------------------------------------------------^^^\n",
+      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"COMMENT\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 31) ==\nALTER TABLE my_tab ADD COLUMN b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\"\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate COMMENT clause"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"",
-      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"DEFAULT\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"\n--------------------------------------------------------------^^^\n",
+      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"DEFAULT\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 31) ==\nALTER TABLE my_tab ADD COLUMN b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\"\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate DEFAULT clause"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y",
-      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"FIRST|AFTER\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y\n-----------------------------------------------------------^^^\n",
+      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"FIRST|AFTER\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 31) ==\nALTER TABLE my_tab ADD COLUMN b STRING FIRST COMMENT \"abc\" AFTER y\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate POSITION clause"
       }
     },
     {
       "input": "ALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL",
-      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"NOT NULL\" more than once, which is invalid.(line 1, pos 62)\n\n== SQL ==\nALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL\n--------------------------------------------------------------^^^\n",
+      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE ADD column b specifies descriptor \"NOT NULL\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 31) ==\nALTER TABLE my_tab ADD COLUMN b STRING NOT NULL DEFAULT \"abc\" NOT NULL\n                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate NOT NULL clause"
       }
@@ -437,6 +437,48 @@
       }
     },
     {
+      "input": "ALTER TABLE t DEFAULT COLLATION sr",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+      }
+    },
+    {
+      "input": "ALTER TABLE t DEFAULT COLLATION sr_ci_ai",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+      }
+    },
+    {
+      "input": "ALTER TABLE t DEFAULT COLLATION unicode",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+      }
+    },
+    {
+      "input": "ALTER TABLE t DEFAULT COLLATION unicode_ci",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+      }
+    },
+    {
+      "input": "ALTER TABLE t DEFAULT COLLATION unicode_ci_rtrim",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+      }
+    },
+    {
+      "input": "ALTER TABLE t DEFAULT COLLATION utf8_binary",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+      }
+    },
+    {
+      "input": "ALTER TABLE t DEFAULT COLLATION utf8_lcase",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+      }
+    },
+    {
       "input": "ALTER TABLE t1 ADD COLUMN x int NOT NULL DEFAULT 42",
       "output": {
         "success": {
@@ -472,14 +514,14 @@
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'SET'.(line 1, pos 47)\n\n== SQL ==\nALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42\n-----------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'SET'. SQLSTATE: 42601 (line 1, pos 47)\n\n== SQL ==\nALTER TABLE t1 ALTER COLUMN a.b.c DROP DEFAULT SET DEFAULT 42\n-----------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found SET at 47:50 expected ';', or end of input"
       }
     },
     {
       "input": "ALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT ",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input.(line 1, pos 46)\n\n== SQL ==\nALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT \n----------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601 (line 1, pos 46)\n\n== SQL ==\nALTER TABLE t1 ALTER COLUMN a.b.c SET DEFAULT \n----------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found end of input expected expression"
       }
@@ -706,6 +748,12 @@
       }
     },
     {
+      "input": "ALTER TABLE table_name ALTER COLUMN\n a.b.c SET NOT NULL,\n d.e.f COMMENT 'new comment',\n x TYPE INT,\n y FIRST",
+      "output": {
+        "failure": "invalid argument: found , at 55:56 expected ';', or end of input"
+      }
+    },
+    {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c DROP NOT NULL",
       "output": {
         "success": {
@@ -741,7 +789,7 @@
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bad_type",
-      "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"BAD_TYPE\".(line 1, pos 47)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bad_type\n-----------------------------------------------^^^\n",
+      "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"BAD_TYPE\". SQLSTATE: 0A000\n== SQL (line 1, position 48) ==\n...le_name ALTER COLUMN a.b.c TYPE bad_type\n                                   ^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found bad_type at 47:55 expected data type"
       }
@@ -765,21 +813,21 @@
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'\n------------------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'. SQLSTATE: 42601 (line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment'\n------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found COMMENT at 54:61 expected ';', or end of input"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d\n------------------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'. SQLSTATE: 42601 (line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT 'new comment' AFTER d\n------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found COMMENT at 54:61 expected ';', or end of input"
       }
     },
     {
       "input": "ALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'.(line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d\n------------------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'COMMENT'. SQLSTATE: 42601 (line 1, pos 54)\n\n== SQL ==\nALTER TABLE table_name ALTER COLUMN a.b.c TYPE bigint COMMENT AFTER d\n------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found COMMENT at 54:61 expected ';', or end of input"
       }
@@ -855,154 +903,35 @@
     },
     {
       "input": "ALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT",
-      "exception": "\nRenaming column is not supported in Hive-style ALTER COLUMN, please run RENAME COLUMN instead.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT\n^^^\n",
+      "exception": "\nRenaming column is not supported in Hive-style ALTER COLUMN, please run RENAME COLUMN instead.\n== SQL (line 1, position 1) ==\nALTER TABLE table_name CHANGE COLUMN a.b.c new_name INT\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found new_name at 43:51 expected '.', 'TYPE', 'COMMENT', 'SET', 'DROP', 'FIRST', or 'AFTER'"
       }
     },
     {
-      "input": "ALTER TABLE table_name DROP COLUMN IF EXISTS a.b.c",
-      "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "ALTER TABLE table_name DROP COLUMN IF EXISTS x, y, a.b.c",
-      "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "ALTER TABLE table_name DROP COLUMN a.b.c",
-      "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "ALTER TABLE table_name DROP COLUMN x, y, a.b.c",
-      "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "ALTER TABLE table_name DROP COLUMNS IF EXISTS x, y, a.b.c",
-      "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "ALTER TABLE table_name DROP COLUMNS x, y, a.b.c",
-      "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
       "input": "ALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT",
-      "exception": "\nOperation not allowed: ALTER TABLE table PARTITION partition_spec CHANGE COLUMN.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT\n^^^\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: ALTER TABLE ... PARTITION ... CHANGE COLUMN is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nALTER TABLE table_name PARTITION (a='1') CHANGE COLUMN a.b.c c INT\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found CHANGE at 41:47 expected 'RENAME', or 'SET'"
       }
     },
     {
       "input": "ALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)",
-      "exception": "\nOperation not allowed: ALTER TABLE table PARTITION partition_spec REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)\n^^^\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: ALTER TABLE ... PARTITION ... REPLACE COLUMNS is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nALTER TABLE table_name PARTITION (a='1') REPLACE COLUMNS (x string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found REPLACE at 41:48 expected 'RENAME', or 'SET'"
       }
     },
     {
-      "input": "ALTER TABLE table_name RENAME COLUMN a.b.c TO d",
-      "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')",
-      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE REPLACE column a specifies descriptor \"COMMENT\" more than once, which is invalid.(line 1, pos 61)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')\n-------------------------------------------------------------^^^\n",
+      "exception": "\n[ALTER_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] ALTER TABLE REPLACE column a specifies descriptor \"COMMENT\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 1) ==\nALTER TABLE table_name REPLACE COLUMNS (a STRING COMMENT 'x' COMMENT 'y')\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate COMMENT clause"
       }
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (a.b.c string)",
-      "exception": "\nReplacing with a nested column is not supported in Hive-style REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (a.b.c string)\n^^^\n",
+      "exception": "\nReplacing with a nested column is not supported in Hive-style REPLACE COLUMNS.\n== SQL (line 1, position 1) ==\nALTER TABLE table_name REPLACE COLUMNS (a.b.c string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -1071,7 +1000,7 @@
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string FIRST)",
-      "exception": "\nColumn position is not supported in Hive-style REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (x string FIRST)\n^^^\n",
+      "exception": "\nColumn position is not supported in Hive-style REPLACE COLUMNS.\n== SQL (line 1, position 1) ==\nALTER TABLE table_name REPLACE COLUMNS (x string FIRST)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -1089,7 +1018,7 @@
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string NOT NULL)",
-      "exception": "\nNOT NULL is not supported in Hive-style REPLACE COLUMNS.(line 1, pos 0)\n\n== SQL ==\nALTER TABLE table_name REPLACE COLUMNS (x string NOT NULL)\n^^^\n",
+      "exception": "\nNOT NULL is not supported in Hive-style REPLACE COLUMNS.\n== SQL (line 1, position 1) ==\nALTER TABLE table_name REPLACE COLUMNS (x string NOT NULL)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -1107,57 +1036,6 @@
     },
     {
       "input": "ALTER TABLE table_name REPLACE COLUMNS (x string)",
-      "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "ALTER TABLE table_name SET TBLPROPERTIES ('test' = 'test', 'comment' = 'new_comment')",
-      "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "ALTER TABLE table_name UNSET TBLPROPERTIES ('comment', 'test')",
-      "output": {
-        "success": {
-          "command": {
-            "alterTable": {
-              "table": [
-                "table_name"
-              ],
-              "ifExists": false,
-              "operation": "unknown"
-            },
-            "planId": null
-          }
-        }
-      }
-    },
-    {
-      "input": "ALTER TABLE table_name UNSET TBLPROPERTIES IF EXISTS ('comment', 'test')",
       "output": {
         "success": {
           "command": {

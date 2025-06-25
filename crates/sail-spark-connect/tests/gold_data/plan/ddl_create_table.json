@@ -351,6 +351,18 @@
       }
     },
     {
+      "input": "CREATE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nCLUSTER BY (a, b)\n",
+      "output": {
+        "failure": "invalid argument: found CLUSTER at 66:73 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab (a STRUCT<b INT, c STRING>, ts TIMESTAMP) USING parquet\nCLUSTER BY (a.b, ts)\n",
+      "output": {
+        "failure": "invalid argument: found CLUSTER at 76:83 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\n        ",
       "output": {
         "success": {
@@ -449,7 +461,7 @@
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','",
-      "exception": "\nOperation not allowed: ROW FORMAT DELIMITED is only compatible with 'textfile', not 'otherformat'.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','\n",
+      "exception": "\nOperation not allowed: ROW FORMAT DELIMITED is only compatible with 'textfile', not 'otherformat'.\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab (id bigint)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPARTITIONED BY (part string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nSTORED AS otherFormat\n^^^^^^^^^^^^^^^^^^^^^\nROW FORMAT DELIMITED\n^^^^^^^^^^^^^^^^^^^^\nFIELDS TERMINATED BY ','\n^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -504,7 +516,7 @@
     },
     {
       "input": "CREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')",
-      "exception": "\nOperation not allowed: ROW FORMAT SERDE is incompatible with format 'otherformat', which also specifies a serde.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n",
+      "exception": "\nOperation not allowed: ROW FORMAT SERDE is incompatible with format 'otherformat', which also specifies a serde.\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab (id bigint)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPARTITIONED BY (part string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nSTORED AS otherFormat\n^^^^^^^^^^^^^^^^^^^^^\nROW FORMAT SERDE 'customSerde'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nWITH SERDEPROPERTIES ('prop'='value')\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -865,7 +877,7 @@
     },
     {
       "input": "CREATE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)",
-      "exception": "\nOperation not allowed: CREATE TABLE ... SKEWED BY.(line 1, pos 32)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n--------------------------------^^^\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: CREATE TABLE ... SKEWED BY is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found SKEWED at 32:38 expected 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
@@ -917,14 +929,14 @@
     },
     {
       "input": "CREATE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'",
-      "exception": "\nOperation not allowed: STORED BY.(line 2, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'\n^^^\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: STORED BY is not valid. SQLSTATE: 42601\n== SQL (line 2, position 1) ==\nSTORED BY 'handler'\n^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found BY at 50:52 expected 'AS'"
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)",
-      "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: p1\nColumns: p2 string.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)\n^^^\n",
+      "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: p1\nColumns: p2 string.\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -977,14 +989,14 @@
     },
     {
       "input": "CREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))",
-      "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: truncate(p1, 16)\nColumns: p2 string.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))\n^^^\n",
+      "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: truncate(p1, 16)\nColumns: p2 string.\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found ( at 78:79 expected ':', data type, ',', or ')'"
       }
     },
     {
       "input": "CREATE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','",
-      "exception": "\nOperation not allowed: CREATE TABLE ... USING ... ROW FORMAT DELIMITED.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: CREATE TABLE ... USING ... ROW FORMAT DELIMITED is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUSING parquet\n^^^^^^^^^^^^^\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -1047,7 +1059,7 @@
     },
     {
       "input": "CREATE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT SERDE 'customSerde'",
-      "exception": "\nOperation not allowed: CREATE TABLE ... USING ... ROW FORMAT SERDE customSerde.(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nROW FORMAT SERDE 'customSerde'\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: CREATE TABLE ... USING ... ROW FORMAT SERDE CUSTOMSERDE is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUSING parquet\n^^^^^^^^^^^^^\nROW FORMAT SERDE 'customSerde'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -1106,7 +1118,7 @@
     },
     {
       "input": "CREATE TABLE my_tab (id bigint, part string)\nUSING parquet\nSTORED AS parquet",
-      "exception": "\nOperation not allowed: CREATE TABLE ... USING ... STORED AS parquet .(line 1, pos 0)\n\n== SQL ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nSTORED AS parquet\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: CREATE TABLE ... USING ... STORED AS PARQUET  is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab (id bigint, part string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUSING parquet\n^^^^^^^^^^^^^\nSTORED AS parquet\n^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: conflicting USING and STORED AS clauses"
       }
@@ -1255,21 +1267,21 @@
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'.(line 1, pos 54)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET\n------------------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ')'. SQLSTATE: 42601 (line 1, pos 54)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS ()) USING PARQUET\n------------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found ) at 54:55 expected expression"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS (a + 1) GENERATED ALWAYS AS (a + 2)) USING PARQUET",
-      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"GENERATED ALWAYS AS\" more than once, which is invalid.(line 1, pos 61)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS (a + 1) GENERATED ALWAYS AS (a + 2)) USING PARQUET\n-------------------------------------------------------------^^^\n",
+      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"GENERATED ALWAYS AS\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 28) ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS (a + 1) GENERATED ALWAYS AS (a + 2)) USING PARQUET\n                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate GENERATED clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'a': missing '('.(line 1, pos 53)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET\n-----------------------------------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'a'. SQLSTATE: 42601 (line 1, pos 53)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET\n-----------------------------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found a at 53:54 expected '('"
       }
@@ -1282,20 +1294,20 @@
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\")",
-      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"COMMENT\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\")\n-----------------------------------------------------------^^^\n",
+      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"COMMENT\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 28) ==\nCREATE TABLE my_tab(a INT, b STRING COMMENT \"abc\" NOT NULL COMMENT \"abc\")\n                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate COMMENT clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\")",
-      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"DEFAULT\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\")\n-----------------------------------------------------------^^^\n",
+      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"DEFAULT\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 28) ==\nCREATE TABLE my_tab(a INT, b STRING DEFAULT \"123\" NOT NULL DEFAULT \"abc\")\n                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate DEFAULT clause"
       }
     },
     {
-      "input": "CREATE TABLE my_tab(a INT, b STRING DEFAULT \"abc\" NOT NULL) USING parquet",
+      "input": "CREATE TABLE my_tab(a INT, b STRING DEFAULT 'abc' NOT NULL) USING parquet",
       "output": {
         "success": {
           "command": {
@@ -1360,13 +1372,14 @@
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\" NOT NULL)",
-      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"NOT NULL\" more than once, which is invalid.(line 1, pos 59)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\" NOT NULL)\n-----------------------------------------------------------^^^\n",
+      "exception": "\n[CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE] CREATE TABLE column b specifies descriptor \"NOT NULL\" more than once, which is invalid. SQLSTATE: 42710\n== SQL (line 1, position 28) ==\nCREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\" NOT NULL)\n                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate NOT NULL clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\") USING parquet",
+      "exception": "\n[UNSUPPORTED_DEFAULT_VALUE.WITH_SUGGESTION] DEFAULT column values is not supported. Enable it by setting \"spark.sql.defaultColumn.enabled\" to \"true\". SQLSTATE: 0A000\n== SQL (line 1, position 28) ==\nCREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\") USING parquet\n                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -1430,66 +1443,151 @@
       }
     },
     {
+      "input": "CREATE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT 'abc') USING parquet",
+      "output": {
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "schema": {
+                "fields": [
+                  {
+                    "name": "a",
+                    "dataType": "int32",
+                    "nullable": true,
+                    "metadata": []
+                  },
+                  {
+                    "name": "b",
+                    "dataType": {
+                      "configuredUtf8": {
+                        "utf8Type": "configured"
+                      }
+                    },
+                    "nullable": false,
+                    "metadata": []
+                  }
+                ]
+              },
+              "comment": null,
+              "columnDefaults": [
+                [
+                  "b",
+                  {
+                    "literal": {
+                      "utf8": {
+                        "value": "abc"
+                      }
+                    }
+                  }
+                ]
+              ],
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "tablePartitionCols": [],
+              "fileSortOrder": [],
+              "ifNotExists": false,
+              "orReplace": false,
+              "unbounded": false,
+              "options": [],
+              "query": null,
+              "definition": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) CLUSTER BY (a) CLUSTER BY (a)",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: CLUSTER BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) CLUSTER BY (a) CLUSTER BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found CLUSTER at 37:44 expected 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
       "input": "CREATE TABLE my_tab(a INT, b STRING) CLUSTERED BY(b) INTO 256 BUCKETS CLUSTERED BY(b) INTO 256 BUCKETS",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: CLUSTERED BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) CLUSTERED BY(b) INTO 256 BUCKETS CLUSTERED BY(b) INTO 256 BUCKETS\n-------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: CLUSTERED BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) CLUSTERED BY(b) INTO 256 BUCKETS CLUSTERED BY(b) INTO 256 BUCKETS\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate CLUSTERED BY clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) COMMENT 'a table' COMMENT 'a table'",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: COMMENT. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) COMMENT 'a table' COMMENT 'a table'\n-------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: COMMENT. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) COMMENT 'a table' COMMENT 'a table'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate COMMENT clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: LOCATION. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'\n-------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: LOCATION. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate LOCATION clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)\n-------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate PARTITIONED BY clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (c int) PARTITIONED BY (c int)",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (c int) PARTITIONED BY (c int)\n-------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) PARTITIONED BY (c int) PARTITIONED BY (c int)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate PARTITIONED BY clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: ROW FORMAT. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'\n-------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: ROW FORMAT. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate ROW FORMAT clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'\n-------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate STORED AS clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet\n-------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate STORED AS clause"
       }
     },
     {
       "input": "CREATE TABLE my_tab(a INT, b STRING) TBLPROPERTIES('test' = 'test2') TBLPROPERTIES('test' = 'test2')",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: TBLPROPERTIES. Please, remove one of them.(line 1, pos 37)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b STRING) TBLPROPERTIES('test' = 'test2') TBLPROPERTIES('test' = 'test2')\n-------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: TBLPROPERTIES. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) TBLPROPERTIES('test' = 'test2') TBLPROPERTIES('test' = 'test2')\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate TBLPROPERTIES clause"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) USING parquet CLUSTER BY (a) PARTITIONED BY (a)",
+      "exception": "\n[SPECIFY_CLUSTER_BY_WITH_PARTITIONED_BY_IS_NOT_ALLOWED] Cannot specify both CLUSTER BY and PARTITIONED BY. SQLSTATE: 42908\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) USING parquet CLUSTER BY (a) PARTITIONED BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found CLUSTER at 51:58 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS CLUSTER BY (a)",
+      "exception": "\n[SPECIFY_CLUSTER_BY_WITH_BUCKETING_IS_NOT_ALLOWED] Cannot specify both CLUSTER BY and CLUSTERED BY INTO BUCKETS. SQLSTATE: 42908\n== SQL (line 1, position 1) ==\nCREATE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS CLUSTER BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found CLUSTER at 83:90 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
@@ -1664,14 +1762,304 @@
     },
     {
       "input": "CREATE TABLE my_tab(a: INT COMMENT 'test', b: STRING) USING parquet",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ':'.(line 1, pos 21)\n\n== SQL ==\nCREATE TABLE my_tab(a: INT COMMENT 'test', b: STRING) USING parquet\n---------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ':'. SQLSTATE: 42601 (line 1, pos 21)\n\n== SQL ==\nCREATE TABLE my_tab(a: INT COMMENT 'test', b: STRING) USING parquet\n---------------------^^^\n",
       "output": {
         "failure": "invalid argument: found : at 21:22 expected data type"
       }
     },
     {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY , val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY , val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY , val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY , val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION sr",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION sr_ci_ai",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode_ci",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode_ci_rtrim",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION utf8_binary",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE t (c STRING) USING parquet DEFAULT COLLATION utf8_lcase",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 40:47 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE t DEFAULT COLLATION XD",
+      "exception": "[COLLATION_INVALID_NAME] The value XD does not represent a correct collation name. Suggested valid collation names: [id, xh, af]. SQLSTATE: 42704",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 15:22 expected '.', '(', 'LIKE', 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS 1 GENERATED ALWAYS AS IDENTITY, val INT) USING foo",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '1'. SQLSTATE: 42601 (line 1, pos 58)\n\n== SQL ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS 1 GENERATED ALWAYS AS IDENTITY, val INT) USING foo\n----------------------------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: found 1 at 58:59 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 INCREMENT BY 2), val INT) USING foo",
+      "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: STEP. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 INCREMENT BY 2), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 START WITH 0 INCREMENT BY 2), val INT) USING foo",
+      "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: STEP. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 START WITH 0 INCREMENT BY 2), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 INCREMENT BY 1 START WITH 1), val INT) USING foo",
+      "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: START. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 INCREMENT BY 1 START WITH 1), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 START WITH 1), val INT) USING foo",
+      "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: START. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 START WITH 1), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY(INCREMENT BY 0), val INT) USING foo",
+      "exception": "\n[IDENTITY_COLUMNS_ILLEGAL_STEP] IDENTITY column step cannot be 0. SQLSTATE: 42611\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY(INCREMENT BY 0), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+      }
+    },
+    {
+      "input": "CREATE TABLE testcat.my_tab(id FLOAT GENERATED ALWAYS AS IDENTITY(), val INT) USING foo",
+      "exception": "\n[IDENTITY_COLUMNS_UNSUPPORTED_DATA_TYPE] DataType FloatType is not supported for IDENTITY columns. SQLSTATE: 428H2\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id FLOAT GENERATED ALWAYS AS IDENTITY(), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 57:65 expected '('"
+      }
+    },
+    {
       "input": "create table test_table using my_data_source options (password)",
-      "exception": "\nOperation not allowed: A value must be specified for the key: password..(line 1, pos 53)\n\n== SQL ==\ncreate table test_table using my_data_source options (password)\n-----------------------------------------------------^^^\n",
+      "exception": "\nOperation not allowed: A value must be specified for the key: password..\n== SQL (line 1, position 1) ==\ncreate table test_table using my_data_source options (password)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: missing property value: password"
       }

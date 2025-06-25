@@ -2,50 +2,6 @@
   "tests": [
     {
       "input": {
-        "query": "SELECT element_at(array(1, 2, 3), 2);",
-        "result": [
-          "2"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "element_at(array(1, 2, 3), 2)",
-              "nullable": false,
-              "type": "integer",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT element_at(map(1, 'a', 2, 'b'), 2);",
-        "result": [
-          "b"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "element_at(map(1, a, 2, b), 2)",
-              "nullable": true,
-              "type": "string",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
         "query": "SELECT map(1.0, '2', 3.0, '4');",
         "result": [
           "{1.0:\"2\",3.0:\"4\"}"
@@ -342,50 +298,6 @@
       },
       "output": {
         "failure": "not implemented: function: str_to_map"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT try_element_at(array(1, 2, 3), 2);",
-        "result": [
-          "2"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "try_element_at(array(1, 2, 3), 2)",
-              "nullable": false,
-              "type": "integer",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
-        "query": "SELECT try_element_at(map(1, 'a', 2, 'b'), 2);",
-        "result": [
-          "b"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "try_element_at(map(1, a, 2, b), 2)",
-              "nullable": true,
-              "type": "string",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
       }
     }
   ]

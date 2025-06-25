@@ -2,79 +2,100 @@
   "tests": [
     {
       "input": "\nALTER DATABASE my-database\nSET DBPROPERTIES ('p1'='v1')",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier my-database is invalid. Please, consider quoting it with back-quotes as `my-database`.(line 2, pos 17)\n\n== SQL ==\n\nALTER DATABASE my-database\n-----------------^^^\nSET DBPROPERTIES ('p1'='v1')\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier my-database is invalid and must be back quoted as: `my-database`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 2, pos 17)\n\n== SQL ==\n\nALTER DATABASE my-database\n-----------------^^^\nSET DBPROPERTIES ('p1'='v1')\n",
       "output": {
         "failure": "invalid argument: found - at 18:19 expected '.', or 'SET'"
       }
     },
     {
       "input": "\nFROM test-table\nSELECT a\nSELECT b\n        ",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-table is invalid. Please, consider quoting it with back-quotes as `test-table`.(line 2, pos 9)\n\n== SQL ==\n\nFROM test-table\n---------^^^\nSELECT a\nSELECT b\n        \n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-table is invalid and must be back quoted as: `test-table`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 2, pos 9)\n\n== SQL ==\n\nFROM test-table\n---------^^^\nSELECT a\nSELECT b\n        \n",
       "output": {
         "failure": "invalid argument: found something at 1:5 expected something else"
       }
     },
     {
       "input": "CREATE DATABASE IF NOT EXISTS my-database",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier my-database is invalid. Please, consider quoting it with back-quotes as `my-database`.(line 1, pos 32)\n\n== SQL ==\nCREATE DATABASE IF NOT EXISTS my-database\n--------------------------------^^^\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier my-database is invalid and must be back quoted as: `my-database`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 32)\n\n== SQL ==\nCREATE DATABASE IF NOT EXISTS my-database\n--------------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found NOT at 19:22 expected '.', 'IF', 'COMMENT', 'LOCATION', 'WITH', ';', or end of input"
       }
     },
     {
       "input": "CREATE FUNCTION test-func as org.test.func",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-func is invalid. Please, consider quoting it with back-quotes as `test-func`.(line 1, pos 20)\n\n== SQL ==\nCREATE FUNCTION test-func as org.test.func\n--------------------^^^\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-func is invalid and must be back quoted as: `test-func`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 20)\n\n== SQL ==\nCREATE FUNCTION test-func as org.test.func\n--------------------^^^\n",
       "output": {
         "failure": "invalid argument: found FUNCTION at 7:15 expected 'DATABASE', 'SCHEMA', 'OR', 'TEMP', 'TEMPORARY', 'EXTERNAL', 'TABLE', 'GLOBAL', or 'VIEW'"
       }
     },
     {
       "input": "DROP DATABASE my-database",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier my-database is invalid. Please, consider quoting it with back-quotes as `my-database`.(line 1, pos 16)\n\n== SQL ==\nDROP DATABASE my-database\n----------------^^^\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier my-database is invalid and must be back quoted as: `my-database`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 16)\n\n== SQL ==\nDROP DATABASE my-database\n----------------^^^\n",
       "output": {
         "failure": "invalid argument: found - at 16:17 expected '.', 'RESTRICT', 'CASCADE', ';', or end of input"
       }
     },
     {
       "input": "DROP FUNCTION test-func as org.test.func",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-func is invalid. Please, consider quoting it with back-quotes as `test-func`.(line 1, pos 18)\n\n== SQL ==\nDROP FUNCTION test-func as org.test.func\n------------------^^^\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-func is invalid and must be back quoted as: `test-func`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 18)\n\n== SQL ==\nDROP FUNCTION test-func as org.test.func\n------------------^^^\n",
       "output": {
         "failure": "invalid argument: found FUNCTION at 5:13 expected 'DATABASE', 'SCHEMA', 'TABLE', 'VIEW', 'TEMP', 'TEMPORARY', or 'FUNCTIONS'"
       }
     },
     {
-      "input": "SHOW COLUMNS IN t FROM test-db",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-db is invalid. Please, consider quoting it with back-quotes as `test-db`.(line 1, pos 27)\n\n== SQL ==\nSHOW COLUMNS IN t FROM test-db\n---------------------------^^^\n",
+      "input": "SET CATALOG test-test",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-test is invalid and must be back quoted as: `test-test`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 16)\n\n== SQL ==\nSET CATALOG test-test\n----------------^^^\n",
       "output": {
-        "failure": "invalid argument: found - at 27:28 expected '.', ';', or end of input"
+        "failure": "invalid argument: found - at 16:17 expected ';', or end of input"
       }
     },
     {
       "input": "SHOW FUNCTIONS LIKE test-func",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-func is invalid. Please, consider quoting it with back-quotes as `test-func`.(line 1, pos 24)\n\n== SQL ==\nSHOW FUNCTIONS LIKE test-func\n------------------------^^^\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-func is invalid and must be back quoted as: `test-func`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 24)\n\n== SQL ==\nSHOW FUNCTIONS LIKE test-func\n------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found LIKE at 15:19 expected ';', or end of input"
       }
     },
     {
       "input": "SHOW TABLE EXTENDED IN hyphen-db LIKE \"str\"",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier hyphen-db is invalid. Please, consider quoting it with back-quotes as `hyphen-db`.(line 1, pos 29)\n\n== SQL ==\nSHOW TABLE EXTENDED IN hyphen-db LIKE \"str\"\n-----------------------------^^^\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier hyphen-db is invalid and must be back quoted as: `hyphen-db`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 29)\n\n== SQL ==\nSHOW TABLE EXTENDED IN hyphen-db LIKE \"str\"\n-----------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found TABLE at 5:10 expected 'DATABASES', 'SCHEMAS', 'TABLES', 'CREATE', 'COLUMNS', 'VIEWS', or 'FUNCTIONS'"
       }
     },
     {
       "input": "SHOW TABLES IN hyphen-database",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier hyphen-database is invalid. Please, consider quoting it with back-quotes as `hyphen-database`.(line 1, pos 21)\n\n== SQL ==\nSHOW TABLES IN hyphen-database\n---------------------^^^\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier hyphen-database is invalid and must be back quoted as: `hyphen-database`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 21)\n\n== SQL ==\nSHOW TABLES IN hyphen-database\n---------------------^^^\n",
       "output": {
         "failure": "invalid argument: found - at 21:22 expected '.', 'LIKE', string, ';', or end of input"
       }
     },
     {
+      "input": "USE https://www.spa.rk/bucket/pa-th.json?=&#%",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier https://www.spa.rk/bucket/pa-th.json?=&#% is invalid and must be back quoted as: `https://www.spa.rk/bucket/pa-th.json?=&#%`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 4)\n\n== SQL ==\nUSE https://www.spa.rk/bucket/pa-th.json?=&#%\n----^^^\n",
+      "output": {
+        "failure": "invalid argument: found https at 4:9 expected 'DATABASE', or 'SCHEMA'"
+      }
+    },
+    {
       "input": "USE test-test",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier test-test is invalid. Please, consider quoting it with back-quotes as `test-test`.(line 1, pos 8)\n\n== SQL ==\nUSE test-test\n--------^^^\n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-test is invalid and must be back quoted as: `test-test`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 8)\n\n== SQL ==\nUSE test-test\n--------^^^\n",
       "output": {
         "failure": "invalid argument: found test at 4:8 expected 'DATABASE', or 'SCHEMA'"
+      }
+    },
+    {
+      "input": "USE Ɩpfel",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier Ɩpfel is invalid and must be back quoted as: `Ɩpfel`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 4)\n\n== SQL ==\nUSE Ɩpfel\n----^^^\n",
+      "output": {
+        "failure": "invalid argument: found Ɩpfel at 4:10 expected 'DATABASE', or 'SCHEMA'"
+      }
+    },
+    {
+      "input": "USE 表1",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier 表1 is invalid and must be back quoted as: `表1`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 4)\n\n== SQL ==\nUSE 表1\n----^^^\n",
+      "output": {
+        "failure": "invalid argument: found 表1 at 4:8 expected 'DATABASE', or 'SCHEMA'"
       }
     }
   ]
