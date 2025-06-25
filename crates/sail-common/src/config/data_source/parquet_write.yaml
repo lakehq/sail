@@ -22,10 +22,10 @@
 - key: writer_version
   alias:
     - writerVersion
-  default: '"1.0"'
+  default: "1.0"
   description: |
     (Writing) The Parquet writer version.
-    Valid values are `"1.0"` and `"2.0"`.
+    Valid values are `1.0` and `2.0`.
   supported: true
 
 - key: skip_arrow_metadata

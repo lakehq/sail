@@ -109,8 +109,7 @@ pub(crate) fn parse_bool(value: &str) -> PlanResult<bool> {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn parse_non_zero_usize(value: &str) -> PlanResult<Option<usize>> {
+pub(crate) fn parse_non_empty_usize(value: &str) -> PlanResult<Option<usize>> {
     let value: usize = value
         .parse()
         .map_err(|e| PlanError::internal(format!("Invalid usize value: {e}")))?;
@@ -119,4 +118,22 @@ pub(crate) fn parse_non_zero_usize(value: &str) -> PlanResult<Option<usize>> {
     } else {
         Ok(Some(value))
     }
+}
+
+pub(crate) fn parse_usize(value: &str) -> PlanResult<usize> {
+    value
+        .parse()
+        .map_err(|e| PlanError::internal(format!("Invalid usize value: {e}")))
+}
+
+pub(crate) fn parse_f64(value: &str) -> PlanResult<f64> {
+    value
+        .parse()
+        .map_err(|e| PlanError::internal(format!("Invalid f64 value: {e}")))
+}
+
+pub(crate) fn parse_u64(value: &str) -> PlanResult<u64> {
+    value
+        .parse()
+        .map_err(|e| PlanError::internal(format!("Invalid u64 value: {e}")))
 }
