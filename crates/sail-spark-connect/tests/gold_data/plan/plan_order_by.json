@@ -417,6 +417,87 @@
       }
     },
     {
+      "input": "select * from my_tvf(arg1 => table(1) order by col1)",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'order'. SQLSTATE: 42601 (line 1, pos 38)\n\n== SQL ==\nselect * from my_tvf(arg1 => table(1) order by col1)\n--------------------------------------^^^\n",
+      "output": {
+        "failure": "invalid argument: found order at 38:43 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(select col1, col2, col3 from v2) distribute by (col1, col2) order by (col2 asc, col3 desc))",
+      "output": {
+        "failure": "invalid argument: found distribute at 68:78 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(select col1, col2, col3 from v2) distribute by col1, col2 order by col2 asc, col3 desc)",
+      "exception": "\nThe table function call includes a table argument with an invalid partitioning/ordering specification: the PARTITION BY clause included multiple expressions without parentheses surrounding them; please add parentheses around these expressions and then retry the query again.\n== SQL (line 1, position 30) ==\nselect * from my_tvf(arg1 => table(select col1, col2, col3 from v2) distribute by col1, col2 order by col2 asc, col3 desc)\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found distribute at 68:78 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(select col1, col2, col3 from v2) partition by (col1, col2) order by (col2 asc, col3 desc))",
+      "output": {
+        "failure": "invalid argument: found partition at 68:77 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(select col1, col2, col3 from v2) partition by col1, col2 order by col2 asc, col3 desc)",
+      "exception": "\nThe table function call includes a table argument with an invalid partitioning/ordering specification: the PARTITION BY clause included multiple expressions without parentheses surrounding them; please add parentheses around these expressions and then retry the query again.\n== SQL (line 1, position 30) ==\nselect * from my_tvf(arg1 => table(select col1, col2, col3 from v2) partition by col1, col2 order by col2 asc, col3 desc)\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found partition at 68:77 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) distribute by (col1, col2) order by (col2 asc, col3 desc))",
+      "output": {
+        "failure": "invalid argument: found distribute at 39:49 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) distribute by (col1, col2) sort by (col2 asc, col3 desc))",
+      "output": {
+        "failure": "invalid argument: found distribute at 39:49 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) distribute by col1 order by col2 asc)",
+      "output": {
+        "failure": "invalid argument: found distribute at 39:49 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) distribute by col1 sort by col2 asc)",
+      "output": {
+        "failure": "invalid argument: found distribute at 39:49 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) partition by (col1, col2) order by (col2 asc, col3 desc))",
+      "output": {
+        "failure": "invalid argument: found partition at 39:48 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) partition by (col1, col2) sort by (col2 asc, col3 desc))",
+      "output": {
+        "failure": "invalid argument: found partition at 39:48 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) partition by col1 order by col2 asc)",
+      "output": {
+        "failure": "invalid argument: found partition at 39:48 expected ',', or ')'"
+      }
+    },
+    {
+      "input": "select * from my_tvf(arg1 => table(v1) partition by col1 sort by col2 asc)",
+      "output": {
+        "failure": "invalid argument: found partition at 39:48 expected ',', or ')'"
+      }
+    },
+    {
       "input": "select * from t\nwindow w1 as (partition by a, b order by c rows between 1 preceding and 1 following),\n       w2 as w1,\n       w3 as w1",
       "output": {
         "success": {
@@ -459,21 +540,21 @@
     },
     {
       "input": "select * from t order by a cluster by a",
-      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t order by a cluster by a\n----------------^^^\n",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t order by a cluster by a\n                ^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "not implemented: CLUSTER BY"
       }
     },
     {
       "input": "select * from t order by a distribute by a",
-      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t order by a distribute by a\n----------------^^^\n",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t order by a distribute by a\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "not implemented: DISTRIBUTE BY"
       }
     },
     {
       "input": "select * from t order by a sort by a",
-      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 1, pos 16)\n\n== SQL ==\nselect * from t order by a sort by a\n----------------^^^\n",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY. SQLSTATE: 0A000\n== SQL (line 1, position 17) ==\nselect * from t order by a sort by a\n                ^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "query": {

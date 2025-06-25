@@ -179,6 +179,18 @@
       }
     },
     {
+      "input": "REPLACE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nCLUSTER BY (a, b)\n",
+      "output": {
+        "failure": "invalid argument: found CLUSTER at 67:74 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab (a STRUCT<b INT, c STRING>, ts TIMESTAMP) USING parquet\nCLUSTER BY (a.b, ts)\n",
+      "output": {
+        "failure": "invalid argument: found CLUSTER at 77:84 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS INPUTFORMAT 'inFormat' OUTPUTFORMAT 'outFormat'\n        ",
       "output": {
         "success": {
@@ -277,7 +289,7 @@
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','",
-      "exception": "\nOperation not allowed: ROW FORMAT DELIMITED is only compatible with 'textfile', not 'otherformat'.(line 2, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT DELIMITED\nFIELDS TERMINATED BY ','\n",
+      "exception": "\nOperation not allowed: ROW FORMAT DELIMITED is only compatible with 'textfile', not 'otherformat'.\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPARTITIONED BY (part string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nSTORED AS otherFormat\n^^^^^^^^^^^^^^^^^^^^^\nROW FORMAT DELIMITED\n^^^^^^^^^^^^^^^^^^^^\nFIELDS TERMINATED BY ','\n^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -332,7 +344,7 @@
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')",
-      "exception": "\nOperation not allowed: ROW FORMAT SERDE is incompatible with format 'otherformat', which also specifies a serde.(line 2, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint)\nPARTITIONED BY (part string)\n^^^\nSTORED AS otherFormat\nROW FORMAT SERDE 'customSerde'\nWITH SERDEPROPERTIES ('prop'='value')\n",
+      "exception": "\nOperation not allowed: ROW FORMAT SERDE is incompatible with format 'otherformat', which also specifies a serde.\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPARTITIONED BY (part string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nSTORED AS otherFormat\n^^^^^^^^^^^^^^^^^^^^^\nROW FORMAT SERDE 'customSerde'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nWITH SERDEPROPERTIES ('prop'='value')\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -693,7 +705,7 @@
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)",
-      "exception": "\nOperation not allowed: CREATE TABLE ... SKEWED BY.(line 1, pos 33)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n---------------------------------^^^\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: CREATE TABLE ... SKEWED BY is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found SKEWED at 33:39 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
@@ -745,14 +757,14 @@
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'",
-      "exception": "\nOperation not allowed: STORED BY.(line 2, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint, p1 string)\nSTORED BY 'handler'\n^^^\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: STORED BY is not valid. SQLSTATE: 42601\n== SQL (line 2, position 1) ==\nSTORED BY 'handler'\n^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found BY at 51:53 expected 'AS'"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)",
-      "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: p1\nColumns: p2 string.(line 1, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)\n^^^\n",
+      "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: p1\nColumns: p2 string.\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p1, p2 string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -805,14 +817,14 @@
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))",
-      "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: truncate(p1, 16)\nColumns: p2 string.(line 1, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))\n^^^\n",
+      "exception": "\nOperation not allowed: PARTITION BY: Cannot mix partition expressions and partition columns:\nExpressions: truncate(p1, 16)\nColumns: p2 string.\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint, p1 string) PARTITIONED BY (p2 string, truncate(p1, 16))\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found ( at 79:80 expected ':', data type, ',', or ')'"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','",
-      "exception": "\nOperation not allowed: REPLACE TABLE ... USING ... ROW FORMAT DELIMITED.(line 1, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: REPLACE TABLE ... USING ... ROW FORMAT DELIMITED is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint, part string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUSING parquet\n^^^^^^^^^^^^^\nROW FORMAT DELIMITED FIELDS TERMINATED BY ','\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -875,7 +887,7 @@
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, part string)\nUSING parquet\nROW FORMAT SERDE 'customSerde'",
-      "exception": "\nOperation not allowed: REPLACE TABLE ... USING ... ROW FORMAT SERDE customSerde.(line 1, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nROW FORMAT SERDE 'customSerde'\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: REPLACE TABLE ... USING ... ROW FORMAT SERDE CUSTOMSERDE is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint, part string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUSING parquet\n^^^^^^^^^^^^^\nROW FORMAT SERDE 'customSerde'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {
@@ -934,7 +946,7 @@
     },
     {
       "input": "REPLACE TABLE my_tab (id bigint, part string)\nUSING parquet\nSTORED AS parquet",
-      "exception": "\nOperation not allowed: REPLACE TABLE ... USING ... STORED AS parquet .(line 1, pos 0)\n\n== SQL ==\nREPLACE TABLE my_tab (id bigint, part string)\n^^^\nUSING parquet\nSTORED AS parquet\n",
+      "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: REPLACE TABLE ... USING ... STORED AS PARQUET  is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint, part string)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUSING parquet\n^^^^^^^^^^^^^\nSTORED AS parquet\n^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: conflicting USING and STORED AS clauses"
       }
@@ -1088,7 +1100,7 @@
       }
     },
     {
-      "input": "REPLACE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT \"abc\") USING parquet",
+      "input": "REPLACE TABLE my_tab(a INT, b STRING NOT NULL DEFAULT 'abc') USING parquet",
       "output": {
         "success": {
           "command": {
@@ -1152,66 +1164,87 @@
       }
     },
     {
+      "input": "REPLACE TABLE my_tab(a INT, b STRING) CLUSTER BY (a) CLUSTER BY (a)",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: CLUSTER BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) CLUSTER BY (a) CLUSTER BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found CLUSTER at 38:45 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) CLUSTERED BY(b) INTO 256 BUCKETS CLUSTERED BY(b) INTO 256 BUCKETS",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: CLUSTERED BY. Please, remove one of them.(line 1, pos 38)\n\n== SQL ==\nREPLACE TABLE my_tab(a INT, b STRING) CLUSTERED BY(b) INTO 256 BUCKETS CLUSTERED BY(b) INTO 256 BUCKETS\n--------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: CLUSTERED BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) CLUSTERED BY(b) INTO 256 BUCKETS CLUSTERED BY(b) INTO 256 BUCKETS\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate CLUSTERED BY clause"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) COMMENT 'a table' COMMENT 'a table'",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: COMMENT. Please, remove one of them.(line 1, pos 38)\n\n== SQL ==\nREPLACE TABLE my_tab(a INT, b STRING) COMMENT 'a table' COMMENT 'a table'\n--------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: COMMENT. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) COMMENT 'a table' COMMENT 'a table'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate COMMENT clause"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: LOCATION. Please, remove one of them.(line 1, pos 38)\n\n== SQL ==\nREPLACE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'\n--------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: LOCATION. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) LOCATION '/tmp/file' LOCATION '/tmp/file'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate LOCATION clause"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them.(line 1, pos 38)\n\n== SQL ==\nREPLACE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)\n--------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) PARTITIONED BY (b) PARTITIONED BY (b)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate PARTITIONED BY clause"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) PARTITIONED BY (c int) PARTITIONED BY (c int)",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them.(line 1, pos 38)\n\n== SQL ==\nREPLACE TABLE my_tab(a INT, b STRING) PARTITIONED BY (c int) PARTITIONED BY (c int)\n--------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: PARTITIONED BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) PARTITIONED BY (c int) PARTITIONED BY (c int)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate PARTITIONED BY clause"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: ROW FORMAT. Please, remove one of them.(line 1, pos 38)\n\n== SQL ==\nREPLACE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'\n--------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: ROW FORMAT. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) ROW FORMAT SERDE 'serde' ROW FORMAT SERDE 'serde'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate ROW FORMAT clause"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them.(line 1, pos 38)\n\n== SQL ==\nREPLACE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'\n--------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out' STORED AS INPUTFORMAT 'in' OUTPUTFORMAT 'out'\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate STORED AS clause"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them.(line 1, pos 38)\n\n== SQL ==\nREPLACE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet\n--------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: STORED AS/BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) STORED AS parquet STORED AS parquet\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate STORED AS clause"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) TBLPROPERTIES('test' = 'test2') TBLPROPERTIES('test' = 'test2')",
-      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: TBLPROPERTIES. Please, remove one of them.(line 1, pos 38)\n\n== SQL ==\nREPLACE TABLE my_tab(a INT, b STRING) TBLPROPERTIES('test' = 'test2') TBLPROPERTIES('test' = 'test2')\n--------------------------------------^^^\n",
+      "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: TBLPROPERTIES. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) TBLPROPERTIES('test' = 'test2') TBLPROPERTIES('test' = 'test2')\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: duplicate TBLPROPERTIES clause"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTER BY (a) PARTITIONED BY (a)",
+      "exception": "\n[SPECIFY_CLUSTER_BY_WITH_PARTITIONED_BY_IS_NOT_ALLOWED] Cannot specify both CLUSTER BY and PARTITIONED BY. SQLSTATE: 42908\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTER BY (a) PARTITIONED BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found CLUSTER at 52:59 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS CLUSTER BY (a)",
+      "exception": "\n[SPECIFY_CLUSTER_BY_WITH_BUCKETING_IS_NOT_ALLOWED] Cannot specify both CLUSTER BY and CLUSTERED BY INTO BUCKETS. SQLSTATE: 42908\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS CLUSTER BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found CLUSTER at 84:91 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
@@ -1382,6 +1415,240 @@
             "planId": null
           }
         }
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 51:59 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 51:59 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 51:59 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 51:59 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 51:59 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 51:59 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 51:59 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY , val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 51:59 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 41:43 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 41:43 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 41:43 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 41:43 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 41:43 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 41:43 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 41:43 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY , val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 41:43 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 48:56 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 48:56 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 48:56 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 48:56 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 48:56 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 48:56 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 48:56 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY , val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found IDENTITY at 48:56 expected '('"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 38:40 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 38:40 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 38:40 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 38:40 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH -2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 38:40 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 38:40 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH 2), val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 38:40 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY , val INT) USING parquet",
+      "output": {
+        "failure": "invalid argument: found BY at 38:40 expected 'ALWAYS'"
+      }
+    },
+    {
+      "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION sr",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION sr_ci_ai",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode_ci",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode_ci_rtrim",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION utf8_binary",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+      }
+    },
+    {
+      "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION utf8_lcase",
+      "output": {
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     }
   ]

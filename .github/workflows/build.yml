@@ -88,6 +88,11 @@ jobs:
     name: Spark Tests
     if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/spark-tests.yml
+    strategy:
+      matrix:
+        spark-version: ["3.5.5", "4.0.0"]
+    with:
+      spark_version: ${{ matrix.spark-version }}
     needs:
       - setup
       - build

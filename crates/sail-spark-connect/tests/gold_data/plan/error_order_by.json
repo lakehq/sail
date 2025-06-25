@@ -2,14 +2,14 @@
   "tests": [
     {
       "input": "\nSELECT * FROM tab\nWINDOW hyphen-window AS\n  (PARTITION BY a, b ORDER BY c rows BETWEEN 1 PRECEDING AND 1 FOLLOWING)\n        ",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier hyphen-window is invalid. Please, consider quoting it with back-quotes as `hyphen-window`.(line 3, pos 13)\n\n== SQL ==\n\nSELECT * FROM tab\nWINDOW hyphen-window AS\n-------------^^^\n  (PARTITION BY a, b ORDER BY c rows BETWEEN 1 PRECEDING AND 1 FOLLOWING)\n        \n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier hyphen-window is invalid and must be back quoted as: `hyphen-window`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 3, pos 13)\n\n== SQL ==\n\nSELECT * FROM tab\nWINDOW hyphen-window AS\n-------------^^^\n  (PARTITION BY a, b ORDER BY c rows BETWEEN 1 PRECEDING AND 1 FOLLOWING)\n        \n",
       "output": {
         "failure": "invalid argument: found - at 32:33 expected 'AS'"
       }
     },
     {
       "input": "\nSELECT a, b\nFROM grammar-breaker\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n        ",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier grammar-breaker is invalid. Please, consider quoting it with back-quotes as `grammar-breaker`.(line 3, pos 12)\n\n== SQL ==\n\nSELECT a, b\nFROM grammar-breaker\n------------^^^\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n        \n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier grammar-breaker is invalid and must be back quoted as: `grammar-breaker`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 3, pos 12)\n\n== SQL ==\n\nSELECT a, b\nFROM grammar-breaker\n------------^^^\nWHERE a-b > 10\nGROUP BY fake-breaker\nORDER BY c\n        \n",
       "output": {
         "failure": "invalid argument: found - at 25:26 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
@@ -183,14 +183,14 @@
     },
     {
       "input": "\nSELECT product, category, dense_rank()\nOVER (PARTITION BY category ORDER BY revenue DESC) as hyphen-rank\nFROM productRevenue\n        ",
-      "exception": "\n[INVALID_IDENTIFIER] The identifier hyphen-rank is invalid. Please, consider quoting it with back-quotes as `hyphen-rank`.(line 3, pos 60)\n\n== SQL ==\n\nSELECT product, category, dense_rank()\nOVER (PARTITION BY category ORDER BY revenue DESC) as hyphen-rank\n------------------------------------------------------------^^^\nFROM productRevenue\n        \n",
+      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier hyphen-rank is invalid and must be back quoted as: `hyphen-rank`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 3, pos 60)\n\n== SQL ==\n\nSELECT product, category, dense_rank()\nOVER (PARTITION BY category ORDER BY revenue DESC) as hyphen-rank\n------------------------------------------------------------^^^\nFROM productRevenue\n        \n",
       "output": {
         "failure": "invalid argument: found - at 100:101 expected ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "select *\nfrom r\norder by q\ncluster by q",
-      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY.(line 3, pos 0)\n\n== SQL ==\nselect *\nfrom r\norder by q\n^^^\ncluster by q\n",
+      "exception": "\n[UNSUPPORTED_FEATURE.COMBINATION_QUERY_RESULT_CLAUSES] The feature is not supported: Combination of ORDER BY/SORT BY/DISTRIBUTE BY/CLUSTER BY. SQLSTATE: 0A000\n== SQL (line 3, position 1) ==\norder by q\n^^^^^^^^^^\ncluster by q\n^^^^^^^^^^^^\n",
       "output": {
         "failure": "not implemented: CLUSTER BY"
       }

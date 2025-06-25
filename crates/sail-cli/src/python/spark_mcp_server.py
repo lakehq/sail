@@ -2,8 +2,8 @@ import json
 import logging
 import os
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import uvicorn.server
 from mcp.server.fastmcp import Context, FastMCP
