@@ -62,7 +62,7 @@
     },
     {
       "input": "-1.8E308D",
-      "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal -1.8E308 is outside the valid range for double with minimum value of -1.7976931348623157E+308 and maximum value of 1.7976931348623157E+308. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n-1.8E308D\n^^^\n",
+      "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal -1.8E308 is outside the valid range for double with minimum value of -1.7976931348623157E+308 and maximum value of 1.7976931348623157E+308. Please adjust the value accordingly. SQLSTATE: 22003\n== SQL (line 1, position 1) ==\n-1.8E308D\n^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: out-of-range double: 1.8E308"
       }
@@ -143,7 +143,7 @@
     },
     {
       "input": ".e3",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'.(line 1, pos 0)\n\n== SQL ==\n.e3\n^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'. SQLSTATE: 42601 (line 1, pos 0)\n\n== SQL ==\n.e3\n^^^\n",
       "output": {
         "failure": "invalid argument: found something at 0:1 expected something else"
       }
@@ -164,7 +164,7 @@
     },
     {
       "input": "1.20E-38BD",
-      "exception": "\n[DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION] Decimal precision 40 exceeds max precision 38..(line 1, pos 0)\n\n== SQL ==\n1.20E-38BD\n^^^\n",
+      "exception": "\n[DECIMAL_PRECISION_EXCEEDS_MAX_PRECISION] Decimal precision 40 exceeds max precision 38. SQLSTATE: 22003\n== SQL (line 1, position 1) ==\n1.20E-38BD\n^^^^^^^^^^\n",
       "output": {
         "success": {
           "literal": {
@@ -193,7 +193,7 @@
     },
     {
       "input": "1.8E308D",
-      "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1.8E308 is outside the valid range for double with minimum value of -1.7976931348623157E+308 and maximum value of 1.7976931348623157E+308. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n1.8E308D\n^^^\n",
+      "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1.8E308 is outside the valid range for double with minimum value of -1.7976931348623157E+308 and maximum value of 1.7976931348623157E+308. Please adjust the value accordingly. SQLSTATE: 22003\n== SQL (line 1, position 1) ==\n1.8E308D\n^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: out-of-range double: 1.8E308"
       }
@@ -212,7 +212,7 @@
     },
     {
       "input": "1000Y",
-      "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1000 is outside the valid range for tinyint with minimum value of -128 and maximum value of 127. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n1000Y\n^^^\n",
+      "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 1000 is outside the valid range for tinyint with minimum value of -128 and maximum value of 127. Please adjust the value accordingly. SQLSTATE: 22003\n== SQL (line 1, position 1) ==\n1000Y\n^^^^^\n",
       "output": {
         "failure": "invalid argument: tinyint: 1000"
       }
@@ -381,7 +381,7 @@
     },
     {
       "input": "40000S",
-      "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 40000 is outside the valid range for smallint with minimum value of -32768 and maximum value of 32767. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n40000S\n^^^\n",
+      "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 40000 is outside the valid range for smallint with minimum value of -32768 and maximum value of 32767. Please adjust the value accordingly. SQLSTATE: 22003\n== SQL (line 1, position 1) ==\n40000S\n^^^^^^\n",
       "output": {
         "failure": "invalid argument: smallint: 40000"
       }
@@ -440,7 +440,7 @@
     },
     {
       "input": "78732472347982492793712334L",
-      "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 78732472347982492793712334 is outside the valid range for bigint with minimum value of -9223372036854775808 and maximum value of 9223372036854775807. Please adjust the value accordingly.(line 1, pos 0)\n\n== SQL ==\n78732472347982492793712334L\n^^^\n",
+      "exception": "\n[INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 78732472347982492793712334 is outside the valid range for bigint with minimum value of -9223372036854775808 and maximum value of 9223372036854775807. Please adjust the value accordingly. SQLSTATE: 22003\n== SQL (line 1, position 1) ==\n78732472347982492793712334L\n^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: bigint: 78732472347982492793712334"
       }

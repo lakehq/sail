@@ -1101,6 +1101,28 @@
     },
     {
       "input": {
+        "query": "SELECT dayname(DATE('2008-02-20'));",
+        "result": [
+          "Wed"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "dayname(2008-02-20)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: dayname"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT dayofmonth('2009-07-30');",
         "result": [
           "30"
@@ -1484,7 +1506,7 @@
           "fields": [
             {
               "name": "make_date(2013, 7, 15)",
-              "nullable": true,
+              "nullable": false,
               "type": "date",
               "metadata": {}
             }
@@ -1594,7 +1616,7 @@
           "fields": [
             {
               "name": "make_interval(0, 1, 0, 1, 0, 0, 100.000001)",
-              "nullable": true,
+              "nullable": false,
               "type": "interval",
               "metadata": {}
             }
@@ -1616,7 +1638,7 @@
           "fields": [
             {
               "name": "make_interval(100, 11, 1, 1, 12, 30, 1.001001)",
-              "nullable": true,
+              "nullable": false,
               "type": "interval",
               "metadata": {}
             }
@@ -1660,7 +1682,7 @@
           "fields": [
             {
               "name": "make_timestamp(2014, 12, 28, 6, 30, 45.887)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp",
               "metadata": {}
             }
@@ -1682,7 +1704,7 @@
           "fields": [
             {
               "name": "make_timestamp(2014, 12, 28, 6, 30, 45.887, CET)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp",
               "metadata": {}
             }
@@ -1704,7 +1726,7 @@
           "fields": [
             {
               "name": "make_timestamp(2019, 6, 30, 23, 59, 1)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp",
               "metadata": {}
             }
@@ -1726,7 +1748,7 @@
           "fields": [
             {
               "name": "make_timestamp(2019, 6, 30, 23, 59, 60)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp",
               "metadata": {}
             }
@@ -1770,7 +1792,7 @@
           "fields": [
             {
               "name": "make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp",
               "metadata": {}
             }
@@ -1792,7 +1814,7 @@
           "fields": [
             {
               "name": "make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, CET)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp",
               "metadata": {}
             }
@@ -1814,7 +1836,7 @@
           "fields": [
             {
               "name": "make_timestamp_ltz(2019, 6, 30, 23, 59, 60)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp",
               "metadata": {}
             }
@@ -1858,7 +1880,7 @@
           "fields": [
             {
               "name": "make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp_ntz",
               "metadata": {}
             }
@@ -1880,7 +1902,7 @@
           "fields": [
             {
               "name": "make_timestamp_ntz(2019, 6, 30, 23, 59, 60)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp_ntz",
               "metadata": {}
             }
@@ -2043,6 +2065,28 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT monthname('2008-02-20');",
+        "result": [
+          "Feb"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "monthname(2008-02-20)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: monthname"
       }
     },
     {
@@ -2298,7 +2342,7 @@
           "fields": [
             {
               "name": "to_date(2016-12-31, yyyy-MM-dd)",
-              "nullable": true,
+              "nullable": false,
               "type": "date",
               "metadata": {}
             }
@@ -2342,7 +2386,7 @@
           "fields": [
             {
               "name": "to_timestamp(2016-12-31, yyyy-MM-dd)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp",
               "metadata": {}
             }
@@ -2386,7 +2430,7 @@
           "fields": [
             {
               "name": "to_timestamp_ltz(2016-12-31, yyyy-MM-dd)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp",
               "metadata": {}
             }
@@ -2430,7 +2474,7 @@
           "fields": [
             {
               "name": "to_timestamp_ntz(2016-12-31, yyyy-MM-dd)",
-              "nullable": true,
+              "nullable": false,
               "type": "timestamp_ntz",
               "metadata": {}
             }
@@ -2452,7 +2496,7 @@
           "fields": [
             {
               "name": "to_unix_timestamp(2016-04-08, yyyy-MM-dd)",
-              "nullable": true,
+              "nullable": false,
               "type": "long",
               "metadata": {}
             }
@@ -2571,6 +2615,424 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_interval(0, 1, 0, 1, 0, 0, 100.000001);",
+        "result": [
+          "1 months 1 days 1 minutes 40.000001 seconds"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_interval(0, 1, 0, 1, 0, 0, 100.000001)",
+              "nullable": true,
+              "type": "interval",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_interval"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_interval(100, 11, 1, 1, 12, 30, 01.001001);",
+        "result": [
+          "100 years 11 months 8 days 12 hours 30 minutes 1.001001 seconds"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_interval(100, 11, 1, 1, 12, 30, 1.001001)",
+              "nullable": true,
+              "type": "interval",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_interval"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_interval(100, null, 3);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_interval(100, NULL, 3, 0, 0, 0, 0.000000)",
+              "nullable": true,
+              "type": "interval",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_interval"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_interval(2147483647);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_interval(2147483647, 0, 0, 0, 0, 0, 0.000000)",
+              "nullable": true,
+              "type": "interval",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_interval"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp(2014, 12, 28, 6, 30, 45.887);",
+        "result": [
+          "2014-12-28 06:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp(2014, 12, 28, 6, 30, 45.887)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp(2014, 12, 28, 6, 30, 45.887, 'CET');",
+        "result": [
+          "2014-12-27 21:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp(2014, 12, 28, 6, 30, 45.887)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp(2019, 6, 30, 23, 59, 1);",
+        "result": [
+          "2019-06-30 23:59:01"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp(2019, 6, 30, 23, 59, 1)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp(2019, 6, 30, 23, 59, 60);",
+        "result": [
+          "2019-07-01 00:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp(2019, 6, 30, 23, 59, 60)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp(2024, 13, 22, 15, 30, 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp(2024, 13, 22, 15, 30, 0)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp(null, 7, 22, 15, 30, 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp(NULL, 7, 22, 15, 30, 0)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887);",
+        "result": [
+          "2014-12-28 06:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp_ltz"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, 'CET');",
+        "result": [
+          "2014-12-27 21:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, CET)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp_ltz"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp_ltz(2019, 6, 30, 23, 59, 60);",
+        "result": [
+          "2019-07-01 00:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp_ltz(2019, 6, 30, 23, 59, 60)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp_ltz"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp_ltz(2024, 13, 22, 15, 30, 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp_ltz(2024, 13, 22, 15, 30, 0)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp_ltz"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp_ltz(null, 7, 22, 15, 30, 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp_ltz(NULL, 7, 22, 15, 30, 0)",
+              "nullable": true,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp_ltz"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887);",
+        "result": [
+          "2014-12-28 06:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887)",
+              "nullable": true,
+              "type": "timestamp_ntz",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp_ntz"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp_ntz(2019, 6, 30, 23, 59, 60);",
+        "result": [
+          "2019-07-01 00:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp_ntz(2019, 6, 30, 23, 59, 60)",
+              "nullable": true,
+              "type": "timestamp_ntz",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp_ntz"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp_ntz(2024, 13, 22, 15, 30, 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp_ntz(2024, 13, 22, 15, 30, 0)",
+              "nullable": true,
+              "type": "timestamp_ntz",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp_ntz"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp_ntz(null, 7, 22, 15, 30, 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp_ntz(NULL, 7, 22, 15, 30, 0)",
+              "nullable": true,
+              "type": "timestamp_ntz",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_make_timestamp_ntz"
       }
     },
     {
@@ -2738,7 +3200,7 @@
           "fields": [
             {
               "name": "unix_timestamp(2016-04-08, yyyy-MM-dd)",
-              "nullable": true,
+              "nullable": false,
               "type": "long",
               "metadata": {}
             }
@@ -2760,7 +3222,7 @@
           "fields": [
             {
               "name": "unix_timestamp(current_timestamp(), yyyy-MM-dd HH:mm:ss)",
-              "nullable": true,
+              "nullable": false,
               "type": "long",
               "metadata": {}
             }

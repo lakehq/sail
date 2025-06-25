@@ -32,6 +32,7 @@ pub enum JsonDataType {
     TimestampNtz,
     #[serde(rename = "interval")]
     CalendarInterval,
+    Variant,
     #[serde(untagged, with = "serde_char")]
     Char {
         length: i32,
@@ -448,6 +449,9 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
                 end_field: end.map(|f| f as i32),
                 type_variation_reference: 0,
             })),
+        },
+        JsonDataType::Variant => sc::DataType {
+            kind: Some(dt::Kind::Variant(dt::Variant::default())),
         },
         JsonDataType::Array {
             r#type: _,

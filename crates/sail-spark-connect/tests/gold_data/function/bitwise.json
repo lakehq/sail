@@ -2,6 +2,28 @@
   "tests": [
     {
       "input": {
+        "query": "SELECT 2 << 1;",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(2 << 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: <<"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT 3 & 5;",
         "result": [
           "1"
@@ -64,6 +86,50 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 4 >> 1;",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(4 >> 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: >>"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT 4 >>> 1;",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(4 >>> 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: >>>"
       }
     },
     {
@@ -174,6 +240,28 @@
       },
       "output": {
         "failure": "not implemented: function: getbit"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT shiftleft(2, 1);",
+        "result": [
+          "4"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "shiftleft(2, 1)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
       }
     },
     {
