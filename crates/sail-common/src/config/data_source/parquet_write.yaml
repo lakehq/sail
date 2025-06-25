@@ -1,20 +1,27 @@
 # References:
 #   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-parquet.html#data-source-option
 #   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L744-L750
+#   - [3] TODO: Spark global options: https://spark.apache.org/docs/4.0.0/sql-data-sources-parquet.html#configuration
 
 - key: data_page_size_limit
+  alias:
+    - dataPageSizeLimit
   default: "1048576"
   description: |
     (Writing) The best-effort maximum size of a data page in bytes.
   supported: true
 
 - key: write_batch_size
+  alias:
+    - writeBatchSize
   default: "1024"
   description: |
     (Writing) The Parquet writer batch size in bytes.
   supported: true
 
 - key: writer_version
+  alias:
+    - writerVersion
   default: '"1.0"'
   description: |
     (Writing) The Parquet writer version.
@@ -22,6 +29,8 @@
   supported: true
 
 - key: skip_arrow_metadata
+  alias:
+    - skipArrowMetadata
   default: "false"
   description: |
     (Writing) Whether to skip encoding the embedded arrow metadata when writing Parquet files.
@@ -40,18 +49,24 @@
   supported: true
 
 - key: dictionary_enabled
+  alias:
+    - dictionaryEnabled
   default: "true"
   description: |
     (Writing) Whether to enable dictionary encoding for the Parquet writer.
   supported: true
 
 - key: dictionary_page_size_limit
+  alias:
+    - dictionaryPageSizeLimit
   default: "1048576"
   description: |
     (Writing) The best-effort maximum dictionary page size in bytes for the Parquet writer.
   supported: true
 
 - key: statistics_enabled
+  alias:
+    - statisticsEnabled
   default: "page"
   description: |
     (Writing) Whether statistics are enabled for any column for the Parquet writer.
@@ -60,6 +75,8 @@
   supported: true
 
 - key: max_row_group_size
+  alias:
+    - maxRowGroupSize
   default: "1048576"
   description: |
     (Writing) The target maximum number of rows in each row group for the Parquet writer.
@@ -68,12 +85,16 @@
   supported: true
 
 - key: column_index_truncate_length
+  alias:
+    - columnIndexTruncateLength
   default: "64"
   description: |
     (Writing) The column index truncate length for the Parquet writer.
   supported: true
 
 - key: statistics_truncate_length
+  alias:
+    - statisticsTruncateLength
   default: "0"
   description: |
     (Writing) The statistics truncate length for the Parquet writer.
@@ -81,6 +102,8 @@
   supported: true
 
 - key: data_page_row_count_limit
+  alias:
+    - dataPageRowCountLimit
   default: "20000"
   description: |
     (Writing) The best-effort maximum number of rows in data page for the Parquet writer.
@@ -99,24 +122,32 @@
   supported: true
 
 - key: bloom_filter_on_write
+  alias:
+    - bloomFilterOnWrite
   default: "false"
   description: |
     (Writing) Whether to write bloom filters for all columns when writing Parquet files.
   supported: true
 
 - key: bloom_filter_fpp
+  alias:
+    - bloomFilterFpp
   default: "0.05"
   description: |
     (Writing) The false positive probability for bloom filters when writing Parquet files.
   supported: true
 
 - key: bloom_filter_ndv
+  alias:
+    - bloomFilterNdv
   default: "1000000"
   description: |
     (Writing) The number of distinct values for bloom filters when writing Parquet files.
   supported: true
 
 - key: allow_single_file_parallelism
+  alias:
+    - allowSingleFileParallelism
   default: "true"
   description: |
     (Writing) Whether to parallelize writing for each single Parquet file.
@@ -124,6 +155,8 @@
   supported: true
 
 - key: maximum_parallel_row_group_writers
+  alias:
+    - maximumParallelRowGroupWriters
   default: "2"
   description: |
     (Writing) The maximum number of row group writers to use for the Parquet writer.
@@ -132,6 +165,8 @@
   supported: true
 
 - key: maximum_buffered_record_batches_per_stream
+  alias:
+    - maximumBufferedRecordBatchesPerStream
   default: "32"
   description: |
     (Writing) The maximum number of buffered record batches per stream for the Parquet writer.

@@ -54,6 +54,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use crate::data_source::csv::{CsvReadOptions, CsvWriteOptions};
 use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
 use crate::data_source::load_options;
+use crate::data_source::parquet::ParquetReadOptions;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
@@ -848,22 +849,18 @@ impl PlanResolver<'_> {
         let options: ListingOptions = match format.to_lowercase().as_str() {
             "json" => {
                 let json_read_options = load_options::<JsonReadOptions>(options.clone())?;
-                Self::resolve_json_read_options(json_read_options)?
+                Self::resolve_json_read_options(json_read_options, self.ctx.copied_table_options())?
             }
             "csv" => {
                 let csv_read_options = load_options::<CsvReadOptions>(options.clone())?;
-                Self::resolve_csv_read_options(csv_read_options)?
+                Self::resolve_csv_read_options(csv_read_options, self.ctx.copied_table_options())?
             }
             "parquet" => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(
-                        "Parquet data source read options are not yet supported.",
-                    ));
-                }
-                ListingOptions::new(
-                    ParquetFormatFactory::new().create(&self.ctx.state(), &options)?,
-                )
-                .with_file_extension(".parquet")
+                let parquet_read_options = load_options::<ParquetReadOptions>(options.clone())?;
+                Self::resolve_parquet_read_options(
+                    parquet_read_options,
+                    self.ctx.copied_table_options(),
+                )?
             }
             "arrow" => {
                 if !options.is_empty() {
@@ -889,7 +886,8 @@ impl PlanResolver<'_> {
                     other
                 )))
             }
-        };
+        }
+        .with_session_config_options(&self.ctx.copied_config());
         let schema = self
             .resolve_listing_schema(&urls, &options, schema, state)
             .await?;
@@ -2855,6 +2853,7 @@ impl PlanResolver<'_> {
                     "json" => {
                         let (json_format, json_options_vec) = Self::resolve_json_write_options(
                             load_options::<JsonWriteOptions>(options)?,
+                            self.ctx.copied_table_options(),
                         )?;
                         (
                             Arc::new(JsonFormatFactory::new_with_options(
@@ -2868,6 +2867,7 @@ impl PlanResolver<'_> {
                     "csv" => {
                         let (csv_format, csv_options_vec) = Self::resolve_csv_write_options(
                             load_options::<CsvWriteOptions>(options)?,
+                            self.ctx.copied_table_options(),
                         )?;
                         (
                             Arc::new(CsvFormatFactory::new_with_options(
@@ -3059,6 +3059,7 @@ impl PlanResolver<'_> {
                 "json" => {
                     let (json_format, json_options_vec) = Self::resolve_json_write_options(
                         load_options::<JsonWriteOptions>(options_map)?,
+                        self.ctx.copied_table_options(),
                     )?;
                     (
                         Arc::new(JsonFormatFactory::new_with_options(
@@ -3072,6 +3073,7 @@ impl PlanResolver<'_> {
                 "csv" => {
                     let (csv_format, csv_options_vec) = Self::resolve_csv_write_options(
                         load_options::<CsvWriteOptions>(options_map)?,
+                        self.ctx.copied_table_options(),
                     )?;
                     (
                         Arc::new(CsvFormatFactory::new_with_options(
@@ -3130,7 +3132,7 @@ impl PlanResolver<'_> {
             if_not_exists,
             or_replace,
             unbounded,
-            options, // CHECK HERE: DO NOT MERGE IF THIS COMMENT IS HERE!!!
+            options,
             definition,
             copy_to_plan,
         };

@@ -1,14 +1,17 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
-use datafusion_common::config::ConfigField;
+use datafusion_common::config::{ConfigField, TableOptions};
 
 use crate::data_source::csv::{CsvReadOptions, CsvWriteOptions};
 use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
+use crate::data_source::parquet::ParquetReadOptions;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
@@ -26,8 +29,11 @@ impl PlanResolver<'_> {
     /// Ref: [`datafusion::datasource::file_format::options::NdJsonReadOptions`]
     pub(crate) fn resolve_json_read_options(
         options: JsonReadOptions,
+        mut table_options: TableOptions,
     ) -> PlanResult<ListingOptions> {
+        table_options.set_config_format(datafusion_common::config::ConfigFileType::JSON);
         let file_format = JsonFormat::default()
+            .with_options(table_options.json)
             .with_schema_infer_max_rec(options.schema_infer_max_records)
             .with_file_compression_type(FileCompressionType::from_str(&options.compression)?);
         Ok(ListingOptions::new(Arc::new(file_format)).with_file_extension(".json"))
@@ -36,8 +42,11 @@ impl PlanResolver<'_> {
     /// Ref: [`datafusion_common::file_options::json_writer::JsonWriterOptions`]
     pub(crate) fn resolve_json_write_options(
         options: JsonWriteOptions,
+        mut table_options: TableOptions,
     ) -> PlanResult<(JsonFormat, Vec<(String, String)>)> {
+        table_options.set_config_format(datafusion_common::config::ConfigFileType::JSON);
         let json_format = JsonFormat::default()
+            .with_options(table_options.json)
             .with_file_compression_type(FileCompressionType::from_str(&options.compression)?);
         let json_options: Vec<(String, String)> =
             vec![("format.compression".to_string(), options.compression)];
@@ -45,7 +54,11 @@ impl PlanResolver<'_> {
     }
 
     /// Ref: [`datafusion::datasource::file_format::options::CsvReadOptions`]
-    pub(crate) fn resolve_csv_read_options(options: CsvReadOptions) -> PlanResult<ListingOptions> {
+    pub(crate) fn resolve_csv_read_options(
+        options: CsvReadOptions,
+        mut table_options: TableOptions,
+    ) -> PlanResult<ListingOptions> {
+        table_options.set_config_format(datafusion_common::config::ConfigFileType::CSV);
         let null_regex = match (options.null_value, options.null_regex) {
             (Some(null_value), Some(null_regex))
                 if !null_value.is_empty() && !null_regex.is_empty() =>
@@ -63,6 +76,7 @@ impl PlanResolver<'_> {
         }?;
 
         let file_format = CsvFormat::default()
+            .with_options(table_options.csv)
             .with_has_header(options.header)
             .with_delimiter(Self::char_to_u8(options.delimiter, "delimiter")?)
             .with_quote(Self::char_to_u8(options.quote, "quote")?)
@@ -95,16 +109,19 @@ impl PlanResolver<'_> {
     /// Ref: [`datafusion_common::file_options::csv_writer::CsvWriterOptions`]
     pub(crate) fn resolve_csv_write_options(
         options: CsvWriteOptions,
+        mut table_options: TableOptions,
     ) -> PlanResult<(CsvFormat, Vec<(String, String)>)> {
-        // DataFusion bug: `double_quote` and `null_value` not available in CsvFormat builder
-        let mut df_csv_options = datafusion_common::config::CsvOptions::default();
-        df_csv_options.set("double_quote", options.escape_quotes.to_string().as_str())?;
+        table_options.set_config_format(datafusion_common::config::ConfigFileType::CSV);
+        table_options.set(
+            "format.double_quote",
+            options.escape_quotes.to_string().as_str(),
+        )?;
         if let Some(null_value) = &options.null_value {
-            df_csv_options.set("null_value", null_value)?;
+            table_options.set("format.null_value", null_value)?;
         }
 
         let csv_format = CsvFormat::default()
-            .with_options(df_csv_options)
+            .with_options(table_options.csv)
             .with_delimiter(Self::char_to_u8(options.delimiter, "delimiter")?)
             .with_quote(Self::char_to_u8(options.quote, "quote")?)
             .with_escape(
@@ -135,5 +152,53 @@ impl PlanResolver<'_> {
         }
         csv_options.push(("format.compression".to_string(), options.compression));
         Ok((csv_format, csv_options))
+    }
+
+    /// Ref: [`datafusion_common::config:ParquetOptions`]
+    pub(crate) fn resolve_parquet_read_options(
+        options: ParquetReadOptions,
+        mut table_options: TableOptions,
+    ) -> PlanResult<ListingOptions> {
+        let mut option_map: HashMap<String, String> = HashMap::new();
+        option_map.insert(
+            "format.enable_page_index".to_owned(),
+            options.enable_page_index.to_string(),
+        );
+        option_map.insert("format.pruning".to_owned(), options.pruning.to_string());
+        option_map.insert(
+            "format.skip_metadata".to_owned(),
+            options.skip_metadata.to_string(),
+        );
+        if let Some(metadata_size_hint) = options.metadata_size_hint {
+            option_map.insert(
+                "format.metadata_size_hint".to_owned(),
+                metadata_size_hint.to_string(),
+            );
+        }
+        option_map.insert(
+            "format.pushdown_filters".to_owned(),
+            options.pushdown_filters.to_string(),
+        );
+        option_map.insert(
+            "format.reorder_filters".to_owned(),
+            options.reorder_filters.to_string(),
+        );
+        option_map.insert(
+            "format.schema_force_view_types".to_owned(),
+            options.schema_force_view_types.to_string(),
+        );
+        option_map.insert(
+            "format.binary_as_string".to_owned(),
+            options.binary_as_string.to_string(),
+        );
+        option_map.insert("format.coerce_int96".to_owned(), options.coerce_int96);
+        option_map.insert(
+            "format.bloom_filter_on_read".to_owned(),
+            options.bloom_filter_on_read.to_string(),
+        );
+        table_options.set_config_format(datafusion_common::config::ConfigFileType::PARQUET);
+        table_options.alter_with_string_hash_map(&option_map)?;
+        let file_format = ParquetFormat::new().with_options(table_options.parquet);
+        Ok(ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet"))
     }
 }
