@@ -43,10 +43,9 @@ jobs:
         id: previous
         uses: actions/github-script@v7
         with:
-          result-encoding: string
           script: |
             const script = require('./scripts/releases/get-previous-version.js');
-            return script({ github, context });
+            await script({ github, context, core });
 
       - name: Verify Version
         env:
@@ -82,16 +81,15 @@ jobs:
         uses: actions/github-script@v7
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-          PREVIOUS_RELEASE_VERSION: ${{ steps.previous.outputs.result }}
+          PREVIOUS_RELEASE_VERSION: ${{ steps.previous.outputs.version }}
         with:
-          result-encoding: string
           script: |
             const script = require('./scripts/releases/generate-release-notes.js');
-            return script({ github, context });
+            await script({ github, context, core });
 
       - name: Write Release Notes
         env:
-          RELEASE_NOTES: ${{ steps.notes.outputs.result }}
+          RELEASE_NOTES: ${{ steps.notes.outputs.content }}
         run: |
           output="/tmp/release-notes.md"
           printf '%s' "${RELEASE_NOTES}" > "$output"

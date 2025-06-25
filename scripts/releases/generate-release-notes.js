@@ -1,4 +1,4 @@
-module.exports = async ({ github, context }) => {
+module.exports = async ({ github, context, core }) => {
   const version = process.env.RELEASE_VERSION;
   const previousVersion = process.env.PREVIOUS_RELEASE_VERSION;
   const text = [];
@@ -21,5 +21,5 @@ module.exports = async ({ github, context }) => {
     });
     text.push(data.body);
   }
-  return text.join("");
+  core.setOutput("content", text.join(""));
 };

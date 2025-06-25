@@ -1,4 +1,4 @@
-module.exports = async ({ github, context }) => {
+module.exports = async ({ github, context, core }) => {
   const tags = await github.paginate(
     github.rest.repos.listTags.endpoint.merge({
       owner: context.repo.owner,
@@ -23,8 +23,8 @@ module.exports = async ({ github, context }) => {
     });
   const offset = context.event_name === "push" ? 1 : 0;
   if (versions.length <= offset) {
-    return "";
+    core.setOutput("version", "");
   } else {
-    return versions[offset].replace(/^v/, "");
+    core.setOutput("version", versions[offset].replace(/^v/, ""));
   }
 };
