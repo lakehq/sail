@@ -56,7 +56,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use crate::data_source::csv::{CsvReadOptions, CsvWriteOptions};
 use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
 use crate::data_source::load_options;
-use crate::data_source::parquet::ParquetReadOptions;
+use crate::data_source::parquet::{ParquetReadOptions, ParquetWriteOptions};
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array::spark_sequence::SparkSequence;
 use crate::extension::function::math::rand_poisson::RandPoisson;
@@ -854,18 +854,15 @@ impl PlanResolver<'_> {
         let options: ListingOptions = match format.to_lowercase().as_str() {
             "json" => {
                 let json_read_options = load_options::<JsonReadOptions>(options.clone())?;
-                Self::resolve_json_read_options(json_read_options, self.ctx.copied_table_options())?
+                self.resolve_json_read_options(json_read_options)?
             }
             "csv" => {
                 let csv_read_options = load_options::<CsvReadOptions>(options.clone())?;
-                Self::resolve_csv_read_options(csv_read_options, self.ctx.copied_table_options())?
+                self.resolve_csv_read_options(csv_read_options)?
             }
             "parquet" => {
                 let parquet_read_options = load_options::<ParquetReadOptions>(options.clone())?;
-                Self::resolve_parquet_read_options(
-                    parquet_read_options,
-                    self.ctx.copied_table_options(),
-                )?
+                self.resolve_parquet_read_options(parquet_read_options)?
             }
             "arrow" => {
                 if !options.is_empty() {
@@ -2956,9 +2953,8 @@ impl PlanResolver<'_> {
                     Vec<(String, String)>,
                 ) = match source.as_str() {
                     "json" => {
-                        let (json_format, json_options_vec) = Self::resolve_json_write_options(
+                        let (json_format, json_options_vec) = self.resolve_json_write_options(
                             load_options::<JsonWriteOptions>(options)?,
-                            self.ctx.copied_table_options(),
                         )?;
                         (
                             Arc::new(JsonFormatFactory::new_with_options(
@@ -2967,13 +2963,21 @@ impl PlanResolver<'_> {
                             json_options_vec,
                         )
                     }
-                    // CHECK HERE: DO NOT MERGE IF THIS COMMENT IS HERE!!!
-                    "parquet" => (Arc::new(ParquetFormatFactory::new()), vec![]),
+                    "parquet" => {
+                        let (parquet_format, parquet_options_vec) = self
+                            .resolve_parquet_write_options(load_options::<ParquetWriteOptions>(
+                                options,
+                            )?)?;
+                        (
+                            Arc::new(ParquetFormatFactory::new_with_options(
+                                parquet_format.options().clone(),
+                            )),
+                            parquet_options_vec,
+                        )
+                    }
                     "csv" => {
-                        let (csv_format, csv_options_vec) = Self::resolve_csv_write_options(
-                            load_options::<CsvWriteOptions>(options)?,
-                            self.ctx.copied_table_options(),
-                        )?;
+                        let (csv_format, csv_options_vec) = self
+                            .resolve_csv_write_options(load_options::<CsvWriteOptions>(options)?)?;
                         (
                             Arc::new(CsvFormatFactory::new_with_options(
                                 csv_format.options().clone(),
@@ -3162,9 +3166,8 @@ impl PlanResolver<'_> {
         let (format_factory, options): (Arc<dyn FileFormatFactory>, Vec<(String, String)>) =
             match file_format.to_lowercase().as_str() {
                 "json" => {
-                    let (json_format, json_options_vec) = Self::resolve_json_write_options(
+                    let (json_format, json_options_vec) = self.resolve_json_write_options(
                         load_options::<JsonWriteOptions>(options_map)?,
-                        self.ctx.copied_table_options(),
                     )?;
                     (
                         Arc::new(JsonFormatFactory::new_with_options(
@@ -3173,13 +3176,21 @@ impl PlanResolver<'_> {
                         json_options_vec,
                     )
                 }
-                // CHECK HERE: DO NOT MERGE IF THIS COMMENT IS HERE!!!
-                "parquet" => (Arc::new(ParquetFormatFactory::new()), vec![]),
+                "parquet" => {
+                    let (parquet_format, parquet_options_vec) = self
+                        .resolve_parquet_write_options(load_options::<ParquetWriteOptions>(
+                            options_map,
+                        )?)?;
+                    (
+                        Arc::new(ParquetFormatFactory::new_with_options(
+                            parquet_format.options().clone(),
+                        )),
+                        parquet_options_vec,
+                    )
+                }
                 "csv" => {
-                    let (csv_format, csv_options_vec) = Self::resolve_csv_write_options(
-                        load_options::<CsvWriteOptions>(options_map)?,
-                        self.ctx.copied_table_options(),
-                    )?;
+                    let (csv_format, csv_options_vec) = self
+                        .resolve_csv_write_options(load_options::<CsvWriteOptions>(options_map)?)?;
                     (
                         Arc::new(CsvFormatFactory::new_with_options(
                             csv_format.options().clone(),

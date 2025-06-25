@@ -11,7 +11,7 @@ use datafusion_common::config::{ConfigField, TableOptions};
 
 use crate::data_source::csv::{CsvReadOptions, CsvWriteOptions};
 use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
-use crate::data_source::parquet::ParquetReadOptions;
+use crate::data_source::parquet::{ParquetReadOptions, ParquetWriteOptions};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
@@ -28,9 +28,10 @@ impl PlanResolver<'_> {
 
     /// Ref: [`datafusion::datasource::file_format::options::NdJsonReadOptions`]
     pub(crate) fn resolve_json_read_options(
+        &self,
         options: JsonReadOptions,
-        mut table_options: TableOptions,
     ) -> PlanResult<ListingOptions> {
+        let mut table_options = self.ctx.copied_table_options();
         table_options.set_config_format(datafusion_common::config::ConfigFileType::JSON);
         let file_format = JsonFormat::default()
             .with_options(table_options.json)
@@ -41,9 +42,10 @@ impl PlanResolver<'_> {
 
     /// Ref: [`datafusion_common::file_options::json_writer::JsonWriterOptions`]
     pub(crate) fn resolve_json_write_options(
+        &self,
         options: JsonWriteOptions,
-        mut table_options: TableOptions,
     ) -> PlanResult<(JsonFormat, Vec<(String, String)>)> {
+        let mut table_options = self.ctx.copied_table_options();
         table_options.set_config_format(datafusion_common::config::ConfigFileType::JSON);
         let json_format = JsonFormat::default()
             .with_options(table_options.json)
@@ -55,9 +57,10 @@ impl PlanResolver<'_> {
 
     /// Ref: [`datafusion::datasource::file_format::options::CsvReadOptions`]
     pub(crate) fn resolve_csv_read_options(
+        &self,
         options: CsvReadOptions,
-        mut table_options: TableOptions,
     ) -> PlanResult<ListingOptions> {
+        let mut table_options = self.ctx.copied_table_options();
         table_options.set_config_format(datafusion_common::config::ConfigFileType::CSV);
         let null_regex = match (options.null_value, options.null_regex) {
             (Some(null_value), Some(null_regex))
@@ -108,9 +111,10 @@ impl PlanResolver<'_> {
 
     /// Ref: [`datafusion_common::file_options::csv_writer::CsvWriterOptions`]
     pub(crate) fn resolve_csv_write_options(
+        &self,
         options: CsvWriteOptions,
-        mut table_options: TableOptions,
     ) -> PlanResult<(CsvFormat, Vec<(String, String)>)> {
+        let mut table_options = self.ctx.copied_table_options();
         table_options.set_config_format(datafusion_common::config::ConfigFileType::CSV);
         table_options.set(
             "format.double_quote",
@@ -156,49 +160,138 @@ impl PlanResolver<'_> {
 
     /// Ref: [`datafusion_common::config:ParquetOptions`]
     pub(crate) fn resolve_parquet_read_options(
+        &self,
         options: ParquetReadOptions,
-        mut table_options: TableOptions,
     ) -> PlanResult<ListingOptions> {
-        let mut option_map: HashMap<String, String> = HashMap::new();
-        option_map.insert(
+        let mut parquet_options: HashMap<String, String> = HashMap::new();
+        let mut table_options = self.ctx.copied_table_options();
+        table_options.set_config_format(datafusion_common::config::ConfigFileType::PARQUET);
+        parquet_options.insert(
             "format.enable_page_index".to_owned(),
             options.enable_page_index.to_string(),
         );
-        option_map.insert("format.pruning".to_owned(), options.pruning.to_string());
-        option_map.insert(
+        parquet_options.insert("format.pruning".to_owned(), options.pruning.to_string());
+        parquet_options.insert(
             "format.skip_metadata".to_owned(),
             options.skip_metadata.to_string(),
         );
         if let Some(metadata_size_hint) = options.metadata_size_hint {
-            option_map.insert(
+            parquet_options.insert(
                 "format.metadata_size_hint".to_owned(),
                 metadata_size_hint.to_string(),
             );
         }
-        option_map.insert(
+        parquet_options.insert(
             "format.pushdown_filters".to_owned(),
             options.pushdown_filters.to_string(),
         );
-        option_map.insert(
+        parquet_options.insert(
             "format.reorder_filters".to_owned(),
             options.reorder_filters.to_string(),
         );
-        option_map.insert(
+        parquet_options.insert(
             "format.schema_force_view_types".to_owned(),
             options.schema_force_view_types.to_string(),
         );
-        option_map.insert(
+        parquet_options.insert(
             "format.binary_as_string".to_owned(),
             options.binary_as_string.to_string(),
         );
-        option_map.insert("format.coerce_int96".to_owned(), options.coerce_int96);
-        option_map.insert(
+        parquet_options.insert("format.coerce_int96".to_owned(), options.coerce_int96);
+        parquet_options.insert(
             "format.bloom_filter_on_read".to_owned(),
             options.bloom_filter_on_read.to_string(),
         );
+        table_options.alter_with_string_hash_map(&parquet_options)?;
+        let parquet_format = ParquetFormat::new().with_options(table_options.parquet);
+        Ok(ListingOptions::new(Arc::new(parquet_format)).with_file_extension(".parquet"))
+    }
+
+    /// Ref: [`datafusion_common::config:ParquetOptions`]
+    pub(crate) fn resolve_parquet_write_options(
+        &self,
+        options: ParquetWriteOptions,
+    ) -> PlanResult<(ParquetFormat, Vec<(String, String)>)> {
+        let mut parquet_options: HashMap<String, String> = HashMap::new();
+        let mut table_options = self.ctx.copied_table_options();
         table_options.set_config_format(datafusion_common::config::ConfigFileType::PARQUET);
-        table_options.alter_with_string_hash_map(&option_map)?;
-        let file_format = ParquetFormat::new().with_options(table_options.parquet);
-        Ok(ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet"))
+        parquet_options.insert(
+            "format.data_page_size_limit".to_owned(),
+            options.data_page_size_limit.to_string(),
+        );
+        parquet_options.insert(
+            "format.write_batch_size".to_owned(),
+            options.write_batch_size.to_string(),
+        );
+        parquet_options.insert("format.writer_version".to_owned(), options.writer_version);
+        parquet_options.insert(
+            "format.skip_arrow_metadata".to_owned(),
+            options.skip_arrow_metadata.to_string(),
+        );
+        parquet_options.insert("format.compression".to_owned(), options.compression);
+        parquet_options.insert(
+            "format.dictionary_enabled".to_owned(),
+            options.dictionary_enabled.to_string(),
+        );
+        parquet_options.insert(
+            "format.dictionary_page_size_limit".to_owned(),
+            options.dictionary_page_size_limit.to_string(),
+        );
+        parquet_options.insert(
+            "format.statistics_enabled".to_owned(),
+            options.statistics_enabled,
+        );
+        parquet_options.insert(
+            "format.max_row_group_size".to_owned(),
+            options.max_row_group_size.to_string(),
+        );
+        if let Some(column_index_truncate_length) = options.column_index_truncate_length {
+            parquet_options.insert(
+                "format.column_index_truncate_length".to_owned(),
+                column_index_truncate_length.to_string(),
+            );
+        }
+        if let Some(statistics_truncate_length) = options.statistics_truncate_length {
+            parquet_options.insert(
+                "format.statistics_truncate_length".to_owned(),
+                statistics_truncate_length.to_string(),
+            );
+        }
+        parquet_options.insert(
+            "format.data_page_row_count_limit".to_owned(),
+            options.data_page_row_count_limit.to_string(),
+        );
+        if let Some(encoding) = options.encoding {
+            parquet_options.insert("format.encoding".to_owned(), encoding);
+        }
+        parquet_options.insert(
+            "format.bloom_filter_on_write".to_owned(),
+            options.bloom_filter_on_write.to_string(),
+        );
+        parquet_options.insert(
+            "format.bloom_filter_fpp".to_owned(),
+            options.bloom_filter_fpp.to_string(),
+        );
+        parquet_options.insert(
+            "format.bloom_filter_ndv".to_owned(),
+            options.bloom_filter_ndv.to_string(),
+        );
+        parquet_options.insert(
+            "format.allow_single_file_parallelism".to_owned(),
+            options.allow_single_file_parallelism.to_string(),
+        );
+        parquet_options.insert(
+            "format.maximum_parallel_row_group_writers".to_owned(),
+            options.maximum_parallel_row_group_writers.to_string(),
+        );
+        parquet_options.insert(
+            "format.maximum_buffered_record_batches_per_stream".to_owned(),
+            options
+                .maximum_buffered_record_batches_per_stream
+                .to_string(),
+        );
+        table_options.alter_with_string_hash_map(&parquet_options)?;
+        let parquet_format = ParquetFormat::new().with_options(table_options.parquet);
+        Ok((parquet_format, parquet_options.into_iter().collect()))
     }
 }
