@@ -169,7 +169,7 @@ impl TableProvider for DeltaTableProvider {
             .get_partitioned_files()
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
 
-        // Create the object store URL from the table location
+        // Parse the table URI to get the object store URL
         let object_store_url = ObjectStoreUrl::parse(&self.table.table_uri())
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
 
@@ -177,7 +177,7 @@ impl TableProvider for DeltaTableProvider {
         let parquet_options = TableParquetOptions::default();
         let source = Arc::new(ParquetSource::new(parquet_options));
 
-        // Create FileScanConfig using the builder
+        // Create FileScanConfig using the builder with the object store URL
         let mut builder = FileScanConfigBuilder::new(object_store_url, self.schema.clone(), source);
 
         // Add files to the builder
