@@ -124,7 +124,7 @@ object_store = { version = "0.12.2", features = ["aws", "gcp", "azure", "http"] 
 hdfs-native-object-store = "0.14.2"
 
 # Lakehouse
-deltalake = { version = "0.26.2" }
+deltalake = { version = "0.26.2", default-features = false, features = ["rustls"]}
 
 ######
 # This is the end of the manually managed dependencies.

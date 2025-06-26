@@ -4,4 +4,12 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+sail-common = { path = "../sail-common" }
+sail-plan = { path = "../sail-plan" }
 deltalake = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+object_store = { workspace = true }
