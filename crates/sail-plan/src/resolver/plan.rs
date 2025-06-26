@@ -3361,29 +3361,19 @@ impl PlanResolver<'_> {
                     })?;
 
                 // Register the existing table in the catalog
+                let table_provider = Arc::new(delta_provider);
                 self.ctx
-                    .register_table(table_reference.clone(), Arc::new(delta_provider))
+                    .register_table(table_reference.clone(), table_provider.clone())
                     .map_err(|e| PlanError::invalid(format!("Failed to register table: {}", e)))?;
 
-                // Return a successful DDL plan indicating the table was loaded
-                let command = CatalogCommand::CreateTable {
-                    table: table_reference,
-                    schema,
-                    comment,
-                    column_defaults,
-                    constraints,
-                    location,
-                    file_format: "delta".to_string(),
-                    table_partition_cols,
-                    file_sort_order,
-                    if_not_exists,
-                    or_replace,
-                    unbounded,
-                    options: vec![], // Options already processed during table loading
-                    definition,
-                    copy_to_plan: None,
-                };
-                return self.resolve_catalog_command(command);
+                                // Return a TableScan logical plan for the existing table
+                return Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                    table_reference,
+                    provider_as_source(table_provider),
+                    None,
+                    vec![],
+                    None,
+                )?));
             }
             Err(deltalake::DeltaTableError::NotATable(_))
             | Err(deltalake::DeltaTableError::InvalidTableLocation(_)) => {
@@ -3540,6 +3530,7 @@ impl PlanResolver<'_> {
             }
         }
     }
+
 
     async fn resolve_catalog_drop_view(
         &self,
