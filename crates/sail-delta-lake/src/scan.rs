@@ -53,7 +53,7 @@ pub(crate) fn partitioned_file_from_action(
     let last_modified = Utc
         .timestamp_millis_opt(action.modification_time)
         .single()
-        .unwrap_or_else(|| Utc::now());
+        .unwrap_or_else(Utc::now);
 
     Ok(PartitionedFile {
         object_meta: ObjectMeta {

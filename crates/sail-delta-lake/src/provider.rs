@@ -122,7 +122,7 @@ impl TableProvider for DeltaTableProvider {
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
 
         // Parse the table URI to get the object store URL
-        let object_store_url = ObjectStoreUrl::parse(&self.table.table_uri())
+        let object_store_url = ObjectStoreUrl::parse(self.table.table_uri())
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
 
         // Create ParquetSource with default options
