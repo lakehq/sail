@@ -2,9 +2,7 @@ use chrono::{TimeZone, Utc};
 use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion_common::DataFusionError;
-use deltalake::arrow::datatypes::Schema as ArrowSchema;
-use deltalake::kernel::{Add, Error as DeltaKernelError};
+use deltalake::kernel::{Add, Error as DeltaKernelError, StructType};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde_json::Value;
@@ -26,27 +24,36 @@ pub(crate) fn to_correct_scalar_value(
 pub(crate) fn partitioned_file_from_action(
     action: &Add,
     partition_columns: &[String],
-    schema: &ArrowSchema,
+    schema: &StructType,
 ) -> Result<PartitionedFile, DeltaKernelError> {
     let partition_values = partition_columns
         .iter()
         .map(|part| {
             let value = action.partition_values.get(part).cloned().flatten();
-            let field = schema.field_with_name(part).unwrap();
+            let field = schema.fields().find(|f| f.name() == part).ok_or_else(|| {
+                DeltaKernelError::Generic(format!("Field {} not found in schema", part))
+            })?;
+
+            // Convert Delta field to Arrow data type
+            let arrow_data_type: ArrowDataType = field.data_type().try_into().map_err(|e| {
+                DeltaKernelError::Generic(format!("Failed to convert data type: {}", e))
+            })?;
+
             match value {
                 Some(value) => {
-                    to_correct_scalar_value(&serde_json::Value::String(value), field.data_type())
+                    to_correct_scalar_value(&serde_json::Value::String(value), &arrow_data_type)
+                        .map_err(|e| DeltaKernelError::Generic(e.to_string()))
                 }
-                None => ScalarValue::try_from(field.data_type()),
+                None => ScalarValue::try_from(&arrow_data_type)
+                    .map_err(|e| DeltaKernelError::Generic(e.to_string())),
             }
         })
-        .collect::<Result<Vec<_>, DataFusionError>>()
-        .map_err(|e| DeltaKernelError::Generic(e.to_string()))?;
+        .collect::<Result<Vec<_>, DeltaKernelError>>()?;
 
     let last_modified = Utc
         .timestamp_millis_opt(action.modification_time)
         .single()
-        .unwrap_or_else(|| Utc.timestamp_nanos(0));
+        .unwrap_or_else(|| Utc::now());
 
     Ok(PartitionedFile {
         object_meta: ObjectMeta {

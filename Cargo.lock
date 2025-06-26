@@ -5401,6 +5401,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-common",
+ "datafusion-execution",
  "datafusion-expr",
  "deltalake",
  "object_store",

@@ -10,6 +10,7 @@ deltalake = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-execution = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 object_store = { workspace = true }
