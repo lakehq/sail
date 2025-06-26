@@ -83,60 +83,11 @@ impl DeltaTableProvider {
 
         let mut files = Vec::new();
 
-        // Get all add actions from the current snapshot
-        // TODO: properly iterate through the add actions from the snapshot
-        let actions = snapshot.add_actions_table(false)?;
-
-        // Convert RecordBatch to Add actions
-        // TODO: properly iterate through the add actions from the snapshot
-        // iterate through the add actions from the snapshot
-        for i in 0..actions.num_rows() {
-            // TODO: properly iterate through the add actions from the snapshot
-            let path_array = actions
-                .column_by_name("path")
-                .ok_or_else(|| DeltaTableError::Generic("No path column found".to_string()))?;
-            let size_array = actions
-                .column_by_name("size")
-                .ok_or_else(|| DeltaTableError::Generic("No size column found".to_string()))?;
-            let modification_time_array =
-                actions.column_by_name("modificationTime").ok_or_else(|| {
-                    DeltaTableError::Generic("No modificationTime column found".to_string())
-                })?;
-
-            if let (Some(path), Some(size), Some(mod_time)) = (
-                path_array
-                    .as_any()
-                    .downcast_ref::<datafusion::arrow::array::StringArray>()
-                    .map(|arr| arr.value(i)),
-                size_array
-                    .as_any()
-                    .downcast_ref::<datafusion::arrow::array::Int64Array>()
-                    .map(|arr| arr.value(i)),
-                modification_time_array
-                    .as_any()
-                    .downcast_ref::<datafusion::arrow::array::Int64Array>()
-                    .map(|arr| arr.value(i)),
-            ) {
-                // Create a simple Add action for now
-                let add_action = deltalake::kernel::Add {
-                    path: path.to_string(),
-                    size: size,
-                    modification_time: mod_time,
-                    partition_values: std::collections::HashMap::new(), // TODO: extract partition values
-                    data_change: true,
-                    stats: None,
-                    stats_parsed: None,
-                    tags: None,
-                    deletion_vector: None,
-                    base_row_id: None,
-                    default_row_commit_version: None,
-                    clustering_provider: None,
-                };
-
-                let partitioned_file =
-                    partitioned_file_from_action(&add_action, &partition_columns, schema)?;
-                files.push(partitioned_file);
-            }
+        // Use the proper iterator over Add actions from delta-rs
+        for add_action in snapshot.file_actions()? {
+            let partitioned_file =
+                partitioned_file_from_action(&add_action, &partition_columns, schema)?;
+            files.push(partitioned_file);
         }
 
         Ok(files)

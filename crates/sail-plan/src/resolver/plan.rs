@@ -3071,6 +3071,9 @@ impl PlanResolver<'_> {
         definition: spec::TableDefinition,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        dbg!("resolve_catalog_create_table");
+        dbg!(&table);
+        dbg!(&definition);
         let spec::TableDefinition {
             schema,
             comment,
