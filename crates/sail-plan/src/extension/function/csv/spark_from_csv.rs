@@ -60,7 +60,24 @@ impl ScalarUDFImpl for SparkFromCSV {
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         // We need to implement the return type related to the args
-        todo!()
+        let Some(ScalarValue::Utf8(Some(sep))) = &args.scalar_arguments[2] else {
+            return exec_err!("Unsupported type: TODO");
+        };
+        let schema = match &args.scalar_arguments[1] {
+            Some(ScalarValue::Utf8(Some(schema)))
+            | Some(ScalarValue::LargeUtf8(Some(schema)))
+            | Some(ScalarValue::Utf8View(Some(schema))) => parse_schema_string(schema, sep),
+
+            _ => {
+                // Manejo para el caso no esperado
+                Err(DataFusionError::Internal(format!("Unsupported type: TODO")))
+            }
+        };
+        schema.map(|fields| {
+            let vec_fields: Vec<Arc<Field>> = fields.iter().cloned().collect();
+            let dt = DataType::Struct(Fields::from(vec_fields));
+            ReturnInfo::new_nullable(dt)
+        })
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
