@@ -10,6 +10,7 @@ sail-delta-lake = { path = "../sail-delta-lake" }
 sail-object-store = { path = "../sail-object-store" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
+deltalake = { workspace = true }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }

@@ -5,7 +5,7 @@ edition = { workspace = true }
 
 [dependencies]
 sail-common = { path = "../sail-common" }
-sail-plan = { path = "../sail-plan" }
+sail-common-datafusion = { path = "../sail-common-datafusion", features = ["delta-lake"] }
 deltalake = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
@@ -13,3 +13,5 @@ datafusion-expr = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 object_store = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }

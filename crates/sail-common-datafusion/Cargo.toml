@@ -16,3 +16,7 @@ lexical-core = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 pyo3 = { workspace = true }
+deltalake = { workspace = true, optional = true }
+
+[features]
+delta-lake = ["dep:deltalake"]

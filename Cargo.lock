@@ -5383,6 +5383,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "deltalake",
  "futures",
  "lexical-core",
  "pyo3",
@@ -5397,13 +5398,15 @@ name = "sail-delta-lake"
 version = "0.3.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
  "deltalake",
  "object_store",
  "sail-common",
- "sail-plan",
+ "sail-common-datafusion",
+ "serde_json",
  "thiserror 2.0.12",
 ]
 
@@ -5502,6 +5505,7 @@ dependencies = [
  "datafusion-functions-json",
  "datafusion-functions-nested",
  "datafusion-spark",
+ "deltalake",
  "either",
  "futures",
  "glob",
@@ -5520,6 +5524,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-object-store",
+ "sail-delta-lake",
  "sail-python-udf",
  "sail-sql-analyzer",
  "serde",

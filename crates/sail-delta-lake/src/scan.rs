@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
