@@ -45,6 +45,7 @@ use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
+use sail_delta_lake::provider::DeltaTableProvider;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
@@ -846,11 +847,46 @@ impl PlanResolver<'_> {
         if paths.is_empty() {
             return Err(PlanError::invalid("empty data source paths"));
         }
-        let urls = self.resolve_listing_urls(paths).await?;
         let Some(format) = format else {
             return Err(PlanError::invalid("missing data source format"));
         };
         let options: HashMap<String, String> = options.into_iter().collect();
+        match format.to_lowercase().as_str() {
+            "delta" | "deltalake" => {
+                // Handle Delta Lake format
+                if paths.len() != 1 {
+                    return Err(PlanError::invalid(
+                        "Delta Lake data source must have exactly one path",
+                    ));
+                }
+                let table_path = &paths[0];
+
+                // Open the Delta table using deltalake::open_table()
+                let delta_table = deltalake::open_table(table_path).await.map_err(|e| {
+                    PlanError::invalid(format!("Failed to open Delta table: {}", e))
+                })?;
+
+                // Create DeltaTableProvider
+                let delta_provider = DeltaTableProvider::new(delta_table).map_err(|e| {
+                    PlanError::invalid(format!("Failed to create DeltaTableProvider: {}", e))
+                })?;
+
+                let table_provider = Arc::new(delta_provider);
+                let names = state.register_fields(table_provider.schema().fields());
+                let table_provider = RenameTableProvider::try_new(table_provider, names)?;
+
+                return Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
+                    UNNAMED_TABLE,
+                    provider_as_source(Arc::new(table_provider)),
+                    None,
+                    vec![],
+                    None,
+                )?));
+            }
+            _ => {}
+        }
+
+        let urls = self.resolve_listing_urls(paths).await?;
         let options: ListingOptions = match format.to_lowercase().as_str() {
             "json" => {
                 let json_read_options = load_options::<JsonReadOptions>(options.clone())?;
