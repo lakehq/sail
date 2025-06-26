@@ -143,7 +143,7 @@ impl FromStr for Signed<DecimalSecond> {
     type Err = SqlError;
 
     fn from_str(s: &str) -> SqlResult<Self> {
-        let error = || SqlError::invalid(format!("second: {:?}", s));
+        let error = || SqlError::invalid(format!("second: {s:?}"));
         let captures = INTERVAL_SECOND_REGEX.captures(s).ok_or_else(error)?;
         let negated = captures.name("sign").map(|s| s.as_str()) == Some("-");
         let seconds: u32 = extract_match(&captures, "second", error)?.unwrap_or(0);

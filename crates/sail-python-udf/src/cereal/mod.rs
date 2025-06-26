@@ -24,8 +24,7 @@ fn get_pyspark_version() -> PyUdfResult<PySparkVersion> {
             Ok(PySparkVersion::V4)
         } else {
             Err(PyUdfError::invalid(format!(
-                "unsupported PySpark version: {}",
-                version
+                "unsupported PySpark version: {version}"
             )))
         }
     })
@@ -37,9 +36,7 @@ fn check_python_udf_version(version: &str) -> PyUdfResult<()> {
         Ok(())
     } else {
         Err(PyUdfError::invalid(format!(
-            "Python version used to compile the UDF ({}) does not match the Python version at runtime ({})",
-            version,
-            pyo3_version
+            "Python version used to compile the UDF ({version}) does not match the Python version at runtime ({pyo3_version})"
         )))
     }
 }

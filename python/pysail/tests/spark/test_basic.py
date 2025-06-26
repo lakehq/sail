@@ -48,6 +48,14 @@ def df(spark):
 
 
 @pytest.fixture(scope="module")
+def simple_df(spark):
+    return spark.createDataFrame(
+        [Row(a=1, b="hello"), Row(a=2, b="world")],
+        schema="a integer, b string",
+    )
+
+
+@pytest.fixture(scope="module")
 def df_view(spark, df):
     name = "df"
     df.createOrReplaceTempView(name)
@@ -225,11 +233,58 @@ def test_sql_temp_view(spark, df, df_view):
     assert_frame_equal(spark.sql(f"SELECT * FROM {df_view}").toPandas(), df.toPandas())  # noqa: S608
 
 
-def test_write(spark, df, tmpdir):
+def test_write_json(spark, df, tmpdir):
     path = str(tmpdir.join("df.json"))
     df.write.json(path)
     out = spark.read.json(path).sort("a")
     assert_frame_equal(df.toPandas(), out.toPandas(), check_dtype=False)
+
+
+def test_write_parquet(spark, df, tmpdir):
+    path = str(tmpdir.join("df.parquet"))
+    df.write.parquet(path)
+    out = spark.read.parquet(path).sort("a")
+    assert_frame_equal(df.toPandas(), out.toPandas(), check_dtype=False)
+
+
+def test_write_csv(spark, simple_df, tmpdir):
+    path = str(tmpdir.join("simple_df_0.csv"))
+    simple_df.write.csv(path)
+    expected = simple_df.toPandas()
+    expected.columns = [f"_c{i}" for i in range(expected.shape[1])]
+    assert_frame_equal(
+        expected,
+        spark.read.csv(path).sort("_c0").toPandas(),
+        check_dtype=False,
+    )
+
+    path = str(tmpdir.join("simple_df_1.csv"))
+    simple_df.write.csv(path, header=False)
+    expected = simple_df.toPandas()
+    expected.columns = [f"_c{i}" for i in range(expected.shape[1])]
+    assert_frame_equal(
+        expected,
+        spark.read.csv(path).sort("_c0").toPandas(),
+        check_dtype=False,
+    )
+
+    path = str(tmpdir.join("simple_df_2.csv"))
+    simple_df.write.csv(path)
+    expected = simple_df.toPandas()
+    expected.columns = [f"_c{i}" for i in range(expected.shape[1])]
+    assert_frame_equal(
+        expected,
+        spark.read.csv(path, header=False).sort("_c0").toPandas(),
+        check_dtype=False,
+    )
+
+    path = str(tmpdir.join("simple_df_3.csv"))
+    simple_df.write.csv(path, header=True)
+    assert_frame_equal(
+        simple_df.toPandas(),
+        spark.read.csv(path, header=True).sort("a").toPandas(),
+        check_dtype=False,
+    )
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
