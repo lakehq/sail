@@ -6,20 +6,24 @@ rank: 3
 # Getting Started
 
 In this guide, you will see how to use Sail as the compute engine for PySpark.
+The Spark session communicates with the Sail server using the Spark Connect protocol.
+You can refer to the [Spark documentation](https://spark.apache.org/docs/latest/spark-connect-overview.html) for more information about Spark Connect.
+
+## Package Installation
 
 Install the required packages in your Python environment.
 You can choose the Spark version you want.
 
 ::: code-group
 
-```bash-vue [Spark 4.0]
-pip install "pysail=={{ libVersion }}"
-pip install "pyspark[connect]==4.0.0"
-```
-
 ```bash-vue [Spark 4.0 (Client) ]
 pip install "pysail=={{ libVersion }}"
 pip install "pyspark-client==4.0.0"
+```
+
+```bash-vue [Spark 4.0]
+pip install "pysail=={{ libVersion }}"
+pip install "pyspark[connect]==4.0.0"
 ```
 
 ```bash-vue [Spark 3.5]
@@ -30,12 +34,20 @@ pip install "pyspark[connect]==3.5.5
 :::
 
 ::: info
-Please refer to the [Installation](/introduction/installation/) page for more information about installing Sail.
+
+- `pyspark-client` is a lightweight PySpark client introduced in Spark 4.0 while `pyspark` remains as the full PySpark package containing all the JARs. The lightweight client cannot execute queries by itself, and can only connect to a Spark Connect server.
+- `pyspark[connect]` installs extra dependencies needed for Spark Connect. This is supported since Spark 3.4.
+- Since Spark 4.0, there is also a wrapper package `pyspark-connect` that you can use, which is equivalent to `pyspark[connect]`.
+
 :::
 
-::: info
-The way to invoke Sail has changed since Sail 0.1. In Sail 0.2, we have introduced the `sail` command-line interface (CLI) to interact with Sail.
-:::
+You can refer to the [Installation](/introduction/installation/) page for more information about installing Sail.
+
+::: details Migrating from Earlier Versions of Sail
+
+- Since Sail 0.2, the `sail` command-line interface (CLI) became the new way to interact with Sail.
+- Since Sail 0.3, you can no longer run `pip install pysail[spark]` to install PySail along with PySpark (the `spark` "extra"). You must explicitly install PySpark and choose the version you want to use.
+  :::
 
 ## Using the Sail PySpark Shell
 
@@ -45,16 +57,13 @@ You can start a PySpark shell from Sail, using the following command.
 sail spark shell
 ```
 
+You will see the banner and prompt similar to a regular PySpark shell.
+The `SparkSession` instance is available as the `spark` local variable.
+You can run Spark SQL queries or use the DataFrame API in the shell.
+The `SparkSession` instance communicates with the Sail server started in the same Python interpreter process. The Sail server runs in the background.
+
 ::: info
 The `sail` command is installed as an executable script as part of the `pysail` Python package. You can also invoke the Sail CLI via `python -m pysail`.
-:::
-
-You will see the banner and prompt similar to a regular PySpark shell.
-The `SparkSession` is available as the `spark` local variable.
-You can run Spark SQL queries or use the DataFrame API in the shell.
-
-::: info
-Spark uses the [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) protocol to communicate with Sail, which runs as a Spark Connect server in the background, in the same process.
 :::
 
 ## Using the Sail Library
@@ -98,10 +107,9 @@ In another terminal, you can connect to the Sail Spark Connect server using PySp
 env SPARK_CONNECT_MODE_ENABLED=1 SPARK_REMOTE="sc://localhost:50051" pyspark
 ```
 
-::: info
+::: warning
 
-1. The `pyspark` shell is not available if PySpark is installed via `pyspark-client`. To use the `pyspark` shell, you need to install `pyspark[connect]`.
-2. You can refer to the [Spark documentation](https://spark.apache.org/docs/latest/spark-connect-overview.html) for more information about Spark Connect.
+The `pyspark` shell is not available if PySpark is installed via `pyspark-client`. To use the `pyspark` shell, you need to install `pyspark[connect]`.
 
 :::
 
