@@ -113,13 +113,30 @@ impl TableProvider for DeltaTableProvider {
         &self,
         _state: &dyn Session,
         projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
+        filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        // Get the partitioned files from Delta table
-        let files = self
-            .get_partitioned_files()
-            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+        // Apply partition filters first for file pruning
+        let partition_columns = match self.table.metadata() {
+            Ok(metadata) => metadata.partition_columns.clone(),
+            Err(_) => vec![],
+        };
+
+        // Separate partition filters from data filters
+        let (partition_filters, remaining_filters): (Vec<&Expr>, Vec<&Expr>) = filters
+            .iter()
+            .partition(|filter| is_exact_predicate_for_partition_cols(&partition_columns, filter));
+
+        // Get the partitioned files from Delta table with partition pruning
+        let files = if partition_filters.is_empty() {
+            self.get_partitioned_files()
+                .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?
+        } else {
+            // Apply partition pruning - this would need more complex logic
+            // For now, get all files and let DataFusion handle filtering
+            self.get_partitioned_files()
+                .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?
+        };
 
         // Parse the table URI to get the object store URL
         let object_store_url = ObjectStoreUrl::parse(self.table.table_uri())
@@ -150,7 +167,45 @@ impl TableProvider for DeltaTableProvider {
         let config = builder.build();
 
         // Create DataSourceExec from the config
-        Ok(DataSourceExec::from_data_source(config))
+        let exec = DataSourceExec::from_data_source(config);
+
+        // Apply remaining filters that couldn't be pushed to partition level
+        if !remaining_filters.is_empty() {
+            use datafusion::physical_plan::filter::FilterExec;
+            use datafusion::physical_expr::create_physical_expr;
+            use datafusion::physical_expr::execution_props::ExecutionProps;
+            use datafusion_common::DFSchema;
+
+            // Combine remaining filters with AND
+            let combined_filter = remaining_filters
+                .into_iter()
+                .cloned()
+                .reduce(|acc, filter| {
+                    use datafusion::logical_expr::{BinaryExpr, Operator};
+                    Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(acc),
+                        Operator::And,
+                        Box::new(filter),
+                    ))
+                });
+
+            if let Some(filter_expr) = combined_filter {
+                // Convert Arrow schema to DFSchema for create_physical_expr
+                let df_schema = DFSchema::try_from(exec.schema().as_ref().clone())?;
+                let physical_filter = create_physical_expr(
+                    &filter_expr,
+                    &df_schema,
+                    &ExecutionProps::new(),
+                )?;
+
+                let filtered_exec = Arc::new(FilterExec::try_new(physical_filter, exec)?);
+                Ok(filtered_exec as Arc<dyn ExecutionPlan>)
+            } else {
+                Ok(exec as Arc<dyn ExecutionPlan>)
+            }
+        } else {
+            Ok(exec as Arc<dyn ExecutionPlan>)
+        }
     }
 
     fn supports_filters_pushdown(

@@ -163,7 +163,7 @@ impl SessionManager {
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)
         };
-        let state = SessionStateBuilder::new()
+        let mut state = SessionStateBuilder::new()
             .with_config(session_config)
             .with_runtime_env(runtime)
             .with_default_features()
@@ -171,6 +171,14 @@ impl SessionManager {
             .with_optimizer_rules(default_optimizer_rules())
             .with_query_planner(new_query_planner())
             .build();
+
+        // Register Delta Lake table factory
+        state
+            .table_factories_mut()
+            .insert("DELTA".to_string(), Arc::new(sail_delta_lake::factory::DeltaTableFactory::new()));
+        state
+            .table_factories_mut()
+            .insert("DELTALAKE".to_string(), Arc::new(sail_delta_lake::factory::DeltaTableFactory::new()));
         let context = SessionContext::new_with_state(state);
 
         // TODO: This is a temp workaround to deregister all built-in functions that we define.

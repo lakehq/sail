@@ -3185,6 +3185,39 @@ impl PlanResolver<'_> {
         } else {
             self.config.default_bounded_table_file_format.clone()
         };
+
+        // Handle Delta Lake table creation specially
+        if file_format.to_lowercase() == "delta" || file_format.to_lowercase() == "deltalake" {
+            let table_partition_cols_converted: Vec<String> =
+                table_partition_cols.into_iter().map(String::from).collect();
+            let file_sort_order_converted: Vec<Vec<Sort>> = async {
+                let mut results: Vec<Vec<Sort>> = Vec::with_capacity(file_sort_order.len());
+                for order in file_sort_order {
+                    let order = self
+                        .resolve_sort_orders(order, true, &schema, state)
+                        .await?;
+                    results.push(order);
+                }
+                Ok(results) as PlanResult<_>
+            }.await?;
+
+            return self.resolve_catalog_create_delta_table(
+                table,
+                schema,
+                comment,
+                column_defaults,
+                constraints,
+                location,
+                table_partition_cols_converted,
+                file_sort_order_converted,
+                if_not_exists,
+                or_replace,
+                unbounded,
+                options,
+                definition,
+            ).await;
+        }
+
         let table_partition_cols: Vec<String> =
             table_partition_cols.into_iter().map(String::from).collect();
         let file_sort_order: Vec<Vec<Sort>> = async {
@@ -3288,6 +3321,128 @@ impl PlanResolver<'_> {
             options,
             definition,
             copy_to_plan,
+        };
+        self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_catalog_create_delta_table(
+        &self,
+        table: spec::ObjectName,
+        schema: DFSchemaRef,
+        comment: Option<String>,
+        column_defaults: Vec<(String, Expr)>,
+        constraints: datafusion_common::Constraints,
+        location: String,
+        table_partition_cols: Vec<String>,
+        file_sort_order: Vec<Vec<Sort>>,
+        if_not_exists: bool,
+        or_replace: bool,
+        unbounded: bool,
+        options: Vec<(String, String)>,
+        definition: Option<String>,
+    ) -> PlanResult<LogicalPlan> {
+        use deltalake::kernel::{DataType as DeltaDataType, PrimitiveType, StructField};
+        use deltalake::protocol::SaveMode;
+        use deltalake::DeltaOps;
+        use std::collections::HashMap;
+
+        // Convert DataFusion schema to Delta Lake schema
+        let delta_fields: Result<Vec<StructField>, PlanError> = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let delta_type = match field.data_type() {
+                    adt::DataType::Boolean => DeltaDataType::Primitive(PrimitiveType::Boolean),
+                    adt::DataType::Int8 => DeltaDataType::Primitive(PrimitiveType::Byte),
+                    adt::DataType::Int16 => DeltaDataType::Primitive(PrimitiveType::Short),
+                    adt::DataType::Int32 => DeltaDataType::Primitive(PrimitiveType::Integer),
+                    adt::DataType::Int64 => DeltaDataType::Primitive(PrimitiveType::Long),
+                    adt::DataType::Float32 => DeltaDataType::Primitive(PrimitiveType::Float),
+                    adt::DataType::Float64 => DeltaDataType::Primitive(PrimitiveType::Double),
+                    adt::DataType::Utf8 => DeltaDataType::Primitive(PrimitiveType::String),
+                    adt::DataType::LargeUtf8 => DeltaDataType::Primitive(PrimitiveType::String),
+                    adt::DataType::Binary => DeltaDataType::Primitive(PrimitiveType::Binary),
+                    adt::DataType::LargeBinary => DeltaDataType::Primitive(PrimitiveType::Binary),
+                    adt::DataType::Date32 => DeltaDataType::Primitive(PrimitiveType::Date),
+                    adt::DataType::Timestamp(_, _) => DeltaDataType::Primitive(PrimitiveType::Timestamp),
+                    _ => {
+                        return Err(PlanError::invalid(format!(
+                            "Unsupported data type for Delta Lake: {:?}",
+                            field.data_type()
+                        )));
+                    }
+                };
+
+                Ok(StructField::new(
+                    field.name().clone(),
+                    delta_type,
+                    field.is_nullable(),
+                ))
+            })
+            .collect();
+
+        let delta_fields = delta_fields?;
+
+        // Create Delta table using DeltaOps
+        let delta_ops = DeltaOps::try_from_uri(&location)
+            .await
+            .map_err(|e| PlanError::invalid(format!("Failed to create Delta table: {}", e)))?;
+
+        let mut create_builder = delta_ops
+            .create()
+            .with_columns(delta_fields.into_iter())
+            .with_save_mode(if if_not_exists {
+                SaveMode::Ignore
+            } else if or_replace {
+                SaveMode::Overwrite
+            } else {
+                SaveMode::ErrorIfExists
+            });
+
+        // Add partition columns if specified
+        if !table_partition_cols.is_empty() {
+            create_builder = create_builder.with_partition_columns(table_partition_cols);
+        }
+
+        // Add table properties from options
+        let mut configuration = HashMap::new();
+        for (key, value) in options {
+            if key.starts_with("delta.") {
+                configuration.insert(key, Some(value));
+            }
+        }
+
+        if !configuration.is_empty() {
+            create_builder = create_builder.with_configuration(configuration);
+        }
+
+        // Add comment if provided
+        if let Some(comment) = comment {
+            create_builder = create_builder.with_comment(&comment);
+        }
+
+        // Execute table creation
+        let _delta_table = create_builder
+            .await
+            .map_err(|e| PlanError::invalid(format!("Failed to create Delta table: {}", e)))?;
+
+        // Return a successful DDL plan
+        let command = CatalogCommand::CreateTable {
+            table: self.resolve_table_reference(&table)?,
+            schema,
+            comment: None, // Already handled above
+            column_defaults,
+            constraints,
+            location,
+            file_format: "delta".to_string(),
+            table_partition_cols: vec![], // Already handled above
+            file_sort_order,
+            if_not_exists,
+            or_replace,
+            unbounded,
+            options: vec![], // Already handled above
+            definition,
+            copy_to_plan: None,
         };
         self.resolve_catalog_command(command)
     }
