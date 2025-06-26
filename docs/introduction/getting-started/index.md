@@ -8,10 +8,26 @@ rank: 3
 In this guide, you will see how to use Sail as the compute engine for PySpark.
 
 Install the required packages in your Python environment.
+You can choose the Spark version you want.
 
-```bash-vue
-pip install "pysail[spark]=={{ libVersion }}"
+::: code-group
+
+```bash-vue [Spark 4.0]
+pip install "pysail=={{ libVersion }}"
+pip install "pyspark[connect]==4.0.0"
 ```
+
+```bash-vue [Spark 4.0 (Client) ]
+pip install "pysail=={{ libVersion }}"
+pip install "pyspark-client==4.0.0"
+```
+
+```bash-vue [Spark 3.5]
+pip install "pysail=={{ libVersion }}"
+pip install "pyspark[connect]==3.5.5
+```
+
+:::
 
 ::: info
 Please refer to the [Installation](/introduction/installation/) page for more information about installing Sail.
@@ -83,8 +99,10 @@ env SPARK_CONNECT_MODE_ENABLED=1 SPARK_REMOTE="sc://localhost:50051" pyspark
 ```
 
 ::: info
-You can refer to the [Spark documentation](https://spark.apache.org/docs/latest/spark-connect-overview.html)
-for more information about Spark Connect.
+
+1. The `pyspark` shell is not available if PySpark is installed via `pyspark-client`. To use the `pyspark` shell, you need to install `pyspark[connect]`.
+2. You can refer to the [Spark documentation](https://spark.apache.org/docs/latest/spark-connect-overview.html) for more information about Spark Connect.
+
 :::
 
 <script setup>

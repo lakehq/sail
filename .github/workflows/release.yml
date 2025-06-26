@@ -280,8 +280,7 @@ jobs:
             mkdir -p 'C:\Temp'
             export TEMP='C:\Temp'
           fi
-          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --no-binary pysail
-          pip install pytest
+          pip install 'pysail[test]=='"${RELEASE_VERSION}" -v -f dist --no-binary pysail
 
       - name: Verify Package
         shell: python
@@ -323,8 +322,7 @@ jobs:
       - name: Install Package
         shell: bash
         run: |
-          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --only-binary pysail
-          pip install pytest
+          pip install 'pysail[test]=='"${RELEASE_VERSION}" -v -f dist --only-binary pysail
 
       - name: Verify Package
         shell: python
