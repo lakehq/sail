@@ -77,7 +77,7 @@ where
                 Err(_) => Err(SqlError::invalid(format!("literal: {value}"))),
             }
         }
-        _ => Err(SqlError::invalid(format!("literal expression: {:?}", expr))),
+        _ => Err(SqlError::invalid(format!("literal expression: {expr:?}"))),
     }
 }
 

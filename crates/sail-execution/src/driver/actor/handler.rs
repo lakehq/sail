@@ -274,7 +274,7 @@ impl DriverActor {
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
         let graph = JobGraph::try_new(plan)?;
-        debug!("job {} job graph \n{}", job_id, graph);
+        debug!("job {job_id} job graph \n{graph}");
         let mut stages = vec![];
         for (s, stage) in graph.stages().iter().enumerate() {
             let last = s == graph.stages().len() - 1;

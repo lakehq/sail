@@ -363,7 +363,7 @@ pub enum PySparkUdfType {
 
 impl PySparkUdfType {
     fn invalid(v: i32) -> CommonError {
-        CommonError::invalid(format!("invalid PySpark UDF type: {}", v))
+        CommonError::invalid(format!("invalid PySpark UDF type: {v}"))
     }
 
     pub fn is_table_function(&self) -> bool {

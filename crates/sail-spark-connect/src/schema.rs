@@ -55,13 +55,13 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
         Kind::Decimal(decimal) => {
             write!(f, "decimal(")?;
             if let Some(precision) = decimal.precision {
-                write!(f, "{}", precision)?;
+                write!(f, "{precision}")?;
             } else {
                 write!(f, "?")?;
             }
             write!(f, ",")?;
             if let Some(scale) = decimal.scale {
-                write!(f, "{}", scale)?;
+                write!(f, "{scale}")?;
             } else {
                 write!(f, "?")?;
             }

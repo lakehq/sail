@@ -60,8 +60,7 @@ fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         ),
         _ => {
             return Err(PlanError::invalid(format!(
-                "Invalid asc value for sort_array: {}",
-                asc
+                "Invalid asc value for sort_array: {asc}"
             )))
         }
     };
