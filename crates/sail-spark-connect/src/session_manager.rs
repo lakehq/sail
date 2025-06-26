@@ -111,6 +111,7 @@ impl SessionManager {
             let execution = &mut session_config.options_mut().execution;
 
             execution.batch_size = options.config.execution.batch_size;
+            execution.collect_statistics = options.config.execution.collect_statistics;
             execution.listing_table_ignore_subdirectory = false;
         }
 

@@ -297,10 +297,11 @@ impl PlanResolver<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::PlanConfig;
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
+
+    use super::*;
+    use crate::config::PlanConfig;
 
     #[test]
     fn test_resolve_json_read_options() -> PlanResult<()> {

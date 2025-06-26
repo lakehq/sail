@@ -206,6 +206,15 @@
   description: The batch size for physical plan execution.
   experimental: true
 
+- key: execution.collect_statistics
+  type: boolean
+  default: "true"
+  description: |
+    Should statistics be collected when first creating a table.
+    This can slow down the initial DataFrame creation while greatly accelerating queries with certain filters.
+    Has no effect after the table is created.
+  experimental: true
+
 - key: parquet.enable_page_index
   type: boolean
   default: "true"
