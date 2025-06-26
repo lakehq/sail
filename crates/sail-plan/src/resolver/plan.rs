@@ -3199,23 +3199,26 @@ impl PlanResolver<'_> {
                     results.push(order);
                 }
                 Ok(results) as PlanResult<_>
-            }.await?;
+            }
+            .await?;
 
-            return self.resolve_catalog_create_delta_table(
-                table,
-                schema,
-                comment,
-                column_defaults,
-                constraints,
-                location,
-                table_partition_cols_converted,
-                file_sort_order_converted,
-                if_not_exists,
-                or_replace,
-                unbounded,
-                options,
-                definition,
-            ).await;
+            return self
+                .resolve_catalog_create_delta_table(
+                    table,
+                    schema,
+                    comment,
+                    column_defaults,
+                    constraints,
+                    location,
+                    table_partition_cols_converted,
+                    file_sort_order_converted,
+                    if_not_exists,
+                    or_replace,
+                    unbounded,
+                    options,
+                    definition,
+                )
+                .await;
         }
 
         let table_partition_cols: Vec<String> =
@@ -3346,6 +3349,55 @@ impl PlanResolver<'_> {
         use deltalake::DeltaOps;
         use std::collections::HashMap;
 
+        let table_reference = self.resolve_table_reference(&table)?;
+
+        // First, try to open an existing Delta table at the location
+        match deltalake::open_table(&location).await {
+            Ok(existing_delta_table) => {
+                // Table exists, create a provider and register it
+                let delta_provider =
+                    DeltaTableProvider::new(existing_delta_table).map_err(|e| {
+                        PlanError::invalid(format!("Failed to create DeltaTableProvider: {}", e))
+                    })?;
+
+                // Register the existing table in the catalog
+                self.ctx
+                    .register_table(table_reference.clone(), Arc::new(delta_provider))
+                    .map_err(|e| PlanError::invalid(format!("Failed to register table: {}", e)))?;
+
+                // Return a successful DDL plan indicating the table was loaded
+                let command = CatalogCommand::CreateTable {
+                    table: table_reference,
+                    schema,
+                    comment,
+                    column_defaults,
+                    constraints,
+                    location,
+                    file_format: "delta".to_string(),
+                    table_partition_cols,
+                    file_sort_order,
+                    if_not_exists,
+                    or_replace,
+                    unbounded,
+                    options: vec![], // Options already processed during table loading
+                    definition,
+                    copy_to_plan: None,
+                };
+                return self.resolve_catalog_command(command);
+            }
+            Err(deltalake::DeltaTableError::NotATable(_))
+            | Err(deltalake::DeltaTableError::InvalidTableLocation(_)) => {
+                // Table doesn't exist, proceed with creation logic
+            }
+            Err(e) => {
+                // Other errors (e.g., permission issues, network problems)
+                return Err(PlanError::invalid(format!(
+                    "Failed to check Delta table existence: {}",
+                    e
+                )));
+            }
+        }
+
         // Convert DataFusion schema to Delta Lake schema
         let delta_fields: Result<Vec<StructField>, PlanError> = schema
             .fields()
@@ -3364,7 +3416,9 @@ impl PlanResolver<'_> {
                     adt::DataType::Binary => DeltaDataType::Primitive(PrimitiveType::Binary),
                     adt::DataType::LargeBinary => DeltaDataType::Primitive(PrimitiveType::Binary),
                     adt::DataType::Date32 => DeltaDataType::Primitive(PrimitiveType::Date),
-                    adt::DataType::Timestamp(_, _) => DeltaDataType::Primitive(PrimitiveType::Timestamp),
+                    adt::DataType::Timestamp(_, _) => {
+                        DeltaDataType::Primitive(PrimitiveType::Timestamp)
+                    }
                     _ => {
                         return Err(PlanError::invalid(format!(
                             "Unsupported data type for Delta Lake: {:?}",
@@ -3401,14 +3455,14 @@ impl PlanResolver<'_> {
 
         // Add partition columns if specified
         if !table_partition_cols.is_empty() {
-            create_builder = create_builder.with_partition_columns(table_partition_cols);
+            create_builder = create_builder.with_partition_columns(table_partition_cols.clone());
         }
 
         // Add table properties from options
         let mut configuration = HashMap::new();
-        for (key, value) in options {
+        for (key, value) in &options {
             if key.starts_with("delta.") {
-                configuration.insert(key, Some(value));
+                configuration.insert(key.clone(), Some(value.clone()));
             }
         }
 
@@ -3417,18 +3471,27 @@ impl PlanResolver<'_> {
         }
 
         // Add comment if provided
-        if let Some(comment) = comment {
-            create_builder = create_builder.with_comment(&comment);
+        if let Some(ref comment) = comment {
+            create_builder = create_builder.with_comment(comment);
         }
 
         // Execute table creation
-        let _delta_table = create_builder
+        let new_delta_table = create_builder
             .await
             .map_err(|e| PlanError::invalid(format!("Failed to create Delta table: {}", e)))?;
 
+        // Register the newly created table in the catalog
+        let delta_provider = DeltaTableProvider::new(new_delta_table).map_err(|e| {
+            PlanError::invalid(format!("Failed to create DeltaTableProvider: {}", e))
+        })?;
+
+        self.ctx
+            .register_table(table_reference.clone(), Arc::new(delta_provider))
+            .map_err(|e| PlanError::invalid(format!("Failed to register table: {}", e)))?;
+
         // Return a successful DDL plan
         let command = CatalogCommand::CreateTable {
-            table: self.resolve_table_reference(&table)?,
+            table: table_reference,
             schema,
             comment: None, // Already handled above
             column_defaults,

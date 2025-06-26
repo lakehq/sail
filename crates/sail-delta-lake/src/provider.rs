@@ -171,9 +171,9 @@ impl TableProvider for DeltaTableProvider {
 
         // Apply remaining filters that couldn't be pushed to partition level
         if !remaining_filters.is_empty() {
-            use datafusion::physical_plan::filter::FilterExec;
             use datafusion::physical_expr::create_physical_expr;
             use datafusion::physical_expr::execution_props::ExecutionProps;
+            use datafusion::physical_plan::filter::FilterExec;
             use datafusion_common::DFSchema;
 
             // Combine remaining filters with AND
@@ -192,11 +192,8 @@ impl TableProvider for DeltaTableProvider {
             if let Some(filter_expr) = combined_filter {
                 // Convert Arrow schema to DFSchema for create_physical_expr
                 let df_schema = DFSchema::try_from(exec.schema().as_ref().clone())?;
-                let physical_filter = create_physical_expr(
-                    &filter_expr,
-                    &df_schema,
-                    &ExecutionProps::new(),
-                )?;
+                let physical_filter =
+                    create_physical_expr(&filter_expr, &df_schema, &ExecutionProps::new())?;
 
                 let filtered_exec = Arc::new(FilterExec::try_new(physical_filter, exec)?);
                 Ok(filtered_exec as Arc<dyn ExecutionPlan>)

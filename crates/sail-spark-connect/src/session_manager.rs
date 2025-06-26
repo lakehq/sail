@@ -173,12 +173,14 @@ impl SessionManager {
             .build();
 
         // Register Delta Lake table factory
-        state
-            .table_factories_mut()
-            .insert("DELTA".to_string(), Arc::new(sail_delta_lake::factory::DeltaTableFactory::new()));
-        state
-            .table_factories_mut()
-            .insert("DELTALAKE".to_string(), Arc::new(sail_delta_lake::factory::DeltaTableFactory::new()));
+        state.table_factories_mut().insert(
+            "DELTA".to_string(),
+            Arc::new(sail_delta_lake::factory::DeltaTableFactory::new()),
+        );
+        state.table_factories_mut().insert(
+            "DELTALAKE".to_string(),
+            Arc::new(sail_delta_lake::factory::DeltaTableFactory::new()),
+        );
         let context = SessionContext::new_with_state(state);
 
         // TODO: This is a temp workaround to deregister all built-in functions that we define.

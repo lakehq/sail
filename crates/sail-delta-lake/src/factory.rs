@@ -142,7 +142,8 @@ impl DeltaTableFactory {
 
         // Add partition columns if specified
         if !cmd.table_partition_cols.is_empty() {
-            create_builder = create_builder.with_partition_columns(cmd.table_partition_cols.clone());
+            create_builder =
+                create_builder.with_partition_columns(cmd.table_partition_cols.clone());
         }
 
         // Add table properties from options
