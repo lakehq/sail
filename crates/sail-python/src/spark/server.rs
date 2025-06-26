@@ -30,7 +30,7 @@ impl SparkConnectServerState {
             let _ = self.shutdown.send(());
         }
         self.handle.join().map_err(|e| {
-            PyErr::new::<PyRuntimeError, _>(format!("failed to join the server thread: {:?}", e))
+            PyErr::new::<PyRuntimeError, _>(format!("failed to join the server thread: {e:?}"))
         })??;
         info!("The Spark Connect server has stopped.");
         fastrace::flush();
@@ -116,7 +116,7 @@ impl SparkConnectServer {
         handle
             .primary()
             .block_on(async { init_telemetry() })
-            .map_err(|e| PyErr::new::<PyRuntimeError, _>(format!("{:?}", e)))
+            .map_err(|e| PyErr::new::<PyRuntimeError, _>(format!("{e:?}")))
     }
 }
 
@@ -149,8 +149,7 @@ impl SparkConnectServer {
             .block_on(async { serve(listener, Self::shutdown(rx), options).await })
             .map_err(|e| {
                 PyErr::new::<PyRuntimeError, _>(format!(
-                    "failed to run the Spark Connect server: {:?}",
-                    e
+                    "failed to run the Spark Connect server: {e:?}"
                 ))
             })?;
         Ok(())
@@ -166,7 +165,7 @@ impl SparkConnectServer {
         let address = listener.local_addr()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         let handle = self.runtime.handle();
-        info!("Starting the Spark Connect server on {}...", address);
+        info!("Starting the Spark Connect server on {address}...");
         let handle = thread::Builder::new()
             .spawn(move || Self::run_blocking(handle.primary().clone(), options, listener, rx))?;
         Ok(SparkConnectServerState {

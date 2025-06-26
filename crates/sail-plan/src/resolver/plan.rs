@@ -884,8 +884,7 @@ impl PlanResolver<'_> {
             }
             other => {
                 return Err(PlanError::unsupported(format!(
-                    "unsupported data source format: {:?}",
-                    other
+                    "unsupported data source format: {other:?}"
                 )))
             }
         }
@@ -1757,8 +1756,7 @@ impl PlanResolver<'_> {
         let num_partitions = num_partitions.unwrap_or(1);
         if num_partitions < 1 {
             return Err(PlanError::invalid(format!(
-                "invalid number of partitions: {}",
-                num_partitions
+                "invalid number of partitions: {num_partitions}"
             )));
         }
         let alias = state.register_field_name("id");

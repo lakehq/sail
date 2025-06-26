@@ -55,8 +55,7 @@ impl SparkRuntimeConfig {
         if let Some(entry) = SPARK_CONFIG.get(key) {
             if entry.removed.is_some() && entry.default_value != Some(value) {
                 return Err(SparkError::invalid(format!(
-                    "configuration has been removed: {}",
-                    key
+                    "configuration has been removed: {key}"
                 )));
             }
         }

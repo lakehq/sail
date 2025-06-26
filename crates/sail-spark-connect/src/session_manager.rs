@@ -253,7 +253,7 @@ impl SessionManagerActor {
             Entry::Occupied(o) => Ok(o.get().clone()),
             Entry::Vacant(v) => {
                 let key = v.key().clone();
-                info!("creating session {}", key);
+                info!("creating session {key}");
                 match SessionManager::create_session_context(system, key, self.options.clone()) {
                     Ok(context) => Ok(v.insert(context).clone()),
                     Err(e) => Err(e),
@@ -287,7 +287,7 @@ impl SessionManagerActor {
         if let Some(context) = context {
             if let Ok(spark) = SparkExtension::get(context) {
                 if spark.active_at().is_ok_and(|x| x <= instant) {
-                    info!("removing idle session {}", key);
+                    info!("removing idle session {key}");
                     ctx.spawn(async move { spark.job_runner().stop().await });
                     self.sessions.remove(&key);
                 }

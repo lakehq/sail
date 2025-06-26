@@ -1275,8 +1275,7 @@ impl PlanResolver<'_> {
             }
             _ => {
                 return Err(PlanError::invalid(format!(
-                    "invalid window function expression: {:?}",
-                    window_function
+                    "invalid window function expression: {window_function:?}"
                 )));
             }
         };
@@ -1759,7 +1758,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|e| {
                 name_map.get(e).cloned().ok_or_else(|| {
-                    PlanError::invalid(format!("grouping set expression not found: {:?}", e))
+                    PlanError::invalid(format!("grouping set expression not found: {e:?}"))
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;

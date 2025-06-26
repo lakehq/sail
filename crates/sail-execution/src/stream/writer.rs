@@ -30,9 +30,9 @@ impl Display for TaskWriteLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             TaskWriteLocation::Local { channel, storage } => {
-                write!(f, "Local({}, {})", channel, storage)
+                write!(f, "Local({channel}, {storage})")
             }
-            TaskWriteLocation::Remote { uri } => write!(f, "Remote({})", uri),
+            TaskWriteLocation::Remote { uri } => write!(f, "Remote({uri})"),
         }
     }
 }

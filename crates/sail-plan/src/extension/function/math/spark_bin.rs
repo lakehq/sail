@@ -93,8 +93,8 @@ impl ScalarUDFImpl for SparkBin {
 fn bin(value: i64) -> String {
     // TODO: This is not performant, but it's a simple implementation
     if value >= 0 {
-        format!("{:b}", value)
+        format!("{value:b}")
     } else {
-        format!("{:064b}", value)
+        format!("{value:064b}")
     }
 }

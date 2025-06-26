@@ -23,7 +23,7 @@ impl PlanResolver<'_> {
                 catalog: Arc::from(a.as_ref()),
                 schema: Arc::from(b.as_ref()),
             }),
-            _ => Err(PlanError::invalid(format!("schema reference: {:?}", names))),
+            _ => Err(PlanError::invalid(format!("schema reference: {names:?}"))),
         }
     }
 
@@ -45,7 +45,7 @@ impl PlanResolver<'_> {
                 schema: Arc::from(b.as_ref()),
                 table: Arc::from(c.as_ref()),
             }),
-            _ => Err(PlanError::invalid(format!("table reference: {:?}", names))),
+            _ => Err(PlanError::invalid(format!("table reference: {names:?}"))),
         }
     }
 

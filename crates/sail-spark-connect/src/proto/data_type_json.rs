@@ -111,8 +111,7 @@ impl FromStr for DayTimeIntervalField {
             "minute" => Ok(DayTimeIntervalField::Minute),
             "second" => Ok(DayTimeIntervalField::Second),
             _ => Err(serde::de::Error::custom(format!(
-                "invalid day time interval field: {}",
-                s
+                "invalid day time interval field: {s}"
             ))),
         }
     }
@@ -143,8 +142,7 @@ impl FromStr for YearMonthIntervalField {
             "year" => Ok(YearMonthIntervalField::Year),
             "month" => Ok(YearMonthIntervalField::Month),
             _ => Err(serde::de::Error::custom(format!(
-                "invalid year month interval field: {}",
-                s
+                "invalid year month interval field: {s}"
             ))),
         }
     }
@@ -181,7 +179,7 @@ mod serde_char {
         let s = String::deserialize(deserializer)?;
         let caps = CHAR_LENGTH
             .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid char type: {}", s)))?;
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid char type: {s}")))?;
         caps[1].parse().map_err(serde::de::Error::custom)
     }
 }
@@ -209,7 +207,7 @@ mod serde_varchar {
         let s = String::deserialize(deserializer)?;
         let caps = VARCHAR_LENGTH
             .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid varchar type: {}", s)))?;
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid varchar type: {s}")))?;
         caps[1].parse().map_err(serde::de::Error::custom)
     }
 }
@@ -237,7 +235,7 @@ mod serde_fixed_decimal {
         let s = String::deserialize(deserializer)?;
         let caps = FIXED_DECIMAL
             .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid decimal type: {}", s)))?;
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid decimal type: {s}")))?;
         Ok((
             caps[1].parse().map_err(serde::de::Error::custom)?,
             caps[2].parse().map_err(serde::de::Error::custom)?,
@@ -269,8 +267,8 @@ mod serde_day_time_interval {
         let start = start.as_ref().map(|f| f.to_string());
         let end = end.as_ref().map(|f| f.to_string());
         let interval = match (start, end) {
-            (Some(start), Some(end)) => format!("interval {} to {}", start, end),
-            (Some(start), None) => format!("interval {}", start),
+            (Some(start), Some(end)) => format!("interval {start} to {end}"),
+            (Some(start), None) => format!("interval {start}"),
             _ => return Err(serde::ser::Error::custom("invalid day time interval")),
         };
         interval.serialize(serializer)
@@ -291,7 +289,7 @@ mod serde_day_time_interval {
         let s = String::deserialize(deserializer)?;
         let caps = DAY_TIME_INTERVAL
             .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid day time interval: {}", s)))?;
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid day time interval: {s}")))?;
         let start = caps
             .get(1)
             .map(|m| super::DayTimeIntervalField::from_str(m.as_str()))
@@ -328,8 +326,8 @@ mod serde_year_month_interval {
         let start = start.as_ref().map(|f| f.to_string());
         let end = end.as_ref().map(|f| f.to_string());
         let interval = match (start, end) {
-            (Some(start), Some(end)) => format!("interval {} to {}", start, end),
-            (Some(start), None) => format!("interval {}", start),
+            (Some(start), Some(end)) => format!("interval {start} to {end}"),
+            (Some(start), None) => format!("interval {start}"),
             _ => return Err(serde::ser::Error::custom("invalid year month interval")),
         };
         interval.serialize(serializer)
@@ -349,7 +347,7 @@ mod serde_year_month_interval {
     {
         let s = String::deserialize(deserializer)?;
         let caps = YEAR_MONTH_INTERVAL.captures(&s).ok_or_else(|| {
-            serde::de::Error::custom(format!("invalid year month interval: {}", s))
+            serde::de::Error::custom(format!("invalid year month interval: {s}"))
         })?;
         let start = caps
             .get(1)
