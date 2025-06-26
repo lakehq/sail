@@ -2,13 +2,14 @@ module.exports = async ({ github, context, core }) => {
   const version = process.env.RELEASE_VERSION;
   const previousVersion = process.env.PREVIOUS_RELEASE_VERSION;
   const text = [];
-  const url = `https://docs.lakesail.com/sail/latest/reference/changelog/#_${version.replace(/\./g, "-")}`;
+  const summaryUrl = `https://docs.lakesail.com/sail/latest/reference/changelog/#_${version.replace(/\./g, "-")}`;
+  const pypiUrl = `https://pypi.org/project/pysail/${version}/`;
   text.push("## Overview\n");
   text.push(
-    `Please refer to the [documentation](${url}) for a summary of the release.\n\n`,
+    `You can find the release summary in the [documentation](${summaryUrl}).\n\n`,
   );
   text.push(
-    `PySail ${version} is available on [PyPI](https://pypi.org/project/pysail/${version}/).\n\n`,
+    `The PySail Python package is available on [PyPI](${pypiUrl}).\n\n`,
   );
 
   if (previousVersion) {

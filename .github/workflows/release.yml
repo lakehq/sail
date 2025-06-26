@@ -312,6 +312,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: "package-wheel-*"
           path: dist
           merge-multiple: true
 
@@ -344,6 +345,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: "package-*"
           path: dist
           merge-multiple: true
 
@@ -361,6 +363,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
+      contents: write
+      discussions: write
       id-token: write
     needs:
       - setup
@@ -393,9 +397,10 @@ jobs:
 
       - name: Create GitHub Release
         if: ${{ github.event_name == 'push' }}
-        uses: ncipollo/release-action@v1
+        uses: softprops/action-gh-release@v2
         with:
-          bodyFile: /tmp/release-notes.md
-          discussionCategory: Releases
+          body_path: /tmp/release-notes.md
+          discussion_category_name: Releases
           draft: true
           prerelease: ${{ needs.setup.outputs.is_pre_release == 'true' }}
+          generate_release_notes: false
