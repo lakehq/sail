@@ -233,7 +233,6 @@ def test_sql_temp_view(spark, df, df_view):
     assert_frame_equal(spark.sql(f"SELECT * FROM {df_view}").toPandas(), df.toPandas())  # noqa: S608
 
 
-# CHECK HERE: DO NOT MERGE IF THIS COMMENT IS HERE!!!
 def test_write_json(spark, df, tmpdir):
     path = str(tmpdir.join("df.json"))
     df.write.json(path)
@@ -241,7 +240,6 @@ def test_write_json(spark, df, tmpdir):
     assert_frame_equal(df.toPandas(), out.toPandas(), check_dtype=False)
 
 
-# CHECK HERE: DO NOT MERGE IF THIS COMMENT IS HERE!!!
 def test_write_parquet(spark, df, tmpdir):
     path = str(tmpdir.join("df.parquet"))
     df.write.parquet(path)
