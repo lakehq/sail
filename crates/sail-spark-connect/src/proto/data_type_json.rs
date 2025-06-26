@@ -346,9 +346,9 @@ mod serde_year_month_interval {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        let caps = YEAR_MONTH_INTERVAL.captures(&s).ok_or_else(|| {
-            serde::de::Error::custom(format!("invalid year month interval: {s}"))
-        })?;
+        let caps = YEAR_MONTH_INTERVAL
+            .captures(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid year month interval: {s}")))?;
         let start = caps
             .get(1)
             .map(|m| super::YearMonthIntervalField::from_str(m.as_str()))
