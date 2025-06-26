@@ -12,6 +12,7 @@ use datafusion::datasource::TableType;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::Result as DataFusionResult;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use deltalake::arrow::error::ArrowError;
@@ -156,10 +157,94 @@ impl TableProvider for DeltaTableProvider {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        // For now, return Unsupported for all filters until we implement proper filter pushdown
-        Ok(vec![
-            TableProviderFilterPushDown::Unsupported;
-            filters.len()
-        ])
+        // Get partition columns from Delta table metadata
+        let partition_columns = match self.table.metadata() {
+            Ok(metadata) => metadata.partition_columns.clone(),
+            Err(_) => {
+                return Ok(vec![
+                    TableProviderFilterPushDown::Unsupported;
+                    filters.len()
+                ])
+            }
+        };
+
+        // Evaluate each filter to determine pushdown capability
+        Ok(filters
+            .iter()
+            .map(|filter| {
+                // Check if this filter can be exactly evaluated using partition columns only
+                if is_exact_predicate_for_partition_cols(&partition_columns, filter) {
+                    // Filter only references partition columns and supported operators
+                    // This can be handled exactly during file pruning
+                    TableProviderFilterPushDown::Exact
+                } else if has_supported_column_refs(filter) {
+                    // Filter references some columns but may not be limited to partition columns
+                    // Can be pushed down but may not be completely exact (needs additional filtering)
+                    TableProviderFilterPushDown::Inexact
+                } else {
+                    // Filter cannot be pushed down (e.g., complex expressions, unsupported functions)
+                    TableProviderFilterPushDown::Unsupported
+                }
+            })
+            .collect())
     }
+}
+
+/// Check if a filter expression can be exactly evaluated using only partition columns
+/// Based on delta-rs implementation of expr_is_exact_predicate_for_cols
+fn is_exact_predicate_for_partition_cols(partition_cols: &[String], expr: &Expr) -> bool {
+    use datafusion::logical_expr::{BinaryExpr, Operator};
+
+    let mut is_exact = true;
+
+    let _ = expr.apply(|expr| match expr {
+        Expr::Column(col) => {
+            // All column references must be partition columns
+            is_exact &= partition_cols.contains(&col.name);
+            if is_exact {
+                Ok(TreeNodeRecursion::Jump) // Skip children, we found a valid column
+            } else {
+                Ok(TreeNodeRecursion::Stop) // Stop traversal, found invalid column
+            }
+        }
+        Expr::BinaryExpr(BinaryExpr { op, .. }) => {
+            // Only support specific binary operators for exact pushdown
+            is_exact &= matches!(
+                op,
+                Operator::And
+                    | Operator::Or
+                    | Operator::NotEq
+                    | Operator::Eq
+                    | Operator::Gt
+                    | Operator::GtEq
+                    | Operator::Lt
+                    | Operator::LtEq
+            );
+            if is_exact {
+                Ok(TreeNodeRecursion::Continue) // Continue checking children
+            } else {
+                Ok(TreeNodeRecursion::Stop) // Stop traversal, unsupported operator
+            }
+        }
+        // These expression types are supported for exact pushdown
+        Expr::Literal(_, _)
+        | Expr::Not(_)
+        | Expr::IsNotNull(_)
+        | Expr::IsNull(_)
+        | Expr::Between(_)
+        | Expr::InList(_) => Ok(TreeNodeRecursion::Continue),
+        // All other expression types are not supported for exact pushdown
+        _ => {
+            is_exact = false;
+            Ok(TreeNodeRecursion::Stop)
+        }
+    });
+
+    is_exact
+}
+
+/// Check if a filter expression has column references that could potentially be pushed down
+fn has_supported_column_refs(expr: &Expr) -> bool {
+    // If the expression has any column references, it might be pushable as inexact
+    !expr.column_refs().is_empty()
 }
