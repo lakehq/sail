@@ -5,7 +5,9 @@ use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::datasource::TableProvider;
 use datafusion_common::Result as DataFusionResult;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::CreateExternalTable;
+use url::Url;
 
 use crate::provider::DeltaTableProvider;
 
@@ -29,13 +31,22 @@ impl Default for DeltaTableFactory {
 impl TableProviderFactory for DeltaTableFactory {
     async fn create(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
         let location = &cmd.location;
+        let url = Url::parse(location)
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+        let object_store_url = ObjectStoreUrl::parse(url.as_str())
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+        let object_store = state.runtime_env().object_store(&object_store_url)?;
 
         // Check if this is a Delta table creation or reading
-        match deltalake::open_table(location).await {
+        match deltalake::DeltaTableBuilder::from_uri(location)
+            .with_storage_backend(object_store.clone(), url.clone())
+            .load()
+            .await
+        {
             Ok(delta_table) => {
                 // Table exists, create provider for reading
                 let provider = DeltaTableProvider::new(delta_table)
@@ -44,7 +55,7 @@ impl TableProviderFactory for DeltaTableFactory {
             }
             Err(_) => {
                 // Table doesn't exist, create a new one
-                self.create_delta_table(location, cmd).await
+                self.create_delta_table(state, location, cmd).await
             }
         }
     }
@@ -53,6 +64,7 @@ impl TableProviderFactory for DeltaTableFactory {
 impl DeltaTableFactory {
     async fn create_delta_table(
         &self,
+        state: &dyn Session,
         location: &str,
         cmd: &CreateExternalTable,
     ) -> DataFusionResult<Arc<dyn TableProvider>> {
@@ -126,10 +138,19 @@ impl DeltaTableFactory {
             datafusion_common::DataFusionError::Plan(format!("Schema conversion error: {}", e))
         })?;
 
-        // Create Delta table
-        let delta_ops = DeltaOps::try_from_uri(location)
-            .await
+        // Create Delta table using the shared ObjectStore
+        let url = Url::parse(location)
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+        let object_store_url = ObjectStoreUrl::parse(url.as_str())
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+        let object_store = state.runtime_env().object_store(&object_store_url)?;
+
+        let table = deltalake::DeltaTableBuilder::from_uri(location)
+            .with_storage_backend(object_store, url)
+            .build()
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+
+        let delta_ops = DeltaOps(table);
 
         let mut create_builder = delta_ops
             .create()

@@ -3366,7 +3366,7 @@ impl PlanResolver<'_> {
                     .register_table(table_reference.clone(), table_provider.clone())
                     .map_err(|e| PlanError::invalid(format!("Failed to register table: {}", e)))?;
 
-                                // Return a TableScan logical plan for the existing table
+                // Return a TableScan logical plan for the existing table
                 return Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
                     table_reference,
                     provider_as_source(table_provider),
@@ -3530,7 +3530,6 @@ impl PlanResolver<'_> {
             }
         }
     }
-
 
     async fn resolve_catalog_drop_view(
         &self,

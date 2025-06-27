@@ -111,7 +111,7 @@ impl TableProvider for DeltaTableProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -172,11 +172,11 @@ impl TableProvider for DeltaTableProvider {
         // Apply remaining filters that couldn't be pushed to partition level
         if !remaining_filters.is_empty() {
             use datafusion::physical_expr::create_physical_expr;
-            use datafusion::physical_expr::execution_props::ExecutionProps;
             use datafusion::physical_plan::filter::FilterExec;
             use datafusion_common::DFSchema;
 
-            // Combine remaining filters with AND
+            // Combine remaining filters with AND.
+            // We need to pass the session state to `create_physical_expr`.
             let combined_filter = remaining_filters
                 .into_iter()
                 .cloned()
@@ -193,7 +193,7 @@ impl TableProvider for DeltaTableProvider {
                 // Convert Arrow schema to DFSchema for create_physical_expr
                 let df_schema = DFSchema::try_from(exec.schema().as_ref().clone())?;
                 let physical_filter =
-                    create_physical_expr(&filter_expr, &df_schema, &ExecutionProps::new())?;
+                    create_physical_expr(&filter_expr, &df_schema, &state.execution_props())?;
 
                 let filtered_exec = Arc::new(FilterExec::try_new(physical_filter, exec)?);
                 Ok(filtered_exec as Arc<dyn ExecutionPlan>)

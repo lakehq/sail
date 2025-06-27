@@ -163,7 +163,7 @@ impl SessionManager {
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)
         };
-        let mut state = SessionStateBuilder::new()
+        let state = SessionStateBuilder::new()
             .with_config(session_config)
             .with_runtime_env(runtime)
             .with_default_features()
