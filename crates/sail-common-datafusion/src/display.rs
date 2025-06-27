@@ -639,7 +639,7 @@ impl From<Option<Duration>> for MaybeDuration {
 impl Display for MaybeDuration {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            MaybeDuration::Yes(d) => write!(f, "{}", d),
+            MaybeDuration::Yes(d) => write!(f, "{d}"),
             MaybeDuration::No => write!(f, "ERROR"),
         }
     }
