@@ -91,6 +91,9 @@ use sail_plan::extension::function::spark_aes::{
 use sail_plan::extension::function::spark_crc32::SparkCrc32;
 use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_plan::extension::function::spark_sha1::SparkSha1;
+use sail_plan::extension::function::spark_to_string::{
+    SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
+};
 use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::string::levenshtein::Levenshtein;
 use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
@@ -830,6 +833,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
             "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
             "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
+            "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
+            "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
+            "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -890,6 +896,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkPmod>()
             || node.inner().as_any().is::<SparkCeil>()
             || node.inner().as_any().is::<SparkFloor>()
+            || node.inner().as_any().is::<SparkToUtf8>()
+            || node.inner().as_any().is::<SparkToLargeUtf8>()
+            || node.inner().as_any().is::<SparkToUtf8View>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"
