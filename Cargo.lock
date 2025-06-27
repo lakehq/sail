@@ -5404,6 +5404,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "deltalake",
+ "futures",
  "object_store",
  "sail-common",
  "sail-common-datafusion",

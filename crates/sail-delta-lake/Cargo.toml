@@ -4,16 +4,26 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+# Core sail dependencies
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion", features = ["delta-lake"] }
-deltalake = { workspace = true }
+
+# Delta Lake core (without datafusion feature)
+deltalake = { workspace = true}
+
+# DataFusion dependencies - these are needed because we disabled delta-rs datafusion feature
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-execution = { workspace = true }
+# Essential utilities
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 object_store = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
+futures = { workspace = true }
+
+[features]
+default = []

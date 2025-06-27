@@ -1,9 +1,10 @@
-use std::any::Any;
-use std::sync::Arc;
+mod cdf;
 
+use crate::delta_datafusion::cdf::scan::partitioned_file_from_action;
+use crate::error::DeltaResult;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema, SchemaRef};
-use datafusion::catalog::Session;
+use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
@@ -15,22 +16,35 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::Result as DataFusionResult;
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_expr::CreateExternalTable;
 use deltalake::arrow::error::ArrowError;
 use deltalake::{DeltaTable, DeltaTableError};
-
-use crate::error::DeltaResult;
-use crate::scan::partitioned_file_from_action;
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
+use url::Url;
 
 #[derive(Debug)]
 pub struct DeltaTableProvider {
     table: DeltaTable,
     schema: SchemaRef,
+    /// The object store URL for this Delta table
+    object_store_url: ObjectStoreUrl,
 }
 
 impl DeltaTableProvider {
     pub fn new(table: DeltaTable) -> DeltaResult<Self> {
         let schema = Self::create_arrow_schema(&table)?;
-        Ok(Self { table, schema })
+
+        // Parse the table URI to get the object store URL
+        let object_store_url = ObjectStoreUrl::parse(table.table_uri())
+            .map_err(|e| DeltaTableError::Generic(format!("Failed to parse table URI: {}", e)))?;
+
+        Ok(Self {
+            table,
+            schema,
+            object_store_url,
+        })
     }
 
     /// Replicate the schema conversion logic from `delta-rs`.
@@ -93,6 +107,13 @@ impl DeltaTableProvider {
 
         Ok(files)
     }
+
+    /// Get the object store for this Delta table using the session's runtime environment
+    fn get_object_store(&self, state: &dyn Session) -> DataFusionResult<Arc<dyn object_store::ObjectStore>> {
+        // Use the session's runtime environment to get the object store
+        // This ensures we use Sail's DynamicObjectStoreRegistry
+        state.runtime_env().object_store(&self.object_store_url)
+    }
 }
 
 #[async_trait]
@@ -116,6 +137,9 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        // Get the object store using Sail's registry pattern
+        let _object_store = self.get_object_store(state)?;
+
         // Apply partition filters first for file pruning
         let partition_columns = match self.table.metadata() {
             Ok(metadata) => metadata.partition_columns.clone(),
@@ -138,16 +162,12 @@ impl TableProvider for DeltaTableProvider {
                 .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?
         };
 
-        // Parse the table URI to get the object store URL
-        let object_store_url = ObjectStoreUrl::parse(self.table.table_uri())
-            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
-
         // Create ParquetSource with default options
         let parquet_options = TableParquetOptions::default();
         let source = Arc::new(ParquetSource::new(parquet_options));
 
         // Create FileScanConfig using the builder with the object store URL
-        let mut builder = FileScanConfigBuilder::new(object_store_url, self.schema.clone(), source);
+        let mut builder = FileScanConfigBuilder::new(self.object_store_url.clone(), self.schema.clone(), source);
 
         // Add files to the builder
         for file in files {
@@ -299,4 +319,184 @@ fn is_exact_predicate_for_partition_cols(partition_cols: &[String], expr: &Expr)
 fn has_supported_column_refs(expr: &Expr) -> bool {
     // If the expression has any column references, it might be pushable as inexact
     !expr.column_refs().is_empty()
+}
+
+/// Factory for creating Delta Lake table providers
+
+#[derive(Debug)]
+pub struct DeltaTableFactory;
+
+impl DeltaTableFactory {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for DeltaTableFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl TableProviderFactory for DeltaTableFactory {
+    async fn create(
+        &self,
+        state: &dyn Session,
+        cmd: &CreateExternalTable,
+    ) -> DataFusionResult<Arc<dyn TableProvider>> {
+        let location = &cmd.location;
+        let url = Url::parse(location)
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+        let object_store_url = ObjectStoreUrl::parse(url.as_str())
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+        let object_store = state.runtime_env().object_store(&object_store_url)?;
+
+        match deltalake::DeltaTableBuilder::from_uri(location)
+            .with_storage_backend(object_store.clone(), url.clone())
+            .load()
+            .await
+        {
+            Ok(delta_table) => {
+                // Table exists, create provider for reading
+                let provider = DeltaTableProvider::new(delta_table)
+                    .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+                Ok(Arc::new(provider))
+            }
+            Err(_) => {
+                // Table doesn't exist, create a new one
+                self.create_delta_table(state, location, cmd).await
+            }
+        }
+    }
+}
+
+impl DeltaTableFactory {
+    async fn create_delta_table(
+        &self,
+        state: &dyn Session,
+        location: &str,
+        cmd: &CreateExternalTable,
+    ) -> DataFusionResult<Arc<dyn TableProvider>> {
+        use deltalake::kernel::{DataType as DeltaDataType, PrimitiveType, StructField};
+        use deltalake::protocol::SaveMode;
+        use deltalake::DeltaOps;
+
+        // Convert DataFusion schema to Delta Lake schema
+        let delta_fields: Result<Vec<StructField>, _> = cmd
+            .schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let delta_type = match field.data_type() {
+                    datafusion::arrow::datatypes::DataType::Boolean => {
+                        DeltaDataType::Primitive(PrimitiveType::Boolean)
+                    }
+                    datafusion::arrow::datatypes::DataType::Int8 => {
+                        DeltaDataType::Primitive(PrimitiveType::Byte)
+                    }
+                    datafusion::arrow::datatypes::DataType::Int16 => {
+                        DeltaDataType::Primitive(PrimitiveType::Short)
+                    }
+                    datafusion::arrow::datatypes::DataType::Int32 => {
+                        DeltaDataType::Primitive(PrimitiveType::Integer)
+                    }
+                    datafusion::arrow::datatypes::DataType::Int64 => {
+                        DeltaDataType::Primitive(PrimitiveType::Long)
+                    }
+                    datafusion::arrow::datatypes::DataType::Float32 => {
+                        DeltaDataType::Primitive(PrimitiveType::Float)
+                    }
+                    datafusion::arrow::datatypes::DataType::Float64 => {
+                        DeltaDataType::Primitive(PrimitiveType::Double)
+                    }
+                    datafusion::arrow::datatypes::DataType::Utf8 => {
+                        DeltaDataType::Primitive(PrimitiveType::String)
+                    }
+                    datafusion::arrow::datatypes::DataType::LargeUtf8 => {
+                        DeltaDataType::Primitive(PrimitiveType::String)
+                    }
+                    datafusion::arrow::datatypes::DataType::Binary => {
+                        DeltaDataType::Primitive(PrimitiveType::Binary)
+                    }
+                    datafusion::arrow::datatypes::DataType::LargeBinary => {
+                        DeltaDataType::Primitive(PrimitiveType::Binary)
+                    }
+                    datafusion::arrow::datatypes::DataType::Date32 => {
+                        DeltaDataType::Primitive(PrimitiveType::Date)
+                    }
+                    datafusion::arrow::datatypes::DataType::Timestamp(_, _) => {
+                        DeltaDataType::Primitive(PrimitiveType::Timestamp)
+                    }
+                    _ => {
+                        return Err(format!(
+                            "Unsupported data type for Delta Lake: {:?}",
+                            field.data_type()
+                        ));
+                    }
+                };
+
+                Ok(StructField::new(
+                    field.name().clone(),
+                    delta_type,
+                    field.is_nullable(),
+                ))
+            })
+            .collect();
+
+        let delta_fields = delta_fields.map_err(|e| {
+            datafusion_common::DataFusionError::Plan(format!("Schema conversion error: {}", e))
+        })?;
+
+        let url = Url::parse(location)
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+        let object_store_url = ObjectStoreUrl::parse(url.as_str())
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+        let object_store = state.runtime_env().object_store(&object_store_url)?;
+
+        let table = deltalake::DeltaTableBuilder::from_uri(location)
+            .with_storage_backend(object_store, url)
+            .build()
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+
+        let delta_ops = DeltaOps(table);
+
+        let mut create_builder = delta_ops
+            .create()
+            .with_columns(delta_fields.into_iter())
+            .with_save_mode(if cmd.if_not_exists {
+                SaveMode::Ignore
+            } else {
+                SaveMode::ErrorIfExists
+            });
+
+        // Add partition columns if specified
+        if !cmd.table_partition_cols.is_empty() {
+            create_builder =
+                create_builder.with_partition_columns(cmd.table_partition_cols.clone());
+        }
+
+        // Add table properties from options
+        let mut configuration = HashMap::new();
+        for (key, value) in &cmd.options {
+            if key.starts_with("delta.") {
+                configuration.insert(key.clone(), Some(value.clone()));
+            }
+        }
+
+        if !configuration.is_empty() {
+            create_builder = create_builder.with_configuration(configuration);
+        }
+
+        // Execute table creation
+        let delta_table = create_builder
+            .await
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+
+        // Create provider for the new table
+        let provider = DeltaTableProvider::new(delta_table)
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+
+        Ok(Arc::new(provider))
+    }
 }
