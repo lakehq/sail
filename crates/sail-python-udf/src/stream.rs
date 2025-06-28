@@ -2,9 +2,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_common::{exec_err, DataFusionError, Result};

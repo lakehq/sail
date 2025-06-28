@@ -11,6 +11,7 @@ thiserror = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+arrow-pyarrow = { workspace = true }
 pyo3 = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }

@@ -1,5 +1,5 @@
+use arrow_pyarrow::ToPyArrow;
 use datafusion::arrow::datatypes::DataType;
-use datafusion::arrow::pyarrow::ToPyArrow;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
