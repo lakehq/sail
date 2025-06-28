@@ -95,12 +95,12 @@
 
 - key: cluster.worker_max_idle_time_secs
   type: number
-  default: "120"
+  default: "60"
   description: The maximum idle time in seconds before a worker is removed.
 
 - key: cluster.worker_heartbeat_interval_secs
   type: number
-  default: "30"
+  default: "10"
   description: The interval in seconds for worker heartbeats.
   experimental: true
 
@@ -112,7 +112,7 @@
 
 - key: cluster.worker_launch_timeout_secs
   type: number
-  default: "300"
+  default: "120"
   description: The timeout in seconds for launching a worker.
 
 - key: cluster.worker_task_slots
@@ -128,7 +128,7 @@
 
 - key: cluster.task_launch_timeout_secs
   type: number
-  default: "300"
+  default: "120"
   description: The timeout in seconds for launching a task.
 
 - key: cluster.job_output_buffer
@@ -496,5 +496,5 @@
 
 - key: spark.session_timeout_secs
   type: number
-  default: "300"
+  default: "120"
   description: The Spark session timeout in seconds.
