@@ -28,8 +28,9 @@ module.exports = async ({ github, context, core }) => {
   //    is the first item (offset 0) in the sorted list.
   // 3. For other events (test release run), no new tag has been created yet,
   //    and the previous version is the first item (offset 0) in the sorted list.
-  const offset =
-    context.event_name === "push" && pattern.test(context.ref_name) ? 1 : 0;
+  const isPushEvent = process.env.GITHUB_EVENT_NAME === "push";
+  const isNormalRelease = pattern.test(process.env.GITHUB_REF_NAME);
+  const offset = isPushEvent && isNormalRelease ? 1 : 0;
   if (versions.length <= offset) {
     core.setOutput("version", "");
   } else {
