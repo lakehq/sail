@@ -62,6 +62,7 @@ log = { workspace = true }
 chumsky = { workspace = true }
 percent-encoding = { workspace = true }
 dashmap = { workspace = true }
+urlencoding = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]
