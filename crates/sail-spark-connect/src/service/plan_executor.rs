@@ -81,7 +81,7 @@ impl Stream for ExecutePlanResponseStream {
                             Some(ResponseType::ResultComplete(ResultComplete::default()));
                     }
                 }
-                debug!("{:?}", response);
+                debug!("{response:?}");
                 Ok(response)
             })
         })
@@ -326,11 +326,10 @@ pub(crate) async fn handle_reattach_execute(
     let spark = SparkExtension::get(ctx)?;
     let executor = spark
         .get_executor(operation_id.as_str())?
-        .ok_or_else(|| SparkError::invalid(format!("operation not found: {}", operation_id)))?;
+        .ok_or_else(|| SparkError::invalid(format!("operation not found: {operation_id}")))?;
     if !executor.metadata.reattachable {
         return Err(SparkError::invalid(format!(
-            "operation not reattachable: {}",
-            operation_id
+            "operation not reattachable: {operation_id}"
         )));
     }
     executor.pause_if_running().await?;

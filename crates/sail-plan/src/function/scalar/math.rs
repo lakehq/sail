@@ -591,7 +591,6 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("rint", F::unary(rint)),
         ("round", F::var_arg(expr_fn::round)),
         ("sec", F::unknown("sec")),
-        ("shiftleft", F::binary_op(Operator::BitwiseShiftLeft)),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),
         ("sin", F::unary(expr_fn::sin)),

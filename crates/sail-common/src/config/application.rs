@@ -163,6 +163,7 @@ mod retry_strategy {
 #[serde(deny_unknown_fields)]
 pub struct ExecutionConfig {
     pub batch_size: usize,
+    pub collect_statistics: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

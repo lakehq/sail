@@ -683,7 +683,7 @@ impl PlanResolver<'_> {
                         if qualifier_matches(q.as_ref(), qualifier)
                             && info.matches(name.as_ref(), plan_id)
                         {
-                            let expr = Self::resolve_nested_field(
+                            let expr = Self::resolve_potentially_nested_field(
                                 col((qualifier, field)),
                                 field.data_type(),
                                 inner,
@@ -817,7 +817,7 @@ impl PlanResolver<'_> {
         Ok(candidates.pop())
     }
 
-    fn resolve_nested_field<T: AsRef<str>>(
+    fn resolve_potentially_nested_field<T: AsRef<str>>(
         expr: expr::Expr,
         data_type: &DataType,
         inner: &[T],
@@ -832,7 +832,7 @@ impl PlanResolver<'_> {
                         let args = vec![expr, lit(field.name().to_string())];
                         let expr =
                             expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
-                        Self::resolve_nested_field(expr, field.data_type(), remaining)
+                        Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
                     }),
                 _ => None,
             },
@@ -1275,8 +1275,7 @@ impl PlanResolver<'_> {
             }
             _ => {
                 return Err(PlanError::invalid(format!(
-                    "invalid window function expression: {:?}",
-                    window_function
+                    "invalid window function expression: {window_function:?}"
                 )));
             }
         };
@@ -1759,7 +1758,7 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(|e| {
                 name_map.get(e).cloned().ok_or_else(|| {
-                    PlanError::invalid(format!("grouping set expression not found: {:?}", e))
+                    PlanError::invalid(format!("grouping set expression not found: {e:?}"))
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;

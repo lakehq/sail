@@ -31,8 +31,8 @@ impl Display for TaskReadLocation {
                 host,
                 port,
                 channel,
-            } => write!(f, "Worker({}, {}:{}, {})", worker_id, host, port, channel),
-            TaskReadLocation::Remote { uri } => write!(f, "Remote({})", uri),
+            } => write!(f, "Worker({worker_id}, {host}:{port}, {channel})"),
+            TaskReadLocation::Remote { uri } => write!(f, "Remote({uri})"),
         }
     }
 }

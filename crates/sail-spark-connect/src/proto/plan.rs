@@ -1500,7 +1500,18 @@ impl TryFrom<WriteOperation> for spec::Write {
             SaveMode::ErrorIfExists => spec::SaveMode::ErrorIfExists,
             SaveMode::Ignore => spec::SaveMode::Ignore,
         };
-        let sort_columns = sort_column_names.into_iter().map(|x| x.into()).collect();
+        let sort_columns = sort_column_names
+            .into_iter()
+            .map(|x| spec::SortOrder {
+                child: Box::new(spec::Expr::UnresolvedAttribute {
+                    name: spec::ObjectName::bare(x),
+                    plan_id: None,
+                    is_metadata_column: false,
+                }),
+                direction: spec::SortDirection::Unspecified,
+                null_ordering: spec::NullOrdering::Unspecified,
+            })
+            .collect();
         let partitioning_columns = partitioning_columns.into_iter().map(|x| x.into()).collect();
         let clustering_columns = clustering_columns.into_iter().map(|x| x.into()).collect();
         let bucket_by = match bucket_by {

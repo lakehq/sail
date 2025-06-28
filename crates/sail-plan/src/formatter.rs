@@ -576,7 +576,7 @@ impl Display for BinaryDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "X'")?;
         for b in self.0 {
-            write!(f, "{:02X}", b)?;
+            write!(f, "{b:02X}")?;
         }
         write!(f, "'")
     }
