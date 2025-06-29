@@ -95,12 +95,12 @@
 
 - key: cluster.worker_max_idle_time_secs
   type: number
-  default: "120"
+  default: "60"
   description: The maximum idle time in seconds before a worker is removed.
 
 - key: cluster.worker_heartbeat_interval_secs
   type: number
-  default: "30"
+  default: "10"
   description: The interval in seconds for worker heartbeats.
   experimental: true
 
@@ -112,7 +112,7 @@
 
 - key: cluster.worker_launch_timeout_secs
   type: number
-  default: "300"
+  default: "120"
   description: The timeout in seconds for launching a worker.
 
 - key: cluster.worker_task_slots
@@ -128,7 +128,7 @@
 
 - key: cluster.task_launch_timeout_secs
   type: number
-  default: "300"
+  default: "120"
   description: The timeout in seconds for launching a task.
 
 - key: cluster.job_output_buffer
@@ -143,7 +143,6 @@
   description: |
     The retry strategy for driver and worker RPC requests.
     Valid values are `fixed` and `exponential_backoff`.
-  hidden: true
   experimental: true
 
 - key: cluster.rpc_retry_strategy.fixed.max_count
@@ -152,7 +151,6 @@
   description: |
     The maximum number of retries for RPC requests
     when using the `fixed` retry strategy.
-  hidden: true
   experimental: true
 
 - key: cluster.rpc_retry_strategy.fixed.delay_secs
@@ -161,7 +159,6 @@
   description: |
     The delay in seconds between retries for RPC requests
     when using the `fixed` retry strategy.
-  hidden: true
   experimental: true
 
 - key: cluster.rpc_retry_strategy.exponential_backoff.max_count
@@ -170,7 +167,6 @@
   description: |
     The maximum number of retries for RPC requests
     when using the `exponential_backoff` retry strategy.
-  hidden: true
   experimental: true
 
 - key: cluster.rpc_retry_strategy.exponential_backoff.initial_delay_secs
@@ -179,7 +175,6 @@
   description: |
     The initial delay in seconds between retries for RPC requests
     when using the `exponential_backoff` retry strategy.
-  hidden: true
   experimental: true
 
 - key: cluster.rpc_retry_strategy.exponential_backoff.max_delay_secs
@@ -188,7 +183,6 @@
   description: |
     The maximum delay in seconds between retries for RPC requests
     when using the `exponential_backoff` retry strategy.
-  hidden: true
   experimental: true
 
 - key: cluster.rpc_retry_strategy.exponential_backoff.factor
@@ -197,7 +191,6 @@
   description: |
     The factor by which the delay increases after each retry
     when using the `exponential_backoff` retry strategy.
-  hidden: true
   experimental: true
 
 - key: execution.batch_size
@@ -305,7 +298,6 @@
   default: "1048576"
   description: |
     (Writing) The best-effort maximum size of a data page in bytes.
-  hidden: true
   experimental: true
 
 - key: parquet.write_batch_size
@@ -321,7 +313,6 @@
   description: |
     (Writing) The Parquet writer version.
     Valid values are `"1.0"` and `"2.0"`.
-  hidden: true
   experimental: true
 
 - key: parquet.skip_arrow_metadata
@@ -379,7 +370,6 @@
   default: "64"
   description: |
     (Writing) The column index truncate length for the Parquet writer.
-  hidden: true
   experimental: true
 
 - key: parquet.statistics_truncate_length
@@ -388,7 +378,6 @@
   description: |
     (Writing) The statistics truncate length for the Parquet writer.
     If the value is `0`, no truncation is applied.
-  hidden: true
   experimental: true
 
 - key: parquet.data_page_row_count_limit
@@ -409,7 +398,6 @@
     These values are not case sensitive.
     An empty value can also be used, which allows the Parquet writer to choose
     the encoding for each column to achieve good performance.
-  hidden: true
   experimental: true
 
 - key: parquet.bloom_filter_on_write
@@ -496,5 +484,5 @@
 
 - key: spark.session_timeout_secs
   type: number
-  default: "300"
+  default: "120"
   description: The Spark session timeout in seconds.

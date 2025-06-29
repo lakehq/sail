@@ -280,8 +280,7 @@ jobs:
             mkdir -p 'C:\Temp'
             export TEMP='C:\Temp'
           fi
-          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --no-binary pysail
-          pip install pytest
+          pip install 'pysail[test]=='"${RELEASE_VERSION}" -v -f dist --no-binary pysail
 
       - name: Verify Package
         shell: python
@@ -323,8 +322,7 @@ jobs:
       - name: Install Package
         shell: bash
         run: |
-          pip install 'pysail[spark]=='"${RELEASE_VERSION}" -v -f dist --only-binary pysail
-          pip install pytest
+          pip install 'pysail[test]=='"${RELEASE_VERSION}" -v -f dist --only-binary pysail
 
       - name: Verify Package
         shell: python
@@ -357,14 +355,12 @@ jobs:
           ls -lah dist
           md5sum dist/*
 
-  release:
-    name: Release
+  release-pypi:
+    name: Release to PyPI
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true') }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: write
-      discussions: write
       id-token: write
     needs:
       - setup
@@ -388,15 +384,27 @@ jobs:
           command: upload
           args: --non-interactive --skip-existing dist/*
 
+  release-github:
+    name: Release to GitHub
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      discussions: write
+    needs:
+      - setup
+      - review
+      - release-pypi
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Download Release Notes
-        if: ${{ github.event_name == 'push' }}
         uses: actions/download-artifact@v4
         with:
           name: release-notes
           path: /tmp/release-notes.md
 
       - name: Create GitHub Release
-        if: ${{ github.event_name == 'push' }}
         uses: softprops/action-gh-release@v2
         with:
           body_path: /tmp/release-notes.md

@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.3.0.dev0"
+version = "0.3.0"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -30,9 +30,11 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-spark = [
+test = [
+    # The dependencies for testing the installed package.
     "pyspark-client>=4.0,<5",
     "duckdb>=1.0,<2",
+    "pytest>=8.4,<9",
 ]
 mcp = [
     "mcp>=1.0.0,<2",

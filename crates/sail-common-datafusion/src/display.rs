@@ -2,7 +2,7 @@
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
-use chrono::{NaiveDate, SecondsFormat, TimeZone, Utc};
+use chrono::{Duration, NaiveDate, SecondsFormat, TimeZone, Utc};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::{
@@ -17,9 +17,9 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion::arrow::temporal_conversions::{
-    as_datetime, date32_to_datetime, date64_to_datetime, duration_ms_to_duration,
-    duration_ns_to_duration, duration_s_to_duration, duration_us_to_duration, time32ms_to_time,
-    time32s_to_time, time64ns_to_time, time64us_to_time,
+    as_datetime, date32_to_datetime, date64_to_datetime, duration_ns_to_duration,
+    duration_us_to_duration, time32ms_to_time, time32s_to_time, time64ns_to_time, time64us_to_time,
+    try_duration_ms_to_duration, try_duration_s_to_duration,
 };
 use lexical_core::FormattedSize;
 
@@ -622,14 +622,45 @@ macro_rules! duration_display {
     };
 }
 
+enum MaybeDuration {
+    Yes(Duration),
+    No,
+}
+
+impl From<Option<Duration>> for MaybeDuration {
+    fn from(value: Option<Duration>) -> Self {
+        match value {
+            Some(x) => MaybeDuration::Yes(x),
+            None => MaybeDuration::No,
+        }
+    }
+}
+
+impl Display for MaybeDuration {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MaybeDuration::Yes(d) => write!(f, "{d}"),
+            MaybeDuration::No => write!(f, "ERROR"),
+        }
+    }
+}
+
+fn duration_s_to_maybe_duration(v: i64) -> MaybeDuration {
+    try_duration_s_to_duration(v).into()
+}
+
+fn duration_ms_to_maybe_duration(v: i64) -> MaybeDuration {
+    try_duration_ms_to_duration(v).into()
+}
+
 duration_display!(
     DurationSecondType,
-    duration_s_to_duration,
+    duration_s_to_maybe_duration,
     DurationSecondFormatter,
 );
 duration_display!(
     DurationMillisecondType,
-    duration_ms_to_duration,
+    duration_ms_to_maybe_duration,
     DurationMillisecondFormatter,
 );
 duration_display!(
