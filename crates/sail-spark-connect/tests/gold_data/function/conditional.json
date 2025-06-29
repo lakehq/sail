@@ -221,7 +221,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: nullifzero"
+        "success": "ok"
       }
     },
     {
@@ -243,7 +243,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: nullifzero"
+        "success": "ok"
       }
     },
     {
@@ -313,7 +313,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: zeroifnull"
+        "success": "ok"
       }
     },
     {
@@ -335,7 +335,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: zeroifnull"
+        "success": "ok"
       }
     }
   ]
