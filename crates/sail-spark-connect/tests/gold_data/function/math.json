@@ -1801,7 +1801,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sec"
+        "success": "ok"
       }
     },
     {
