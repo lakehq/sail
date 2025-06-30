@@ -45,7 +45,10 @@ impl ScalarUDFImpl for SparkBRound {
             DataType::Float64
             | DataType::Float32
             | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => Ok(DataType::Float64),
+            | DataType::Decimal256(_, _)
+            | DataType::Int32
+            | DataType::Int64 => Ok(DataType::Float64),
+
             other => exec_err!("Unsupported type for spark_bround: {}", other),
         }
     }
@@ -63,6 +66,7 @@ impl ScalarUDFImpl for SparkBRound {
         };
         match (x, d) {
             // Decimal128, Int32
+            // Int32,      Int32
             // Float64,    Float64
             // Float32,    Float64
             // Float64,    Int32
@@ -77,6 +81,15 @@ impl ScalarUDFImpl for SparkBRound {
                 let scale = 10f64.powi(*d);
                 let rounded = (float_val * scale).round() / scale;
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(rounded))))
+            }
+            (
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(x_val))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(scale))),
+            ) => {
+                let x_val_f64 = *x_val as f64;
+                let pow = 10f64.powi(*scale);
+                let result = (x_val_f64 * pow).round() / pow;
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(result))))
             }
             (
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(x_val))),
@@ -126,6 +139,39 @@ impl ScalarUDFImpl for SparkBRound {
             other => exec_err!(
                 "bround only supports scalar Float32 or Float64 with Int32 as scale, received {other:?}"
             ),
+        }
+    }
+
+    fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
+        if types.len() != 2 {
+            return exec_err!(
+                "Function spark_bround expects 2 arguments, got {}",
+                types.len()
+            );
+        }
+
+        let x_type: &DataType = &types[0];
+        let scale_type: &DataType = &types[1];
+
+        let valid_x: bool = matches!(
+            x_type,
+            DataType::Float32
+                | DataType::Float64
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
+                | DataType::Int32
+                | DataType::Int64
+        );
+        let valid_scale: bool = matches!(scale_type, DataType::Int32);
+
+        if valid_x && valid_scale {
+            Ok(vec![x_type.clone(), scale_type.clone()])
+        } else {
+            exec_err!(
+                "Function spark_bround does not support argument types ({:?}, {:?})",
+                x_type,
+                scale_type
+            )
         }
     }
 }
