@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::catalog::TableProvider;
-use datafusion::common::{exec_datafusion_err, Column, DFSchema, Result as DataFusionResult};
+use datafusion::common::{exec_datafusion_err, Column, DFSchema, Result as DataFusionResult, DataFusionError};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
@@ -28,6 +28,16 @@ fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&Sessio
         .as_any()
         .downcast_ref::<SessionState>()
         .ok_or_else(|| exec_datafusion_err!("Failed to downcast Session to SessionState"))
+}
+
+// Helper function to convert DeltaTableError to DataFusionError
+fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {
+    DataFusionError::External(Box::new(err))
+}
+
+// Helper function to convert DataFusionError to DeltaTableError
+fn datafusion_to_delta_error(err: DataFusionError) -> DeltaTableError {
+    DeltaTableError::Generic(format!("DataFusion error: {}", err))
 }
 
 #[derive(Debug)]
@@ -79,10 +89,12 @@ impl TableProvider for DeltaCdfTableProvider {
             let plan = self
                 .cdf_builder
                 .build(session_state, Some(&physical_expr))
-                .await?;
+                .await
+                .map_err(delta_to_datafusion_error)?;
             Arc::new(FilterExec::try_new(physical_expr, plan)?)
         } else {
-            self.cdf_builder.build(session_state, None).await?
+            self.cdf_builder.build(session_state, None).await
+                .map_err(delta_to_datafusion_error)?
         };
 
         let df_schema: DFSchema = plan.schema().try_into()?;
@@ -90,7 +102,7 @@ impl TableProvider for DeltaCdfTableProvider {
         if let Some(projection) = projection {
             let current_projection = (0..plan.schema().fields().len()).collect::<Vec<usize>>();
             if projection != &current_projection {
-                let fields: DeltaResult<Vec<(Arc<dyn PhysicalExpr>, String)>> = projection
+                let fields: Result<Vec<(Arc<dyn PhysicalExpr>, String)>, DataFusionError> = projection
                     .iter()
                     .map(|i| {
                         let (table_ref, field) = df_schema.qualified_field(*i);
@@ -100,7 +112,6 @@ impl TableProvider for DeltaCdfTableProvider {
                                 &df_schema,
                             )
                             .map(|expr| (expr, field.name().clone()))
-                            .map_err(DeltaTableError::from)
                     })
                     .collect();
                 let fields = fields?;

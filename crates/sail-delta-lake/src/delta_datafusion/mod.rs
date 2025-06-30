@@ -76,8 +76,8 @@ use datafusion::physical_plan::{
     Statistics,
 };
 use datafusion::sql::planner::ParserOptions;
-use datafusion_proto::logical_plan::LogicalExtensionCodec;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+// use datafusion_proto::logical_plan::LogicalExtensionCodec;
+// use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
 use futures::TryStreamExt;
@@ -201,8 +201,19 @@ fn _arrow_schema(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<Arro
 pub(crate) fn files_matching_predicate<'a>(
     snapshot: &'a EagerSnapshot,
     filters: &[Expr],
-) -> DeltaResult<impl Iterator<Item = Add> + 'a> {
-    unimplemented!();
+) -> DeltaResult<Box<dyn Iterator<Item = Add> + 'a>> {
+    let adds: Vec<Add> = snapshot.file_actions()?.collect();
+    if filters.is_empty() {
+        return Ok(Box::new(adds.into_iter()));
+    }
+
+    // Filter files based on predicates
+    let filtered = adds.into_iter().filter(|_add| {
+        // TODO: Evaluate predicates against partition values
+        true // For now return all files
+    });
+
+    Ok(Box::new(filtered))
 }
 
 pub(crate) fn get_path_column<'a>(
@@ -685,65 +696,65 @@ impl DeltaDataChecker {
 }
 
 /// A codec for deltalake physical plans
-#[derive(Debug)]
-pub struct DeltaPhysicalCodec {}
+// #[derive(Debug)]
+// pub struct DeltaPhysicalCodec {}
 
-impl PhysicalExtensionCodec for DeltaPhysicalCodec {
-    fn try_decode(
-        &self,
-        buf: &[u8],
-        inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
-    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        unimplemented!();
-    }
+// impl PhysicalExtensionCodec for DeltaPhysicalCodec {
+//     fn try_decode(
+//         &self,
+//         buf: &[u8],
+//         inputs: &[Arc<dyn ExecutionPlan>],
+//         _registry: &dyn FunctionRegistry,
+//     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+//         unimplemented!();
+//     }
 
-    fn try_encode(
-        &self,
-        node: Arc<dyn ExecutionPlan>,
-        buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError> {
-        unimplemented!();
-    }
-}
+//     fn try_encode(
+//         &self,
+//         node: Arc<dyn ExecutionPlan>,
+//         buf: &mut Vec<u8>,
+//     ) -> Result<(), DataFusionError> {
+//         unimplemented!();
+//     }
+// }
 
 /// Does serde on DeltaTables
-#[derive(Debug)]
-pub struct DeltaLogicalCodec {}
+// #[derive(Debug)]
+// pub struct DeltaLogicalCodec {}
 
-impl LogicalExtensionCodec for DeltaLogicalCodec {
-    fn try_decode(
-        &self,
-        _buf: &[u8],
-        _inputs: &[LogicalPlan],
-        _ctx: &SessionContext,
-    ) -> Result<Extension, DataFusionError> {
-        unimplemented!();
-    }
+// impl LogicalExtensionCodec for DeltaLogicalCodec {
+//     fn try_decode(
+//         &self,
+//         _buf: &[u8],
+//         _inputs: &[LogicalPlan],
+//         _ctx: &SessionContext,
+//     ) -> Result<Extension, DataFusionError> {
+//         unimplemented!();
+//     }
 
-    fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<(), DataFusionError> {
-        unimplemented!();
-    }
+//     fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<(), DataFusionError> {
+//         unimplemented!();
+//     }
 
-    fn try_decode_table_provider(
-        &self,
-        buf: &[u8],
-        _table_ref: &TableReference,
-        _schema: SchemaRef,
-        _ctx: &SessionContext,
-    ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
-        unimplemented!();
-    }
+//     fn try_decode_table_provider(
+//         &self,
+//         buf: &[u8],
+//         _table_ref: &TableReference,
+//         _schema: SchemaRef,
+//         _ctx: &SessionContext,
+//     ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+//         unimplemented!();
+//     }
 
-    fn try_encode_table_provider(
-        &self,
-        _table_ref: &TableReference,
-        node: Arc<dyn TableProvider>,
-        buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError> {
-        unimplemented!();
-    }
-}
+//     fn try_encode_table_provider(
+//         &self,
+//         _table_ref: &TableReference,
+//         node: Arc<dyn TableProvider>,
+//         buf: &mut Vec<u8>,
+//     ) -> Result<(), DataFusionError> {
+//         unimplemented!();
+//     }
+// }
 
 /// Responsible for creating deltatables
 #[derive(Debug)]

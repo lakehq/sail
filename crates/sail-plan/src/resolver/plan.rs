@@ -868,7 +868,7 @@ impl PlanResolver<'_> {
 
                 // Create DeltaTableProvider
                 let delta_provider = DeltaTableProvider::try_new(
-                    Arc::new(delta_table.snapshot()?.clone()),
+                    delta_table.snapshot()?.clone(),
                     delta_table.log_store(),
                     Default::default(),
                 )
@@ -3362,7 +3362,7 @@ impl PlanResolver<'_> {
             Ok(existing_delta_table) => {
                 // Table exists, create a provider and register it
                 let delta_provider = DeltaTableProvider::try_new(
-                    Arc::new(existing_delta_table.snapshot()?.clone()),
+                    existing_delta_table.snapshot()?.clone(),
                     existing_delta_table.log_store(),
                     Default::default(),
                 )
@@ -3482,7 +3482,7 @@ impl PlanResolver<'_> {
 
         // Register the newly created table in the catalog
         let delta_provider = DeltaTableProvider::try_new(
-            Arc::new(new_delta_table.snapshot()?.clone()),
+            new_delta_table.snapshot()?.clone(),
             new_delta_table.log_store(),
             Default::default(),
         )

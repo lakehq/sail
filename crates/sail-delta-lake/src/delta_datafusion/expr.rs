@@ -279,7 +279,10 @@ pub fn parse_predicate_expression(
     let sql_to_rel =
         SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
 
-    Ok(sql_to_rel.sql_to_expr(sql, schema, &mut Default::default())?)
+    Ok(sql_to_rel.sql_to_expr(sql, schema, &mut Default::default())
+        .map_err(|err| DeltaTableError::GenericError {
+            source: Box::new(err),
+        })?)
 }
 
 struct SqlFormat<'a> {
@@ -333,7 +336,7 @@ impl Display for SqlFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.expr {
             Expr::Column(c) => write!(f, "{}", c.quoted_flat_name()),
-            Expr::Literal(v) => write!(f, "{}", ScalarValueFormat { scalar: v }),
+            Expr::Literal(v, _) => write!(f, "{}", ScalarValueFormat { scalar: v }),
             Expr::Case(case) => {
                 write!(f, "CASE ")?;
                 if let Some(e) = &case.expr {

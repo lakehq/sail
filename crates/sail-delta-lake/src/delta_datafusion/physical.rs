@@ -108,7 +108,7 @@ impl ExecutionPlan for MetricObserverExec {
     }
 
     fn statistics(&self) -> DataFusionResult<datafusion::common::Statistics> {
-        self.parent.statistics()
+        self.parent.partition_statistics(None)
     }
 
     fn with_new_children(
