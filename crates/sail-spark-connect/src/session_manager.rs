@@ -77,7 +77,7 @@ impl SessionManager {
         };
         self.handle.send(event).await?;
         rx.await
-            .map_err(|e| SparkError::internal(format!("failed to get session: {e}")))
+            .map_err(|e| SparkError::internal(format!("failed to get session: {e}")))?
     }
 
     pub fn create_session_context(
