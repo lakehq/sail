@@ -867,7 +867,12 @@ impl PlanResolver<'_> {
                 })?;
 
                 // Create DeltaTableProvider
-                let delta_provider = DeltaTableProvider::new(delta_table).map_err(|e| {
+                let delta_provider = DeltaTableProvider::try_new(
+                    Arc::new(delta_table.snapshot()?.clone()),
+                    delta_table.log_store(),
+                    Default::default(),
+                )
+                .map_err(|e| {
                     PlanError::invalid(format!("Failed to create DeltaTableProvider: {}", e))
                 })?;
 
@@ -3344,10 +3349,11 @@ impl PlanResolver<'_> {
         options: Vec<(String, String)>,
         definition: Option<String>,
     ) -> PlanResult<LogicalPlan> {
+        use std::collections::HashMap;
+
         use deltalake::kernel::{DataType as DeltaDataType, PrimitiveType, StructField};
         use deltalake::protocol::SaveMode;
         use deltalake::DeltaOps;
-        use std::collections::HashMap;
 
         let table_reference = self.resolve_table_reference(&table)?;
 
@@ -3355,10 +3361,14 @@ impl PlanResolver<'_> {
         match deltalake::open_table(&location).await {
             Ok(existing_delta_table) => {
                 // Table exists, create a provider and register it
-                let delta_provider =
-                    DeltaTableProvider::new(existing_delta_table).map_err(|e| {
-                        PlanError::invalid(format!("Failed to create DeltaTableProvider: {}", e))
-                    })?;
+                let delta_provider = DeltaTableProvider::try_new(
+                    Arc::new(existing_delta_table.snapshot()?.clone()),
+                    existing_delta_table.log_store(),
+                    Default::default(),
+                )
+                .map_err(|e| {
+                    PlanError::invalid(format!("Failed to create DeltaTableProvider: {}", e))
+                })?;
 
                 // Register the existing table in the catalog
                 let table_provider = Arc::new(delta_provider);
@@ -3471,9 +3481,12 @@ impl PlanResolver<'_> {
             .map_err(|e| PlanError::invalid(format!("Failed to create Delta table: {}", e)))?;
 
         // Register the newly created table in the catalog
-        let delta_provider = DeltaTableProvider::new(new_delta_table).map_err(|e| {
-            PlanError::invalid(format!("Failed to create DeltaTableProvider: {}", e))
-        })?;
+        let delta_provider = DeltaTableProvider::try_new(
+            Arc::new(new_delta_table.snapshot()?.clone()),
+            new_delta_table.log_store(),
+            Default::default(),
+        )
+        .map_err(|e| PlanError::invalid(format!("Failed to create DeltaTableProvider: {}", e)))?;
 
         self.ctx
             .register_table(table_reference.clone(), Arc::new(delta_provider))

@@ -2,13 +2,12 @@ use std::collections::HashSet;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
+#[cfg(feature = "delta-lake")]
+use deltalake::DeltaTableError;
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::{intern, PyErr, PyResult, Python};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-#[cfg(feature = "delta-lake")]
-use deltalake::DeltaTableError;
 
 /// A Python error in text form. This could be a remote error from a worker.
 #[derive(Debug, Clone, Error)]
