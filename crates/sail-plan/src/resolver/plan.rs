@@ -894,7 +894,9 @@ impl PlanResolver<'_> {
             .await?;
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(options)
-            .with_schema(Arc::new(schema));
+            .with_schema(Arc::new(schema))
+            .infer_partitions_from_path(&self.ctx.state())
+            .await?;
         let table_provider = Arc::new(ListingTable::try_new(config)?);
         let names = state.register_fields(table_provider.schema().fields());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;

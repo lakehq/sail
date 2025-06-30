@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use datafusion::arrow::datatypes as adt;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
 use datafusion_common::plan_err;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use sail_common::spec;
 
 use crate::error::PlanResult;
@@ -47,6 +47,7 @@ impl PlanResolver<'_> {
             let files: Vec<_> = url
                 .list_all_files(&session_state, &store, &options.file_extension)
                 .await?
+                .take(10)
                 .try_collect()
                 .await?;
             file_groups.push((store, files));
