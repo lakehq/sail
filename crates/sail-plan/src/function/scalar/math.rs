@@ -19,6 +19,7 @@ use crate::extension::function::math::spark_bin::SparkBin;
 use crate::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_pmod::SparkPmod;
+use crate::extension::function::math::spark_sec::SparkSec;
 use crate::extension::function::math::spark_signum::SparkSignum;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
@@ -590,7 +591,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("random", F::udf(Random::new())),
         ("rint", F::unary(rint)),
         ("round", F::var_arg(expr_fn::round)),
-        ("sec", F::unknown("sec")),
+        ("sec", F::udf(SparkSec::new())),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),
         ("sin", F::unary(expr_fn::sin)),

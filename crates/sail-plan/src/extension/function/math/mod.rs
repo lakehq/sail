@@ -11,6 +11,7 @@ pub mod spark_bin;
 pub mod spark_ceil_floor;
 pub mod spark_hex_unhex;
 pub mod spark_pmod;
+pub mod spark_sec;
 pub mod spark_signum;
 
 #[inline]

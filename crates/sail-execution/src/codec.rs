@@ -79,6 +79,7 @@ use sail_plan::extension::function::math::spark_bin::SparkBin;
 use sail_plan::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::math::spark_pmod::SparkPmod;
+use sail_plan::extension::function::math::spark_sec::SparkSec;
 use sail_plan::extension::function::math::spark_signum::SparkSignum;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use sail_plan::extension::function::mode::ModeFunction;
@@ -798,6 +799,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
             }
             "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
+            "spark_sec" | "sec" => Ok(Arc::new(ScalarUDF::from(SparkSec::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_element_at" | "element_at" => {
                 Ok(Arc::new(ScalarUDF::from(SparkElementAt::new())))
