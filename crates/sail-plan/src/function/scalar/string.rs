@@ -5,6 +5,7 @@ use datafusion::functions;
 use datafusion::functions::expr_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::string::contains::ContainsFunc;
+use datafusion::functions_array::string::string_to_array;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, ExprSchemable, ScalarUDF};
 
@@ -347,7 +348,10 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("sentences", F::unknown("sentences")),
         ("soundex", F::unknown("soundex")),
         ("space", F::unary(space)),
-        ("split", F::unknown("split")),
+        (
+            "split",
+            F::binary(|arg1, arg2| string_to_array(arg1, arg2, lit(ScalarValue::Utf8(None)))),
+        ),
         ("split_part", F::ternary(expr_fn::split_part)),
         ("startswith", F::binary(startswith)),
         ("substr", F::custom(substr)),
