@@ -7,7 +7,7 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::info;
-use sail_plan::object_store::DynamicObjectStoreRegistry;
+use sail_object_store::DynamicObjectStoreRegistry;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 use tokio::sync::oneshot;
 

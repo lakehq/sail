@@ -6,6 +6,7 @@ edition = { workspace = true }
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-object-store = { path = "../sail-object-store" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
@@ -40,12 +41,6 @@ rand_distr = { workspace = true }
 url = { workspace = true }
 glob = { workspace = true }
 object_store = { workspace = true }
-aws-config = { workspace = true }
-aws-credential-types = { workspace = true }
-aws-smithy-runtime-api = { workspace = true }
-aws-smithy-types = { workspace = true }
-aws-smithy-async = { workspace = true }
-hdfs-native-object-store = { workspace = true, optional = true }
 sha1 = { workspace = true }
 twox-hash = { workspace = true }
 aes = { workspace = true }
@@ -56,13 +51,5 @@ half = { workspace = true }
 crc32fast = { workspace = true }
 num = { workspace = true }
 num-traits = { workspace = true }
-hf-hub = { workspace = true }
-reqwest = { workspace = true }
-log = { workspace = true }
 chumsky = { workspace = true }
 percent-encoding = { workspace = true }
-dashmap = { workspace = true }
-
-[features]
-hdfs = ["dep:hdfs-native-object-store"]
-default = ["hdfs"]

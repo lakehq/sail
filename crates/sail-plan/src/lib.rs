@@ -22,7 +22,6 @@ pub mod extension;
 pub mod formatter;
 pub mod function;
 pub mod literal;
-pub mod object_store;
 pub mod resolver;
 pub mod temp_view;
 mod utils;
