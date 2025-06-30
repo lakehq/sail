@@ -5,10 +5,7 @@ use std::sync::Arc;
 use core::any::type_name;
 use regex::Regex;
 
-use datafusion::arrow::{
-    array::*,
-    datatypes::{DataType, Field, Fields},
-};
+use datafusion::arrow::{array::*, datatypes::*};
 use datafusion::error::{DataFusionError, Result};
 use datafusion_common::{
     exec_err, DataFusionError as DFCommonError, Result as DFCommonResult, ScalarValue,
@@ -16,6 +13,7 @@ use datafusion_common::{
 use datafusion_expr::{
     ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
+use sail_common::spec::i256;
 
 use crate::extension::function::functions_nested_utils::*;
 use crate::extension::function::functions_utils::make_scalar_function;
@@ -106,7 +104,7 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     todo!()
 }
 
-fn get_schema_from_options(schema: &str, options: &StructArray) -> Result<DataType> {
+fn get_sep_from_options(options: &StructArray) -> Result<&str> {
     // TODO: Control de errores
     let sep_array: &StringArray = downcast_arg!(
         options
@@ -115,7 +113,11 @@ fn get_schema_from_options(schema: &str, options: &StructArray) -> Result<DataTy
         StringArray
     );
 
-    let sep: &str = sep_array.value(0);
+    Ok(sep_array.value(0))
+}
+
+fn get_schema_from_options(schema: &str, options: &StructArray) -> Result<DataType> {
+    let sep: &str = get_sep_from_options(options)?;
     let schema: Result<Fields> = parse_schema_string(schema, sep);
     schema.map(|fields| {
         let vec_fields: Vec<Arc<Field>> = fields.iter().cloned().collect();
@@ -237,6 +239,122 @@ fn parse_simple_type(raw: &str) -> Result<DataType> {
         _ => Err(DataFusionError::Plan(format!(
             "Unsupported SQL type: '{}'",
             raw
+        ))),
+    }
+}
+
+fn parse_scalar_value(raw: &str, dtype: &DataType) -> Result<ScalarValue> {
+    match dtype {
+        DataType::Boolean => Ok(ScalarValue::Boolean(Some(raw.parse::<bool>().unwrap()))),
+        DataType::Float16 => Ok(ScalarValue::Float16(Some(
+            raw.parse::<half::f16>().unwrap(),
+        ))),
+        DataType::Float32 => Ok(ScalarValue::Float32(Some(raw.parse::<f32>().unwrap()))),
+        DataType::Float64 => Ok(ScalarValue::Float64(Some(raw.parse::<f64>().unwrap()))),
+
+        DataType::Int8 => Ok(ScalarValue::Int8(Some(raw.parse::<i8>().unwrap()))),
+        DataType::Int16 => Ok(ScalarValue::Int16(Some(raw.parse::<i16>().unwrap()))),
+        DataType::Int32 => Ok(ScalarValue::Int32(Some(raw.parse::<i32>().unwrap()))),
+        DataType::Int64 => Ok(ScalarValue::Int64(Some(raw.parse::<i64>().unwrap()))),
+
+        DataType::UInt8 => Ok(ScalarValue::UInt8(Some(raw.parse::<u8>().unwrap()))),
+        DataType::UInt16 => Ok(ScalarValue::UInt16(Some(raw.parse::<u16>().unwrap()))),
+        DataType::UInt32 => Ok(ScalarValue::UInt32(Some(raw.parse::<u32>().unwrap()))),
+        DataType::UInt64 => Ok(ScalarValue::UInt64(Some(raw.parse::<u64>().unwrap()))),
+
+        DataType::Decimal128(p, s) => Ok(ScalarValue::Decimal128(
+            Some(raw.parse::<i128>().unwrap()),
+            *p,
+            *s,
+        )),
+        DataType::Decimal256(p, s) => Ok(ScalarValue::Decimal256(
+            Some(raw.parse::<i256>().unwrap()),
+            *p,
+            *s,
+        )),
+
+        DataType::Utf8 => Ok(ScalarValue::Utf8(Some(raw.to_string()))),
+        DataType::Utf8View => Ok(ScalarValue::Utf8View(Some(raw.to_string()))),
+        DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some(raw.to_string()))),
+
+        DataType::Binary => Ok(ScalarValue::Binary(Some(raw.as_bytes().to_vec()))),
+        DataType::BinaryView => Ok(ScalarValue::BinaryView(Some(raw.as_bytes().to_vec()))),
+        DataType::LargeBinary => Ok(ScalarValue::LargeBinary(Some(raw.as_bytes().to_vec()))),
+
+        DataType::Date32 => Ok(ScalarValue::Date32(Some(raw.parse::<i32>().unwrap()))),
+        DataType::Date64 => Ok(ScalarValue::Date64(Some(raw.parse::<i64>().unwrap()))),
+
+        DataType::Time32(TimeUnit::Second) => {
+            Ok(ScalarValue::Time32Second(Some(raw.parse::<i32>().unwrap())))
+        }
+        DataType::Time32(TimeUnit::Millisecond) => Ok(ScalarValue::Time32Millisecond(Some(
+            raw.parse::<i32>().unwrap(),
+        ))),
+        DataType::Time64(TimeUnit::Microsecond) => Ok(ScalarValue::Time64Microsecond(Some(
+            raw.parse::<i64>().unwrap(),
+        ))),
+        DataType::Time64(TimeUnit::Nanosecond) => Ok(ScalarValue::Time64Nanosecond(Some(
+            raw.parse::<i64>().unwrap(),
+        ))),
+
+        DataType::Timestamp(TimeUnit::Second, tz) => Ok(ScalarValue::TimestampSecond(
+            Some(raw.parse::<i64>().unwrap()),
+            tz.clone(),
+        )),
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => Ok(ScalarValue::TimestampMillisecond(
+            Some(raw.parse::<i64>().unwrap()),
+            tz.clone(),
+        )),
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => Ok(ScalarValue::TimestampMicrosecond(
+            Some(raw.parse::<i64>().unwrap()),
+            tz.clone(),
+        )),
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => Ok(ScalarValue::TimestampNanosecond(
+            Some(raw.parse::<i64>().unwrap()),
+            tz.clone(),
+        )),
+
+        DataType::Interval(IntervalUnit::YearMonth) => Ok(ScalarValue::IntervalYearMonth(Some(
+            raw.parse::<i32>().unwrap(),
+        ))),
+        DataType::Interval(IntervalUnit::DayTime) => Err(DataFusionError::Plan(
+            "Cannot parse IntervalDayTime from string".into(),
+        )),
+        DataType::Interval(IntervalUnit::MonthDayNano) => Err(DataFusionError::Plan(
+            "Cannot parse IntervalMonthDayNano from string".into(),
+        )),
+
+        DataType::Duration(TimeUnit::Second) => Ok(ScalarValue::DurationSecond(Some(
+            raw.parse::<i64>().unwrap(),
+        ))),
+        DataType::Duration(TimeUnit::Millisecond) => Ok(ScalarValue::DurationMillisecond(Some(
+            raw.parse::<i64>().unwrap(),
+        ))),
+        DataType::Duration(TimeUnit::Microsecond) => Ok(ScalarValue::DurationMicrosecond(Some(
+            raw.parse::<i64>().unwrap(),
+        ))),
+        DataType::Duration(TimeUnit::Nanosecond) => Ok(ScalarValue::DurationNanosecond(Some(
+            raw.parse::<i64>().unwrap(),
+        ))),
+
+        // Tipos complejos no soportados directamente desde string
+        DataType::FixedSizeBinary(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::Struct(_)
+        | DataType::Map(_, _)
+        | DataType::Union(_, _)
+        | DataType::Dictionary(_, _) => Err(DataFusionError::Plan(format!(
+            "Unsupported complex data type in from_csv: {:?}",
+            dtype
+        ))),
+
+        DataType::Null => Ok(ScalarValue::Null),
+
+        other => Err(DataFusionError::Plan(format!(
+            "Unsupported or unknown data type in from_csv: {:?}",
+            other
         ))),
     }
 }
