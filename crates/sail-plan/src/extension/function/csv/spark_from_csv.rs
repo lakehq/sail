@@ -65,38 +65,23 @@ impl ScalarUDFImpl for SparkFromCSV {
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         // We need to implement the return type related to the args
-        let key_value_array: Option<&StructArray> =
+        let options_array: Option<&StructArray> =
             args.scalar_arguments.get(2).and_then(|opt| match opt {
                 Some(ScalarValue::Map(map_array)) => Some(map_array.entries()),
                 _ => None,
             });
 
-        // TODO: Control de errores
-        let sep_array: &StringArray = downcast_arg!(
-            key_value_array
-                .unwrap()
-                .column_by_name("sep")
-                .expect("'sep' option is not available"),
-            StringArray
-        );
-
-        let sep: &str = sep_array.value(0);
-
-        let schema: Result<Fields> = match &args.scalar_arguments[1] {
+        let schema: &String = match args.scalar_arguments[1] {
             Some(ScalarValue::Utf8(Some(schema)))
             | Some(ScalarValue::LargeUtf8(Some(schema)))
-            | Some(ScalarValue::Utf8View(Some(schema))) => parse_schema_string(schema, sep),
+            | Some(ScalarValue::Utf8View(Some(schema))) => Ok(schema),
 
-            _ => {
-                // Manejo para el caso no esperado
-                Err(DataFusionError::Internal(format!("Unsupported type: TODO")))
-            }
-        };
-        schema.map(|fields| {
-            let vec_fields: Vec<Arc<Field>> = fields.iter().cloned().collect();
-            let dt = DataType::Struct(Fields::from(vec_fields));
-            ReturnInfo::new_nullable(dt)
-        })
+            _ => Err(DataFusionError::Internal(
+                "Expected UTF-8 schema string".to_string(),
+            )),
+        }?;
+        let schema = get_schema_from_options(schema, options_array.unwrap());
+        schema.map(|dt| ReturnInfo::new_nullable(dt))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -114,8 +99,28 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     let column: &StringArray = downcast_arg!(&args[0], StringArray);
-    let schema: &StringArray = downcast_arg!(&args[1], StringArray);
+    let schema: &str = downcast_arg!(&args[1], StringArray).value(0);
+    let options: &MapArray = downcast_arg!(&args[2], MapArray);
+    let options: &StructArray = options.entries();
+    let schema: Result<DataType> = get_schema_from_options(schema, options);
     todo!()
+}
+
+fn get_schema_from_options(schema: &str, options: &StructArray) -> Result<DataType> {
+    // TODO: Control de errores
+    let sep_array: &StringArray = downcast_arg!(
+        options
+            .column_by_name("sep")
+            .expect("'sep' option is not available"),
+        StringArray
+    );
+
+    let sep: &str = sep_array.value(0);
+    let schema: Result<Fields> = parse_schema_string(schema, sep);
+    schema.map(|fields| {
+        let vec_fields: Vec<Arc<Field>> = fields.iter().cloned().collect();
+        DataType::Struct(Fields::from(vec_fields))
+    })
 }
 
 // TODO: Double-check this implementation
@@ -135,6 +140,7 @@ fn parse_schema_string(schema_str: &str, sep: &str) -> Result<Fields> {
 
     fields.map(|f| Fields::from_iter(f))
 }
+
 // TODO: Is there any SQL type parser?
 // TODO: Double-check this implementation
 pub fn parse_data_type(raw: &str) -> Result<DataType> {
