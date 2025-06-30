@@ -10,10 +10,10 @@ use object_store::ObjectStore;
 use sail_common::runtime::RuntimeHandle;
 use url::Url;
 
-use crate::object_store::hugging_face::HuggingFaceObjectStore;
-use crate::object_store::layers::lazy::LazyObjectStore;
-use crate::object_store::layers::runtime::RuntimeAwareObjectStore;
-use crate::object_store::s3::get_s3_object_store;
+use crate::hugging_face::HuggingFaceObjectStore;
+use crate::layers::lazy::LazyObjectStore;
+use crate::layers::runtime::RuntimeAwareObjectStore;
+use crate::s3::get_s3_object_store;
 
 #[derive(Debug, Eq, PartialEq, Hash)]
 struct ObjectStoreKey {

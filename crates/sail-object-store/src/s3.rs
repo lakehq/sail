@@ -38,7 +38,7 @@ impl std::error::Error for IdentityDataError {}
 ///
 /// See also: <https://github.com/awslabs/aws-sdk-rust/discussions/923>
 #[derive(Debug)]
-pub(super) struct S3CredentialProvider {
+pub(crate) struct S3CredentialProvider {
     identity_cache: SharedIdentityCache,
     identity_resolver: SharedIdentityResolver,
     runtime_components: RuntimeComponents,
@@ -98,7 +98,7 @@ impl CredentialProvider for S3CredentialProvider {
     }
 }
 
-pub(super) async fn get_s3_object_store(url: &Url) -> Result<AmazonS3> {
+pub async fn get_s3_object_store(url: &Url) -> Result<AmazonS3> {
     let config = DEFAULT_AWS_CONFIG
         .get_or_init(|| aws_config::defaults(BehaviorVersion::latest()).load())
         .await;
