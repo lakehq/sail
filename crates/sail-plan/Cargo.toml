@@ -6,7 +6,6 @@ edition = { workspace = true }
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
-sail-object-store = { path = "../sail-object-store" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
@@ -22,7 +21,6 @@ tonic = { workspace = true }
 tokio-stream = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
-async-stream = { workspace = true }
 lazy_static = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
