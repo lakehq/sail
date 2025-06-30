@@ -1,11 +1,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion::catalog::Session;
-use datafusion::catalog::TableProvider;
-use datafusion::common::{exec_datafusion_err, Column, DFSchema, Result as DataFusionResult, DataFusionError};
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::{
+    exec_datafusion_err, Column, DFSchema, DataFusionError, Result as DataFusionResult,
+};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
@@ -14,14 +15,11 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
-
-use deltalake::DeltaTableError;
-use crate::{
-    delta_datafusion::DataFusionMixins, operations::load_cdf::CdfLoadBuilder
-};
-use deltalake::DeltaResult;
+use deltalake::{DeltaResult, DeltaTableError};
 
 use super::ADD_PARTITION_SCHEMA;
+use crate::delta_datafusion::DataFusionMixins;
+use crate::operations::load_cdf::CdfLoadBuilder;
 
 fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&SessionState> {
     session
@@ -93,7 +91,9 @@ impl TableProvider for DeltaCdfTableProvider {
                 .map_err(delta_to_datafusion_error)?;
             Arc::new(FilterExec::try_new(physical_expr, plan)?)
         } else {
-            self.cdf_builder.build(session_state, None).await
+            self.cdf_builder
+                .build(session_state, None)
+                .await
                 .map_err(delta_to_datafusion_error)?
         };
 
@@ -102,18 +102,19 @@ impl TableProvider for DeltaCdfTableProvider {
         if let Some(projection) = projection {
             let current_projection = (0..plan.schema().fields().len()).collect::<Vec<usize>>();
             if projection != &current_projection {
-                let fields: Result<Vec<(Arc<dyn PhysicalExpr>, String)>, DataFusionError> = projection
-                    .iter()
-                    .map(|i| {
-                        let (table_ref, field) = df_schema.qualified_field(*i);
-                        session
-                            .create_physical_expr(
-                                Expr::Column(Column::from((table_ref, field))),
-                                &df_schema,
-                            )
-                            .map(|expr| (expr, field.name().clone()))
-                    })
-                    .collect();
+                let fields: Result<Vec<(Arc<dyn PhysicalExpr>, String)>, DataFusionError> =
+                    projection
+                        .iter()
+                        .map(|i| {
+                            let (table_ref, field) = df_schema.qualified_field(*i);
+                            session
+                                .create_physical_expr(
+                                    Expr::Column(Column::from((table_ref, field))),
+                                    &df_schema,
+                                )
+                                .map(|expr| (expr, field.name().clone()))
+                        })
+                        .collect();
                 let fields = fields?;
                 plan = Arc::new(ProjectionExec::try_new(fields, plan)?);
             }

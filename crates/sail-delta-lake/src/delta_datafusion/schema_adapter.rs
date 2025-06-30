@@ -5,7 +5,6 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::common::DataFusionError;
 use datafusion::datasource::schema_adapter::{SchemaAdapter, SchemaAdapterFactory, SchemaMapper};
-
 use deltalake::operations::cast::cast_record_batch;
 
 /// A Schema Adapter Factory which provides casting record batches from parquet to meet

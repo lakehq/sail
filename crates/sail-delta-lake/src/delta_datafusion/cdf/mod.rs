@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
-
-pub(crate) use self::scan_utils::*;
 use deltalake::kernel::{Add, AddCDCFile, Remove};
 use deltalake::DeltaResult;
+
+pub(crate) use self::scan_utils::*;
 
 pub mod scan;
 mod scan_utils;

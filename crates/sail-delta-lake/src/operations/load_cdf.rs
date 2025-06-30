@@ -13,9 +13,9 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use chrono::{DateTime, Utc};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Field, Schema};
-use chrono::{DateTime, Utc};
 use datafusion::common::config::TableParquetOptions;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::memory::DataSourceExec;
@@ -28,14 +28,14 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-
-use crate::delta_datafusion::{register_store, DataFusionMixins};
 use deltalake::errors::DeltaResult;
 use deltalake::kernel::{Action, Add, AddCDCFile, CommitInfo, Remove};
 use deltalake::logstore::{get_actions, LogStoreRef};
 use deltalake::table::state::DeltaTableState;
 use deltalake::DeltaTableError;
+
 use crate::delta_datafusion::cdf::*;
+use crate::delta_datafusion::{register_store, DataFusionMixins};
 
 /// Builder for create a read of change data feeds for delta tables
 #[derive(Clone, Debug)]
@@ -115,7 +115,9 @@ impl CdfLoadBuilder {
         Vec<CdcDataSpec<Add>>,
         Vec<CdcDataSpec<Remove>>,
     )> {
-        unimplemented!("determine_files_to_read method needs to be updated for datafusion 0.48 compatibility")
+        unimplemented!(
+            "determine_files_to_read method needs to be updated for datafusion 0.48 compatibility"
+        )
     }
 
     #[inline]
@@ -134,7 +136,9 @@ impl CdfLoadBuilder {
         session_sate: &SessionState,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
-        unimplemented!("CdfLoadBuilder::build method needs to be updated for datafusion 0.48 compatibility")
+        unimplemented!(
+            "CdfLoadBuilder::build method needs to be updated for datafusion 0.48 compatibility"
+        )
     }
 }
 

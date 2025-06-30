@@ -23,31 +23,31 @@
 use std::fmt::{self, Display, Error, Formatter, Write};
 use std::sync::Arc;
 
+use chrono::{DateTime, NaiveDate};
 use datafusion::arrow::array::{Array, GenericListArray};
 use datafusion::arrow::datatypes::{DataType, Field};
-use chrono::{DateTime, NaiveDate};
-use datafusion::common::Result as DFResult;
-use datafusion::common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
+use datafusion::common::config::ConfigOptions;
+use datafusion::common::{DFSchema, Result as DFResult, Result, ScalarValue, TableReference};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
+// Needed for MakeParquetArray
+use datafusion::functions::core::planner::CoreFunctionPlanner;
 use datafusion::functions_nested::make_array::MakeArray;
 use datafusion::functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::planner::ExprPlanner;
 use datafusion::logical_expr::{
-    AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, ScalarFunctionArgs, TableSource,
+    AggregateUDF, Between, BinaryExpr, Cast, ColumnarValue, Documentation, Expr, Like,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableSource,
 };
-// Needed for MakeParquetArray
-use datafusion::functions::core::planner::CoreFunctionPlanner;
-use datafusion::logical_expr::{ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature};
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::ast::escape_quoted_string;
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::tokenizer::Tokenizer;
+use deltalake::{DeltaResult, DeltaTableError};
 
 use super::DeltaParserOptions;
-use deltalake::{DeltaResult, DeltaTableError};
 
 /// This struct is like Datafusion's MakeArray but ensures that `element` is used rather than `item
 /// as the field name within the list.
@@ -279,7 +279,8 @@ pub fn parse_predicate_expression(
     let sql_to_rel =
         SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
 
-    Ok(sql_to_rel.sql_to_expr(sql, schema, &mut Default::default())
+    Ok(sql_to_rel
+        .sql_to_expr(sql, schema, &mut Default::default())
         .map_err(|err| DeltaTableError::GenericError {
             source: Box::new(err),
         })?)

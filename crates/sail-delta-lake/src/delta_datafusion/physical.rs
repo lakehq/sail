@@ -8,9 +8,8 @@ use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
-use futures::{Stream, StreamExt};
-
 use deltalake::DeltaTableError;
+use futures::{Stream, StreamExt};
 
 // Metric Observer is used to update DataFusion metrics from a record batch.
 // Typically the null count for a particular column is pulled after performing a

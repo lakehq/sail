@@ -26,34 +26,35 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
+// use arrow_select::concat::concat_batches;
+// use arrow_select::filter::filter_record_batch;
+use async_trait::async_trait;
+use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::types::UInt16Type;
 use datafusion::arrow::array::{
     Array, BooleanArray, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray,
 };
-use datafusion::arrow::util::display::array_value_to_string;
 use datafusion::arrow::compute::kernels::cast::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
-// use arrow_select::concat::concat_batches;
-// use arrow_select::filter::filter_record_batch;
-use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
+use datafusion::arrow::util::display::array_value_to_string;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProviderFactory};
+use datafusion::common::config::ConfigOptions;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::{
-    config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
-    TableReference, ToDFSchema,
+    Column, DFSchema, DataFusionError, Result as DataFusionResult, TableReference, ToDFSchema,
 };
 use datafusion::config::TableParquetOptions;
+use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfigBuilder,
     ParquetSource,
 };
-use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
+use datafusion::datasource::{MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
@@ -79,17 +80,6 @@ use datafusion::sql::planner::ParserOptions;
 // use datafusion_proto::logical_plan::LogicalExtensionCodec;
 // use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
-use either::Either;
-use futures::TryStreamExt;
-
-use object_store::ObjectMeta;
-use serde::{Deserialize, Serialize};
-
-use url::Url;
-
-use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
-
 use deltalake::errors::{DeltaResult, DeltaTableError};
 use deltalake::kernel::{
     Add, DataCheck, EagerSnapshot, Invariant, LogDataHandler, Snapshot, StructTypeExt,
@@ -99,6 +89,14 @@ use deltalake::table::builder::ensure_table_uri;
 use deltalake::table::state::DeltaTableState;
 use deltalake::table::{Constraint, GeneratedColumn};
 use deltalake::{open_table, open_table_with_storage_options, DeltaTable};
+use either::Either;
+use futures::TryStreamExt;
+use object_store::ObjectMeta;
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+use crate::delta_datafusion::expr::parse_predicate_expression;
+use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
