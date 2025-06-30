@@ -6,7 +6,6 @@ edition = { workspace = true }
 [dependencies]
 sail-common = { path = "../sail-common" }
 
-# Dependencies needed for object store functionality
 object_store = { workspace = true }
 aws-config = { workspace = true }
 aws-credential-types = { workspace = true }

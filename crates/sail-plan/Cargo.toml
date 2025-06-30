@@ -51,10 +51,5 @@ half = { workspace = true }
 crc32fast = { workspace = true }
 num = { workspace = true }
 num-traits = { workspace = true }
-log = { workspace = true }
 chumsky = { workspace = true }
 percent-encoding = { workspace = true }
-dashmap = { workspace = true }
-
-[features]
-hdfs = ["sail-object-store/hdfs"]
