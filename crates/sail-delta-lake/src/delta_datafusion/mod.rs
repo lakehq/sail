@@ -44,6 +44,7 @@ use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::scalar::ScalarValue;
+use datafusion::common::stats::Statistics;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::{
     Column, DFSchema, DataFusionError, Result as DataFusionResult, TableReference, ToDFSchema,
@@ -75,7 +76,6 @@ use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
-    Statistics,
 };
 use datafusion::sql::planner::ParserOptions;
 // use datafusion_proto::logical_plan::LogicalExtensionCodec;
@@ -406,12 +406,18 @@ pub(crate) fn get_path_column<'a>(
     unimplemented!();
 }
 
-// impl DeltaTableState {
-//     /// Provide table level statistics to Datafusion
-//     pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
-//         unimplemented!();
-//     }
-// }
+// Extension trait to add datafusion_table_statistics method to DeltaTableState
+trait DeltaTableStateExt {
+    fn datafusion_table_statistics(&self) -> Option<Statistics>;
+}
+
+impl DeltaTableStateExt for DeltaTableState {
+    fn datafusion_table_statistics(&self) -> Option<Statistics> {
+        // let log_data = self.snapshot().log_data();
+        // log_data.statistics()
+        unimplemented!();
+    }
+}
 
 pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     let url = &store.config().location;
@@ -1367,6 +1373,164 @@ impl DeltaDataChecker {
 //         unimplemented!();
 //     }
 // }
+
+/// A Delta table provider that enables additional metadata columns to be included during the scan
+#[derive(Debug)]
+pub struct DeltaTableProvider {
+    snapshot: DeltaTableState,
+    log_store: LogStoreRef,
+    config: DeltaScanConfig,
+    schema: Arc<ArrowSchema>,
+    files: Option<Vec<Add>>,
+}
+
+impl DeltaTableProvider {
+    /// Build a DeltaTableProvider
+    pub fn try_new(
+        snapshot: DeltaTableState,
+        log_store: LogStoreRef,
+        config: DeltaScanConfig,
+    ) -> DeltaResult<Self> {
+        Ok(DeltaTableProvider {
+            schema: df_logical_schema(&snapshot, &config.file_column_name, config.schema.clone())?,
+            snapshot,
+            log_store,
+            config,
+            files: None,
+        })
+    }
+
+    /// Define which files to consider while building a scan, for advanced usecases
+    pub fn with_files(mut self, files: Vec<Add>) -> DeltaTableProvider {
+        self.files = Some(files);
+        self
+    }
+}
+
+#[async_trait]
+impl TableProvider for DeltaTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> Arc<ArrowSchema> {
+        self.schema.clone()
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        None
+    }
+
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
+        None
+    }
+
+    async fn scan(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        register_store(self.log_store.clone(), session.runtime_env().clone());
+        let filter_expr = conjunction(filters.iter().cloned());
+
+        let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
+            .with_projection(projection)
+            .with_limit(limit)
+            .with_filter(filter_expr)
+            .with_scan_config(self.config.clone());
+
+        if let Some(files) = &self.files {
+            scan = scan.with_files(files);
+        }
+        Ok(Arc::new(
+            scan.build().await.map_err(delta_to_datafusion_error)?,
+        ))
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filter: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        let partition_cols = self.snapshot.metadata().partition_columns.as_slice();
+        Ok(get_pushdown_filters(filter, partition_cols))
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        self.snapshot.datafusion_table_statistics()
+    }
+}
+
+fn get_pushdown_filters(
+    filter: &[&Expr],
+    partition_cols: &[String],
+) -> Vec<TableProviderFilterPushDown> {
+    filter
+        .iter()
+        .cloned()
+        .map(|expr| {
+            let applicable = expr_is_exact_predicate_for_cols(partition_cols, expr);
+            if !expr.column_refs().is_empty() && applicable {
+                TableProviderFilterPushDown::Exact
+            } else {
+                TableProviderFilterPushDown::Inexact
+            }
+        })
+        .collect()
+}
+
+// inspired from datafusion::listing::helpers, but adapted to only stats based pruning
+fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> bool {
+    let mut is_applicable = true;
+    expr.apply(|expr| match expr {
+        Expr::Column(Column { ref name, .. }) => {
+            is_applicable &= partition_cols.contains(name);
+
+            // TODO: decide if we should constrain this to Utf8 columns (including views, dicts etc)
+
+            if is_applicable {
+                Ok(TreeNodeRecursion::Jump)
+            } else {
+                Ok(TreeNodeRecursion::Stop)
+            }
+        }
+        Expr::BinaryExpr(BinaryExpr { ref op, .. }) => {
+            is_applicable &= matches!(
+                op,
+                Operator::And
+                    | Operator::Or
+                    | Operator::NotEq
+                    | Operator::Eq
+                    | Operator::Gt
+                    | Operator::GtEq
+                    | Operator::Lt
+                    | Operator::LtEq
+            );
+            if is_applicable {
+                Ok(TreeNodeRecursion::Continue)
+            } else {
+                Ok(TreeNodeRecursion::Stop)
+            }
+        }
+        Expr::Literal(..)
+        | Expr::Not(_)
+        | Expr::IsNotNull(_)
+        | Expr::IsNull(_)
+        | Expr::Between(_)
+        | Expr::InList(_) => Ok(TreeNodeRecursion::Continue),
+        _ => {
+            is_applicable = false;
+            Ok(TreeNodeRecursion::Stop)
+        }
+    })
+    .unwrap();
+    is_applicable
+}
 
 /// Responsible for creating deltatables
 #[derive(Debug)]
