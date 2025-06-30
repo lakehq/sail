@@ -110,17 +110,27 @@ pub use cdf::scan::DeltaCdfTableProvider;
 
 mod schema_adapter;
 
-// impl From<DeltaTableError> for DataFusionError {
-//     fn from(err: DeltaTableError) -> Self {
-//         unimplemented!();
-//     }
-// }
+/// Convert DeltaTableError to DataFusionError
+pub fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {
+    match err {
+        DeltaTableError::Arrow { source } => DataFusionError::ArrowError(source, None),
+        DeltaTableError::Io { source } => DataFusionError::IoError(source),
+        DeltaTableError::ObjectStore { source } => DataFusionError::ObjectStore(source),
+        DeltaTableError::Parquet { source } => DataFusionError::ParquetError(source),
+        _ => DataFusionError::External(Box::new(err)),
+    }
+}
 
-// impl From<DataFusionError> for DeltaTableError {
-//     fn from(err: DataFusionError) -> Self {
-//         unimplemented!();
-//     }
-// }
+/// Convert DataFusionError to DeltaTableError
+pub fn datafusion_to_delta_error(err: DataFusionError) -> DeltaTableError {
+    match err {
+        DataFusionError::ArrowError(source, _) => DeltaTableError::Arrow { source },
+        DataFusionError::IoError(source) => DeltaTableError::Io { source },
+        DataFusionError::ObjectStore(source) => DeltaTableError::ObjectStore { source },
+        DataFusionError::ParquetError(source) => DeltaTableError::Parquet { source },
+        _ => DeltaTableError::Generic(err.to_string()),
+    }
+}
 
 /// Convenience trait for calling common methods on snapshot hierarchies
 pub trait DataFusionMixins {

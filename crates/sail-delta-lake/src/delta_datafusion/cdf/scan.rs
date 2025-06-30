@@ -18,7 +18,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use deltalake::{DeltaResult, DeltaTableError};
 
 use super::ADD_PARTITION_SCHEMA;
-use crate::delta_datafusion::DataFusionMixins;
+use crate::delta_datafusion::{delta_to_datafusion_error, DataFusionMixins};
 use crate::operations::load_cdf::CdfLoadBuilder;
 
 fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&SessionState> {
@@ -26,16 +26,6 @@ fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&Sessio
         .as_any()
         .downcast_ref::<SessionState>()
         .ok_or_else(|| exec_datafusion_err!("Failed to downcast Session to SessionState"))
-}
-
-// Helper function to convert DeltaTableError to DataFusionError
-fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {
-    DataFusionError::External(Box::new(err))
-}
-
-// Helper function to convert DataFusionError to DeltaTableError
-fn datafusion_to_delta_error(err: DataFusionError) -> DeltaTableError {
-    DeltaTableError::Generic(format!("DataFusion error: {}", err))
 }
 
 #[derive(Debug)]
