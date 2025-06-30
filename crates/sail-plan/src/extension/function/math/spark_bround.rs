@@ -3,7 +3,6 @@ use std::any::Any;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr_common::signature::TypeSignature;
 
 #[derive(Debug)]
 pub struct SparkBRound {
@@ -19,16 +18,7 @@ impl Default for SparkBRound {
 impl SparkBRound {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    // Decimal(_,_) not work here, but in invoke_with_args yes
-                    TypeSignature::Exact(vec![DataType::Float32, DataType::Int32]),
-                    TypeSignature::Exact(vec![DataType::Float64, DataType::Int32]),
-                    TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
-                    TypeSignature::Exact(vec![DataType::Float64, DataType::Float64]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -47,16 +37,27 @@ impl ScalarUDFImpl for SparkBRound {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            DataType::Float32 => Ok(DataType::Float32),
-            DataType::Float64 => Ok(DataType::Float64),
-            DataType::Decimal128(_, _) => Ok(DataType::Float64),
-            _ => exec_err!("bround: unsupported input type {:?}", arg_types[0]),
+        if arg_types.len() != 2 {
+            return exec_err!("spark_bround expects 2 arguments, got {}", arg_types.len());
+        }
+
+        match &arg_types[0] {
+            DataType::Float64
+            | DataType::Float32
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => Ok(DataType::Float64),
+            other => exec_err!("Unsupported type for spark_bround: {}", other),
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
+        if args.len() != 2 {
+            return exec_err!(
+                "spark_bround expects exactly 2 arguments, got {}",
+                args.len()
+            );
+        }
         let [x, d] = args.as_slice() else {
             return exec_err!("bround() requires exactly 2 arguments, got {}", args.len());
         };
