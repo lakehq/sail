@@ -449,6 +449,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("datepart", F::binary(expr_fn::date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
+        (
+            "dayname",
+            F::unary(|arg| expr_fn::to_char(arg, lit(ScalarValue::Utf8(Some("%a".into()))))),
+        ),
         ("dayofmonth", F::unary(|arg| integer_part(arg, "DAY"))),
         (
             "dayofweek",
