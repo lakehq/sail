@@ -1,6 +1,1 @@
-mod hugging_face;
-mod layers;
-mod registry;
-mod s3;
-
-pub use registry::DynamicObjectStoreRegistry;
+pub use sail_object_store::DynamicObjectStoreRegistry;
