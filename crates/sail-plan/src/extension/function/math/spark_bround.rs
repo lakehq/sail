@@ -40,7 +40,6 @@ impl ScalarUDFImpl for SparkBRound {
         if arg_types.len() != 2 {
             return exec_err!("spark_bround expects 2 arguments, got {}", arg_types.len());
         }
-
         match &arg_types[0] {
             DataType::Float64
             | DataType::Float32
