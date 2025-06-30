@@ -58,4 +58,3 @@ dashmap = { workspace = true }
 
 [features]
 hdfs = ["sail-object-store/hdfs"]
-default = ["hdfs"]

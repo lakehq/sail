@@ -13,13 +13,13 @@ use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
+use sail_object_store::DynamicObjectStoreRegistry;
 use sail_plan::extension::analyzer::default_analyzer_rules;
 use sail_plan::extension::optimizer::default_optimizer_rules;
 use sail_plan::function::{
     BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
 };
 use sail_plan::new_query_planner;
-use sail_plan::object_store::DynamicObjectStoreRegistry;
 use sail_plan::temp_view::TemporaryViewManager;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
@@ -77,7 +77,7 @@ impl SessionManager {
         };
         self.handle.send(event).await?;
         rx.await
-            .map_err(|e| SparkError::internal(format!("failed to get session: {e}")))?
+            .map_err(|e| SparkError::internal(format!("failed to get session: {e}")))
     }
 
     pub fn create_session_context(
