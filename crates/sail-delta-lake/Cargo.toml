@@ -10,6 +10,7 @@ sail-common-datafusion = { path = "../sail-common-datafusion", features = ["delt
 
 # Delta Lake core (without datafusion feature)
 deltalake = { workspace = true}
+delta_kernel = { workspace = true}
 
 # DataFusion dependencies - these are needed because we disabled delta-rs datafusion feature
 datafusion = { workspace = true }

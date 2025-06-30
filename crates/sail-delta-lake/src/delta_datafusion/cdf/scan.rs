@@ -1,73 +1,126 @@
-use chrono::{TimeZone, Utc};
-use datafusion::arrow::datatypes::DataType as ArrowDataType;
-use datafusion::common::ScalarValue;
-use datafusion::datasource::listing::PartitionedFile;
-use deltalake::kernel::{Add, Error as DeltaKernelError, StructType};
-use object_store::path::Path;
-use object_store::ObjectMeta;
-use serde_json::Value;
+use std::any::Any;
+use std::sync::Arc;
 
-/// Replicates the logic from `delta-rs` to correctly convert a `serde_json::Value` from
-/// a partition value into the appropriate `ScalarValue`.
-pub(crate) fn to_correct_scalar_value(
-    value: &Value,
-    data_type: &ArrowDataType,
-) -> datafusion::common::Result<ScalarValue> {
-    match value {
-        Value::Null => ScalarValue::try_from(data_type),
-        Value::String(s) => ScalarValue::try_from_string(s.clone(), data_type),
-        other => ScalarValue::try_from_string(other.to_string(), data_type),
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use async_trait::async_trait;
+use datafusion::catalog::Session;
+use datafusion::catalog::TableProvider;
+use datafusion::common::{exec_datafusion_err, Column, DFSchema, Result as DataFusionResult};
+use datafusion::execution::SessionState;
+use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::ExecutionPlan;
+
+use deltalake::DeltaTableError;
+use crate::{
+    delta_datafusion::DataFusionMixins, operations::load_cdf::CdfLoadBuilder
+};
+use deltalake::DeltaResult;
+
+use super::ADD_PARTITION_SCHEMA;
+
+fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&SessionState> {
+    session
+        .as_any()
+        .downcast_ref::<SessionState>()
+        .ok_or_else(|| exec_datafusion_err!("Failed to downcast Session to SessionState"))
+}
+
+#[derive(Debug)]
+pub struct DeltaCdfTableProvider {
+    cdf_builder: CdfLoadBuilder,
+    schema: SchemaRef,
+}
+
+impl DeltaCdfTableProvider {
+    /// Build a DeltaCDFTableProvider
+    pub fn try_new(cdf_builder: CdfLoadBuilder) -> DeltaResult<Self> {
+        let mut fields = cdf_builder.snapshot.input_schema()?.fields().to_vec();
+        for f in ADD_PARTITION_SCHEMA.clone() {
+            fields.push(f.into());
+        }
+        Ok(DeltaCdfTableProvider {
+            cdf_builder,
+            schema: Schema::new(fields).into(),
+        })
     }
 }
 
-/// Creates a DataFusion `PartitionedFile` from a Delta `Add` action.
-pub(crate) fn partitioned_file_from_action(
-    action: &Add,
-    partition_columns: &[String],
-    schema: &StructType,
-) -> Result<PartitionedFile, DeltaKernelError> {
-    let partition_values = partition_columns
-        .iter()
-        .map(|part| {
-            let value = action.partition_values.get(part).cloned().flatten();
-            let field = schema.fields().find(|f| f.name() == part).ok_or_else(|| {
-                DeltaKernelError::Generic(format!("Field {} not found in schema", part))
-            })?;
+#[async_trait]
+impl TableProvider for DeltaCdfTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 
-            // Convert Delta field to Arrow data type
-            let arrow_data_type: ArrowDataType = field.data_type().try_into().map_err(|e| {
-                DeltaKernelError::Generic(format!("Failed to convert data type: {}", e))
-            })?;
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
 
-            match value {
-                Some(value) => {
-                    to_correct_scalar_value(&serde_json::Value::String(value), &arrow_data_type)
-                        .map_err(|e| DeltaKernelError::Generic(e.to_string()))
-                }
-                None => ScalarValue::try_from(&arrow_data_type)
-                    .map_err(|e| DeltaKernelError::Generic(e.to_string())),
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        let session_state = session_state_from_session(session)?;
+        let schema: DFSchema = self.schema().try_into()?;
+
+        let mut plan = if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
+            let physical_expr = session.create_physical_expr(filter_expr, &schema)?;
+            let plan = self
+                .cdf_builder
+                .build(session_state, Some(&physical_expr))
+                .await?;
+            Arc::new(FilterExec::try_new(physical_expr, plan)?)
+        } else {
+            self.cdf_builder.build(session_state, None).await?
+        };
+
+        let df_schema: DFSchema = plan.schema().try_into()?;
+
+        if let Some(projection) = projection {
+            let current_projection = (0..plan.schema().fields().len()).collect::<Vec<usize>>();
+            if projection != &current_projection {
+                let fields: DeltaResult<Vec<(Arc<dyn PhysicalExpr>, String)>> = projection
+                    .iter()
+                    .map(|i| {
+                        let (table_ref, field) = df_schema.qualified_field(*i);
+                        session
+                            .create_physical_expr(
+                                Expr::Column(Column::from((table_ref, field))),
+                                &df_schema,
+                            )
+                            .map(|expr| (expr, field.name().clone()))
+                            .map_err(DeltaTableError::from)
+                    })
+                    .collect();
+                let fields = fields?;
+                plan = Arc::new(ProjectionExec::try_new(fields, plan)?);
             }
-        })
-        .collect::<Result<Vec<_>, DeltaKernelError>>()?;
+        }
 
-    let last_modified = Utc
-        .timestamp_millis_opt(action.modification_time)
-        .single()
-        .unwrap_or_else(Utc::now);
+        if let Some(limit) = limit {
+            plan = Arc::new(GlobalLimitExec::new(plan, 0, Some(limit)))
+        };
+        Ok(plan)
+    }
 
-    Ok(PartitionedFile {
-        object_meta: ObjectMeta {
-            location: Path::parse(action.path.as_str())
-                .map_err(|e| DeltaKernelError::Generic(e.to_string()))?,
-            size: action.size as u64,
-            e_tag: None,
-            last_modified,
-            version: None,
-        },
-        partition_values,
-        range: None,
-        extensions: None,
-        statistics: None,
-        metadata_size_hint: None,
-    })
+    fn supports_filters_pushdown(
+        &self,
+        filter: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        Ok(filter
+            .iter()
+            .map(|_| TableProviderFilterPushDown::Exact) // maybe exact
+            .collect())
+    }
 }
