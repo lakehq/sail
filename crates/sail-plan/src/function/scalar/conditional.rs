@@ -1,5 +1,6 @@
 use datafusion::functions::expr_fn;
-use datafusion_expr::expr;
+use datafusion_common::ScalarValue;
+use datafusion_expr::{expr, lit};
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -44,8 +45,16 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
         ("ifnull", F::binary(expr_fn::nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
         ("nullif", F::binary(expr_fn::nullif)),
+        (
+            "nullifzero",
+            F::unary(|arg| expr_fn::nullif(arg, lit(ScalarValue::Int32(Some(0))))),
+        ),
         ("nvl", F::binary(expr_fn::nvl)),
         ("nvl2", F::ternary(expr_fn::nvl2)),
+        (
+            "zeroifnull",
+            F::unary(|arg| expr_fn::nvl(arg, lit(ScalarValue::Int32(Some(0))))),
+        ),
         ("when", F::custom(case)),
         ("case", F::custom(case)),
     ]
