@@ -55,7 +55,6 @@ impl ScalarUDFImpl for SparkSec {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
-        // Validación: debe haber solo 1 argumento
         let [arg] = args.as_slice() else {
             return exec_err!(
                 "Spark `sec` function requires 1 argument, got {}",
