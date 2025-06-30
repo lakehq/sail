@@ -16,6 +16,7 @@ use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::math::spark_abs::SparkAbs;
 use crate::extension::function::math::spark_bin::SparkBin;
+use crate::extension::function::math::spark_bround::SparkBRound;
 use crate::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_pmod::SparkPmod;
@@ -552,7 +553,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("atan2", F::binary(expr_fn::atan2)),
         ("atanh", F::unary(expr_fn::atanh)),
         ("bin", F::udf(SparkBin::new())),
-        ("bround", F::unknown("bround")),
+        ("bround", F::udf(SparkBRound::new())),
         ("cbrt", F::unary(expr_fn::cbrt)),
         ("ceil", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("ceiling", F::custom(|arg| ceil_floor(arg, "ceil"))),
