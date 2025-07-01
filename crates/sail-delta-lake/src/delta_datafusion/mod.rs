@@ -420,7 +420,10 @@ impl DeltaTableStateExt for DeltaTableState {
 }
 
 pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
-    let url = &store.config().location;
+    // Use the delta-rs URL format for registration to match the URL parsing logic
+    // in sail-object-store registry
+    let object_store_url = object_store_url(&store.config().location);
+    let url: &Url = object_store_url.as_ref();
     env.register_object_store(url, store.object_store(None));
 }
 

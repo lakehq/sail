@@ -880,8 +880,6 @@ impl PlanResolver<'_> {
                     column_defaults: Default::default(),
                 };
                 let table_provider = factory.create(&self.ctx.state(), &cmd).await?;
-                // For Delta tables, we can't use standard ListingOptions since it's not a FileFormat
-                // Instead, we'll register the table provider directly and create a basic ListingOptions
                 let names = state.register_fields(table_provider.schema().fields());
                 let table_provider = RenameTableProvider::try_new(table_provider, names)?;
                 return Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
@@ -3353,6 +3351,7 @@ impl PlanResolver<'_> {
         use deltalake::kernel::{DataType as DeltaDataType, PrimitiveType, StructField};
         use deltalake::protocol::SaveMode;
         use deltalake::DeltaOps;
+        use sail_delta_lake::delta_datafusion::DeltaTableProvider;
 
         let table_reference = self.resolve_table_reference(&table)?;
 
@@ -3386,6 +3385,11 @@ impl PlanResolver<'_> {
             }
             Err(deltalake::DeltaTableError::NotATable(_))
             | Err(deltalake::DeltaTableError::InvalidTableLocation(_)) => {
+                if schema.fields().is_empty() {
+                    return Err(PlanError::invalid(
+                        "Schema must be provided when creating a new Delta table from an empty location.",
+                    ));
+                }
                 // Table doesn't exist, proceed with creation logic
             }
             Err(e) => {
