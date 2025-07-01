@@ -5439,6 +5439,7 @@ version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "dashmap",
  "datafusion",
  "datafusion-common",
  "datafusion-execution",
