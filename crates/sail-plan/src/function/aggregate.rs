@@ -7,10 +7,11 @@ use datafusion::functions_aggregate::{
     correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
     variance,
 };
+use datafusion::functions_nested::expr_fn;
 use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{expr, AggregateUDF};
+use datafusion_expr::{expr, lit, AggregateUDF};
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
@@ -201,6 +202,15 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    use crate::function::common::AggFunctionBuilder as F;
+
+    Ok(expr_fn::array_remove(
+        expr_fn::array_distinct(F::default(array_agg::array_agg_udaf)(input)?),
+        lit(ScalarValue::Null),
+    ))
+}
+
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
     use crate::function::common::AggFunctionBuilder as F;
 
@@ -225,7 +235,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("bool_and", F::default(bool_and_or::bool_and_udaf)),
         ("bool_or", F::default(bool_and_or::bool_or_udaf)),
         ("collect_list", F::default(array_agg::array_agg_udaf)),
-        ("collect_set", F::unknown("collect_set")),
+        ("collect_set", F::custom(collect_set)),
         ("corr", F::default(correlation::corr_udaf)),
         ("count", F::custom(count)),
         ("count_if", F::unknown("count_if")),
