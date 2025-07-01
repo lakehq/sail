@@ -64,9 +64,9 @@ impl ScalarUDFImpl for SparkConv {
                 match i64::from_str_radix(num_str, *from as u32) {
                     Ok(n) => {
                         let result = if *to == 10 {
-                            format!("{}", n)
+                            format!("{n}")
                         } else {
-                            format!("{:x}", n)
+                            format!("{n:x}")
                         };
                         Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
                     }
