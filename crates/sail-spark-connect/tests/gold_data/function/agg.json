@@ -567,7 +567,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: collect_set"
+        "success": "ok"
       }
     },
     {
