@@ -143,8 +143,16 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
                     format!("{}://{}", original_scheme, original_path)
                 } else {
                     // For schemes with host: scheme://host/path
-                    format!("{}://{}{}", original_scheme, original_host,
-                           if original_path.starts_with('/') { original_path } else { format!("/{}", original_path) })
+                    format!(
+                        "{}://{}{}",
+                        original_scheme,
+                        original_host,
+                        if original_path.starts_with('/') {
+                            original_path
+                        } else {
+                            format!("/{}", original_path)
+                        }
+                    )
                 };
 
                 if let Ok(original_url) = Url::parse(&original_url_str) {
