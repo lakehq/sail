@@ -811,7 +811,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: conv"
+        "success": "ok"
       }
     },
     {
@@ -833,7 +833,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: conv"
+        "success": "ok"
       }
     },
     {

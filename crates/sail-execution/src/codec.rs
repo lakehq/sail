@@ -78,6 +78,7 @@ use sail_plan::extension::function::math::spark_abs::SparkAbs;
 use sail_plan::extension::function::math::spark_bin::SparkBin;
 use sail_plan::extension::function::math::spark_bround::SparkBRound;
 use sail_plan::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
+use sail_plan::extension::function::math::spark_conv::SparkConv;
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::math::spark_pmod::SparkPmod;
 use sail_plan::extension::function::math::spark_sec::SparkSec;
@@ -801,6 +802,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
             }
             "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
+            "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_sec" | "sec" => Ok(Arc::new(ScalarUDF::from(SparkSec::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_element_at" | "element_at" => {
@@ -877,6 +879,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkAESDecrypt>()
             || node.inner().as_any().is::<SparkTryAESDecrypt>()
             || node.inner().as_any().is::<SparkAbs>()
+            || node.inner().as_any().is::<SparkBRound>()
+            || node.inner().as_any().is::<SparkConv>()
+            || node.inner().as_any().is::<SparkSec>()
             || node.inner().as_any().is::<SparkSignum>()
             || node.inner().as_any().is::<SparkToBinary>()
             || node.inner().as_any().is::<SparkTryToBinary>()
