@@ -1543,7 +1543,23 @@ impl TableProviderFactory for DeltaTableFactory {
         _ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        unimplemented!();
+        let delta_table = if cmd.options.is_empty() {
+            open_table(cmd.to_owned().location)
+                .await
+                .map_err(delta_to_datafusion_error)?
+        } else {
+            open_table_with_storage_options(cmd.to_owned().location, cmd.to_owned().options)
+                .await
+                .map_err(delta_to_datafusion_error)?
+        };
+        let config = DeltaScanConfig::default();
+        let provider = DeltaTableProvider::try_new(
+            delta_table.state.clone().unwrap(),
+            delta_table.log_store().clone(),
+            config,
+        )
+        .map_err(delta_to_datafusion_error)?;
+        Ok(Arc::new(provider))
     }
 }
 
