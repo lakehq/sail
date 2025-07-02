@@ -9,6 +9,8 @@ pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
 //     merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
 // };
 
+pub mod add_column;
+pub mod cast;
 mod cdc;
 pub mod constraints;
 pub mod delete;

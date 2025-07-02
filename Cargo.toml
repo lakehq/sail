@@ -91,6 +91,7 @@ reqwest = "0.12.15"
 percent-encoding = "2.3.1"
 rustls = "0.23.28"
 dashmap = "6.1.0"
+itertools = "0.14.0"
 
 ######
 # The versions of the following dependencies are managed manually.

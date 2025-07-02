@@ -5448,6 +5448,7 @@ dependencies = [
  "deltalake",
  "either",
  "futures",
+ "itertools 0.14.0",
  "object_store",
  "sail-common",
  "sail-common-datafusion",

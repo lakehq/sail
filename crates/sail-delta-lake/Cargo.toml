@@ -29,6 +29,7 @@ url = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 either.workspace = true
+itertools = { workspace = true }
 
 [features]
 default = []
