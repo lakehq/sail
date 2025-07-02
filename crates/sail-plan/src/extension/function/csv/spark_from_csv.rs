@@ -78,7 +78,10 @@ impl ScalarUDFImpl for SparkFromCSV {
                 "Expected UTF-8 schema string".to_string(),
             )),
         }?;
-        let schema = get_schema_from_options(schema, options_array.unwrap());
+        let sep: &str = get_sep_from_options(options_array.unwrap()).unwrap_or(",");
+        let schema: Result<DataType> =
+            parse_fields(schema, sep).map(|fields| DataType::Struct(fields));
+
         schema.map(|dt| ReturnInfo::new_nullable(dt))
     }
 
@@ -96,11 +99,22 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         );
     };
 
-    let column: &StringArray = downcast_arg!(&args[0], StringArray);
+    let array: &StringArray = downcast_arg!(&args[0], StringArray);
     let schema: &str = downcast_arg!(&args[1], StringArray).value(0);
     let options: &MapArray = downcast_arg!(&args[2], MapArray);
     let options: &StructArray = options.entries();
-    let schema: Result<DataType> = get_schema_from_options(schema, options);
+    let sep: &str = if args.len() == 3 {
+        let options: &MapArray = downcast_arg!(&args[2], MapArray);
+        let options: &StructArray = options.entries();
+        get_sep_from_options(options).unwrap_or(",")
+    } else {
+        ","
+    };
+    let schema: Result<Fields> = parse_fields(schema, sep);
+    todo!()
+}
+
+fn csv_to_values(value: &str, sep: &str) -> StructArray {
     todo!()
 }
 
@@ -116,12 +130,11 @@ fn get_sep_from_options(options: &StructArray) -> Result<&str> {
     Ok(sep_array.value(0))
 }
 
-fn get_schema_from_options(schema: &str, options: &StructArray) -> Result<DataType> {
-    let sep: &str = get_sep_from_options(options)?;
+fn parse_fields(schema: &str, sep: &str) -> Result<Fields> {
     let schema: Result<Fields> = parse_schema_string(schema, sep);
     schema.map(|fields| {
         let vec_fields: Vec<Arc<Field>> = fields.iter().cloned().collect();
-        DataType::Struct(Fields::from(vec_fields))
+        Fields::from(vec_fields)
     })
 }
 
