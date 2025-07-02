@@ -1,684 +1,568 @@
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
 
-use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
-use datafusion::datasource::file_format::json::JsonFormat;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::ListingOptions;
+use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
+use sail_data_source::options::{
+    load_default_options, load_options, CsvReadOptions, CsvWriteOptions, JsonReadOptions,
+    JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
+};
 
-use crate::data_source::csv::{CsvReadOptions, CsvWriteOptions};
-use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
-use crate::data_source::parquet::{ParquetReadOptions, ParquetWriteOptions};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
-impl PlanResolver<'_> {
-    fn char_to_u8(c: char, field_name: &str) -> PlanResult<u8> {
-        if c.is_ascii() {
-            Ok(c as u8)
-        } else {
-            Err(PlanError::internal(format!(
-                "Invalid character '{c}' for {field_name}: must be an ASCII character"
-            )))
-        }
+fn char_to_u8(c: char, option: &str) -> PlanResult<u8> {
+    if c.is_ascii() {
+        Ok(c as u8)
+    } else {
+        Err(PlanError::invalid(format!(
+            "invalid {option} character '{c}': must be an ASCII character"
+        )))
     }
+}
 
-    /// Ref: [`datafusion::datasource::file_format::options::NdJsonReadOptions`]
+fn apply_json_read_options(from: JsonReadOptions, to: &mut JsonOptions) -> PlanResult<()> {
+    let JsonReadOptions {
+        schema_infer_max_records,
+        compression,
+    } = from;
+    if let Some(v) = schema_infer_max_records {
+        to.schema_infer_max_rec = Some(v);
+    }
+    if let Some(compression) = compression {
+        to.compression = FileCompressionType::from_str(&compression)?.into();
+    }
+    Ok(())
+}
+
+fn apply_json_write_options(from: JsonWriteOptions, to: &mut JsonOptions) -> PlanResult<()> {
+    let JsonWriteOptions { compression } = from;
+    if let Some(compression) = compression {
+        to.compression = FileCompressionType::from_str(&compression)?.into();
+    }
+    Ok(())
+}
+
+fn apply_csv_read_options(from: CsvReadOptions, to: &mut CsvOptions) -> PlanResult<()> {
+    let CsvReadOptions {
+        delimiter,
+        quote,
+        escape,
+        comment,
+        header,
+        null_value,
+        null_regex,
+        line_sep,
+        schema_infer_max_records,
+        multi_line,
+        compression,
+    } = from;
+    let null_regex = match (null_value, null_regex) {
+        (Some(null_value), Some(null_regex))
+            if !null_value.is_empty() && !null_regex.is_empty() =>
+        {
+            return Err(PlanError::invalid(
+                "CSV `null_value` and `null_regex` cannot be both set",
+            ));
+        }
+        (Some(null_value), _) if !null_value.is_empty() => {
+            // Convert null value to regex by escaping special characters
+            Some(regex::escape(&null_value))
+        }
+        (_, Some(null_regex)) if !null_regex.is_empty() => Some(null_regex),
+        _ => None,
+    };
+    if let Some(null_regex) = null_regex {
+        to.null_regex = Some(null_regex);
+    }
+    if let Some(delimiter) = delimiter {
+        to.delimiter = char_to_u8(delimiter, "delimiter")?;
+    }
+    // TODO: support no quote
+    if let Some(Some(quote)) = quote {
+        to.quote = char_to_u8(quote, "quote")?;
+    }
+    // TODO: support no escape
+    if let Some(Some(escape)) = escape {
+        to.escape = Some(char_to_u8(escape, "escape")?);
+    }
+    // TODO: support no comment
+    if let Some(Some(comment)) = comment {
+        to.comment = Some(char_to_u8(comment, "comment")?);
+    }
+    if let Some(header) = header {
+        to.has_header = Some(header);
+    }
+    // TODO: support default line separator
+    //   The default line separator is any of `\n`, `\r`, or `\r\n` in Spark,
+    //   but `\r\n` in DataFusion.
+    if let Some(Some(sep)) = line_sep {
+        to.terminator = Some(char_to_u8(sep, "line_sep")?);
+    }
+    if let Some(n) = schema_infer_max_records {
+        to.schema_infer_max_rec = Some(n);
+    }
+    if let Some(compression) = compression {
+        to.compression = FileCompressionType::from_str(&compression)?.into();
+    }
+    if let Some(multi_line) = multi_line {
+        to.newlines_in_values = Some(multi_line);
+    }
+    Ok(())
+}
+
+fn apply_csv_write_options(from: CsvWriteOptions, to: &mut CsvOptions) -> PlanResult<()> {
+    let CsvWriteOptions {
+        delimiter,
+        quote,
+        escape,
+        escape_quotes,
+        header,
+        null_value,
+        compression,
+    } = from;
+    if let Some(delimiter) = delimiter {
+        to.delimiter = char_to_u8(delimiter, "delimiter")?;
+    }
+    // TODO: support no quote
+    if let Some(Some(quote)) = quote {
+        to.quote = char_to_u8(quote, "quote")?;
+    }
+    // TODO: support no escape
+    if let Some(Some(escape)) = escape {
+        to.escape = Some(char_to_u8(escape, "escape")?);
+    }
+    if let Some(escape_quotes) = escape_quotes {
+        to.double_quote = Some(escape_quotes);
+    }
+    if let Some(header) = header {
+        to.has_header = Some(header);
+    }
+    if let Some(null_value) = null_value {
+        to.null_value = Some(null_value);
+    }
+    if let Some(compression) = compression {
+        to.compression = FileCompressionType::from_str(&compression)?.into();
+    }
+    Ok(())
+}
+
+fn apply_parquet_read_options(
+    from: ParquetReadOptions,
+    to: &mut TableParquetOptions,
+) -> PlanResult<()> {
+    let ParquetReadOptions {
+        enable_page_index,
+        pruning,
+        skip_metadata,
+        metadata_size_hint,
+        pushdown_filters,
+        reorder_filters,
+        schema_force_view_types,
+        binary_as_string,
+        coerce_int96,
+        bloom_filter_on_read,
+    } = from;
+    if let Some(v) = enable_page_index {
+        to.global.enable_page_index = v;
+    }
+    if let Some(v) = pruning {
+        to.global.pruning = v;
+    }
+    if let Some(v) = skip_metadata {
+        to.global.skip_metadata = v;
+    }
+    if let Some(v) = metadata_size_hint {
+        to.global.metadata_size_hint = Some(v);
+    }
+    if let Some(v) = pushdown_filters {
+        to.global.pushdown_filters = v;
+    }
+    if let Some(v) = reorder_filters {
+        to.global.reorder_filters = v;
+    }
+    if let Some(v) = schema_force_view_types {
+        to.global.schema_force_view_types = v;
+    }
+    if let Some(v) = binary_as_string {
+        to.global.binary_as_string = v;
+    }
+    if let Some(v) = coerce_int96 {
+        to.global.coerce_int96 = Some(v);
+    }
+    if let Some(v) = bloom_filter_on_read {
+        to.global.bloom_filter_on_read = v;
+    }
+    Ok(())
+}
+
+fn apply_parquet_write_options(
+    from: ParquetWriteOptions,
+    to: &mut TableParquetOptions,
+) -> PlanResult<()> {
+    let ParquetWriteOptions {
+        data_page_size_limit,
+        write_batch_size,
+        writer_version,
+        skip_arrow_metadata,
+        compression,
+        dictionary_enabled,
+        dictionary_page_size_limit,
+        statistics_enabled,
+        max_row_group_size,
+        column_index_truncate_length,
+        statistics_truncate_length,
+        data_page_row_count_limit,
+        encoding,
+        bloom_filter_on_write,
+        bloom_filter_fpp,
+        bloom_filter_ndv,
+        allow_single_file_parallelism,
+        maximum_parallel_row_group_writers,
+        maximum_buffered_record_batches_per_stream,
+    } = from;
+    if let Some(v) = data_page_size_limit {
+        to.global.data_pagesize_limit = v;
+    }
+    if let Some(v) = write_batch_size {
+        to.global.write_batch_size = v;
+    }
+    if let Some(v) = writer_version {
+        to.global.writer_version = v;
+    }
+    if let Some(v) = skip_arrow_metadata {
+        to.global.skip_arrow_metadata = v;
+    }
+    if let Some(v) = compression {
+        to.global.compression = Some(v);
+    }
+    if let Some(v) = dictionary_enabled {
+        to.global.dictionary_enabled = Some(v);
+    }
+    if let Some(v) = dictionary_page_size_limit {
+        to.global.dictionary_page_size_limit = v;
+    }
+    if let Some(v) = statistics_enabled {
+        to.global.statistics_enabled = Some(v);
+    }
+    if let Some(v) = max_row_group_size {
+        to.global.max_row_group_size = v;
+    }
+    if let Some(v) = column_index_truncate_length {
+        to.global.column_index_truncate_length = Some(v);
+    }
+    if let Some(v) = statistics_truncate_length {
+        to.global.statistics_truncate_length = Some(v);
+    }
+    if let Some(v) = data_page_row_count_limit {
+        to.global.data_page_row_count_limit = v;
+    }
+    if let Some(v) = encoding {
+        to.global.encoding = Some(v);
+    }
+    if let Some(v) = bloom_filter_on_write {
+        to.global.bloom_filter_on_write = v;
+    }
+    if let Some(v) = bloom_filter_fpp {
+        to.global.bloom_filter_fpp = Some(v);
+    }
+    if let Some(v) = bloom_filter_ndv {
+        to.global.bloom_filter_ndv = Some(v);
+    }
+    if let Some(v) = allow_single_file_parallelism {
+        to.global.allow_single_file_parallelism = v;
+    }
+    if let Some(v) = maximum_parallel_row_group_writers {
+        to.global.maximum_parallel_row_group_writers = v;
+    }
+    if let Some(v) = maximum_buffered_record_batches_per_stream {
+        to.global.maximum_buffered_record_batches_per_stream = v;
+    }
+    Ok(())
+}
+
+impl PlanResolver<'_> {
     pub(crate) fn resolve_json_read_options(
         &self,
-        options: JsonReadOptions,
-    ) -> PlanResult<ListingOptions> {
-        let mut table_options = self.ctx.copied_table_options();
-        table_options.set_config_format(datafusion_common::config::ConfigFileType::JSON);
-        let file_format = JsonFormat::default()
-            .with_options(table_options.json)
-            .with_schema_infer_max_rec(options.schema_infer_max_records)
-            .with_file_compression_type(FileCompressionType::from_str(&options.compression)?);
-        Ok(ListingOptions::new(Arc::new(file_format)).with_file_extension(".json"))
+        options: HashMap<String, String>,
+    ) -> PlanResult<JsonOptions> {
+        let mut json_options = self.ctx.copied_table_options().json;
+        apply_json_read_options(load_default_options()?, &mut json_options)?;
+        apply_json_read_options(load_options(options)?, &mut json_options)?;
+        Ok(json_options)
     }
 
-    /// Ref: [`datafusion_common::file_options::json_writer::JsonWriterOptions`]
     pub(crate) fn resolve_json_write_options(
         &self,
-        options: JsonWriteOptions,
-    ) -> PlanResult<(JsonFormat, Vec<(String, String)>)> {
-        let mut table_options = self.ctx.copied_table_options();
-        table_options.set_config_format(datafusion_common::config::ConfigFileType::JSON);
-        let json_format = JsonFormat::default()
-            .with_options(table_options.json)
-            .with_file_compression_type(FileCompressionType::from_str(&options.compression)?);
-        let json_options: Vec<(String, String)> =
-            vec![("format.compression".to_string(), options.compression)];
-        Ok((json_format, json_options))
+        options: HashMap<String, String>,
+    ) -> PlanResult<JsonOptions> {
+        let mut json_options = self.ctx.copied_table_options().json;
+        apply_json_write_options(load_default_options()?, &mut json_options)?;
+        apply_json_write_options(load_options(options)?, &mut json_options)?;
+        Ok(json_options)
     }
 
-    /// Ref: [`datafusion::datasource::file_format::options::CsvReadOptions`]
     pub(crate) fn resolve_csv_read_options(
         &self,
-        options: CsvReadOptions,
-    ) -> PlanResult<ListingOptions> {
-        let mut table_options = self.ctx.copied_table_options();
-        table_options.set_config_format(datafusion_common::config::ConfigFileType::CSV);
-        let null_regex = match (options.null_value, options.null_regex) {
-            (Some(null_value), Some(null_regex))
-                if !null_value.is_empty() && !null_regex.is_empty() =>
-            {
-                Err(PlanError::internal(
-                    "CSV `null_value` and `null_regex` cannot be both set",
-                ))
-            }
-            (Some(null_value), _) if !null_value.is_empty() => {
-                // Convert null_value to regex by escaping special characters
-                Ok(Some(regex::escape(&null_value)))
-            }
-            (_, Some(null_regex)) if !null_regex.is_empty() => Ok(Some(null_regex)),
-            _ => Ok(None),
-        }?;
-
-        let file_format = CsvFormat::default()
-            .with_options(table_options.csv)
-            .with_has_header(options.header)
-            .with_delimiter(Self::char_to_u8(options.delimiter, "delimiter")?)
-            .with_quote(Self::char_to_u8(options.quote, "quote")?)
-            .with_terminator(
-                options
-                    .line_sep
-                    .map(|line_sep| Self::char_to_u8(line_sep, "line_sep"))
-                    .transpose()?,
-            )
-            .with_escape(
-                options
-                    .escape
-                    .map(|escape| Self::char_to_u8(escape, "escape"))
-                    .transpose()?,
-            )
-            .with_comment(
-                options
-                    .comment
-                    .map(|comment| Self::char_to_u8(comment, "comment"))
-                    .transpose()?,
-            )
-            .with_newlines_in_values(options.multi_line)
-            .with_schema_infer_max_rec(options.schema_infer_max_records)
-            .with_file_compression_type(FileCompressionType::from_str(&options.compression)?)
-            .with_null_regex(null_regex);
-
-        let file_extension = if options.file_extension.is_empty() {
-            ".csv".to_string()
-        } else if options.file_extension.starts_with('.') {
-            options.file_extension
-        } else {
-            format!(".{}", options.file_extension)
-        };
-
-        Ok(ListingOptions::new(Arc::new(file_format)).with_file_extension(file_extension))
+        options: HashMap<String, String>,
+    ) -> PlanResult<CsvOptions> {
+        let mut csv_options = self.ctx.copied_table_options().csv;
+        apply_csv_read_options(load_default_options()?, &mut csv_options)?;
+        apply_csv_read_options(load_options(options)?, &mut csv_options)?;
+        Ok(csv_options)
     }
 
-    /// Ref: [`datafusion_common::file_options::csv_writer::CsvWriterOptions`]
     pub(crate) fn resolve_csv_write_options(
         &self,
-        options: CsvWriteOptions,
-    ) -> PlanResult<(CsvFormat, Vec<(String, String)>)> {
-        let mut table_options = self.ctx.copied_table_options();
-        table_options.set_config_format(datafusion_common::config::ConfigFileType::CSV);
-        table_options.set(
-            "format.double_quote",
-            options.escape_quotes.to_string().as_str(),
-        )?;
-        if let Some(null_value) = &options.null_value {
-            table_options.set("format.null_value", null_value)?;
-        }
-
-        let csv_format = CsvFormat::default()
-            .with_options(table_options.csv)
-            .with_delimiter(Self::char_to_u8(options.delimiter, "delimiter")?)
-            .with_quote(Self::char_to_u8(options.quote, "quote")?)
-            .with_escape(
-                options
-                    .escape
-                    .map(|escape| Self::char_to_u8(escape, "escape"))
-                    .transpose()?,
-            )
-            .with_has_header(options.header)
-            .with_file_compression_type(FileCompressionType::from_str(&options.compression)?);
-
-        let mut csv_options: Vec<(String, String)> = vec![];
-        csv_options.push((
-            "format.delimiter".to_string(),
-            options.delimiter.to_string(),
-        ));
-        csv_options.push(("format.quote".to_string(), options.quote.to_string()));
-        if let Some(escape) = options.escape {
-            csv_options.push(("format.escape".to_string(), escape.to_string()));
-        }
-        csv_options.push((
-            "format.double_quote".to_string(),
-            options.escape_quotes.to_string(),
-        ));
-        csv_options.push(("format.has_header".to_string(), options.header.to_string()));
-        if let Some(null_value) = options.null_value {
-            csv_options.push(("format.null_value".to_string(), null_value));
-        }
-        csv_options.push(("format.compression".to_string(), options.compression));
-        Ok((csv_format, csv_options))
+        options: HashMap<String, String>,
+    ) -> PlanResult<CsvOptions> {
+        let mut csv_options = self.ctx.copied_table_options().csv;
+        apply_csv_write_options(load_default_options()?, &mut csv_options)?;
+        apply_csv_write_options(load_options(options)?, &mut csv_options)?;
+        Ok(csv_options)
     }
 
-    /// Ref: [`datafusion_common::config:ParquetOptions`]
     pub(crate) fn resolve_parquet_read_options(
         &self,
-        options: ParquetReadOptions,
-    ) -> PlanResult<ListingOptions> {
-        let mut parquet_options: HashMap<String, String> = HashMap::new();
-        let mut table_options = self.ctx.copied_table_options();
-        table_options.set_config_format(datafusion_common::config::ConfigFileType::PARQUET);
-        parquet_options.insert(
-            "format.enable_page_index".to_owned(),
-            options.enable_page_index.to_string(),
-        );
-        parquet_options.insert("format.pruning".to_owned(), options.pruning.to_string());
-        parquet_options.insert(
-            "format.skip_metadata".to_owned(),
-            options.skip_metadata.to_string(),
-        );
-        if let Some(metadata_size_hint) = options.metadata_size_hint {
-            parquet_options.insert(
-                "format.metadata_size_hint".to_owned(),
-                metadata_size_hint.to_string(),
-            );
-        }
-        parquet_options.insert(
-            "format.pushdown_filters".to_owned(),
-            options.pushdown_filters.to_string(),
-        );
-        parquet_options.insert(
-            "format.reorder_filters".to_owned(),
-            options.reorder_filters.to_string(),
-        );
-        parquet_options.insert(
-            "format.schema_force_view_types".to_owned(),
-            options.schema_force_view_types.to_string(),
-        );
-        parquet_options.insert(
-            "format.binary_as_string".to_owned(),
-            options.binary_as_string.to_string(),
-        );
-        parquet_options.insert("format.coerce_int96".to_owned(), options.coerce_int96);
-        parquet_options.insert(
-            "format.bloom_filter_on_read".to_owned(),
-            options.bloom_filter_on_read.to_string(),
-        );
-        table_options.alter_with_string_hash_map(&parquet_options)?;
-        let parquet_format = ParquetFormat::new().with_options(table_options.parquet);
-        Ok(ListingOptions::new(Arc::new(parquet_format)).with_file_extension(".parquet"))
+        options: HashMap<String, String>,
+    ) -> PlanResult<TableParquetOptions> {
+        let mut parquet_options = self.ctx.copied_table_options().parquet;
+        apply_parquet_read_options(load_default_options()?, &mut parquet_options)?;
+        apply_parquet_read_options(load_options(options)?, &mut parquet_options)?;
+        Ok(parquet_options)
     }
 
-    /// Ref: [`datafusion_common::config:ParquetOptions`]
     pub(crate) fn resolve_parquet_write_options(
         &self,
-        options: ParquetWriteOptions,
-    ) -> PlanResult<(ParquetFormat, Vec<(String, String)>)> {
-        let mut parquet_options: HashMap<String, String> = HashMap::new();
-        let mut table_options = self.ctx.copied_table_options();
-        table_options.set_config_format(datafusion_common::config::ConfigFileType::PARQUET);
-        parquet_options.insert(
-            "format.data_pagesize_limit".to_owned(),
-            options.data_page_size_limit.to_string(),
-        );
-        parquet_options.insert(
-            "format.write_batch_size".to_owned(),
-            options.write_batch_size.to_string(),
-        );
-        parquet_options.insert("format.writer_version".to_owned(), options.writer_version);
-        parquet_options.insert(
-            "format.skip_arrow_metadata".to_owned(),
-            options.skip_arrow_metadata.to_string(),
-        );
-        parquet_options.insert("format.compression".to_owned(), options.compression);
-        parquet_options.insert(
-            "format.dictionary_enabled".to_owned(),
-            options.dictionary_enabled.to_string(),
-        );
-        parquet_options.insert(
-            "format.dictionary_page_size_limit".to_owned(),
-            options.dictionary_page_size_limit.to_string(),
-        );
-        parquet_options.insert(
-            "format.statistics_enabled".to_owned(),
-            options.statistics_enabled,
-        );
-        parquet_options.insert(
-            "format.max_row_group_size".to_owned(),
-            options.max_row_group_size.to_string(),
-        );
-        if let Some(column_index_truncate_length) = options.column_index_truncate_length {
-            parquet_options.insert(
-                "format.column_index_truncate_length".to_owned(),
-                column_index_truncate_length.to_string(),
-            );
-        }
-        if let Some(statistics_truncate_length) = options.statistics_truncate_length {
-            parquet_options.insert(
-                "format.statistics_truncate_length".to_owned(),
-                statistics_truncate_length.to_string(),
-            );
-        }
-        parquet_options.insert(
-            "format.data_page_row_count_limit".to_owned(),
-            options.data_page_row_count_limit.to_string(),
-        );
-        if let Some(encoding) = options.encoding {
-            parquet_options.insert("format.encoding".to_owned(), encoding);
-        }
-        parquet_options.insert(
-            "format.bloom_filter_on_write".to_owned(),
-            options.bloom_filter_on_write.to_string(),
-        );
-        parquet_options.insert(
-            "format.bloom_filter_fpp".to_owned(),
-            options.bloom_filter_fpp.to_string(),
-        );
-        parquet_options.insert(
-            "format.bloom_filter_ndv".to_owned(),
-            options.bloom_filter_ndv.to_string(),
-        );
-        parquet_options.insert(
-            "format.allow_single_file_parallelism".to_owned(),
-            options.allow_single_file_parallelism.to_string(),
-        );
-        parquet_options.insert(
-            "format.maximum_parallel_row_group_writers".to_owned(),
-            options.maximum_parallel_row_group_writers.to_string(),
-        );
-        parquet_options.insert(
-            "format.maximum_buffered_record_batches_per_stream".to_owned(),
-            options
-                .maximum_buffered_record_batches_per_stream
-                .to_string(),
-        );
-        table_options.alter_with_string_hash_map(&parquet_options)?;
-        let parquet_format = ParquetFormat::new().with_options(table_options.parquet);
-        Ok((parquet_format, parquet_options.into_iter().collect()))
+        options: HashMap<String, String>,
+    ) -> PlanResult<TableParquetOptions> {
+        let mut parquet_options = self.ctx.copied_table_options().parquet;
+        apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
+        apply_parquet_write_options(load_options(options)?, &mut parquet_options)?;
+        Ok(parquet_options)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
 
     use super::*;
     use crate::config::PlanConfig;
 
+    fn build_options(options: &[(&str, &str)]) -> HashMap<String, String> {
+        options
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
     #[test]
-    fn test_resolve_json_read_options() -> PlanResult<()> {
+    fn test_resolve_json_read_format() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
-        let options = JsonReadOptions {
-            schema_infer_max_records: 100,
-            compression: "bzip2".to_string(),
-        };
-        let listing_options = resolver.resolve_json_read_options(options)?;
-        let format = listing_options
-            .format
-            .as_any()
-            .downcast_ref::<JsonFormat>()
-            .expect("Expected JsonFormat");
-
-        assert_eq!(listing_options.file_extension, ".json");
-        assert_eq!(format.options().schema_infer_max_rec, Some(100));
-        assert_eq!(format.options().compression, CompressionTypeVariant::BZIP2);
+        let options = build_options(&[
+            ("schema_infer_max_records", "100"),
+            ("compression", "bzip2"),
+        ]);
+        let options = resolver.resolve_json_read_options(options)?;
+        assert_eq!(options.schema_infer_max_rec, Some(100));
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         Ok(())
     }
 
     #[test]
-    fn test_resolve_json_write_options() -> PlanResult<()> {
+    fn test_resolve_json_write_format() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
-        let options = JsonWriteOptions {
-            compression: "bzip2".to_string(),
-        };
-        let (format, json_options) = resolver.resolve_json_write_options(options)?;
-        let json_options: HashMap<String, String> = json_options.into_iter().collect();
-
-        assert_eq!(json_options.len(), 1);
-        assert_eq!(
-            json_options.get("format.compression"),
-            Some(&"bzip2".to_string())
-        );
-
-        assert_eq!(format.options().compression, CompressionTypeVariant::BZIP2);
+        let options = build_options(&[("compression", "bzip2")]);
+        let options = resolver.resolve_json_write_options(options)?;
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         Ok(())
     }
 
     #[test]
-    fn test_resolve_csv_read_options() -> PlanResult<()> {
+    fn test_resolve_csv_read_format() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
-        let options = CsvReadOptions {
-            delimiter: '!',
-            quote: '(',
-            escape: Some('*'),
-            comment: Some('^'),
-            header: true,
-            null_value: Some("MEOW".to_string()),
-            null_regex: None,
-            line_sep: Some('@'),
-            schema_infer_max_records: 100,
-            multi_line: true,
-            file_extension: ".lol".to_string(),
-            compression: "bzip2".to_string(),
-        };
-        let listing_options = resolver.resolve_csv_read_options(options)?;
-        let format = listing_options
-            .format
-            .as_any()
-            .downcast_ref::<CsvFormat>()
-            .expect("Expected CsvFormat");
+        let options = build_options(&[
+            ("delimiter", "!"),
+            ("quote", "("),
+            ("escape", "*"),
+            ("comment", "^"),
+            ("header", "true"),
+            ("null_value", "MEOW"),
+            ("line_sep", "@"),
+            ("schema_infer_max_records", "100"),
+            ("multi_line", "true"),
+            ("compression", "bzip2"),
+        ]);
+        let options = resolver.resolve_csv_read_options(options)?;
+        assert_eq!(options.delimiter, b'!');
+        assert_eq!(options.quote, b'(');
+        assert_eq!(options.escape, Some(b'*'));
+        assert_eq!(options.comment, Some(b'^'));
+        assert_eq!(options.has_header, Some(true));
+        assert_eq!(options.null_value, None); // This is for the writer
+        assert_eq!(options.null_regex, Some("MEOW".to_string())); // null_value
+        assert_eq!(options.terminator, Some(b'@')); // line_sep
+        assert_eq!(options.schema_infer_max_rec, Some(100));
+        assert_eq!(options.newlines_in_values, Some(true)); // multi_line
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
-        assert_eq!(listing_options.file_extension, ".lol");
-        assert_eq!(format.options().delimiter, b'!');
-        assert_eq!(format.options().quote, b'(');
-        assert_eq!(format.options().escape, Some(b'*'));
-        assert_eq!(format.options().comment, Some(b'^'));
-        assert_eq!(format.options().has_header, Some(true));
-        assert_eq!(format.options().null_value, None); // This is for the writer
-        assert_eq!(format.options().null_regex, Some("MEOW".to_string())); // null_value
-        assert_eq!(format.options().terminator, Some(b'@')); // line_sep
-        assert_eq!(format.options().schema_infer_max_rec, Some(100));
-        assert_eq!(format.options().newlines_in_values, Some(true)); // multi_line
-        assert_eq!(format.options().compression, CompressionTypeVariant::BZIP2);
-
-        let options = CsvReadOptions {
-            delimiter: '!',
-            quote: '(',
-            escape: Some('*'),
-            comment: Some('^'),
-            header: true,
-            null_value: Some("MEOW".to_string()),
-            null_regex: Some("MEOW".to_string()),
-            line_sep: Some('@'),
-            schema_infer_max_records: 100,
-            multi_line: true,
-            file_extension: ".lol".to_string(),
-            compression: "bzip2".to_string(),
-        };
+        let options = build_options(&[
+            ("delimiter", "!"),
+            ("quote", "("),
+            ("escape", "*"),
+            ("comment", "^"),
+            ("header", "true"),
+            ("null_value", "MEOW"),
+            ("null_regex", "MEOW"),
+            ("line_sep", "@"),
+            ("schema_infer_max_records", "100"),
+            ("multi_line", "true"),
+            ("compression", "bzip2"),
+        ]);
         // null_value and null_regex cannot both be set
         let result = resolver.resolve_csv_read_options(options);
         assert!(result.is_err());
 
-        let options = CsvReadOptions {
-            delimiter: '!',
-            quote: '(',
-            escape: Some('*'),
-            comment: Some('^'),
-            header: true,
-            null_value: None,
-            null_regex: Some("MEOW".to_string()),
-            line_sep: Some('@'),
-            schema_infer_max_records: 100,
-            multi_line: true,
-            file_extension: "lol".to_string(), // No leading dot
-            compression: "bzip2".to_string(),
-        };
-        let listing_options = resolver.resolve_csv_read_options(options)?;
-        let format = listing_options
-            .format
-            .as_any()
-            .downcast_ref::<CsvFormat>()
-            .expect("Expected CsvFormat");
-        assert_eq!(listing_options.file_extension, ".lol");
-        assert_eq!(format.options().null_value, None); // This is for the writer
-        assert_eq!(format.options().null_regex, Some("MEOW".to_string())); // null_regex
+        let options = build_options(&[
+            ("delimiter", "!"),
+            ("quote", "("),
+            ("escape", "*"),
+            ("comment", "^"),
+            ("header", "true"),
+            ("null_regex", "MEOW"),
+            ("line_sep", "@"),
+            ("schema_infer_max_records", "100"),
+            ("multi_line", "true"),
+            ("compression", "bzip2"),
+        ]);
+        let options = resolver.resolve_csv_read_options(options)?;
+        assert_eq!(options.null_value, None); // This is for the writer
+        assert_eq!(options.null_regex, Some("MEOW".to_string())); // null_regex
 
         Ok(())
     }
 
     #[test]
-    fn test_resolve_csv_write_options() -> PlanResult<()> {
+    fn test_resolve_csv_write_format() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
-        let options = CsvWriteOptions {
-            delimiter: '!',
-            quote: '(',
-            escape: Some('*'),
-            escape_quotes: true,
-            header: true,
-            null_value: Some("MEOW".to_string()),
-            compression: "bzip2".to_string(),
-        };
-
-        let (format, csv_options) = resolver.resolve_csv_write_options(options)?;
-        let csv_options: HashMap<String, String> = csv_options.into_iter().collect();
-
-        assert_eq!(csv_options.len(), 7);
-        assert_eq!(csv_options.get("format.delimiter"), Some(&"!".to_string()));
-        assert_eq!(csv_options.get("format.quote"), Some(&"(".to_string()));
-        assert_eq!(csv_options.get("format.escape"), Some(&"*".to_string()));
-        assert_eq!(
-            csv_options.get("format.double_quote"),
-            Some(&"true".to_string())
-        );
-        assert_eq!(
-            csv_options.get("format.has_header"),
-            Some(&"true".to_string())
-        );
-        assert_eq!(
-            csv_options.get("format.null_value"),
-            Some(&"MEOW".to_string())
-        );
-        assert_eq!(
-            csv_options.get("format.compression"),
-            Some(&"bzip2".to_string())
-        );
-
-        assert_eq!(format.options().delimiter, b'!');
-        assert_eq!(format.options().quote, b'(');
-        assert_eq!(format.options().escape, Some(b'*'));
-        assert_eq!(format.options().double_quote, Some(true)); // escape_quotes
-        assert_eq!(format.options().has_header, Some(true));
-        assert_eq!(format.options().null_value, Some("MEOW".to_string()));
-        assert_eq!(format.options().compression, CompressionTypeVariant::BZIP2);
+        let options = build_options(&[
+            ("delimiter", "!"),
+            ("quote", "("),
+            ("escape", "*"),
+            ("escape_quotes", "true"),
+            ("header", "true"),
+            ("null_value", "MEOW"),
+            ("compression", "bzip2"),
+        ]);
+        let options = resolver.resolve_csv_write_options(options)?;
+        assert_eq!(options.delimiter, b'!');
+        assert_eq!(options.quote, b'(');
+        assert_eq!(options.escape, Some(b'*'));
+        assert_eq!(options.double_quote, Some(true)); // escape_quotes
+        assert_eq!(options.has_header, Some(true));
+        assert_eq!(options.null_value, Some("MEOW".to_string()));
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         Ok(())
     }
 
     #[test]
-    fn test_resolve_parquet_read_options() -> PlanResult<()> {
+    fn test_resolve_parquet_read_format() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
-        // pub coerce_int96: String,
-        // pub bloom_filter_on_read: bool,
-        let options = ParquetReadOptions {
-            enable_page_index: true,
-            pruning: true,
-            skip_metadata: false,
-            metadata_size_hint: Some(1024),
-            pushdown_filters: true,
-            reorder_filters: false,
-            schema_force_view_types: true,
-            binary_as_string: true,
-            coerce_int96: "ms".to_string(),
-            bloom_filter_on_read: true,
-        };
-        let listing_options = resolver.resolve_parquet_read_options(options)?;
-        let format = listing_options
-            .format
-            .as_any()
-            .downcast_ref::<ParquetFormat>()
-            .expect("Expected ParquetFormat");
-
-        assert_eq!(listing_options.file_extension, ".parquet");
-        assert!(format.options().global.enable_page_index);
-        assert!(format.options().global.pruning);
-        assert!(!format.options().global.skip_metadata);
-        assert_eq!(format.options().global.metadata_size_hint, Some(1024));
-        assert!(format.options().global.pushdown_filters);
-        assert!(!format.options().global.reorder_filters);
-        assert!(format.options().global.schema_force_view_types);
-        assert!(format.options().global.binary_as_string);
-        assert_eq!(format.options().global.coerce_int96, Some("ms".to_string()));
-        assert!(format.options().global.bloom_filter_on_read);
+        let options = build_options(&[
+            ("enable_page_index", "true"),
+            ("pruning", "true"),
+            ("skip_metadata", "false"),
+            ("metadata_size_hint", "1024"),
+            ("pushdown_filters", "true"),
+            ("reorder_filters", "false"),
+            ("schema_force_view_types", "true"),
+            ("binary_as_string", "true"),
+            ("coerce_int96", "ms"),
+            ("bloom_filter_on_read", "true"),
+        ]);
+        let options = resolver.resolve_parquet_read_options(options)?;
+        assert!(options.global.enable_page_index);
+        assert!(options.global.pruning);
+        assert!(!options.global.skip_metadata);
+        assert_eq!(options.global.metadata_size_hint, Some(1024));
+        assert!(options.global.pushdown_filters);
+        assert!(!options.global.reorder_filters);
+        assert!(options.global.schema_force_view_types);
+        assert!(options.global.binary_as_string);
+        assert_eq!(options.global.coerce_int96, Some("ms".to_string()));
+        assert!(options.global.bloom_filter_on_read);
 
         Ok(())
     }
 
     #[test]
-    fn test_resolve_parquet_write_options() -> PlanResult<()> {
+    fn test_resolve_parquet_write_format() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
-        let options = ParquetWriteOptions {
-            data_page_size_limit: 1024,
-            write_batch_size: 1000,
-            writer_version: "2.0".to_string(),
-            skip_arrow_metadata: true,
-            compression: "snappy".to_string(),
-            dictionary_enabled: true,
-            dictionary_page_size_limit: 2048,
-            statistics_enabled: "chunk".to_string(),
-            max_row_group_size: 5000,
-            column_index_truncate_length: Some(100),
-            statistics_truncate_length: Some(200),
-            data_page_row_count_limit: 10000,
-            encoding: Some("delta_binary_packed".to_string()),
-            bloom_filter_on_write: true,
-            bloom_filter_fpp: 0.01,
-            bloom_filter_ndv: 1000,
-            allow_single_file_parallelism: false,
-            maximum_parallel_row_group_writers: 4,
-            maximum_buffered_record_batches_per_stream: 10,
-        };
-        let (format, parquet_options) = resolver.resolve_parquet_write_options(options)?;
-        let parquet_options: HashMap<String, String> = parquet_options.into_iter().collect();
-
-        assert_eq!(parquet_options.len(), 19);
+        let options = build_options(&[
+            ("data_page_size_limit", "1024"),
+            ("write_batch_size", "1000"),
+            ("writer_version", "2.0"),
+            ("skip_arrow_metadata", "true"),
+            ("compression", "snappy"),
+            ("dictionary_enabled", "true"),
+            ("dictionary_page_size_limit", "2048"),
+            ("statistics_enabled", "chunk"),
+            ("max_row_group_size", "5000"),
+            ("column_index_truncate_length", "100"),
+            ("statistics_truncate_length", "200"),
+            ("data_page_row_count_limit", "10000"),
+            ("encoding", "delta_binary_packed"),
+            ("bloom_filter_on_write", "true"),
+            ("bloom_filter_fpp", "0.01"),
+            ("bloom_filter_ndv", "1000"),
+            ("allow_single_file_parallelism", "false"),
+            ("maximum_parallel_row_group_writers", "4"),
+            ("maximum_buffered_record_batches_per_stream", "10"),
+        ]);
+        let options = resolver.resolve_parquet_write_options(options)?;
+        assert_eq!(options.global.data_pagesize_limit, 1024);
+        assert_eq!(options.global.write_batch_size, 1000);
+        assert_eq!(options.global.writer_version, "2.0");
+        assert!(options.global.skip_arrow_metadata);
+        assert_eq!(options.global.compression, Some("snappy".to_string()));
+        assert_eq!(options.global.dictionary_enabled, Some(true));
+        assert_eq!(options.global.dictionary_page_size_limit, 2048);
+        assert_eq!(options.global.statistics_enabled, Some("chunk".to_string()));
+        assert_eq!(options.global.max_row_group_size, 5000);
+        assert_eq!(options.global.column_index_truncate_length, Some(100));
+        assert_eq!(options.global.statistics_truncate_length, Some(200));
+        assert_eq!(options.global.data_page_row_count_limit, 10000);
         assert_eq!(
-            parquet_options.get("format.data_pagesize_limit"),
-            Some(&"1024".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.write_batch_size"),
-            Some(&"1000".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.writer_version"),
-            Some(&"2.0".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.skip_arrow_metadata"),
-            Some(&"true".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.compression"),
-            Some(&"snappy".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.dictionary_enabled"),
-            Some(&"true".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.dictionary_page_size_limit"),
-            Some(&"2048".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.statistics_enabled"),
-            Some(&"chunk".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.max_row_group_size"),
-            Some(&"5000".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.column_index_truncate_length"),
-            Some(&"100".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.statistics_truncate_length"),
-            Some(&"200".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.data_page_row_count_limit"),
-            Some(&"10000".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.encoding"),
-            Some(&"delta_binary_packed".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.bloom_filter_on_write"),
-            Some(&"true".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.bloom_filter_fpp"),
-            Some(&"0.01".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.bloom_filter_ndv"),
-            Some(&"1000".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.allow_single_file_parallelism"),
-            Some(&"false".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.maximum_parallel_row_group_writers"),
-            Some(&"4".to_string())
-        );
-        assert_eq!(
-            parquet_options.get("format.maximum_buffered_record_batches_per_stream"),
-            Some(&"10".to_string())
-        );
-
-        assert_eq!(format.options().global.data_pagesize_limit, 1024);
-        assert_eq!(format.options().global.write_batch_size, 1000);
-        assert_eq!(format.options().global.writer_version, "2.0");
-        assert!(format.options().global.skip_arrow_metadata);
-        assert_eq!(
-            format.options().global.compression,
-            Some("snappy".to_string())
-        );
-        assert_eq!(format.options().global.dictionary_enabled, Some(true));
-        assert_eq!(format.options().global.dictionary_page_size_limit, 2048);
-        assert_eq!(
-            format.options().global.statistics_enabled,
-            Some("chunk".to_string())
-        );
-        assert_eq!(format.options().global.max_row_group_size, 5000);
-        assert_eq!(
-            format.options().global.column_index_truncate_length,
-            Some(100)
-        );
-        assert_eq!(
-            format.options().global.statistics_truncate_length,
-            Some(200)
-        );
-        assert_eq!(format.options().global.data_page_row_count_limit, 10000);
-        assert_eq!(
-            format.options().global.encoding,
+            options.global.encoding,
             Some("delta_binary_packed".to_string())
         );
-        assert!(format.options().global.bloom_filter_on_write);
-        assert_eq!(format.options().global.bloom_filter_fpp, Some(0.01));
-        assert_eq!(format.options().global.bloom_filter_ndv, Some(1000));
-        assert!(!format.options().global.allow_single_file_parallelism);
+        assert!(options.global.bloom_filter_on_write);
+        assert_eq!(options.global.bloom_filter_fpp, Some(0.01));
+        assert_eq!(options.global.bloom_filter_ndv, Some(1000));
+        assert!(!options.global.allow_single_file_parallelism);
+        assert_eq!(options.global.maximum_parallel_row_group_writers, 4);
         assert_eq!(
-            format.options().global.maximum_parallel_row_group_writers,
-            4
-        );
-        assert_eq!(
-            format
-                .options()
-                .global
-                .maximum_buffered_record_batches_per_stream,
+            options.global.maximum_buffered_record_batches_per_stream,
             10
         );
 
