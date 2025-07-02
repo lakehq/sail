@@ -202,6 +202,19 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: count::count_udaf(),
+        params: AggregateFunctionParams {
+            args: input.arguments.clone(),
+            distinct: input.distinct,
+            order_by: input.order_by,
+            filter: Some(Box::new(input.arguments.get(0).unwrap().clone())),
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     use crate::function::common::AggFunctionBuilder as F;
 
@@ -238,7 +251,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("collect_set", F::custom(collect_set)),
         ("corr", F::default(correlation::corr_udaf)),
         ("count", F::custom(count)),
-        ("count_if", F::unknown("count_if")),
+        ("count_if", F::custom(count_if)),
         ("count_min_sketch", F::unknown("count_min_sketch")),
         ("covar_pop", F::default(covariance::covar_pop_udaf)),
         ("covar_samp", F::default(covariance::covar_samp_udaf)),
