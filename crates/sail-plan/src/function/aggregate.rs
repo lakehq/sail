@@ -203,16 +203,19 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: count::count_udaf(),
-        params: AggregateFunctionParams {
-            args: input.arguments.clone(),
-            distinct: input.distinct,
-            order_by: input.order_by,
-            filter: Some(Box::new(input.arguments.get(0).unwrap().clone())),
-            null_treatment: get_null_treatment(input.ignore_nulls),
-        },
-    }))
+    match input.arguments.len() {
+        1 => Ok(expr::Expr::AggregateFunction(AggregateFunction {
+            func: count::count_udaf(),
+            params: AggregateFunctionParams {
+                args: input.arguments.clone(),
+                distinct: input.distinct,
+                order_by: input.order_by,
+                filter: Some(Box::new(input.arguments.get(0).unwrap().clone())),
+                null_treatment: get_null_treatment(input.ignore_nulls),
+            },
+        })),
+        _ => Err(PlanError::invalid("`count_if` requires 1 argument")),
+    }
 }
 
 fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
