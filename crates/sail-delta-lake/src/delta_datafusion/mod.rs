@@ -427,7 +427,7 @@ pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
     env.register_object_store(url, store.object_store(None));
 }
 
-fn object_store_url(location: &Url) -> ObjectStoreUrl {
+pub(crate) fn object_store_url(location: &Url) -> ObjectStoreUrl {
     use object_store::path::DELIMITER;
     ObjectStoreUrl::parse(format!(
         "delta-rs://{}-{}{}",
