@@ -3924,7 +3924,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         if fractions
             .iter()
-            .any(|f| f.fraction < 0.0 || f.fraction > 1.0)
+            .any(|f| f.fraction <= 0.0 || f.fraction >= 1.0)
         {
             return Err(PlanError::invalid(
                 "All fraction values must be >= 0.0 and <= 1.0",
