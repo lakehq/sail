@@ -677,7 +677,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: count_if"
+        "success": "ok"
       }
     },
     {
@@ -699,7 +699,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: count_if"
+        "success": "ok"
       }
     },
     {
