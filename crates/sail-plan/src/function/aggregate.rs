@@ -210,7 +210,7 @@ fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
                 args: input.arguments.clone(),
                 distinct: input.distinct,
                 order_by: input.order_by,
-                filter: Some(Box::new(input.arguments.get(0).unwrap().clone())),
+                filter: Some(Box::new(input.arguments.first().unwrap().clone())),
                 null_treatment: get_null_treatment(input.ignore_nulls),
             },
         })),
