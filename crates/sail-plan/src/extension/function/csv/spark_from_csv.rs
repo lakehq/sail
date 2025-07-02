@@ -100,7 +100,7 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     let array: &StringArray = downcast_arg!(&args[0], StringArray);
-    let schema: &str = downcast_arg!(&args[1], StringArray).value(0);
+    let schema_str: &str = downcast_arg!(&args[1], StringArray).value(0);
     let options: &MapArray = downcast_arg!(&args[2], MapArray);
     let options: &StructArray = options.entries();
     let sep: &str = if args.len() == 3 {
@@ -110,12 +110,54 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     } else {
         ","
     };
-    let schema: Result<Fields> = parse_fields(schema, sep);
-    todo!()
+    let fields: Fields = parse_fields(schema_str, sep)?;
+
+    let rows: Vec<ScalarValue> = (0..array.len())
+        .map(|i| {
+            if array.is_null(i) {
+                Ok(ScalarValue::Null)
+            } else {
+                let line = array.value(i);
+                let values = parse_csv_line_to_scalar_values(line, sep, &fields)?;
+                let values: std::iter::Zip<std::slice::Iter<'_, Arc<Field>>, std::slice::Iter<'_, ScalarValue>> = fields.iter().zip(values.iter())
+                let values: ArrayRef = ScalarValue::iter_to_array(values.into_iter())?;
+                Ok(ScalarValue::Struct(
+                    Arc(StructArray::from((fields, values)))
+                ))
+            }
+        })
+        .collect::<Result<_>>()?;
+
+    ScalarValue::iter_to_array(rows.into_iter())
 }
 
-fn csv_to_values(value: &str, sep: &str) -> StructArray {
-    todo!()
+fn parse_csv_line_to_scalar_values(
+    line: &str,
+    sep: &str,
+    fields: &Fields,
+) -> Result<Vec<ScalarValue>> {
+    let values: Vec<&str> = line.split(sep).map(|s| s.trim()).collect();
+
+    if values.len() != fields.len() {
+        return exec_err!(
+            "CSV line has {} values but schema expects {} fields: '{}'",
+            values.len(),
+            fields.len(),
+            line
+        );
+    }
+
+    values
+        .iter()
+        .zip(fields.iter())
+        .map(|(value, field)| {
+            if value.is_empty() {
+                Ok(ScalarValue::Null)
+            } else {
+                parse_scalar_value(value, field.data_type())
+            }
+        })
+        .collect()
 }
 
 fn get_sep_from_options(options: &StructArray) -> Result<&str> {
