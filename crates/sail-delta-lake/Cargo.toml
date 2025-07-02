@@ -30,6 +30,8 @@ futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 either.workspace = true
 itertools = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
 
 [features]
 default = []
