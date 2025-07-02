@@ -864,7 +864,7 @@ impl PlanResolver<'_> {
             }
             "arrow" => {
                 if !options.is_empty() {
-                    return Err(PlanError::todo(
+                    return Err(PlanError::unsupported(
                         "Arrow data source read options are not yet supported",
                     ));
                 }
@@ -872,7 +872,7 @@ impl PlanResolver<'_> {
             }
             "avro" => {
                 if !options.is_empty() {
-                    return Err(PlanError::todo(
+                    return Err(PlanError::unsupported(
                         "Avro data source read options are not yet supported",
                     ));
                 }

@@ -362,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_json_read_format() -> PlanResult<()> {
+    fn test_resolve_json_read_options() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
@@ -378,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_json_write_format() -> PlanResult<()> {
+    fn test_resolve_json_write_options() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_csv_read_format() -> PlanResult<()> {
+    fn test_resolve_csv_read_options() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
@@ -456,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_csv_write_format() -> PlanResult<()> {
+    fn test_resolve_csv_write_options() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
@@ -482,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parquet_read_format() -> PlanResult<()> {
+    fn test_resolve_parquet_read_options() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
@@ -514,7 +514,27 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parquet_write_format() -> PlanResult<()> {
+    fn test_resolve_parquet_read_options_with_global_default() -> PlanResult<()> {
+        let ctx = SessionContext::default();
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let state = ctx.state_ref();
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .metadata_size_hint = Some(123);
+        let options = build_options(&[]);
+        let options = resolver.resolve_parquet_read_options(options)?;
+        assert_eq!(options.global.metadata_size_hint, Some(123));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_write_options() -> PlanResult<()> {
         let ctx = SessionContext::default();
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
@@ -565,6 +585,26 @@ mod tests {
             options.global.maximum_buffered_record_batches_per_stream,
             10
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_write_options_with_global_default() -> PlanResult<()> {
+        let ctx = SessionContext::default();
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let state = ctx.state_ref();
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .max_row_group_size = 1234;
+        let options = build_options(&[]);
+        let options = resolver.resolve_parquet_read_options(options)?;
+        assert_eq!(options.global.max_row_group_size, 1234);
 
         Ok(())
     }

@@ -5,30 +5,42 @@ use quote::{format_ident, quote};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OptionEntry {
+    /// The key for the option (case-insensitive).
     pub key: String,
+    /// The aliases for the option (case-insensitive), if any.
     pub aliases: Option<Vec<String>>,
+    /// The default value for the option, or [`None`] if the option should not have a default.
+    /// If the option is not set by the user, there are two scenarios:
+    ///   1. If the option has a default, the default value is used.
+    ///   2. If the option does not have a default, certain global configuration options may apply.
     pub default: Option<String>,
+    /// The option description in Markdown format.
     pub description: String,
+    /// Whether the option is supported by the data source.
+    /// Unsupported options will be excluded from the generated code.
     pub supported: bool,
+    /// The Rust type for the option, which defaults to `String`.
     pub rust_type: Option<String>,
+    /// The Rust deserialization function, which defaults to a `String` deserializer.
+    /// The function should deserialize `Option<T>` when `rust_type` is `T`.
     pub rust_deserialize_with: Option<String>,
 }
 
 fn build_options(name: &str, kind: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=src/options/data/{kind}.yaml");
+    let path = format!("src/options/data/{kind}.yaml");
+    println!("cargo:rerun-if-changed={path}");
 
-    let content = std::fs::read_to_string(format!("src/options/data/{kind}.yaml"))?;
+    let content = std::fs::read_to_string(path)?;
     let options: Vec<OptionEntry> = serde_yaml::from_str(&content)?;
     let key_pattern = regex::Regex::new(r"^[a-z][a-z0-9_]+$")?;
 
     let ident = format_ident!("{name}");
     let fields = options
         .iter()
+        .filter(|entry| entry.supported)
         .map(|entry| {
-            if !entry.supported {
-                return Ok(quote! {});
-            }
             if !key_pattern.is_match(&entry.key) {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
@@ -51,6 +63,8 @@ fn build_options(name: &str, kind: &str) -> Result<(), Box<dyn std::error::Error
             } else {
                 quote! {}
             };
+            // All the fields are optional, so that some options can be unset,
+            // or some options can have no default value.
             Ok(quote! {
                 #[serde(default)]
                 #[serde(deserialize_with = #rust_deserialize_with)]
@@ -63,7 +77,7 @@ fn build_options(name: &str, kind: &str) -> Result<(), Box<dyn std::error::Error
         .iter()
         .filter(|entry| entry.supported)
         .flat_map(|entry| {
-            once(entry.key.clone()).chain(entry.aliases.clone().into_iter().flatten())
+            once(entry.key.clone()).chain(entry.aliases.iter().flatten().map(|x| x.to_lowercase()))
         })
         .map(|key| quote! { #key, })
         .collect::<Vec<_>>();

@@ -17,6 +17,10 @@ mod internal {
 }
 
 pub trait DataSourceOptions: for<'de> serde::Deserialize<'de> {
+    /// A list of allowed keys or aliases for the options.
+    /// All values must be lowercased.
     const ALLOWED_KEYS: &'static [&'static str];
+    /// A list of default values for the options.
+    /// Each entry is a tuple of the key and the default value.
     const DEFAULT_VALUES: &'static [(&'static str, &'static str)];
 }
