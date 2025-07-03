@@ -234,42 +234,6 @@ impl CatalogManager<'_> {
             .map(TableMetadata::from_table_object))
     }
 
-    async fn list_global_temporary_views(
-        &self,
-        pattern: Option<&str>,
-    ) -> Result<Vec<TableMetadata>> {
-        manage_temporary_views(self.ctx, true, |views| {
-            views.list_views(pattern).map(|views| {
-                views
-                    .into_iter()
-                    .map(|(name, plan)| {
-                        TableMetadata::from_table_object(TableObject::GlobalTemporaryView {
-                            database_name: self.config.global_temp_database.clone(),
-                            table_name: name,
-                            plan,
-                        })
-                    })
-                    .collect()
-            })
-        })
-    }
-
-    async fn list_temporary_views(&self, pattern: Option<&str>) -> Result<Vec<TableMetadata>> {
-        manage_temporary_views(self.ctx, false, |views| {
-            views.list_views(pattern).map(|views| {
-                views
-                    .into_iter()
-                    .map(|(name, plan)| {
-                        TableMetadata::from_table_object(TableObject::TemporaryView {
-                            table_name: name,
-                            plan,
-                        })
-                    })
-                    .collect()
-            })
-        })
-    }
-
     async fn list_catalog_tables(
         &self,
         database: Option<SchemaReference>,
@@ -308,10 +272,7 @@ impl CatalogManager<'_> {
         // Spark *global* temporary views should be put in the `global_temp` database, and they will be
         // included in the output if the database pattern matches `global_temp`.
         // The `global_temp` database name can be changed via the `spark.sql.globalTempDatabase` configuration.
-        let mut output = if database.as_ref().is_some_and(|x| match x {
-            SchemaReference::Bare { schema } => schema.as_ref() == self.config.global_temp_database,
-            SchemaReference::Full { .. } => false,
-        }) {
+        let mut output = if self.is_global_temporary_view_database(&database) {
             self.list_global_temporary_views(table_pattern).await?
         } else {
             self.list_catalog_tables(database, table_pattern).await?

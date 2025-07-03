@@ -284,6 +284,10 @@ pub enum CommandNode {
         database: Option<ObjectName>,
         table_pattern: Option<String>,
     },
+    ListViews {
+        database: Option<ObjectName>,
+        view_pattern: Option<String>,
+    },
     ListFunctions {
         database: Option<ObjectName>,
         function_pattern: Option<String>,
