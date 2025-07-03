@@ -91,7 +91,7 @@ use deltalake::table::{Constraint, GeneratedColumn};
 use deltalake::{open_table, open_table_with_storage_options, DeltaTable};
 use either::Either;
 use futures::TryStreamExt;
-use object_store::ObjectMeta;
+use object_store::{ObjectMeta, ObjectStore};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -921,7 +921,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .map_err(datafusion_to_delta_error)?;
 
         let file_scan_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse(self.log_store.config().location.as_str())
+            ObjectStoreUrl::parse(&format!("{}://", self.log_store.config().location.scheme()))
                 .expect("Valid URL"),
             file_schema,
             file_source,
@@ -1090,32 +1090,42 @@ fn partitioned_file_from_action(
     partition_columns: &[String],
     schema: &ArrowSchema,
 ) -> PartitionedFile {
-    let mut partition_values = Vec::new();
-    for partition_col in partition_columns {
-        let value = action
-            .partition_values
-            .get(partition_col)
-            .and_then(|v| v.as_ref())
-            .map(|v| {
-                let field = schema.field_with_name(partition_col).unwrap();
-                to_correct_scalar_value(
-                    &serde_json::Value::String(v.to_string()),
-                    field.data_type(),
-                )
-                .unwrap_or(Some(ScalarValue::Null))
+    let partition_values = partition_columns
+        .iter()
+        .map(|part| {
+            action
+                .partition_values
+                .get(part)
+                .map(|val| {
+                    schema
+                        .field_with_name(part)
+                        .map(|field| match val {
+                            Some(value) => to_correct_scalar_value(
+                                &serde_json::Value::String(value.to_string()),
+                                field.data_type(),
+                            )
+                            .unwrap_or(Some(ScalarValue::Null))
+                            .unwrap_or(ScalarValue::Null),
+                            None => get_null_of_arrow_type(field.data_type())
+                                .unwrap_or(ScalarValue::Null),
+                        })
+                        .unwrap_or(ScalarValue::Null)
+                })
                 .unwrap_or(ScalarValue::Null)
-            })
-            .unwrap_or(ScalarValue::Null);
-        partition_values.push(value);
-    }
+        })
+        .collect::<Vec<_>>();
 
+    let ts_secs = action.modification_time / 1000;
+    let ts_ns = (action.modification_time % 1000) * 1_000_000;
+    let last_modified = chrono::Utc.from_utc_datetime(
+        &chrono::DateTime::from_timestamp(ts_secs, ts_ns as u32)
+            .unwrap()
+            .naive_utc(),
+    );
     PartitionedFile {
         object_meta: ObjectMeta {
-            location: object_store::path::Path::parse(&action.path).unwrap(),
-            size: action.size as u64,
-            e_tag: None,
-            last_modified: chrono::Utc.timestamp_nanos(0),
-            version: None,
+            last_modified,
+            ..action.try_into().unwrap()
         },
         partition_values,
         extensions: None,
@@ -1535,23 +1545,25 @@ impl TableProviderFactory for DeltaTableFactory {
             )))
         })?;
 
-        // Get ObjectStore from sail's registry
+        // Get ObjectStore from sail's registry - this is the dependency injection point
+        // The ObjectStore should already be properly configured by sail's DynamicObjectStoreRegistry
         let object_store = ctx.runtime_env().object_store_registry.get_store(&location_url)
             .map_err(|e| DataFusionError::External(Box::new(DeltaTableError::Generic(
-                format!("Failed to get object store: {}", e)
+                format!("Failed to get object store from sail's registry: {}", e)
             ))))?;
 
         // Create storage config from options
         let storage_config = if cmd.options.is_empty() {
             deltalake::logstore::StorageConfig::default()
         } else {
-            // Convert options to StorageConfig
-            let mut config = deltalake::logstore::StorageConfig::default();
-            // Note: You might need to implement proper option parsing here
-            // For now, we'll use default config
-            config
+            // Parse options into StorageConfig
+            let options_map: std::collections::HashMap<String, String> = cmd.options.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            deltalake::logstore::StorageConfig::parse_options(options_map)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
         };
 
+        // Use sail-delta-lake's open_table_with_object_store to bypass delta-rs internal ObjectStore creation
+        // This follows the dependency injection pattern by using the ObjectStore from sail's registry
         let delta_table = crate::open_table_with_object_store(
             &cmd.location,
             object_store,
@@ -1563,10 +1575,11 @@ impl TableProviderFactory for DeltaTableFactory {
         let config = DeltaScanConfig::default();
         let provider = DeltaTableProvider::try_new(
             delta_table.snapshot().map_err(delta_to_datafusion_error)?.clone(),
-            delta_table.log_store().clone(),
+            delta_table.log_store(),
             config,
         )
         .map_err(delta_to_datafusion_error)?;
+
         Ok(Arc::new(provider))
     }
 }

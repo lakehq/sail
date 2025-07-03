@@ -11,10 +11,10 @@ use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
 use deltalake::errors::DeltaResult;
 use deltalake::logstore::{store_for, StorageConfig};
-use deltalake::open_table_with_storage_options;
 use deltalake::table::builder::ensure_table_uri;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
+use url::Url;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
@@ -32,16 +32,39 @@ const DELTA_LOG_FOLDER: &str = "_delta_log";
 #[derive(Debug)]
 pub struct ListingSchemaProvider {
     authority: String,
-    /// Underlying object store
+    /// Underlying object store - this should be injected from sail's registry
     store: Arc<dyn ObjectStore>,
-    /// A map of table names to a fully quilfied storage location
+    /// A map of table names to a fully qualified storage location
     tables: DashMap<String, String>,
-    /// Options used to create underlying object stores
+    /// Options used for Delta table operations (not for ObjectStore creation)
     storage_options: StorageConfig,
 }
 
 impl ListingSchemaProvider {
-    /// Create a new [`ListingSchemaProvider`]
+    /// Create a new [`ListingSchemaProvider`] with an injected ObjectStore
+    ///
+    /// This is the preferred constructor that accepts an already-created ObjectStore
+    /// from sail's DynamicObjectStoreRegistry, following the dependency injection pattern.
+    pub fn new_with_object_store(
+        authority: String,
+        store: Arc<dyn ObjectStore>,
+        storage_options: Option<HashMap<String, String>>,
+    ) -> DeltaResult<Self> {
+        let storage_options = storage_options.unwrap_or_default();
+        Ok(Self {
+            authority,
+            store,
+            tables: DashMap::new(),
+            storage_options: StorageConfig::parse_options(storage_options)?,
+        })
+    }
+
+    /// Create a new [`ListingSchemaProvider`] (legacy constructor)
+    ///
+    /// This constructor creates its own ObjectStore, which goes against the dependency
+    /// injection pattern. It's kept for backward compatibility but should be avoided
+    /// in favor of `new_with_object_store`.
+    #[deprecated(note = "Use new_with_object_store for better dependency injection")]
     pub fn try_new(
         root_uri: impl AsRef<str>,
         options: Option<HashMap<String, String>>,
@@ -86,7 +109,7 @@ impl ListingSchemaProvider {
     }
 }
 
-// normalizes a path fragment to be a valida table name in datafusion
+// normalizes a path fragment to be a valid table name in datafusion
 // - removes some reserved characters (-, +, ., " ")
 // - lowercase ascii
 fn normalize_table_name(path: &Path) -> Result<String, DataFusionError> {
@@ -116,17 +139,29 @@ impl SchemaProvider for ListingSchemaProvider {
         let Some(location) = self.tables.get(name).map(|t| t.clone()) else {
             return Ok(None);
         };
-        let delta_table =
-            open_table_with_storage_options(location, self.storage_options.raw.clone())
-                .await
-                .map_err(crate::delta_datafusion::delta_to_datafusion_error)?;
+
+        // Parse the location to ensure it's a valid URL
+        let table_url = Url::parse(&location)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Use sail-delta-lake's open_table_with_object_store to bypass delta-rs internal ObjectStore creation
+        // This follows the dependency injection pattern by using the injected ObjectStore
+        let delta_table = crate::open_table_with_object_store(
+            location,
+            self.store.clone(),
+            self.storage_options.clone(),
+        )
+        .await
+        .map_err(crate::delta_datafusion::delta_to_datafusion_error)?;
+
         let config = crate::delta_datafusion::DeltaScanConfig::default();
         let provider = crate::delta_datafusion::DeltaTableProvider::try_new(
-            delta_table.state.clone().unwrap(),
-            delta_table.log_store().clone(),
+            delta_table.snapshot().map_err(crate::delta_datafusion::delta_to_datafusion_error)?.clone(),
+            delta_table.log_store(),
             config,
         )
         .map_err(crate::delta_datafusion::delta_to_datafusion_error)?;
+
         Ok(Some(Arc::new(provider)))
     }
 

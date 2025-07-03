@@ -71,6 +71,75 @@ pub async fn open_table_with_object_store(
     Ok(table)
 }
 
+/// Creates a new Delta table using an external ObjectStore instance.
+///
+/// This function creates a new Delta table at the specified location using the provided
+/// ObjectStore instance, following the dependency injection pattern. This is useful when
+/// you want to ensure that the table creation uses the same ObjectStore configuration
+/// as the rest of your application.
+///
+/// # Arguments
+///
+/// * `table_uri` - The URI where the Delta table should be created
+/// * `object_store` - The ObjectStore instance to use for creating the table
+/// * `storage_options` - Additional storage configuration options
+///
+/// # Returns
+///
+/// A `DeltaResult<deltalake::DeltaOps>` that can be used to configure and create the table.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use std::sync::Arc;
+/// use object_store::local::LocalFileSystem;
+/// use sail_delta_lake::create_delta_table_with_object_store;
+/// use deltalake::kernel::{StructField, DataType, PrimitiveType};
+/// use deltalake::protocol::SaveMode;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let object_store = Arc::new(LocalFileSystem::new());
+/// let delta_ops = create_delta_table_with_object_store(
+///     "file:///path/to/new/delta/table",
+///     object_store,
+///     Default::default(),
+/// ).await?;
+///
+/// // Configure and create the table
+/// let table = delta_ops
+///     .create()
+///     .with_columns(vec![
+///         StructField::new("id".to_string(), DataType::Primitive(PrimitiveType::Long), false),
+///         StructField::new("name".to_string(), DataType::Primitive(PrimitiveType::String), true),
+///     ])
+///     .with_save_mode(SaveMode::ErrorIfExists)
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn create_delta_table_with_object_store(
+    table_uri: impl AsRef<str>,
+    object_store: Arc<dyn ObjectStore>,
+    storage_options: StorageConfig,
+) -> DeltaResult<deltalake::DeltaOps> {
+    let table_uri_str = table_uri.as_ref();
+    let location = Url::parse(table_uri_str).map_err(|_| {
+        DeltaTableError::InvalidTableLocation(table_uri_str.to_string())
+    })?;
+
+    // Create a LogStore using the provided ObjectStore
+    let log_store = create_logstore_with_object_store(
+        object_store,
+        location.clone(),
+        storage_options,
+    )?;
+
+    // Create DeltaOps with the injected LogStore
+    // This bypasses delta-rs's internal ObjectStore creation
+    let table = DeltaTable::new(log_store, Default::default());
+    Ok(deltalake::DeltaOps::from(table))
+}
+
 /// Creates a LogStore using an external ObjectStore instance.
 ///
 /// This function creates both a prefixed store (for table operations) and uses the same
@@ -83,7 +152,7 @@ fn create_logstore_with_object_store(
 ) -> DeltaResult<LogStoreRef> {
     // For most cases, we use the same object store for both prefixed and root access
     // The storage_config.decorate_store method will handle any necessary path prefixing
-    let prefixed_store = storage_config.decorate_store(object_store.clone(), &location, None)?;
+    let prefixed_store = storage_config.decorate_store(Arc::clone(&object_store), &location, None)?;
 
     // Create the default LogStore with our custom ObjectStore
     let log_store = default_logstore(
