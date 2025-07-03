@@ -58,7 +58,6 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::{MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
@@ -419,24 +418,7 @@ impl DeltaTableStateExt for DeltaTableState {
     }
 }
 
-pub(crate) fn register_store(store: LogStoreRef, env: Arc<RuntimeEnv>) {
-    // Use the delta-rs URL format for registration to match the URL parsing logic
-    // in sail-object-store registry
-    let object_store_url = object_store_url(&store.config().location);
-    let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, store.object_store(None));
-}
 
-pub(crate) fn object_store_url(location: &Url) -> ObjectStoreUrl {
-    use object_store::path::DELIMITER;
-    ObjectStoreUrl::parse(format!(
-        "delta-rs://{}-{}{}",
-        location.scheme(),
-        location.host_str().unwrap_or("-"),
-        location.path().replace(DELIMITER, "-").replace(':', "-")
-    ))
-    .expect("Invalid object store url.")
-}
 
 /// The logical schema for a Deltatable is different from the protocol level schema since partition
 /// columns must appear at the end of the schema. This is to align with how partition are handled
@@ -939,7 +921,8 @@ impl<'a> DeltaScanBuilder<'a> {
             .map_err(datafusion_to_delta_error)?;
 
         let file_scan_config = FileScanConfigBuilder::new(
-            object_store_url(&self.log_store.config().location),
+            ObjectStoreUrl::parse(self.log_store.config().location.as_str())
+                .expect("Valid URL"),
             file_schema,
             file_source,
         )
@@ -1439,7 +1422,6 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), session.runtime_env().clone());
         let filter_expr = conjunction(filters.iter().cloned());
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)

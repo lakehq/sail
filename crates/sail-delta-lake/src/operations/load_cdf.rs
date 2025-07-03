@@ -19,6 +19,7 @@ use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::common::config::TableParquetOptions;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::memory::DataSourceExec;
+use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
 };
@@ -35,7 +36,7 @@ use deltalake::table::state::DeltaTableState;
 use deltalake::DeltaTableError;
 
 use crate::delta_datafusion::cdf::*;
-use crate::delta_datafusion::{datafusion_to_delta_error, register_store, DataFusionMixins};
+use crate::delta_datafusion::{datafusion_to_delta_error, DataFusionMixins};
 
 /// Builder for create a read of change data feeds for delta tables
 #[derive(Clone, Debug)]
@@ -310,7 +311,6 @@ impl CdfLoadBuilder {
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         let (cdc, add, remove) = self.determine_files_to_read().await?;
-        register_store(self.log_store.clone(), session_sate.runtime_env().clone());
 
         let partition_values = self.snapshot.metadata().partition_columns.clone();
         let schema = self.snapshot.input_schema()?;
@@ -368,7 +368,8 @@ impl CdfLoadBuilder {
         // Create object store URL from log store
         let root_uri = url::Url::parse(&self.log_store.root_uri())
             .map_err(|e| DeltaTableError::Generic(format!("Invalid root URI: {}", e)))?;
-        let object_store_url = crate::delta_datafusion::object_store_url(&root_uri);
+        let object_store_url = ObjectStoreUrl::parse(root_uri.as_str())
+            .expect("Valid URL");
 
         let cdc_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
             FileScanConfigBuilder::new(
