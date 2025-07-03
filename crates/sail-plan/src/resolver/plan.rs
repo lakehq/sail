@@ -6,11 +6,11 @@ use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
 use datafusion::arrow::datatypes::Int64Type;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
-use datafusion::datasource::file_format::avro::AvroFormatFactory;
-use datafusion::datasource::file_format::csv::CsvFormatFactory;
-use datafusion::datasource::file_format::json::JsonFormatFactory;
-use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
+use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
+use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
+use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
+use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
 use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
@@ -53,18 +53,14 @@ use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
-use crate::data_source::csv::{CsvReadOptions, CsvWriteOptions};
-use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
-use crate::data_source::load_options;
-use crate::data_source::parquet::{ParquetReadOptions, ParquetWriteOptions};
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array::spark_sequence::SparkSequence;
 use crate::extension::function::math::rand_poisson::RandPoisson;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
-    CatalogCommand, CatalogCommandNode, MapPartitionsNode, RangeNode, ShowStringFormat,
-    ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
+    CatalogCommand, CatalogCommandNode, CatalogTableDefinition, MapPartitionsNode, RangeNode,
+    ShowStringFormat, ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::extension::source::rename::RenameTableProvider;
 use crate::function::{
@@ -857,44 +853,44 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("missing data source format"));
         };
         let options: HashMap<String, String> = options.into_iter().collect();
-        let options: ListingOptions = match format.to_lowercase().as_str() {
+        // TODO: infer compression type from file extension
+        // TODO: support global configuration to ignore file extension (by setting it to empty)
+        let options = match format.to_lowercase().as_str() {
             "json" => {
-                let json_read_options = load_options::<JsonReadOptions>(options.clone())?;
-                self.resolve_json_read_options(json_read_options)?
+                let options = self.resolve_json_read_options(options)?;
+                ListingOptions::new(Arc::new(JsonFormat::default().with_options(options)))
             }
             "csv" => {
-                let csv_read_options = load_options::<CsvReadOptions>(options.clone())?;
-                self.resolve_csv_read_options(csv_read_options)?
+                let options = self.resolve_csv_read_options(options)?;
+                ListingOptions::new(Arc::new(CsvFormat::default().with_options(options)))
             }
             "parquet" => {
-                let parquet_read_options = load_options::<ParquetReadOptions>(options.clone())?;
-                self.resolve_parquet_read_options(parquet_read_options)?
+                let options = self.resolve_parquet_read_options(options)?;
+                ListingOptions::new(Arc::new(ParquetFormat::default().with_options(options)))
             }
             "arrow" => {
                 if !options.is_empty() {
                     return Err(PlanError::unsupported(
-                        "Arrow data source read options are not yet supported.",
+                        "Arrow data source read options are not yet supported",
                     ));
                 }
-                ListingOptions::new(ArrowFormatFactory::new().create(&self.ctx.state(), &options)?)
-                    .with_file_extension(".arrow")
+                ListingOptions::new(Arc::new(ArrowFormat))
             }
             "avro" => {
                 if !options.is_empty() {
                     return Err(PlanError::unsupported(
-                        "Avro data source read options are not yet supported.",
+                        "Avro data source read options are not yet supported",
                     ));
                 }
-                ListingOptions::new(AvroFormatFactory::new().create(&self.ctx.state(), &options)?)
-                    .with_file_extension(".avro")
+                ListingOptions::new(Arc::new(AvroFormat))
             }
             other => {
                 return Err(PlanError::unsupported(format!(
                     "unsupported data source format: {other:?}"
                 )))
             }
-        }
-        .with_session_config_options(&self.ctx.copied_config());
+        };
+        let options = options.with_session_config_options(&self.ctx.copied_config());
         let schema = self
             .resolve_listing_schema(&urls, &options, schema, state)
             .await?;
@@ -2952,58 +2948,34 @@ impl PlanResolver<'_> {
                     return Err(PlanError::invalid("missing source"));
                 };
                 let options: HashMap<String, String> = options.into_iter().collect();
-                let (format_factory, _options): (
-                    Arc<dyn FileFormatFactory>,
-                    Vec<(String, String)>,
-                ) = match source.as_str() {
+                let format_factory: Arc<dyn FileFormatFactory> = match source.as_str() {
                     "json" => {
-                        let (json_format, json_options_vec) = self.resolve_json_write_options(
-                            load_options::<JsonWriteOptions>(options)?,
-                        )?;
-                        (
-                            Arc::new(JsonFormatFactory::new_with_options(
-                                json_format.options().clone(),
-                            )),
-                            json_options_vec,
-                        )
+                        let options = self.resolve_json_write_options(options)?;
+                        Arc::new(JsonFormatFactory::new_with_options(options))
                     }
                     "parquet" => {
-                        let (parquet_format, parquet_options_vec) = self
-                            .resolve_parquet_write_options(load_options::<ParquetWriteOptions>(
-                                options,
-                            )?)?;
-                        (
-                            Arc::new(ParquetFormatFactory::new_with_options(
-                                parquet_format.options().clone(),
-                            )),
-                            parquet_options_vec,
-                        )
+                        let options = self.resolve_parquet_write_options(options)?;
+                        Arc::new(ParquetFormatFactory::new_with_options(options))
                     }
                     "csv" => {
-                        let (csv_format, csv_options_vec) = self
-                            .resolve_csv_write_options(load_options::<CsvWriteOptions>(options)?)?;
-                        (
-                            Arc::new(CsvFormatFactory::new_with_options(
-                                csv_format.options().clone(),
-                            )),
-                            csv_options_vec,
-                        )
+                        let options = self.resolve_csv_write_options(options)?;
+                        Arc::new(CsvFormatFactory::new_with_options(options))
                     }
                     "arrow" => {
                         if !options.is_empty() {
                             return Err(PlanError::unsupported(
-                                "Arrow data source write options are not yet supported.",
+                                "Arrow data source write options are not yet supported",
                             ));
                         }
-                        (Arc::new(ArrowFormatFactory::new()), vec![])
+                        Arc::new(ArrowFormatFactory)
                     }
                     "avro" => {
                         if !options.is_empty() {
                             return Err(PlanError::unsupported(
-                                "Avro data source write options are not yet supported.",
+                                "Avro data source write options are not yet supported",
                             ));
                         }
-                        (Arc::new(AvroFormatFactory::new()), vec![])
+                        Arc::new(AvroFormatFactory)
                     }
                     _ => return Err(PlanError::invalid(format!("unsupported source: {source}"))),
                 };
@@ -3095,20 +3067,15 @@ impl PlanResolver<'_> {
             definition,
         } = definition;
 
+        if query.is_some() {
+            return Err(PlanError::todo("CREATE TABLE AS SELECT statement"));
+        }
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
         }
 
-        let (schema, query_logical_plan) = if let Some(query) = query {
-            // FIXME: Query plan has cols renamed to #1, #2, etc. So I think there's more work here.
-            let plan = self.resolve_query_plan(*query, state).await?;
-            (plan.schema().clone(), Some(plan))
-        } else {
-            let fields = self.resolve_fields(&schema.fields, state)?;
-            let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
-            (schema, None)
-        };
-
+        let fields = self.resolve_fields(&schema.fields, state)?;
+        let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
         let column_defaults: Vec<(String, Expr)> = async {
             let mut results: Vec<(String, Expr)> = Vec::with_capacity(column_defaults.len());
             for (name, expr) in column_defaults {
@@ -3166,95 +3133,23 @@ impl PlanResolver<'_> {
         }
         .await?;
 
-        let options_map: HashMap<String, String> = options.clone().into_iter().collect();
-        let (format_factory, options): (Arc<dyn FileFormatFactory>, Vec<(String, String)>) =
-            match file_format.to_lowercase().as_str() {
-                "json" => {
-                    let (json_format, json_options_vec) = self.resolve_json_write_options(
-                        load_options::<JsonWriteOptions>(options_map)?,
-                    )?;
-                    (
-                        Arc::new(JsonFormatFactory::new_with_options(
-                            json_format.options().clone(),
-                        )),
-                        json_options_vec,
-                    )
-                }
-                "parquet" => {
-                    let (parquet_format, parquet_options_vec) = self
-                        .resolve_parquet_write_options(load_options::<ParquetWriteOptions>(
-                            options_map,
-                        )?)?;
-                    (
-                        Arc::new(ParquetFormatFactory::new_with_options(
-                            parquet_format.options().clone(),
-                        )),
-                        parquet_options_vec,
-                    )
-                }
-                "csv" => {
-                    let (csv_format, csv_options_vec) = self
-                        .resolve_csv_write_options(load_options::<CsvWriteOptions>(options_map)?)?;
-                    (
-                        Arc::new(CsvFormatFactory::new_with_options(
-                            csv_format.options().clone(),
-                        )),
-                        csv_options_vec,
-                    )
-                }
-                "arrow" => {
-                    if !options.is_empty() {
-                        return Err(PlanError::unsupported(
-                            "Arrow data source write options are not yet supported.",
-                        ));
-                    }
-                    (Arc::new(ArrowFormatFactory::new()), vec![])
-                }
-                "avro" => {
-                    if !options.is_empty() {
-                        return Err(PlanError::unsupported(
-                            "Avro data source write options are not yet supported.",
-                        ));
-                    }
-                    (Arc::new(AvroFormatFactory::new()), vec![])
-                }
-                _ => {
-                    return Err(PlanError::invalid(format!(
-                        "unsupported file format: {file_format}",
-                    )))
-                }
-            };
-        let copy_to_plan = if let Some(query_logical_plan) = query_logical_plan {
-            Some(Arc::new(
-                LogicalPlanBuilder::copy_to(
-                    query_logical_plan,
-                    location.clone(),
-                    format_as_file_type(format_factory),
-                    HashMap::new(),
-                    table_partition_cols.clone(),
-                )?
-                .build()?,
-            ))
-        } else {
-            None
-        };
-
         let command = CatalogCommand::CreateTable {
             table: self.resolve_table_reference(&table)?,
-            schema,
-            comment,
-            column_defaults,
-            constraints,
-            location,
-            file_format,
-            table_partition_cols,
-            file_sort_order,
-            if_not_exists,
-            or_replace,
-            unbounded,
-            options,
-            definition,
-            copy_to_plan,
+            definition: CatalogTableDefinition {
+                schema,
+                comment,
+                column_defaults,
+                constraints,
+                location,
+                file_format,
+                table_partition_cols,
+                file_sort_order,
+                if_not_exists,
+                or_replace,
+                unbounded,
+                options,
+                definition,
+            },
         };
         self.resolve_catalog_command(command)
     }
