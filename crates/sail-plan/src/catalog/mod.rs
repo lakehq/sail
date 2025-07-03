@@ -74,4 +74,14 @@ impl<'a> CatalogManager<'a> {
             } => Ok((catalog, schema, table)),
         }
     }
+
+    pub(crate) fn is_global_temporary_view_database(
+        &self,
+        database: &Option<SchemaReference>,
+    ) -> bool {
+        database.as_ref().is_some_and(|x| match x {
+            SchemaReference::Bare { schema } => schema.as_ref() == self.config.global_temp_database,
+            SchemaReference::Full { .. } => false,
+        })
+    }
 }

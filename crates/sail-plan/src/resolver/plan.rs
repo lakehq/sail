@@ -486,6 +486,15 @@ impl PlanResolver<'_> {
                     .transpose()?,
                 table_pattern,
             }),
+            CommandNode::ListViews {
+                database,
+                view_pattern,
+            } => self.resolve_catalog_command(CatalogCommand::ListViews {
+                database: database
+                    .map(|db| self.resolve_schema_reference(&db))
+                    .transpose()?,
+                view_pattern,
+            }),
             CommandNode::ListFunctions {
                 database,
                 function_pattern,

@@ -194,6 +194,10 @@ pub(crate) enum CatalogCommand {
         database: Option<SchemaReference>,
         table_pattern: Option<String>,
     },
+    ListViews {
+        database: Option<SchemaReference>,
+        view_pattern: Option<String>,
+    },
     DropTable {
         table: TableReference,
         if_exists: bool,
@@ -282,6 +286,7 @@ impl CatalogCommand {
             CatalogCommand::TableExists { .. } => "TableExists",
             CatalogCommand::GetTable { .. } => "GetTable",
             CatalogCommand::ListTables { .. } => "ListTables",
+            CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
@@ -306,7 +311,9 @@ impl CatalogCommand {
             CatalogCommand::GetDatabase { .. } | CatalogCommand::ListDatabases { .. } => {
                 Vec::<FieldRef>::from_type::<DatabaseMetadata>(TracingOptions::default())
             }
-            CatalogCommand::GetTable { .. } | CatalogCommand::ListTables { .. } => {
+            CatalogCommand::GetTable { .. }
+            | CatalogCommand::ListTables { .. }
+            | CatalogCommand::ListViews { .. } => {
                 Vec::<FieldRef>::from_type::<TableMetadata>(TracingOptions::default())
             }
             CatalogCommand::ListColumns { .. } => {
@@ -433,6 +440,15 @@ impl CatalogCommand {
             } => {
                 let rows = manager
                     .list_tables(database, table_pattern.as_deref())
+                    .await?;
+                build_record_batch(command_schema, &rows)?
+            }
+            CatalogCommand::ListViews {
+                database,
+                view_pattern,
+            } => {
+                let rows = manager
+                    .list_views(database, view_pattern.as_deref())
                     .await?;
                 build_record_batch(command_schema, &rows)?
             }

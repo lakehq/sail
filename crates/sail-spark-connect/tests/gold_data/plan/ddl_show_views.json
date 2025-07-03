@@ -4,38 +4,10 @@
       "input": "SHOW VIEWS",
       "output": {
         "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "views"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
+          "command": {
+            "listViews": {
+              "database": null,
+              "viewPattern": null
             },
             "planId": null
           }
@@ -46,38 +18,10 @@
       "input": "SHOW VIEWS '*test*'",
       "output": {
         "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "views"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
+          "command": {
+            "listViews": {
+              "database": null,
+              "viewPattern": "*test*"
             },
             "planId": null
           }
@@ -88,38 +32,15 @@
       "input": "SHOW VIEWS FROM testcat.ns1.ns2.tbl",
       "output": {
         "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "views"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
+          "command": {
+            "listViews": {
+              "database": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "viewPattern": null
             },
             "planId": null
           }
@@ -130,38 +51,12 @@
       "input": "SHOW VIEWS IN ns1 '*test*'",
       "output": {
         "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "views"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
+          "command": {
+            "listViews": {
+              "database": [
+                "ns1"
+              ],
+              "viewPattern": "*test*"
             },
             "planId": null
           }
@@ -172,38 +67,12 @@
       "input": "SHOW VIEWS IN ns1 LIKE '*test*'",
       "output": {
         "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "views"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
+          "command": {
+            "listViews": {
+              "database": [
+                "ns1"
+              ],
+              "viewPattern": "*test*"
             },
             "planId": null
           }
@@ -214,38 +83,15 @@
       "input": "SHOW VIEWS IN testcat.ns1.ns2.tbl",
       "output": {
         "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "views"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
+          "command": {
+            "listViews": {
+              "database": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "viewPattern": null
             },
             "planId": null
           }
@@ -256,38 +102,10 @@
       "input": "SHOW VIEWS LIKE '*test*'",
       "output": {
         "success": {
-          "query": {
-            "project": {
-              "input": {
-                "read": {
-                  "namedTable": {
-                    "name": [
-                      "information_schema",
-                      "views"
-                    ],
-                    "temporal": null,
-                    "sample": null,
-                    "options": []
-                  },
-                  "isStreaming": false
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
+          "command": {
+            "listViews": {
+              "database": null,
+              "viewPattern": "*test*"
             },
             "planId": null
           }
