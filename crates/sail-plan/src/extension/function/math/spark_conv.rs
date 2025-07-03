@@ -57,8 +57,7 @@ impl ScalarUDFImpl for SparkConv {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(from))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(to))),
             ) => {
-                if *from < 2 || *from > 36 || *to < 2 || *to > 36 {
-                    // Fixme to review
+                if *from <= 2 || *from > 36 || *to < 2 || *to > 36 {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
                 }
                 match i64::from_str_radix(num_str, *from as u32) {
