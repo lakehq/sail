@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use url::Url;
+
 use async_recursion::async_recursion;
 use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
@@ -3355,8 +3357,17 @@ impl PlanResolver<'_> {
 
         let table_reference = self.resolve_table_reference(&table)?;
 
-        // First, try to open an existing Delta table at the location
-        match deltalake::open_table(&location).await {
+        // Parse the location URL to get ObjectStore from sail's registry
+        let location_url = Url::parse(&location).map_err(|e| {
+            PlanError::invalid(format!("Invalid table location URL: {}", e))
+        })?;
+
+        // Get ObjectStore from sail's registry
+        let object_store = self.ctx.runtime_env().object_store_registry.get_store(&location_url)
+            .map_err(|e| PlanError::invalid(format!("Failed to get object store: {}", e)))?;
+
+        // First, try to open an existing Delta table at the location using our custom function
+        match sail_delta_lake::open_table_with_object_store_simple(&location, object_store.clone()).await {
             Ok(existing_delta_table) => {
                 // Table exists, create a provider and register it
                 let delta_provider = DeltaTableProvider::try_new(

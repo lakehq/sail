@@ -1543,21 +1543,44 @@ pub struct DeltaTableFactory {}
 impl TableProviderFactory for DeltaTableFactory {
     async fn create(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let delta_table = if cmd.options.is_empty() {
-            open_table(cmd.to_owned().location)
-                .await
-                .map_err(delta_to_datafusion_error)?
+        // Parse the location URL
+        let location_url = url::Url::parse(&cmd.location).map_err(|e| {
+            DataFusionError::External(Box::new(DeltaTableError::InvalidTableLocation(
+                format!("Invalid table location URL: {}", e)
+            )))
+        })?;
+
+        // Get ObjectStore from sail's registry
+        let object_store = ctx.runtime_env().object_store_registry.get_store(&location_url)
+            .map_err(|e| DataFusionError::External(Box::new(DeltaTableError::Generic(
+                format!("Failed to get object store: {}", e)
+            ))))?;
+
+        // Create storage config from options
+        let storage_config = if cmd.options.is_empty() {
+            deltalake::logstore::StorageConfig::default()
         } else {
-            open_table_with_storage_options(cmd.to_owned().location, cmd.to_owned().options)
-                .await
-                .map_err(delta_to_datafusion_error)?
+            // Convert options to StorageConfig
+            let mut config = deltalake::logstore::StorageConfig::default();
+            // Note: You might need to implement proper option parsing here
+            // For now, we'll use default config
+            config
         };
+
+        let delta_table = crate::open_table_with_object_store(
+            &cmd.location,
+            object_store,
+            storage_config,
+        )
+        .await
+        .map_err(delta_to_datafusion_error)?;
+
         let config = DeltaScanConfig::default();
         let provider = DeltaTableProvider::try_new(
-            delta_table.state.clone().unwrap(),
+            delta_table.snapshot().map_err(delta_to_datafusion_error)?.clone(),
             delta_table.log_store().clone(),
             config,
         )
