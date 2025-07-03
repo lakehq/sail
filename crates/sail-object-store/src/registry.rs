@@ -12,6 +12,7 @@ use url::Url;
 
 use crate::hugging_face::HuggingFaceObjectStore;
 use crate::layers::lazy::LazyObjectStore;
+use crate::layers::logging::LoggingObjectStore;
 use crate::layers::runtime::RuntimeAwareObjectStore;
 use crate::s3::get_s3_object_store;
 
@@ -44,7 +45,7 @@ impl DynamicObjectStoreRegistry {
                 scheme: "file".to_string(),
                 authority: "".to_string(),
             },
-            Arc::new(LocalFileSystem::new()),
+            Arc::new(LoggingObjectStore::new(Arc::new(LocalFileSystem::new()))),
         );
         Self { stores, runtime }
     }
@@ -85,19 +86,19 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
 
 fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectStore>> {
     let key = ObjectStoreKey::new(url);
-    match key.scheme.as_str() {
+    let store: Arc<dyn ObjectStore> = match key.scheme.as_str() {
         "s3" => {
             let url = url.clone();
             let store = LazyObjectStore::new(move || {
                 let url = url.clone();
                 async move { get_s3_object_store(&url).await }
             });
-            Ok(Arc::new(store))
+            Arc::new(store)
         }
         #[cfg(feature = "hdfs")]
         "hdfs" => {
             let store = HdfsObjectStore::with_url(url.as_str())?;
-            Ok(Arc::new(store))
+            Arc::new(store)
         }
         "hf" => {
             if key.authority != "datasets" {
@@ -109,11 +110,15 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
                     )),
                 });
             }
-            Ok(Arc::new(HuggingFaceObjectStore::try_new()?))
+            Arc::new(HuggingFaceObjectStore::try_new()?)
         }
-        _ => Err(object_store::Error::Generic {
-            store: "unknown",
-            source: Box::new(plan_datafusion_err!("unsupported object store URL: {url}")),
-        }),
-    }
+        _ => {
+            return Err(object_store::Error::Generic {
+                store: "unknown",
+                source: Box::new(plan_datafusion_err!("unsupported object store URL: {url}")),
+            })
+        }
+    };
+    let store = Arc::new(LoggingObjectStore::new(store));
+    Ok(store)
 }

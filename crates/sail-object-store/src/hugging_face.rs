@@ -314,7 +314,6 @@ impl ObjectStore for HuggingFaceObjectStore {
             Ok(x) => x,
             Err(e) => return Box::pin(stream::once(async { Err(e) })),
         };
-        debug!("Listing Hugging Face files: {path:?}");
         let api = self.api.clone();
         let stream = async_stream::try_stream! {
             let repo = api.repo(path.repo());
