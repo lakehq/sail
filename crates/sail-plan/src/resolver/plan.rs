@@ -896,7 +896,10 @@ impl PlanResolver<'_> {
             .await?;
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(options)
-            .with_schema(Arc::new(schema));
+            .with_schema(Arc::new(schema))
+            .infer_partitions_from_path(&self.ctx.state())
+            .await?;
+        let config = Self::rewrite_listing_partitions(config)?;
         let table_provider = Arc::new(ListingTable::try_new(config)?);
         let names = state.register_fields(table_provider.schema().fields());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;
@@ -4214,6 +4217,25 @@ impl PlanResolver<'_> {
                 Ok(data_type)
             })
             .collect::<PlanResult<Vec<_>>>()
+    }
+
+    /// The inferred partition columns are of `Dictionary` types by default, which cannot be
+    /// understood by the Spark client. So we rewrite the type to be `Utf8`.
+    fn rewrite_listing_partitions(
+        mut config: ListingTableConfig,
+    ) -> PlanResult<ListingTableConfig> {
+        let Some(options) = config.options.as_mut() else {
+            return Err(PlanError::internal(
+                "listing options should be present in the config",
+            ));
+        };
+        options
+            .table_partition_cols
+            .iter_mut()
+            .for_each(|(_col, data_type)| {
+                *data_type = adt::DataType::Utf8;
+            });
+        Ok(config)
     }
 }
 

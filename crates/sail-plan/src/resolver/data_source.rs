@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use datafusion::arrow::datatypes as adt;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
 use datafusion_common::plan_err;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use sail_common::spec;
 
 use crate::error::PlanResult;
@@ -47,6 +47,12 @@ impl PlanResolver<'_> {
             let files: Vec<_> = url
                 .list_all_files(&session_state, &store, &options.file_extension)
                 .await?
+                // Here we sample up to 10 files to infer the schema.
+                // The value is hard-coded here since DataFusion uses the same hard-coded value
+                // for operations such as `infer_partitions_from_path`.
+                // We can make it configurable if DataFusion makes those operations configurable
+                // as well in the future.
+                .take(10)
                 .try_collect()
                 .await?;
             file_groups.push((store, files));
