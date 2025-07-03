@@ -26,7 +26,7 @@
       - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
         Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
     Other short names like 'CST' are not recommended to use because they can be ambiguous.
-    Defaults to the value of the `spark.sql.session.time_zone` configuration.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
   supported: false
 
 - key: date_format
@@ -76,5 +76,5 @@
   default: ""
   description: |
     Whether to ignore null fields when generating JSON objects.
-    Defaults to the value of the `spark.sql.json_generator.ignore_null_fields` configuration.
+    Defaults to the Sail configuration option `json_generator.ignore_null_fields` (to be implemented).
   supported: false

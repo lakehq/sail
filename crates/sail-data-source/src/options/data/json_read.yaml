@@ -36,7 +36,7 @@
       - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
         Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
     Other short names like 'CST' are not recommended to use because they can be ambiguous.
-    Defaults to the value of the `spark.sql.session.time_zone` configuration.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
   supported: false
 
 - key: primitives_as_string
@@ -112,8 +112,7 @@
   default: ""
   description: |
     Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
-    This overrides `spark.sql.column_name_of_corrupt_record`.
-    Defaults to the value of `spark.sql.column_name_of_corrupt_record` configuration.
+    Defaults to the Sail configuration option `sql.column_name_of_corrupt_record` (to be implemented).
   supported: false
 
 - key: date_format
@@ -226,5 +225,5 @@
   default: ""
   description: |
     Whether to use UnsafeRow to represent struct result in the JSON parser.
-    Defaults to the value of the `spark.sql.json.use_unsafe_row` configuration.
+    Defaults to the Sail configuration option `json.use_unsafe_row` (to be implemented).
   supported: false

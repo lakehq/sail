@@ -150,9 +150,9 @@
     If it is set to true, the specified or inferred schema will be forcibly applied to datasource files, and headers in
     CSV files will be ignored. If the option is set to false, the schema will be validated against all headers in CSV
     files in the case when the header option is set to true. Field names in the schema and column names in CSV headers
-    are checked by their positions taking into account `spark.sql.case_sensitive`. Though the default value is true,
-    it is recommended to disable the enforceSchema option to avoid incorrect results.
-    CSV built-in functions ignore this option.
+    are checked by their positions taking into account the Sail configuration option `sql.case_sensitive` (to be
+    implemented). Though the default value is true, it is recommended to disable the `enforce_schema` option to avoid
+    incorrect results. CSV built-in functions ignore this option.
   supported: false
 
 - key: ignore_leading_white_space
@@ -265,8 +265,7 @@
   default: ""
   description: |
     Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
-    This overrides `spark.sql.column_name_of_corrupt_record`.
-    Defaults to the value of `spark.sql.column_name_of_corrupt_record` configuration.
+    Defaults to the Sail configuration option `sql.column_name_of_corrupt_record` (to be implemented).
   supported: false
 
 - key: char_to_escape_quote_escaping
@@ -328,5 +327,5 @@
       - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
         Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
     Other short names like 'CST' are not recommended to use because they can be ambiguous.
-    Defaults to the value of the `spark.sql.session.time_zone` configuration.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
   supported: false

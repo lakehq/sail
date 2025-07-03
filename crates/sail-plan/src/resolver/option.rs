@@ -93,9 +93,6 @@ fn apply_csv_read_options(from: CsvReadOptions, to: &mut CsvOptions) -> PlanResu
     if let Some(header) = header {
         to.has_header = Some(header);
     }
-    // TODO: support default line separator
-    //   The default line separator is any of `\n`, `\r`, or `\r\n` in Spark,
-    //   but `\r\n` in DataFusion.
     if let Some(Some(sep)) = line_sep {
         to.terminator = Some(char_to_u8(sep, "line_sep")?);
     }

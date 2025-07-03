@@ -108,7 +108,7 @@
 - key: coerce_int96
   aliases:
     - coerceInt96
-  default: "ms"
+  default: "us"
   description: |
     (Reading) Controls how the parquet reader interprets columns with physical type int96.
     By default, int96 columns are treated as microsecond ("us") resolution timestamps.
@@ -136,8 +136,7 @@
     - mergeSchema
   description: |
     (Reading) Sets whether we should merge schemas collected from all Parquet part-files.
-    This will override `spark.sql.parquet.mergeSchema`.
-    Defaults to the value of the `spark.sql.parquet.mergeSchema` configuration.
+    Defaults to the Sail configuration option `parquet.merge_schema` (to be implemented).
   supported: false
 
 - key: int96_rebase_mode
@@ -150,7 +149,7 @@
       - `EXCEPTION`: Fails in reads of ancient INT96 timestamps that are ambiguous between the two calendars.
       - `CORRECTED`: Loads INT96 timestamps without rebasing.
       - `LEGACY`: Performs rebasing of ancient timestamps from the Julian to Proleptic Gregorian calendar.
-    Defaults to the value of the `spark.sql.parquet.int96RebaseModeInRead` configuration.
+    Defaults to the Sail configuration option `parquet.int96_rebase_mode_in_read` (to be implemented).
   supported: false
 
 - key: datetime_rebase_mode
@@ -163,5 +162,5 @@
       - `EXCEPTION`: Fails in reads of ancient dates/timestamps that are ambiguous between the two calendars.
       - `CORRECTED`: Loads dates/timestamps without rebasing.
       - `LEGACY`: Performs rebasing of ancient dates/timestamps from the Julian to Proleptic Gregorian calendar.
-    Defaults to the value of the `spark.sql.parquet.datetimeRebaseModeInRead` configuration.
+    Defaults to the Sail configuration option `parquet.datetime_rebase_mode_in_read` (to be implemented).
   supported: false
