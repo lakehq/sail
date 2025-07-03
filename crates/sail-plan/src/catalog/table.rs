@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::utils::match_pattern;
 use crate::catalog::CatalogManager;
-use crate::extension::logical::CatalogCommand;
+use crate::extension::logical::CatalogTableDefinition;
 use crate::temp_view::manage_temporary_views;
 
 #[derive(Debug, Clone)]
@@ -139,9 +139,12 @@ impl CatalogManager<'_> {
         Ok(())
     }
 
-    pub(crate) async fn create_table(&self, create_table: CatalogCommand) -> Result<()> {
-        if let CatalogCommand::CreateTable {
-            table,
+    pub(crate) async fn create_table(
+        &self,
+        table: TableReference,
+        definition: CatalogTableDefinition,
+    ) -> Result<()> {
+        let CatalogTableDefinition {
             schema,
             comment: _, // TODO: support comment
             column_defaults,
@@ -155,38 +158,25 @@ impl CatalogManager<'_> {
             unbounded,
             options,
             definition,
-            copy_to_plan,
-        } = create_table
-        {
-            let ddl = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
-                schema,
-                name: table,
-                location: location.clone(),
-                file_type: file_format.clone(),
-                table_partition_cols,
-                if_not_exists,
-                temporary: false, // TODO: Propagate temporary
-                definition,
-                order_exprs: file_sort_order,
-                unbounded,
-                options: options.into_iter().collect(),
-                constraints,
-                column_defaults: column_defaults.into_iter().collect(),
-            }));
-            // TODO: process the output
-            _ = self.ctx.execute_logical_plan(ddl).await?;
-            if let Some(copy_to_plan) = copy_to_plan {
-                // FIXME: This does not actually execute the copy_to_plan.
-                //  execute_logical_plan only executes DDL, other statements remain unchanged.
-                _ = self
-                    .ctx
-                    .execute_logical_plan((*copy_to_plan).clone())
-                    .await?;
-            }
-            Ok(())
-        } else {
-            exec_err!("Expected CatalogCommand::CreateTable")
-        }
+        } = definition;
+        let ddl = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
+            schema,
+            name: table,
+            location: location.clone(),
+            file_type: file_format.clone(),
+            table_partition_cols,
+            if_not_exists,
+            temporary: false, // TODO: Propagate temporary
+            definition,
+            order_exprs: file_sort_order,
+            unbounded,
+            options: options.into_iter().collect(),
+            constraints,
+            column_defaults: column_defaults.into_iter().collect(),
+        }));
+        // TODO: process the output
+        _ = self.ctx.execute_logical_plan(ddl).await?;
+        Ok(())
     }
 
     pub(crate) async fn get_table_object(

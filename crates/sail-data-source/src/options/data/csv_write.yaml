@@ -4,12 +4,14 @@
 
 # TODO: Delimiter can be one or more characters
 - key: delimiter
-  alias:
+  aliases:
     - sep
   default: ","
   description: |
     Sets a single character separator for each field and value.
   supported: true
+  rust_type: char
+  rust_deserialize_with: crate::options::serde::deserialize_char
 
 - key: quote
   default: "\""
@@ -17,15 +19,19 @@
     Sets a single character used for escaping quoted values where the delimiter can be part of the value.
     For writing, if an empty string is set, it uses u0000 (null character).
   supported: true
+  rust_type: Option<char>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_char
 
 - key: escape
   default: "\\"
   description: |
     Sets a single character used for escaping quotes inside an already quoted value.
   supported: true
+  rust_type: Option<char>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_char
 
 - key: escape_quotes
-  alias:
+  aliases:
     - escapeQuotes
   default: "true"
   description: |
@@ -33,15 +39,19 @@
     When enabled (which is the default), quotes are escaped by doubling them (e.g., `"` escapes to `""`).
     When disabled, quotes are escaped with the escape character (which is `\\` by default).
   supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
 
 - key: header
   default: "false"
   description: |
     For writing, writes the names of columns as the first line. CSV built-in functions ignore this option.
   supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
 
 - key: null_value
-  alias:
+  aliases:
     - nullValue
   default: ""
   description: |
@@ -49,7 +59,7 @@
   supported: true
 
 - key: compression
-  alias:
+  aliases:
     - codec
   default: "UNCOMPRESSED"
   description: |
@@ -75,7 +85,7 @@
   supported: false
 
 - key: encoding
-  alias:
+  aliases:
     - charset
   default: "UTF-8"
   description: |
@@ -83,7 +93,7 @@
   supported: false
 
 - key: line_sep
-  alias:
+  aliases:
     - lineSep
     - terminator
   default: "\n"
@@ -93,7 +103,7 @@
   supported: false
 
 - key: ignore_leading_white_space
-  alias:
+  aliases:
     - ignoreLeadingWhiteSpace
   default: "true"
   description: |
@@ -102,7 +112,7 @@
   supported: false
 
 - key: ignore_trailing_white_space
-  alias:
+  aliases:
     - ignoreTrailingWhiteSpace
   default: "false"
   description: |
@@ -111,7 +121,7 @@
   supported: false
 
 - key: date_format
-  alias:
+  aliases:
     - dateFormat
   default: "yyyy-MM-dd"
   description: |
@@ -119,7 +129,7 @@
   supported: false
 
 - key: timestamp_format
-  alias:
+  aliases:
     - timestampFormat
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
   description: |
@@ -127,7 +137,7 @@
   supported: false
 
 - key: timestamp_ntz_format
-  alias:
+  aliases:
     - timestampNTZFormat
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
   description: |
@@ -136,7 +146,7 @@
   supported: false
 
 - key: char_to_escape_quote_escaping
-  alias:
+  aliases:
     - charToEscapeQuoteEscaping
   default: ""
   description: |
@@ -145,7 +155,7 @@
   supported: false
 
 - key: empty_value
-  alias:
+  aliases:
     - emptyValue
   default: "\"\""
   description: |
@@ -153,7 +163,7 @@
   supported: false
 
 - key: time_zone
-  alias:
+  aliases:
     - timeZone
   default: ""
   description: |
@@ -163,5 +173,5 @@
       - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
         Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
     Other short names like 'CST' are not recommended to use because they can be ambiguous.
-    Defaults to the value of the `sail.sql.session.time_zone` configuration.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
   supported: false
