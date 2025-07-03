@@ -5252,6 +5252,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-data-source"
+version = "0.3.0"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "sail-common",
+ "serde",
+ "serde_yaml",
+ "syn",
+]
+
+[[package]]
 name = "sail-execution"
 version = "0.3.0"
 dependencies = [
@@ -5352,7 +5366,6 @@ dependencies = [
  "html-escape",
  "lazy_static",
  "num",
- "num-traits",
  "object_store",
  "percent-encoding",
  "rand 0.9.1",
@@ -5362,11 +5375,11 @@ dependencies = [
  "ryu",
  "sail-common",
  "sail-common-datafusion",
+ "sail-data-source",
  "sail-python-udf",
  "sail-sql-analyzer",
  "serde",
  "serde_arrow",
- "serde_yaml",
  "sha1",
  "thiserror 2.0.12",
  "tokio",

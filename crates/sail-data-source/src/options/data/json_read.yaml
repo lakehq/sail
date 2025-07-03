@@ -3,15 +3,17 @@
 #   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L146-L174
 
 - key: schema_infer_max_records
-  alias:
+  aliases:
     - schemaInferMaxRecords
   default: "1000"
   description: |
     The maximum number of rows to read from JSON files for schema inference if needed.
   supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
 
 - key: compression
-  alias:
+  aliases:
     - codec
   default: "UNCOMPRESSED"
   description: |
@@ -24,7 +26,7 @@
   supported: true
 
 - key: time_zone
-  alias:
+  aliases:
     - timeZone
   default: ""
   description: |
@@ -34,11 +36,11 @@
       - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
         Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
     Other short names like 'CST' are not recommended to use because they can be ambiguous.
-    Defaults to the value of the `sail.sql.session.time_zone` configuration.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
   supported: false
 
 - key: primitives_as_string
-  alias:
+  aliases:
     - primitivesAsString
   default: "false"
   description: |
@@ -47,7 +49,7 @@
   
 
 - key: prefers_decimal
-  alias:
+  aliases:
     - prefersDecimal
   default: "false"
   description: |
@@ -55,7 +57,7 @@
   supported: false
 
 - key: allow_comments
-  alias:
+  aliases:
     - allowComments
   default: "false"
   description: |
@@ -63,7 +65,7 @@
   supported: false
 
 - key: allow_unquoted_field_names
-  alias:
+  aliases:
     - allowUnquotedFieldNames
   default: "false"
   description: |
@@ -71,7 +73,7 @@
   supported: false
 
 - key: allow_single_quotes
-  alias:
+  aliases:
     - allowSingleQuotes
   default: "true"
   description: |
@@ -79,7 +81,7 @@
   supported: false
 
 - key: allow_numeric_leading_zeros
-  alias:
+  aliases:
     - allowNumericLeadingZeros
   default: "false"
   description: |
@@ -87,7 +89,7 @@
   supported: false
 
 - key: allow_backslash_escaping_any_character
-  alias:
+  aliases:
     - allowBackslashEscapingAnyCharacter
   default: "false"
   description: |
@@ -105,17 +107,16 @@
   supported: false
 
 - key: column_name_of_corrupt_record
-  alias:
+  aliases:
     - columnNameOfCorruptRecord
   default: ""
   description: |
     Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
-    This overrides `sail.sql.column_name_of_corrupt_record`.
-    Defaults to the value of `sail.sql.column_name_of_corrupt_record` configuration.
+    Defaults to the Sail configuration option `sql.column_name_of_corrupt_record` (to be implemented).
   supported: false
 
 - key: date_format
-  alias:
+  aliases:
     - dateFormat
   default: "yyyy-MM-dd"
   description: |
@@ -123,14 +124,15 @@
   supported: false
 
 - key: timestamp_format
-  alias:
+  aliases:
     - timestampFormat
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
   description: |
     Sets the string that indicates a timestamp format. Custom date formats follow the formats at `Datetime` Patterns.
+  supported: false
 
 - key: timestamp_ntz_format
-  alias:
+  aliases:
     - timestampNTZFormat
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
   description: |
@@ -139,7 +141,7 @@
   supported: false
   
 - key: enable_date_time_parsing_fallback
-  alias:
+  aliases:
     - enableDateTimeParsingFallback
   default: ""
   description: |
@@ -149,7 +151,7 @@
   supported: false
 
 - key: multi_line
-  alias:
+  aliases:
     - multiLine
   default: "false"
   description: |
@@ -157,7 +159,7 @@
   supported: false
 
 - key: allow_unquoted_control_chars
-  alias:
+  aliases:
     - allowUnquotedControlChars
   default: "false"
   description: |
@@ -173,7 +175,7 @@
   supported: false
 
 - key: line_sep
-  alias:
+  aliases:
     - lineSep
     - terminator
   default: ""
@@ -184,15 +186,15 @@
   supported: false
 
 - key: sampling_ratio
-  alias:
+  aliases:
     - samplingRatio
   default: "1.0"
   description: |
     Defines fraction of input JSON objects used for schema inferring.
   supported: false
 
-- key: dropFieldIfAllNull
-  alias:
+- key: drop_field_if_all_null
+  aliases:
     - dropFieldIfAllNull
   default: "false"
   description: |
@@ -207,7 +209,7 @@
   supported: false
 
 - key: allow_non_numeric_numbers
-  alias:
+  aliases:
     - allowNonNumericNumbers
   default: "true"
   description: |
@@ -218,10 +220,10 @@
   supported: false
 
 - key: use_unsafe_row
-  alias:
+  aliases:
     - useUnsafeRow
   default: ""
   description: |
     Whether to use UnsafeRow to represent struct result in the JSON parser.
-    Defaults to the value of the `sail.sql.json.use_unsafe_row` configuration.
+    Defaults to the Sail configuration option `json.use_unsafe_row` (to be implemented).
   supported: false
