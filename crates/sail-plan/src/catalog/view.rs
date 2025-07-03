@@ -1,12 +1,77 @@
 use std::sync::Arc;
 
-use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, SchemaReference, TableReference};
 use datafusion_expr::{CreateView, DdlStatement, DropView, LogicalPlan};
 
+use crate::catalog::table::{TableMetadata, TableObject};
 use crate::catalog::CatalogManager;
 use crate::temp_view::manage_temporary_views;
 
 impl CatalogManager<'_> {
+    pub(crate) async fn list_global_temporary_views(
+        &self,
+        pattern: Option<&str>,
+    ) -> Result<Vec<TableMetadata>> {
+        manage_temporary_views(self.ctx, true, |views| {
+            views.list_views(pattern).map(|views| {
+                views
+                    .into_iter()
+                    .map(|(name, plan)| {
+                        TableMetadata::from_table_object(TableObject::GlobalTemporaryView {
+                            database_name: self.config.global_temp_database.clone(),
+                            table_name: name,
+                            plan,
+                        })
+                    })
+                    .collect()
+            })
+        })
+    }
+
+    pub(crate) async fn list_temporary_views(
+        &self,
+        pattern: Option<&str>,
+    ) -> Result<Vec<TableMetadata>> {
+        manage_temporary_views(self.ctx, false, |views| {
+            views.list_views(pattern).map(|views| {
+                views
+                    .into_iter()
+                    .map(|(name, plan)| {
+                        TableMetadata::from_table_object(TableObject::TemporaryView {
+                            table_name: name,
+                            plan,
+                        })
+                    })
+                    .collect()
+            })
+        })
+    }
+
+    pub(crate) fn is_global_temporary_view_database(
+        &self,
+        database: &Option<SchemaReference>,
+    ) -> bool {
+        database.as_ref().is_some_and(|x| match x {
+            SchemaReference::Bare { schema } => schema.as_ref() == self.config.global_temp_database,
+            SchemaReference::Full { .. } => false,
+        })
+    }
+
+    pub(crate) async fn list_views(
+        &self,
+        database: Option<SchemaReference>,
+        view_pattern: Option<&str>,
+    ) -> Result<Vec<TableMetadata>> {
+        // See `list_tables()` for how the (global) temporary views are handled.
+        let mut output = if self.is_global_temporary_view_database(&database) {
+            self.list_global_temporary_views(view_pattern).await?
+        } else {
+            vec![]
+        };
+        output.extend(self.list_temporary_views(view_pattern).await?);
+        Ok(output)
+    }
+
     pub(crate) async fn drop_temporary_view(
         &self,
         view_name: &str,
