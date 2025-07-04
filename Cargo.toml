@@ -17,10 +17,8 @@ rust-version = "1.82.0"
 
 [workspace.dependencies]
 thiserror = { version = "2.0.12" }
-tokio = { version = "1.45.1", features = ["full"] }
+tokio = { version = "1.46.0", features = ["full"] }
 tokio-stream = "0.1.17"
-prost-build = "0.13.5"
-prost = "0.13.5"
 pbjson = "0.7.0"
 pbjson-types = "0.7.0"
 pbjson-build = "0.7.0"
@@ -32,6 +30,7 @@ async-stream = "0.3.6"
 lazy_static = "1.5.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
+# TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
 serde_yaml = "0.9.34"
 monostate = "0.1.14"
 regex = "1.11.1"
@@ -46,7 +45,7 @@ quote = "1.0.40"
 paste = "1.0.15"
 proc-macro2 = "1.0.95"
 prettyplease = "0.2.35"
-phf = { version = "0.11.3", features = ["macros"] }
+phf = { version = "0.12.1", features = ["macros"] }
 ryu = "1.0.20"
 either = "1.15.0"
 num-bigint = "0.4.6"
@@ -56,23 +55,23 @@ rand_chacha = "0.9.0"
 rand_distr = "0.5.1"
 url = "2.5.4"
 lexical-core = { version = "1.0.5", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-aws-config = "1.6.3"
+aws-config = "1.8.1"
 aws-credential-types = "1.2.3"
-aws-smithy-runtime-api = "1.8.0"
-aws-smithy-types = "1.3.1"
+aws-smithy-runtime-api = "1.8.1"
+aws-smithy-types = "1.3.2"
 aws-smithy-async = "1.2.5"
-clap = { version = "4.5.38", features = ["derive"] }
+clap = { version = "4.5.40", features = ["derive"] }
 num_enum = "0.7.4"
 num-traits = "0.2.19"
 log = "0.4.27"
 env_logger = "0.11.8"
-fastrace = { version = "0.7.12", features = ["enable"] }
-fastrace-opentelemetry = "0.9.0"
-opentelemetry = "0.28.0"
-opentelemetry_sdk = "0.28.0"
-opentelemetry-otlp = { version = "0.28.0", features = ["tls", "tls-roots", "grpc-tonic"] }
+fastrace = { version = "0.7.14", features = ["enable"] }
+fastrace-opentelemetry = "0.12.0"
+opentelemetry = "0.30.0"
+opentelemetry_sdk = "0.30.0"
+opentelemetry-otlp = { version = "0.30.0", features = ["tls", "tls-roots", "grpc-tonic"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }
-kube = "1.0.0"
+kube = "1.1.0"
 k8s-openapi = { version = "0.25.0", features = ["latest"] }
 twox-hash = "2.1.1"
 aes = "0.8.4"
@@ -87,7 +86,7 @@ iana-time-zone = "0.1.63"
 chumsky = { version = "0.10.1", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
-reqwest = "0.12.15"
+reqwest = "0.12.22"
 percent-encoding = "2.3.1"
 rustls = "0.23.28"
 dashmap = "6.1.0"
@@ -96,13 +95,17 @@ dashmap = "6.1.0"
 # The versions of the following dependencies are managed manually.
 ######
 
-# The `tonic` version must match the one used in arrow-flight (replace `RELEASE` with the release we are using):
+# The `tonic` version must match the one used in `arrow-flight` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-flight/Cargo.toml
 tonic = { version = "0.12.3", features = ["tls", "tls-roots", "gzip", "zstd"] }
 tonic-build = "0.12.3"
 tonic-reflection = "0.12.3"
 tonic-health = "0.12.3"
 tonic-types = "0.12.3"
+# The `prost` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
+#   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
+prost-build = "0.13.5"
+prost = "0.13.5"
 
 datafusion = { version = "48.0.0", features = ["serde", "avro"] }
 datafusion-common = { version = "48.0.0", features = ["object_store", "avro"] }
@@ -112,6 +115,8 @@ datafusion-proto = { version = "48.0.0" }
 datafusion-functions-nested = { version = "48.0.0" }
 datafusion-spark = { version = "48.0.0" }
 datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "c4f4298" }
+# The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
+#   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.24.2", features = ["auto-initialize", "serde"] }
 arrow-buffer = { version = "55.2.0" }
