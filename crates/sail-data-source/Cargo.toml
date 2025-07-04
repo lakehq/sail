@@ -10,7 +10,7 @@ serde = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yml = { workspace = true }
 syn = { workspace = true }
 prettyplease = { workspace = true }
 regex = { workspace = true }

@@ -17,10 +17,8 @@ rust-version = "1.82.0"
 
 [workspace.dependencies]
 thiserror = { version = "2.0.12" }
-tokio = { version = "1.45.1", features = ["full"] }
+tokio = { version = "1.46.0", features = ["full"] }
 tokio-stream = "0.1.17"
-prost-build = "0.13.5"
-prost = "0.13.5"
 pbjson = "0.7.0"
 pbjson-types = "0.7.0"
 pbjson-build = "0.7.0"
@@ -32,7 +30,7 @@ async-stream = "0.3.6"
 lazy_static = "1.5.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
-serde_yaml = "0.9.34"
+serde_yml = "0.0.12"
 monostate = "0.1.14"
 regex = "1.11.1"
 glob = "0.3.2"
@@ -96,13 +94,17 @@ dashmap = "6.1.0"
 # The versions of the following dependencies are managed manually.
 ######
 
-# The `tonic` version must match the one used in arrow-flight (replace `RELEASE` with the release we are using):
+# The `tonic` version must match the one used in `arrow-flight` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-flight/Cargo.toml
 tonic = { version = "0.12.3", features = ["tls", "tls-roots", "gzip", "zstd"] }
 tonic-build = "0.12.3"
 tonic-reflection = "0.12.3"
 tonic-health = "0.12.3"
 tonic-types = "0.12.3"
+# The `prost` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
+#   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
+prost-build = "0.13.5"
+prost = "0.13.5"
 
 datafusion = { version = "48.0.0", features = ["serde", "avro"] }
 datafusion-common = { version = "48.0.0", features = ["object_store", "avro"] }
@@ -112,6 +114,8 @@ datafusion-proto = { version = "48.0.0" }
 datafusion-functions-nested = { version = "48.0.0" }
 datafusion-spark = { version = "48.0.0" }
 datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "c4f4298" }
+# The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
+#   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.24.2", features = ["auto-initialize", "serde"] }
 arrow-buffer = { version = "55.2.0" }
