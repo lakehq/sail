@@ -105,6 +105,7 @@ impl From<PlanError> for SparkError {
             PlanError::InternalError(message) => SparkError::InternalError(message),
             PlanError::NotImplemented(message) => SparkError::NotImplemented(message),
             PlanError::AnalysisError(message) => SparkError::AnalysisError(message),
+            PlanError::DeltaTableError(e) => SparkError::InternalError(e.to_string()),
         }
     }
 }
@@ -318,6 +319,7 @@ impl From<CommonErrorCause> for SparkThrowable {
                 // TODO: handle situations where a different exception type is more appropriate.
                 SparkThrowable::AnalysisException(x)
             }
+            CommonErrorCause::DeltaTable(x) => SparkThrowable::QueryExecutionException(x),
         }
     }
 }

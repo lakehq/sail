@@ -90,6 +90,7 @@ reqwest = "0.12.22"
 percent-encoding = "2.3.1"
 rustls = "0.23.28"
 dashmap = "6.1.0"
+itertools = "0.14.0"
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -111,6 +112,7 @@ datafusion = { version = "48.0.0", features = ["serde", "avro"] }
 datafusion-common = { version = "48.0.0", features = ["object_store", "avro"] }
 datafusion-expr = { version = "48.0.0" }
 datafusion-expr-common = { version = "48.0.0" }
+datafusion-execution = { version = "48.0.0" }
 datafusion-proto = { version = "48.0.0" }
 datafusion-functions-nested = { version = "48.0.0" }
 datafusion-spark = { version = "48.0.0" }
@@ -127,6 +129,10 @@ serde_arrow = { version = "0.13.4", features = ["arrow-55"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.2", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.14.2"
+
+# Lakehouse
+deltalake = { version = "0.26.2", default-features = false, features = ["rustls"]}
+delta_kernel = { version = "0.12.1", features = ["arrow-55", "internal-api", "default-engine"] }
 
 ######
 # This is the end of the manually managed dependencies.
