@@ -31,7 +31,7 @@ lazy_static = "1.5.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 # TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
-serde_yaml = "0.9.34+deprecated"
+serde_yaml = "0.9.34"
 monostate = "0.1.14"
 regex = "1.11.1"
 glob = "0.3.2"
@@ -71,7 +71,7 @@ opentelemetry = "0.30.0"
 opentelemetry_sdk = "0.30.0"
 opentelemetry-otlp = { version = "0.30.0", features = ["tls", "tls-roots", "grpc-tonic"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }
-kube = "1.0.0"
+kube = "1.1.0"
 k8s-openapi = { version = "0.25.0", features = ["latest"] }
 twox-hash = "2.1.1"
 aes = "0.8.4"
