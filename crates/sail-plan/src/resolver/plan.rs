@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use url::Url;
-
 use async_recursion::async_recursion;
 use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
@@ -58,6 +56,7 @@ use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
+use url::Url;
 
 use crate::data_source::csv::{CsvReadOptions, CsvWriteOptions};
 use crate::data_source::json::{JsonReadOptions, JsonWriteOptions};
@@ -3361,16 +3360,21 @@ impl PlanResolver<'_> {
         let table_reference = self.resolve_table_reference(&table)?;
 
         // Parse the location URL to get ObjectStore from sail's registry
-        let location_url = Url::parse(&location).map_err(|e| {
-            PlanError::invalid(format!("Invalid table location URL: {}", e))
-        })?;
+        let location_url = Url::parse(&location)
+            .map_err(|e| PlanError::invalid(format!("Invalid table location URL: {}", e)))?;
 
         // Get ObjectStore from sail's registry
-        let object_store = self.ctx.runtime_env().object_store_registry.get_store(&location_url)
+        let object_store = self
+            .ctx
+            .runtime_env()
+            .object_store_registry
+            .get_store(&location_url)
             .map_err(|e| PlanError::invalid(format!("Failed to get object store: {}", e)))?;
 
         // First, try to open an existing Delta table at the location using our custom function
-        match sail_delta_lake::open_table_with_object_store_simple(&location, object_store.clone()).await {
+        match sail_delta_lake::open_table_with_object_store_simple(&location, object_store.clone())
+            .await
+        {
             Ok(existing_delta_table) => {
                 // Table exists, create a provider and register it
                 let delta_provider = DeltaTableProvider::try_new(

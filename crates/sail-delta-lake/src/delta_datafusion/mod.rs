@@ -95,22 +95,6 @@ use object_store::{ObjectMeta, ObjectStore};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-/// Generate a unique enough url to identify the store in datafusion.
-/// The DF object store registry only cares about the scheme and the host of the url for
-/// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
-/// host we convert the location from this `LogStore` to a valid name, combining the
-/// original scheme, host and path with invalid characters replaced.
-fn create_object_store_url(location: &Url) -> ObjectStoreUrl {
-    use object_store::path::DELIMITER;
-    ObjectStoreUrl::parse(format!(
-        "delta-rs://{}-{}{}",
-        location.scheme(),
-        location.host_str().unwrap_or("-"),
-        location.path().replace(DELIMITER, "-").replace(':', "-")
-    ))
-    .expect("Invalid object store url.")
-}
-
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
@@ -149,6 +133,22 @@ pub fn datafusion_to_delta_error(err: DataFusionError) -> DeltaTableError {
 }
 
 // Use explicit conversion functions instead
+
+/// Generate a unique enough url to identify the store in datafusion.
+/// The DF object store registry only cares about the scheme and the host of the url for
+/// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
+/// host we convert the location from this `LogStore` to a valid name, combining the
+/// original scheme, host and path with invalid characters replaced.
+fn create_object_store_url(location: &Url) -> ObjectStoreUrl {
+    use object_store::path::DELIMITER;
+    ObjectStoreUrl::parse(format!(
+        "delta-rs://{}-{}{}",
+        location.scheme(),
+        location.host_str().unwrap_or("-"),
+        location.path().replace(DELIMITER, "-").replace(':', "-")
+    ))
+    .expect("Invalid object store url.")
+}
 
 /// Convenience trait for calling common methods on snapshot hierarchies
 pub trait DataFusionMixins {
@@ -433,8 +433,6 @@ impl DeltaTableStateExt for DeltaTableState {
         unimplemented!();
     }
 }
-
-
 
 /// The logical schema for a Deltatable is different from the protocol level schema since partition
 /// columns must appear at the end of the schema. This is to align with how partition are handled
@@ -941,32 +939,28 @@ impl<'a> DeltaScanBuilder<'a> {
         let object_store_url = create_object_store_url(&self.log_store.config().location);
 
         // Register the object store with DataFusion's RuntimeEnv so it can resolve the custom URL
-        self.session.runtime_env().register_object_store(
-            object_store_url.as_ref(),
-            self.log_store.object_store(None),
-        );
+        self.session
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), self.log_store.object_store(None));
 
-        let file_scan_config = FileScanConfigBuilder::new(
-            object_store_url,
-            file_schema,
-            file_source,
-        )
-        .with_file_groups(
-            // If all files were filtered out, we still need to emit at least one partition to
-            // pass datafusion sanity checks.
-            //
-            // See https://github.com/apache/datafusion/issues/11322
-            if file_groups.is_empty() {
-                vec![FileGroup::from(vec![])]
-            } else {
-                file_groups.into_values().map(FileGroup::from).collect()
-            },
-        )
-        .with_statistics(stats)
-        .with_projection(self.projection.cloned())
-        .with_limit(self.limit)
-        .with_table_partition_cols(table_partition_cols)
-        .build();
+        let file_scan_config =
+            FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
+                .with_file_groups(
+                    // If all files were filtered out, we still need to emit at least one partition to
+                    // pass datafusion sanity checks.
+                    //
+                    // See https://github.com/apache/datafusion/issues/11322
+                    if file_groups.is_empty() {
+                        vec![FileGroup::from(vec![])]
+                    } else {
+                        file_groups.into_values().map(FileGroup::from).collect()
+                    },
+                )
+                .with_statistics(stats)
+                .with_projection(self.projection.cloned())
+                .with_limit(self.limit)
+                .with_table_partition_cols(table_partition_cols)
+                .build();
 
         dbg!(&file_scan_config);
 
@@ -1567,41 +1561,52 @@ impl TableProviderFactory for DeltaTableFactory {
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         // Parse the location URL
         let location_url = url::Url::parse(&cmd.location).map_err(|e| {
-            DataFusionError::External(Box::new(DeltaTableError::InvalidTableLocation(
-                format!("Invalid table location URL: {}", e)
-            )))
+            DataFusionError::External(Box::new(DeltaTableError::InvalidTableLocation(format!(
+                "Invalid table location URL: {}",
+                e
+            ))))
         })?;
 
         // Get ObjectStore from sail's registry - this is the dependency injection point
         // The ObjectStore should already be properly configured by sail's DynamicObjectStoreRegistry
-        let object_store = ctx.runtime_env().object_store_registry.get_store(&location_url)
-            .map_err(|e| DataFusionError::External(Box::new(DeltaTableError::Generic(
-                format!("Failed to get object store from sail's registry: {}", e)
-            ))))?;
+        let object_store = ctx
+            .runtime_env()
+            .object_store_registry
+            .get_store(&location_url)
+            .map_err(|e| {
+                DataFusionError::External(Box::new(DeltaTableError::Generic(format!(
+                    "Failed to get object store from sail's registry: {}",
+                    e
+                ))))
+            })?;
 
         // Create storage config from options
         let storage_config = if cmd.options.is_empty() {
             deltalake::logstore::StorageConfig::default()
         } else {
             // Parse options into StorageConfig
-            let options_map: std::collections::HashMap<String, String> = cmd.options.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let options_map: std::collections::HashMap<String, String> = cmd
+                .options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             deltalake::logstore::StorageConfig::parse_options(options_map)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?
         };
 
         // Use sail-delta-lake's open_table_with_object_store to bypass delta-rs internal ObjectStore creation
         // This follows the dependency injection pattern by using the ObjectStore from sail's registry
-        let delta_table = crate::open_table_with_object_store(
-            &cmd.location,
-            object_store,
-            storage_config,
-        )
-        .await
-        .map_err(delta_to_datafusion_error)?;
+        let delta_table =
+            crate::open_table_with_object_store(&cmd.location, object_store, storage_config)
+                .await
+                .map_err(delta_to_datafusion_error)?;
 
         let config = DeltaScanConfig::default();
         let provider = DeltaTableProvider::try_new(
-            delta_table.snapshot().map_err(delta_to_datafusion_error)?.clone(),
+            delta_table
+                .snapshot()
+                .map_err(delta_to_datafusion_error)?
+                .clone(),
             delta_table.log_store(),
             config,
         )

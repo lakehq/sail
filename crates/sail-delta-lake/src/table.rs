@@ -53,16 +53,12 @@ pub async fn open_table_with_object_store(
     storage_options: StorageConfig,
 ) -> DeltaResult<DeltaTable> {
     let table_uri_str = table_uri.as_ref();
-    let location = Url::parse(table_uri_str).map_err(|_| {
-        DeltaTableError::InvalidTableLocation(table_uri_str.to_string())
-    })?;
+    let location = Url::parse(table_uri_str)
+        .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri_str.to_string()))?;
 
     // Create a LogStore using the provided ObjectStore
-    let log_store = create_logstore_with_object_store(
-        object_store.clone(),
-        location.clone(),
-        storage_options,
-    )?;
+    let log_store =
+        create_logstore_with_object_store(object_store.clone(), location.clone(), storage_options)?;
 
     // Create and load the Delta table
     let mut table = DeltaTable::new(log_store, Default::default());
@@ -123,16 +119,12 @@ pub async fn create_delta_table_with_object_store(
     storage_options: StorageConfig,
 ) -> DeltaResult<deltalake::DeltaOps> {
     let table_uri_str = table_uri.as_ref();
-    let location = Url::parse(table_uri_str).map_err(|_| {
-        DeltaTableError::InvalidTableLocation(table_uri_str.to_string())
-    })?;
+    let location = Url::parse(table_uri_str)
+        .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri_str.to_string()))?;
 
     // Create a LogStore using the provided ObjectStore
-    let log_store = create_logstore_with_object_store(
-        object_store,
-        location.clone(),
-        storage_options,
-    )?;
+    let log_store =
+        create_logstore_with_object_store(object_store, location.clone(), storage_options)?;
 
     // Create DeltaOps with the injected LogStore
     // This bypasses delta-rs's internal ObjectStore creation
@@ -152,14 +144,11 @@ fn create_logstore_with_object_store(
 ) -> DeltaResult<LogStoreRef> {
     // For most cases, we use the same object store for both prefixed and root access
     // The storage_config.decorate_store method will handle any necessary path prefixing
-    let prefixed_store = storage_config.decorate_store(Arc::clone(&object_store), &location, None)?;
+    let prefixed_store =
+        storage_config.decorate_store(Arc::clone(&object_store), &location, None)?;
 
     // Create the default LogStore with our custom ObjectStore
-    let log_store = default_logstore(
-        Arc::new(prefixed_store),
-        &location,
-        &storage_config,
-    );
+    let log_store = default_logstore(Arc::new(prefixed_store), &location, &storage_config);
 
     Ok(log_store)
 }
@@ -186,16 +175,11 @@ pub async fn create_delta_table_provider_with_object_store(
     scan_config: Option<DeltaScanConfig>,
 ) -> DeltaResult<DeltaTableProvider> {
     let table_uri_str = table_uri.as_ref();
-    let location = Url::parse(table_uri_str).map_err(|_| {
-        DeltaTableError::InvalidTableLocation(table_uri_str.to_string())
-    })?;
+    let location = Url::parse(table_uri_str)
+        .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri_str.to_string()))?;
 
     // Create a LogStore using the provided ObjectStore
-    let log_store = create_logstore_with_object_store(
-        object_store,
-        location,
-        storage_options,
-    )?;
+    let log_store = create_logstore_with_object_store(object_store, location, storage_options)?;
 
     // Load the table state
     let mut table = DeltaTable::new(log_store.clone(), Default::default());

@@ -141,8 +141,8 @@ impl SchemaProvider for ListingSchemaProvider {
         };
 
         // Parse the location to ensure it's a valid URL
-        let table_url = Url::parse(&location)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        // let table_url =
+        //     Url::parse(&location).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         // Use sail-delta-lake's open_table_with_object_store to bypass delta-rs internal ObjectStore creation
         // This follows the dependency injection pattern by using the injected ObjectStore
@@ -156,7 +156,10 @@ impl SchemaProvider for ListingSchemaProvider {
 
         let config = crate::delta_datafusion::DeltaScanConfig::default();
         let provider = crate::delta_datafusion::DeltaTableProvider::try_new(
-            delta_table.snapshot().map_err(crate::delta_datafusion::delta_to_datafusion_error)?.clone(),
+            delta_table
+                .snapshot()
+                .map_err(crate::delta_datafusion::delta_to_datafusion_error)?
+                .clone(),
             delta_table.log_store(),
             config,
         )
