@@ -1,12 +1,10 @@
 use std::borrow::Cow;
 use std::env;
 use std::io::Write;
-use std::time::Duration;
 
 use fastrace::collector::{Config, Reporter, SpanRecord};
 use fastrace::prelude::*;
 use fastrace_opentelemetry::OpenTelemetryReporter;
-use opentelemetry::trace::SpanKind;
 use opentelemetry::InstrumentationScope;
 use opentelemetry_otlp::{Protocol, WithExportConfig, OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT};
 use opentelemetry_sdk::Resource;
@@ -34,9 +32,8 @@ pub fn init_tracer(use_collector: bool) -> TelemetryResult<()> {
                 .with_tonic()
                 .with_endpoint(url)
                 .with_protocol(Protocol::Grpc)
-                .with_timeout(Duration::from_secs(OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT))
+                .with_timeout(OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT)
                 .build()?,
-            SpanKind::Server,
             Cow::Owned(Resource::builder().with_service_name("sail_server").build()),
             InstrumentationScope::builder("sail")
                 .with_version(env!("CARGO_PKG_VERSION"))
