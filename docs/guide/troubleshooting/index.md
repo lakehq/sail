@@ -35,3 +35,6 @@ pip install "pyspark[connect]==4.0.0" \
   "grpcio==1.71.2" \
   "grpcio-status==1.71.2"
 ```
+
+The `pyspark[connect]` package can also be replaced with
+its equivalent package `pyspark-connect`, or the lightweight client package `pyspark-client`, depending on your use case.
