@@ -21,3 +21,19 @@ To work around this issue, you can run the following command on the host:
 ```bash
 sudo timedatectl set-timezone UTC
 ```
+
+## Protobuf Version Mismatch
+
+When you run PySpark 4.0 in Spark Connect mode, you may see a lot of warnings like this:
+
+> `UserWarning: Protobuf gencode version 5.28.3 is exactly one major version older than the runtime version 6.31.1 at spark/connect/base.proto. Please update the gencode to avoid compatibility violations in the next runtime release.`
+
+This is possibly related to upstream issues such as [this](https://github.com/protocolbuffers/protobuf/issues/18096) and [this](https://github.com/grpc/grpc/issues/37609).
+You can either ignore these warnings, or install specific versions of Protobuf and gRPC libraries along with PySpark:
+
+```bash
+pip install "pyspark[connect]==4.0.0" \
+  "protobuf==5.28.3" \
+  "grpcio==1.71.2" \
+  "grpcio-status==1.71.2"
+```
