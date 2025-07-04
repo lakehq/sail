@@ -3355,6 +3355,9 @@ impl PlanResolver<'_> {
         use deltalake::DeltaOps;
         use sail_delta_lake::delta_datafusion::DeltaTableProvider;
 
+        dbg!(&table);
+        dbg!(&location);
+
         let table_reference = self.resolve_table_reference(&table)?;
 
         // Parse the location URL to get ObjectStore from sail's registry

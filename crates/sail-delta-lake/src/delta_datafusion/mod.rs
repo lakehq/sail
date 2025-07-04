@@ -95,6 +95,22 @@ use object_store::{ObjectMeta, ObjectStore};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+/// Generate a unique enough url to identify the store in datafusion.
+/// The DF object store registry only cares about the scheme and the host of the url for
+/// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
+/// host we convert the location from this `LogStore` to a valid name, combining the
+/// original scheme, host and path with invalid characters replaced.
+fn create_object_store_url(location: &Url) -> ObjectStoreUrl {
+    use object_store::path::DELIMITER;
+    ObjectStoreUrl::parse(format!(
+        "delta-rs://{}-{}{}",
+        location.scheme(),
+        location.host_str().unwrap_or("-"),
+        location.path().replace(DELIMITER, "-").replace(':', "-")
+    ))
+    .expect("Invalid object store url.")
+}
+
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
@@ -920,9 +936,12 @@ impl<'a> DeltaScanBuilder<'a> {
             .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))
             .map_err(datafusion_to_delta_error)?;
 
+        // Create object store URL using delta-rs object_store_url logic
+        // This generates a unique URL with only scheme and authority for DataFusion
+        let object_store_url = create_object_store_url(&self.log_store.config().location);
+
         let file_scan_config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::parse(&format!("{}://", self.log_store.config().location.scheme()))
-                .expect("Valid URL"),
+            object_store_url,
             file_schema,
             file_source,
         )
@@ -942,6 +961,8 @@ impl<'a> DeltaScanBuilder<'a> {
         .with_limit(self.limit)
         .with_table_partition_cols(table_partition_cols)
         .build();
+
+        dbg!(&file_scan_config);
 
         let metrics = ExecutionPlanMetricsSet::new();
         MetricBuilder::new(&metrics)
