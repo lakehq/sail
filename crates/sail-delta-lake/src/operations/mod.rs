@@ -1,11 +1,51 @@
 use datafusion::arrow::array::RecordBatch;
 pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
 
-// use self::optimize::OptimizeBuilder;
+use deltalake::{DeltaTable, DeltaResult};
 
+pub use self::load::LoadBuilder;
+
+/// High level interface for executing commands against a DeltaTable using sail's DataFusion
+///
+/// This is similar to delta-rs DeltaOps but uses sail's DataFusion version
+pub struct SailDeltaOps(pub DeltaTable);
+
+impl SailDeltaOps {
+    /// Create a new SailDeltaOps from a DeltaTable
+    pub fn new(table: DeltaTable) -> Self {
+        Self(table)
+    }
+
+    /// Load data from the Delta table
+    pub fn load(self) -> DeltaResult<LoadBuilder> {
+        let snapshot = self.0.snapshot()?;
+        Ok(LoadBuilder::new(self.0.log_store(), snapshot.clone()))
+    }
+}
+
+impl From<DeltaTable> for SailDeltaOps {
+    fn from(table: DeltaTable) -> Self {
+        Self(table)
+    }
+}
+
+impl From<SailDeltaOps> for DeltaTable {
+    fn from(ops: SailDeltaOps) -> Self {
+        ops.0
+    }
+}
+
+impl AsRef<DeltaTable> for SailDeltaOps {
+    fn as_ref(&self) -> &DeltaTable {
+        &self.0
+    }
+}
+
+// Future operations to be implemented:
+// use self::optimize::OptimizeBuilder;
 // use self::{
 //     constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
-//     drop_constraints::DropConstraintBuilder, load::LoadBuilder, load_cdf::CdfLoadBuilder,
+//     drop_constraints::DropConstraintBuilder, load_cdf::CdfLoadBuilder,
 //     merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
 // };
 
@@ -14,7 +54,7 @@ pub mod cast;
 mod cdc;
 pub mod constraints;
 pub mod delete;
-mod load;
+pub mod load;
 pub mod load_cdf;
 pub mod merge;
 pub mod optimize;
