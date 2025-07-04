@@ -1,6 +1,6 @@
 use std::env;
 
-use opentelemetry::trace::TraceError;
+use opentelemetry_otlp::ExporterBuildError;
 use sail_common::error::CommonError;
 use thiserror::Error;
 use tonic::codegen::http::header;
@@ -34,8 +34,8 @@ pub enum TelemetryError {
     TonicInvalidMetadataKey(#[from] InvalidMetadataKey),
     #[error("tonic metadata error: {0}")]
     TonicMetadataToStrError(#[from] ToStrError),
-    #[error("trace error: {0}")]
-    TraceError(#[from] TraceError),
+    #[error("exporter build error: {0}")]
+    ExporterBuildError(#[from] ExporterBuildError),
 }
 
 impl TelemetryError {

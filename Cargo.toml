@@ -64,11 +64,11 @@ num_enum = "0.7.4"
 num-traits = "0.2.19"
 log = "0.4.27"
 env_logger = "0.11.8"
-fastrace = { version = "0.7.12", features = ["enable"] }
-fastrace-opentelemetry = "0.9.0"
-opentelemetry = "0.28.0"
-opentelemetry_sdk = "0.28.0"
-opentelemetry-otlp = { version = "0.28.0", features = ["tls", "tls-roots", "grpc-tonic"] }
+fastrace = { version = "0.7.14", features = ["enable"] }
+fastrace-opentelemetry = "0.12.0"
+opentelemetry = "0.30.0"
+opentelemetry_sdk = "0.30.0"
+opentelemetry-otlp = { version = "0.30.0", features = ["tls", "tls-roots", "grpc-tonic"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "1.0.0"
 k8s-openapi = { version = "0.25.0", features = ["latest"] }
@@ -85,7 +85,7 @@ iana-time-zone = "0.1.63"
 chumsky = { version = "0.10.1", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
-reqwest = "0.12.15"
+reqwest = "0.12.22"
 percent-encoding = "2.3.1"
 rustls = "0.23.28"
 dashmap = "6.1.0"
