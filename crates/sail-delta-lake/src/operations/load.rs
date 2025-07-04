@@ -9,15 +9,14 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
-use futures::future::BoxFuture;
-
 use deltalake::errors::{DeltaResult, DeltaTableError};
 use deltalake::kernel::transaction::PROTOCOL;
 use deltalake::logstore::LogStoreRef;
 use deltalake::table::state::DeltaTableState;
 use deltalake::{DeltaTable, DeltaTableConfig};
+use futures::future::BoxFuture;
 
-use crate::delta_datafusion::{DataFusionMixins, DeltaTableProvider, DeltaScanConfig};
+use crate::delta_datafusion::{DataFusionMixins, DeltaScanConfig, DeltaTableProvider};
 
 /// Builder for loading data from a Delta table
 #[derive(Debug, Clone)]
@@ -106,11 +105,8 @@ impl std::future::IntoFuture for LoadBuilder {
             });
 
             // Create DeltaTableProvider for scanning
-            let table_provider = DeltaTableProvider::try_new(
-                this.snapshot,
-                this.log_store,
-                scan_config
-            )?;
+            let table_provider =
+                DeltaTableProvider::try_new(this.snapshot, this.log_store, scan_config)?;
 
             // Create session context for scanning
             let ctx = SessionContext::new();
@@ -126,45 +122,11 @@ impl std::future::IntoFuture for LoadBuilder {
 
             // Execute the plan
             let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
-            let stream = plan.execute(0, task_ctx)
+            let stream = plan
+                .execute(0, task_ctx)
                 .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
 
             Ok((table, stream))
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::operations::collect_sendable_stream;
-    use datafusion::assert_batches_sorted_eq;
-    use std::collections::HashMap;
-
-    // Note: These tests would need actual test data to run
-    // For now, they serve as documentation of the expected API
-
-    #[tokio::test]
-    #[ignore] // Ignore until we have test data setup
-    async fn test_load_basic() -> DeltaResult<()> {
-        // This test would load a basic delta table and verify the results
-        // let table = open_table_with_object_store_simple("path/to/test/table").await?;
-        // let (_table, stream) = LoadBuilder::new(table.log_store(), table.snapshot()?.clone()).await?;
-        // let data = collect_sendable_stream(stream).await?;
-        // ... assertions
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore] // Ignore until we have test data setup
-    async fn test_load_with_columns() -> DeltaResult<()> {
-        // This test would load specific columns and verify the projection
-        // let table = open_table_with_object_store_simple("path/to/test/table").await?;
-        // let (_table, stream) = LoadBuilder::new(table.log_store(), table.snapshot()?.clone())
-        //     .with_columns(["id", "name"])
-        //     .await?;
-        // let data = collect_sendable_stream(stream).await?;
-        // ... assertions
-        Ok(())
     }
 }

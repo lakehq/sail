@@ -1,7 +1,6 @@
 use datafusion::arrow::array::RecordBatch;
 pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
-
-use deltalake::{DeltaTable, DeltaResult};
+use deltalake::{DeltaResult, DeltaTable};
 
 pub use self::load::LoadBuilder;
 
@@ -20,6 +19,12 @@ impl SailDeltaOps {
     pub fn load(self) -> DeltaResult<LoadBuilder> {
         let snapshot = self.0.snapshot()?;
         Ok(LoadBuilder::new(self.0.log_store(), snapshot.clone()))
+    }
+}
+
+impl From<deltalake::operations::DeltaOps> for SailDeltaOps {
+    fn from(ops: deltalake::operations::DeltaOps) -> Self {
+        Self(ops.0)
     }
 }
 
