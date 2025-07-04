@@ -93,7 +93,7 @@ impl<'a> Provider for ConfigDefinition<'a> {
 
     fn data(&self) -> Result<Map<Profile, Dict>, Error> {
         let items: Vec<ConfigItem> =
-            serde_yml::from_str(self.raw).map_err(|e| Error::from(e.to_string()))?;
+            serde_yaml::from_str(self.raw).map_err(|e| Error::from(e.to_string()))?;
         let mut dict = Dict::new();
         for item in items {
             let value: Value = item.default.parse().unwrap();

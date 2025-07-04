@@ -30,7 +30,8 @@ async-stream = "0.3.6"
 lazy_static = "1.5.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
-serde_yml = "0.0.12"
+# TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
+serde_yaml = "0.9.34+deprecated"
 monostate = "0.1.14"
 regex = "1.11.1"
 glob = "0.3.2"

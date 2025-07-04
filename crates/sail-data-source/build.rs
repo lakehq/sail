@@ -33,7 +33,7 @@ fn build_options(name: &str, kind: &str) -> Result<(), Box<dyn std::error::Error
     println!("cargo:rerun-if-changed={path}");
 
     let content = std::fs::read_to_string(path)?;
-    let options: Vec<OptionEntry> = serde_yml::from_str(&content)?;
+    let options: Vec<OptionEntry> = serde_yaml::from_str(&content)?;
     let key_pattern = regex::Regex::new(r"^[a-z][a-z0-9_]+$")?;
 
     let ident = format_ident!("{name}");
