@@ -38,12 +38,11 @@ impl<'a> TableProviderFactory<'a> {
         if paths.is_empty() {
             return plan_err!("empty data source paths");
         }
-        let options: HashMap<String, String> = options.into_iter().collect();
         let urls = self.resolve_listing_urls(paths).await?;
-        let options: HashMap<String, String> = options.into_iter().collect();
         // TODO: infer compression type from file extension
         // TODO: support global configuration to ignore file extension (by setting it to empty)
         let resolver = DataSourceOptionsResolver::new(self.ctx);
+        let options: HashMap<String, String> = options.into_iter().collect();
         let options = match format.to_lowercase().as_str() {
             "json" => {
                 let options = resolver.resolve_json_read_options(options)?;
@@ -72,7 +71,11 @@ impl<'a> TableProviderFactory<'a> {
             other => return plan_err!("unsupported data source format: {other}"),
         };
         let options = options.with_session_config_options(&self.ctx.copied_config());
-        let schema = self.resolve_listing_schema(&urls, &options, schema).await?;
+        let schema = match schema {
+            // ignore empty schema
+            Some(x) if !x.fields.is_empty() => x,
+            _ => self.resolve_listing_schema(&urls, &options).await?,
+        };
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(options)
             .with_schema(Arc::new(schema))
@@ -134,13 +137,7 @@ impl<'a> TableProviderFactory<'a> {
         &self,
         urls: &[ListingTableUrl],
         options: &ListingOptions,
-        schema: Option<Schema>,
     ) -> Result<Schema> {
-        let schema = match schema {
-            // ignore empty schema
-            Some(Schema { fields, .. }) if fields.is_empty() => None,
-            x => x,
-        };
         // The logic is similar to `ListingOptions::infer_schema()`
         // but here we also check for the existence of files.
         let session_state = self.ctx.state();
@@ -169,27 +166,23 @@ impl<'a> TableProviderFactory<'a> {
                 .join(", ");
             return plan_err!("No files found in the specified paths: {urls}")?;
         }
-        let schema = match schema {
-            Some(schema) => schema,
-            None => {
-                let mut schemas = vec![];
-                for (store, files) in file_groups.iter() {
-                    let mut schema = options
-                        .format
-                        .infer_schema(&session_state, store, files)
-                        .await?
-                        .as_ref()
-                        .clone();
-                    let ext = options.format.get_ext().to_lowercase();
-                    let ext = ext.trim();
-                    if matches!(ext, ".csv") || matches!(ext, "csv") {
-                        schema = rename_default_csv_columns(schema);
-                    }
-                    schemas.push(schema);
-                }
-                Schema::try_merge(schemas)?
+
+        let mut schemas = vec![];
+        for (store, files) in file_groups.iter() {
+            let mut schema = options
+                .format
+                .infer_schema(&session_state, store, files)
+                .await?
+                .as_ref()
+                .clone();
+            let ext = options.format.get_ext().to_lowercase();
+            let ext = ext.trim();
+            if matches!(ext, ".csv") || matches!(ext, "csv") {
+                schema = rename_default_csv_columns(schema);
             }
-        };
+            schemas.push(schema);
+        }
+        let schema = Schema::try_merge(schemas)?;
 
         // FIXME: DataFusion 43.0.0 suddenly doesn't support Utf8View
         let new_fields: Vec<Field> = schema
