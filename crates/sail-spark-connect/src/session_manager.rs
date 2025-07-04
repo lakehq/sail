@@ -98,7 +98,9 @@ impl SessionManager {
         let mut session_config = SessionConfig::new()
             .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
-            .with_information_schema(true)
+            // We do not use the information schema since we use the catalog/schema/table providers
+            // directly for catalog operations.
+            .with_information_schema(false)
             .with_extension(Arc::new(TemporaryViewManager::default()))
             .with_extension(Arc::new(SparkExtension::try_new(
                 key.user_id,

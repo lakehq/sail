@@ -15,13 +15,20 @@ use tower::ServiceBuilder;
 pub struct ServerBuilderOptions {
     pub nodelay: bool,
     pub keepalive: Option<std::time::Duration>,
+    pub http2_keepalive_interval: Option<std::time::Duration>,
+    pub http2_keepalive_timeout: Option<std::time::Duration>,
+    pub http2_adaptive_window: Option<bool>,
 }
 
 impl Default for ServerBuilderOptions {
     fn default() -> Self {
         Self {
+            // Disables Nagle's algorithm
             nodelay: true,
-            keepalive: None,
+            keepalive: Some(std::time::Duration::from_secs(60)),
+            http2_keepalive_interval: Some(std::time::Duration::from_secs(60)),
+            http2_keepalive_timeout: Some(std::time::Duration::from_secs(10)),
+            http2_adaptive_window: Some(true),
         }
     }
 }
@@ -56,6 +63,9 @@ impl<'b> ServerBuilder<'b> {
         let router = tonic::transport::Server::builder()
             .tcp_nodelay(options.nodelay)
             .tcp_keepalive(options.keepalive)
+            .http2_keepalive_interval(options.http2_keepalive_interval)
+            .http2_keepalive_timeout(options.http2_keepalive_timeout)
+            .http2_adaptive_window(options.http2_adaptive_window)
             .layer(layer)
             .add_service(health_server);
 

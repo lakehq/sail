@@ -16,7 +16,6 @@ use crate::resolver::PlanResolver;
 
 mod catalog;
 pub mod config;
-pub mod data_source;
 pub mod error;
 pub mod extension;
 pub mod formatter;
