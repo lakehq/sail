@@ -940,6 +940,12 @@ impl<'a> DeltaScanBuilder<'a> {
         // This generates a unique URL with only scheme and authority for DataFusion
         let object_store_url = create_object_store_url(&self.log_store.config().location);
 
+        // Register the object store with DataFusion's RuntimeEnv so it can resolve the custom URL
+        self.session.runtime_env().register_object_store(
+            object_store_url.as_ref(),
+            self.log_store.object_store(None),
+        );
+
         let file_scan_config = FileScanConfigBuilder::new(
             object_store_url,
             file_schema,
