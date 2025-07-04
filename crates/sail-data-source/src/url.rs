@@ -5,13 +5,11 @@ use chumsky::prelude::{any, choice, end, just, none_of, recursive};
 use chumsky::text::whitespace;
 use chumsky::{IterParser, Parser};
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion_common::DataFusionError;
+use datafusion::prelude::SessionContext;
+use datafusion_common::{not_impl_err, plan_datafusion_err, plan_err, DataFusionError, Result};
 use glob::Pattern;
 use percent_encoding::percent_decode;
 use url::Url;
-
-use crate::error::{PlanError, PlanResult};
-use crate::resolver::PlanResolver;
 
 /// A parsed pattern segment in a glob pattern.
 #[derive(Debug, PartialEq)]
@@ -332,18 +330,16 @@ impl GlobUrl {
         Self { base, glob }
     }
 
-    pub fn parse(s: &str) -> PlanResult<Vec<GlobUrl>> {
+    pub fn parse(s: &str) -> Result<Vec<GlobUrl>> {
         if std::path::Path::new(s).is_absolute() {
             return GlobUrl::parse_file_path(s);
         }
         let url = RawGlobUrl::parser()
             .parse(s)
             .into_result()
-            .map_err(|_| PlanError::invalid(format!("URL: {s}")))?;
+            .map_err(|_| plan_datafusion_err!("URL: {s}"))?;
         match url {
-            RawGlobUrl::NonHierarchical { .. } => Err(PlanError::unsupported(format!(
-                "URL without authority: {s}"
-            ))),
+            RawGlobUrl::NonHierarchical { .. } => not_impl_err!("URL without authority: {s}"),
             RawGlobUrl::Hierarchical {
                 scheme,
                 authority,
@@ -364,7 +360,7 @@ impl GlobUrl {
                     base.push_str(fragment);
                 }
                 let Ok(url) = Url::parse(&base) else {
-                    return Err(PlanError::invalid(format!("base URL: {s}")));
+                    return plan_err!("base URL: {s}");
                 };
                 Self::parse_glob_path(path)?
                     .into_iter()
@@ -379,7 +375,7 @@ impl GlobUrl {
         }
     }
 
-    fn parse_file_path(path: &str) -> PlanResult<Vec<Self>> {
+    fn parse_file_path(path: &str) -> Result<Vec<Self>> {
         Self::parse_glob_path(path)?
             .into_iter()
             .map(|(prefix, suffix)| {
@@ -389,11 +385,11 @@ impl GlobUrl {
             .collect()
     }
 
-    fn parse_glob_path(path: &str) -> PlanResult<Vec<(String, Option<Pattern>)>> {
+    fn parse_glob_path(path: &str) -> Result<Vec<(String, Option<Pattern>)>> {
         let patterns = PatternSegment::sequence_parser()
             .parse(path)
             .into_result()
-            .map_err(|_| PlanError::invalid(format!("glob path: {path}")))?;
+            .map_err(|_| plan_datafusion_err!("glob path: {path}"))?;
         let paths = PatternSegment::expand_sequence(patterns)
             .into_iter()
             .map(|x| {
@@ -401,25 +397,25 @@ impl GlobUrl {
                 let suffix = Self::create_percent_decoded_pattern(&suffix)?;
                 Ok((prefix, suffix))
             })
-            .collect::<PlanResult<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
         Ok(paths)
     }
 
-    fn create_percent_decoded_pattern(s: &str) -> PlanResult<Option<Pattern>> {
+    fn create_percent_decoded_pattern(s: &str) -> Result<Option<Pattern>> {
         if s.is_empty() {
             return Ok(None);
         }
         let decoded = percent_decode(s.as_bytes())
             .decode_utf8()
-            .map_err(|e| PlanError::invalid(format!("{e}: {s}")))?;
+            .map_err(|e| plan_datafusion_err!("{e}: {s}"))?;
         let pattern =
-            Pattern::new(decoded.as_ref()).map_err(|e| PlanError::invalid(format!("{e}: {s}")))?;
+            Pattern::new(decoded.as_ref()).map_err(|e| plan_datafusion_err!("{e}: {s}"))?;
         Ok(Some(pattern))
     }
 
     /// Create a URL from a file path.
     /// The logic is similar to [`ListingTableUrl::parse_path`].
-    fn url_from_file_path(s: &str) -> PlanResult<Url> {
+    fn url_from_file_path(s: &str) -> Result<Url> {
         let path = std::path::Path::new(s);
         let is_dir = path.is_dir() || s.chars().last().is_some_and(std::path::is_separator);
 
@@ -427,27 +423,27 @@ impl GlobUrl {
             PathBuf::from(path)
         } else {
             std::env::current_dir()
-                .map_err(|e| PlanError::AnalysisError(e.to_string()))?
+                .map_err(|e| plan_datafusion_err!("{}", e.to_string()))?
                 .join(path)
         };
 
         let url = if is_dir {
             Url::from_directory_path(path)
-                .map_err(|()| PlanError::AnalysisError(format!("invalid directory path: {s}")))?
+                .map_err(|()| plan_datafusion_err!("invalid directory path: {s}"))?
         } else {
             Url::from_file_path(path)
-                .map_err(|()| PlanError::AnalysisError(format!("invalid file path: {s}")))?
+                .map_err(|()| plan_datafusion_err!("invalid file path: {s}"))?
         };
         // parse the URL again to resolve relative path segments
         Url::parse(url.as_str())
-            .map_err(|_| PlanError::AnalysisError(format!("cannot create URL from file path: {s}")))
+            .map_err(|_| plan_datafusion_err!("cannot create URL from file path: {s}"))
     }
 
     /// Split a glob path into the base path and the remaining pattern segments.
     /// The glob path should be expanded already, so no alternation should be present.
     /// The base path is the longest path that does not contain any glob patterns.
     /// For example, `"a/b/c*"` would be split into `"a/b/"` and `"c*"`.
-    fn split_glob_path(s: &str) -> PlanResult<(String, String)> {
+    fn split_glob_path(s: &str) -> Result<(String, String)> {
         let mut prefix = String::new();
         let mut suffix = String::new();
         let mut chars = s.chars();
@@ -470,7 +466,7 @@ impl GlobUrl {
         }
         prefix.push_str(&part);
         if prefix.is_empty() {
-            return Err(PlanError::invalid(format!("empty path in URL: {s}")));
+            return plan_err!("empty path in URL: {s}");
         }
         Ok((prefix, suffix))
     }
@@ -483,33 +479,31 @@ impl AsRef<Url> for GlobUrl {
 }
 
 impl TryFrom<GlobUrl> for ListingTableUrl {
-    type Error = PlanError;
+    type Error = DataFusionError;
 
-    fn try_from(value: GlobUrl) -> PlanResult<Self> {
+    fn try_from(value: GlobUrl) -> Result<Self> {
         let GlobUrl { base, glob } = value;
-        Ok(Self::try_new(base, glob)?)
+        Self::try_new(base, glob)
     }
 }
 
-impl PlanResolver<'_> {
-    pub(super) async fn rewrite_directory_url(&self, url: GlobUrl) -> PlanResult<GlobUrl> {
-        if url.glob.is_some() || url.base.path().ends_with(object_store::path::DELIMITER) {
-            return Ok(url);
+pub async fn rewrite_directory_url(url: GlobUrl, session: &SessionContext) -> Result<GlobUrl> {
+    if url.glob.is_some() || url.base.path().ends_with(object_store::path::DELIMITER) {
+        return Ok(url);
+    }
+    let store = session.runtime_env().object_store(&url)?;
+    let path =
+        object_store::path::Path::from_url_path(url.base.path()).map_err(DataFusionError::from)?;
+    match store.head(&path).await {
+        Ok(_) => Ok(url),
+        Err(object_store::Error::NotFound { .. }) => {
+            let mut url = url;
+            // The object at the path does not exist, so we treat it as a directory.
+            let path = format!("{}{}", url.base.path(), object_store::path::DELIMITER);
+            url.base.set_path(&path);
+            Ok(url)
         }
-        let store = self.ctx.runtime_env().object_store(&url)?;
-        let path = object_store::path::Path::from_url_path(url.base.path())
-            .map_err(DataFusionError::from)?;
-        match store.head(&path).await {
-            Ok(_) => Ok(url),
-            Err(object_store::Error::NotFound { .. }) => {
-                let mut url = url;
-                // The object at the path does not exist, so we treat it as a directory.
-                let path = format!("{}{}", url.base.path(), object_store::path::DELIMITER);
-                url.base.set_path(&path);
-                Ok(url)
-            }
-            Err(e) => Err(DataFusionError::External(Box::new(e)))?,
-        }
+        Err(e) => Err(DataFusionError::External(Box::new(e)))?,
     }
 }
 

@@ -2,26 +2,24 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::prelude::SessionContext;
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
-use sail_data_source::options::{
+use datafusion_common::{plan_err, Result};
+
+use crate::options::{
     load_default_options, load_options, CsvReadOptions, CsvWriteOptions, JsonReadOptions,
     JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
 };
 
-use crate::error::{PlanError, PlanResult};
-use crate::resolver::PlanResolver;
-
-fn char_to_u8(c: char, option: &str) -> PlanResult<u8> {
+fn char_to_u8(c: char, option: &str) -> Result<u8> {
     if c.is_ascii() {
         Ok(c as u8)
     } else {
-        Err(PlanError::invalid(format!(
-            "invalid {option} character '{c}': must be an ASCII character"
-        )))
+        plan_err!("invalid {option} character '{c}': must be an ASCII character")
     }
 }
 
-fn apply_json_read_options(from: JsonReadOptions, to: &mut JsonOptions) -> PlanResult<()> {
+fn apply_json_read_options(from: JsonReadOptions, to: &mut JsonOptions) -> Result<()> {
     let JsonReadOptions {
         schema_infer_max_records,
         compression,
@@ -35,7 +33,7 @@ fn apply_json_read_options(from: JsonReadOptions, to: &mut JsonOptions) -> PlanR
     Ok(())
 }
 
-fn apply_json_write_options(from: JsonWriteOptions, to: &mut JsonOptions) -> PlanResult<()> {
+fn apply_json_write_options(from: JsonWriteOptions, to: &mut JsonOptions) -> Result<()> {
     let JsonWriteOptions { compression } = from;
     if let Some(compression) = compression {
         to.compression = FileCompressionType::from_str(&compression)?.into();
@@ -43,7 +41,7 @@ fn apply_json_write_options(from: JsonWriteOptions, to: &mut JsonOptions) -> Pla
     Ok(())
 }
 
-fn apply_csv_read_options(from: CsvReadOptions, to: &mut CsvOptions) -> PlanResult<()> {
+fn apply_csv_read_options(from: CsvReadOptions, to: &mut CsvOptions) -> Result<()> {
     let CsvReadOptions {
         delimiter,
         quote,
@@ -61,9 +59,7 @@ fn apply_csv_read_options(from: CsvReadOptions, to: &mut CsvOptions) -> PlanResu
         (Some(null_value), Some(null_regex))
             if !null_value.is_empty() && !null_regex.is_empty() =>
         {
-            return Err(PlanError::invalid(
-                "CSV `null_value` and `null_regex` cannot be both set",
-            ));
+            return plan_err!("CSV `null_value` and `null_regex` cannot be both set");
         }
         (Some(null_value), _) if !null_value.is_empty() => {
             // Convert null value to regex by escaping special characters
@@ -108,7 +104,7 @@ fn apply_csv_read_options(from: CsvReadOptions, to: &mut CsvOptions) -> PlanResu
     Ok(())
 }
 
-fn apply_csv_write_options(from: CsvWriteOptions, to: &mut CsvOptions) -> PlanResult<()> {
+fn apply_csv_write_options(from: CsvWriteOptions, to: &mut CsvOptions) -> Result<()> {
     let CsvWriteOptions {
         delimiter,
         quote,
@@ -147,7 +143,7 @@ fn apply_csv_write_options(from: CsvWriteOptions, to: &mut CsvOptions) -> PlanRe
 fn apply_parquet_read_options(
     from: ParquetReadOptions,
     to: &mut TableParquetOptions,
-) -> PlanResult<()> {
+) -> Result<()> {
     let ParquetReadOptions {
         enable_page_index,
         pruning,
@@ -196,7 +192,7 @@ fn apply_parquet_read_options(
 fn apply_parquet_write_options(
     from: ParquetWriteOptions,
     to: &mut TableParquetOptions,
-) -> PlanResult<()> {
+) -> Result<()> {
     let ParquetWriteOptions {
         data_page_size_limit,
         write_batch_size,
@@ -278,61 +274,66 @@ fn apply_parquet_write_options(
     Ok(())
 }
 
-impl PlanResolver<'_> {
-    pub(crate) fn resolve_json_read_options(
+pub struct DataSourceOptionsResolver<'a> {
+    ctx: &'a SessionContext,
+}
+
+impl<'a> DataSourceOptionsResolver<'a> {
+    pub fn new(ctx: &'a SessionContext) -> Self {
+        Self { ctx }
+    }
+
+    pub fn resolve_json_read_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<JsonOptions> {
+    ) -> Result<JsonOptions> {
         let mut json_options = self.ctx.copied_table_options().json;
         apply_json_read_options(load_default_options()?, &mut json_options)?;
         apply_json_read_options(load_options(options)?, &mut json_options)?;
         Ok(json_options)
     }
 
-    pub(crate) fn resolve_json_write_options(
+    pub fn resolve_json_write_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<JsonOptions> {
+    ) -> Result<JsonOptions> {
         let mut json_options = self.ctx.copied_table_options().json;
         apply_json_write_options(load_default_options()?, &mut json_options)?;
         apply_json_write_options(load_options(options)?, &mut json_options)?;
         Ok(json_options)
     }
 
-    pub(crate) fn resolve_csv_read_options(
-        &self,
-        options: HashMap<String, String>,
-    ) -> PlanResult<CsvOptions> {
+    pub fn resolve_csv_read_options(&self, options: HashMap<String, String>) -> Result<CsvOptions> {
         let mut csv_options = self.ctx.copied_table_options().csv;
         apply_csv_read_options(load_default_options()?, &mut csv_options)?;
         apply_csv_read_options(load_options(options)?, &mut csv_options)?;
         Ok(csv_options)
     }
 
-    pub(crate) fn resolve_csv_write_options(
+    pub fn resolve_csv_write_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<CsvOptions> {
+    ) -> Result<CsvOptions> {
         let mut csv_options = self.ctx.copied_table_options().csv;
         apply_csv_write_options(load_default_options()?, &mut csv_options)?;
         apply_csv_write_options(load_options(options)?, &mut csv_options)?;
         Ok(csv_options)
     }
 
-    pub(crate) fn resolve_parquet_read_options(
+    pub fn resolve_parquet_read_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<TableParquetOptions> {
+    ) -> Result<TableParquetOptions> {
         let mut parquet_options = self.ctx.copied_table_options().parquet;
         apply_parquet_read_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_read_options(load_options(options)?, &mut parquet_options)?;
         Ok(parquet_options)
     }
 
-    pub(crate) fn resolve_parquet_write_options(
+    pub fn resolve_parquet_write_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<TableParquetOptions> {
+    ) -> Result<TableParquetOptions> {
         let mut parquet_options = self.ctx.copied_table_options().parquet;
         apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_write_options(load_options(options)?, &mut parquet_options)?;
@@ -343,13 +344,11 @@ impl PlanResolver<'_> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
 
     use super::*;
-    use crate::config::PlanConfig;
 
     fn build_options(options: &[(&str, &str)]) -> HashMap<String, String> {
         options
@@ -359,9 +358,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_json_read_options() -> PlanResult<()> {
+    fn test_resolve_json_read_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[
             ("schema_infer_max_records", "100"),
@@ -375,9 +374,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_json_write_options() -> PlanResult<()> {
+    fn test_resolve_json_write_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[("compression", "bzip2")]);
         let options = resolver.resolve_json_write_options(options)?;
@@ -387,9 +386,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_csv_read_options() -> PlanResult<()> {
+    fn test_resolve_csv_read_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[
             ("delimiter", "!"),
@@ -453,9 +452,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_csv_write_options() -> PlanResult<()> {
+    fn test_resolve_csv_write_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[
             ("delimiter", "!"),
@@ -479,9 +478,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parquet_read_options() -> PlanResult<()> {
+    fn test_resolve_parquet_read_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[
             ("enable_page_index", "true"),
@@ -511,9 +510,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parquet_read_options_with_global_default() -> PlanResult<()> {
+    fn test_resolve_parquet_read_options_with_global_default() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let state = ctx.state_ref();
         state
@@ -531,9 +530,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parquet_write_options() -> PlanResult<()> {
+    fn test_resolve_parquet_write_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[
             ("data_page_size_limit", "1024"),
@@ -587,9 +586,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parquet_write_options_with_global_default() -> PlanResult<()> {
+    fn test_resolve_parquet_write_options_with_global_default() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let state = ctx.state_ref();
         state

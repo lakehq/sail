@@ -1,4 +1,5 @@
 mod loader;
+mod resolver;
 mod serde;
 
 pub use internal::{
@@ -6,6 +7,7 @@ pub use internal::{
     ParquetWriteOptions,
 };
 pub use loader::{load_default_options, load_options};
+pub use resolver::DataSourceOptionsResolver;
 
 mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/csv_read.rs"));
