@@ -10,6 +10,7 @@ sail-delta-lake = { path = "../sail-delta-lake" }
 sail-object-store = { path = "../sail-object-store" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
+sail-data-source = { path = "../sail-data-source" }
 deltalake = { workspace = true }
 
 datafusion = { workspace = true }
@@ -28,7 +29,6 @@ lazy_static = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_arrow = { workspace = true }
-serde_yaml = { workspace = true }
 futures = { workspace = true }
 comfy-table = { workspace = true }
 html-escape = { workspace = true }
@@ -51,6 +51,5 @@ base64 = { workspace = true }
 half = { workspace = true }
 crc32fast = { workspace = true }
 num = { workspace = true }
-num-traits = { workspace = true }
 chumsky = { workspace = true }
 percent-encoding = { workspace = true }

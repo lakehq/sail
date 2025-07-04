@@ -4,12 +4,14 @@
 
 # TODO: Delimiter can be one or more characters
 - key: delimiter
-  alias:
+  aliases:
     - sep
   default: ","
   description: |
     Sets a single character separator for each field and value.
   supported: true
+  rust_type: char
+  rust_deserialize_with: crate::options::serde::deserialize_char
 
 - key: quote
   default: "\""
@@ -17,27 +19,35 @@
     Sets a single character used for escaping quoted values where the delimiter can be part of the value.
     For reading, if you would like to turn off quotations, you need to set not null but an empty string.
   supported: true
+  rust_type: Option<char>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_char
 
 - key: escape
   default: "\\"
   description: |
     Sets a single character used for escaping quotes inside an already quoted value.
   supported: true
+  rust_type: Option<char>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_char
 
 - key: comment
   default: ""
   description: |
     Sets a single character used for skipping lines that begin with this character. By default, it is disabled.
   supported: true
+  rust_type: Option<char>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_char
 
 - key: header
   default: "false"
   description: |
     For reading, uses the first line as names of columns. CSV built-in functions ignore this option.
   supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
 
 - key: null_value
-  alias:
+  aliases:
     - nullValue
   default: ""
   description: |
@@ -46,7 +56,7 @@
   supported: true
 
 - key: null_regex
-  alias:
+  aliases:
     - nullRegex
   default: ""
   description: |
@@ -55,7 +65,7 @@
   supported: true
 
 - key: line_sep
-  alias:
+  aliases:
     - lineSep
     - terminator
   default: ""
@@ -64,27 +74,31 @@
     CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
     For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
   supported: true
+  rust_type: Option<char>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_char
 
 - key: infer_schema
-  alias:
+  aliases:
     - inferSchema
   default: "true"
   description: |
     Infers the input schema automatically from data. It requires one extra pass over the data.
     Ignored if the schema is specified explicitly. If False, the schema must be specified explicitly.
     CSV built-in functions ignore this option.
-  supported: true
+  supported: false
 
 - key: schema_infer_max_records
-  alias:
+  aliases:
     - schemaInferMaxRecords
   default: "1000"
   description: |
     The maximum number of rows to read from CSV files for schema inference if needed.
   supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
 
 - key: multi_line
-  alias:
+  aliases:
     - multiLine
   default: "false"
   description: |
@@ -93,17 +107,11 @@
     Parsing newlines in quoted values may be affected by execution behavior such as parallel file scanning.
     Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
   supported: true
-
-- key: file_extension
-  alias:
-    - fileExtension
-  default: ".csv"
-  description: |
-    Only files with this extension are selected for data input.
-  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
 
 - key: compression
-  alias:
+  aliases:
     - codec
   default: "UNCOMPRESSED"
   description: |
@@ -116,7 +124,7 @@
   supported: true
 
 - key: encoding
-  alias:
+  aliases:
     - charset
   default: "UTF-8"
   description: |
@@ -124,7 +132,7 @@
   supported: false
 
 - key: prefer_date
-  alias:
+  aliases:
     - preferDate
   default: "true"
   description: |
@@ -135,20 +143,20 @@
   supported: false
 
 - key: enforce_schema
-  alias:
+  aliases:
     - enforceSchema
   default: "true"
   description: |
     If it is set to true, the specified or inferred schema will be forcibly applied to datasource files, and headers in
     CSV files will be ignored. If the option is set to false, the schema will be validated against all headers in CSV
     files in the case when the header option is set to true. Field names in the schema and column names in CSV headers
-    are checked by their positions taking into account `sail.sql.case_sensitive`. Though the default value is true,
-    it is recommended to disable the enforceSchema option to avoid incorrect results.
-    CSV built-in functions ignore this option.
+    are checked by their positions taking into account the Sail configuration option `sql.case_sensitive` (to be
+    implemented). Though the default value is true, it is recommended to disable the `enforce_schema` option to avoid
+    incorrect results. CSV built-in functions ignore this option.
   supported: false
 
 - key: ignore_leading_white_space
-  alias:
+  aliases:
     - ignoreLeadingWhiteSpace
   default: "false"
   description: |
@@ -157,7 +165,7 @@
   supported: false
 
 - key: ignore_trailing_white_space
-  alias:
+  aliases:
     - ignoreTrailingWhiteSpace
   default: "false"
   description: |
@@ -166,7 +174,7 @@
   supported: false
 
 - key: nan_value
-  alias:
+  aliases:
     - nanValue
   default: "NaN"
   description: |
@@ -174,7 +182,7 @@
   supported: false
 
 - key: positive_inf
-  alias:
+  aliases:
     - positiveInf
   default: "Inf"
   description: |
@@ -182,7 +190,7 @@
   supported: false
 
 - key: negative_inf
-  alias:
+  aliases:
     - negativeInf
   default: "-Inf"
   description: |
@@ -190,7 +198,7 @@
   supported: false
 
 - key: date_format
-  alias:
+  aliases:
     - dateFormat
   default: "yyyy-MM-dd"
   description: |
@@ -198,7 +206,7 @@
   supported: false
 
 - key: timestamp_format
-  alias:
+  aliases:
     - timestampFormat
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
   description: |
@@ -206,7 +214,7 @@
   supported: false
 
 - key: timestamp_ntz_format
-  alias:
+  aliases:
     - timestampNTZFormat
   default: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
   description: |
@@ -215,7 +223,7 @@
   supported: false
 
 - key: enable_date_time_parsing_fallback
-  alias:
+  aliases:
     - enableDateTimeParsingFallback
   default: ""
   description: |
@@ -225,7 +233,7 @@
   supported: false
 
 - key: max_columns
-  alias:
+  aliases:
     - maxColumns
   default: "20480"
   description: |
@@ -233,7 +241,7 @@
   supported: false
 
 - key: max_chars_per_column
-  alias:
+  aliases:
     - maxCharsPerColumn
   default: "-1"
   description: |
@@ -252,17 +260,16 @@
   supported: false
 
 - key: column_name_of_corrupt_record
-  alias:
+  aliases:
     - columnNameOfCorruptRecord
   default: ""
   description: |
     Allows renaming the new field having malformed string created by `PERMISSIVE` mode.
-    This overrides `sail.sql.column_name_of_corrupt_record`.
-    Defaults to the value of `sail.sql.column_name_of_corrupt_record` configuration.
+    Defaults to the Sail configuration option `sql.column_name_of_corrupt_record` (to be implemented).
   supported: false
 
 - key: char_to_escape_quote_escaping
-  alias:
+  aliases:
     - charToEscapeQuoteEscaping
   default: ""
   description: |
@@ -271,7 +278,7 @@
   supported: false
 
 - key: sampling_ratio
-  alias:
+  aliases:
     - samplingRatio
   default: "1.0"
   description: |
@@ -279,7 +286,7 @@
   supported: false
 
 - key: empty_value
-  alias:
+  aliases:
     - emptyValue
   default: ""
   description: |
@@ -293,7 +300,7 @@
   supported: false
 
 - key: unescaped_quote_handling
-  alias:
+  aliases:
     - unescapedQuoteHandling
   default: "STOP_AT_DELIMITER"
   description: |
@@ -310,7 +317,7 @@
   supported: false
 
 - key: time_zone
-  alias:
+  aliases:
     - timeZone
   default: ""
   description: |
@@ -320,5 +327,5 @@
       - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
         Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
     Other short names like 'CST' are not recommended to use because they can be ambiguous.
-    Defaults to the value of the `sail.sql.session.time_zone` configuration.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
   supported: false

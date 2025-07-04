@@ -247,6 +247,23 @@ def test_write_parquet(spark, df, tmpdir):
     assert_frame_equal(df.toPandas(), out.toPandas(), check_dtype=False)
 
 
+def test_write_partitioned_parquet(spark, df, tmpdir):
+    path = str(tmpdir.join("df.parquet"))
+    sub_path_1 = str(tmpdir.join("df.parquet/partition=123"))
+    sub_path_2 = str(tmpdir.join("df.parquet/partition=456"))
+    df.write.parquet(sub_path_1)
+    df.write.parquet(sub_path_2)
+
+    out = spark.read.parquet(path).groupBy("partition").count().sort("partition")
+    expected = [Row(partition="123", count=2), Row(partition="456", count=2)]
+    assert expected == out.collect()
+
+    out = spark.read.parquet(path).filter(F.col("partition") == "456").sort("a")
+    expected = df.toPandas()
+    expected["partition"] = "456"
+    assert_frame_equal(expected, out.toPandas(), check_dtype=False)
+
+
 def test_write_csv(spark, simple_df, tmpdir):
     path = str(tmpdir.join("simple_df_0.csv"))
     simple_df.write.csv(path)
