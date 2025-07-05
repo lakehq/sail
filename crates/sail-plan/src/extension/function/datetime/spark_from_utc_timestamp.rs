@@ -1,15 +1,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::{Array, ArrayRef, Int64Array, PrimitiveArray};
+use arrow::datatypes::TimestampMicrosecondType;
+use chrono::{Local, TimeZone};
+use chrono_tz::Tz;
+use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Volatility,
 };
 use datafusion_expr_common::signature::{Signature, TypeSignature, TIMEZONE_WILDCARD};
-
-use crate::utils::ItemTaker;
 
 #[derive(Debug)]
 pub struct SparkFromUtcTimestamp {
@@ -154,15 +156,12 @@ impl ScalarUDFImpl for SparkFromUtcTimestamp {
                 args.arg_fields.len()
             );
         }
-        // FIXME: Second arg can be ColumnarValue::Array, but DataFusion doesn't support that.
-        match &args.scalar_arguments[1] {
-            Some(ScalarValue::Utf8(tz))
-            | Some(ScalarValue::Utf8View(tz))
-            | Some(ScalarValue::LargeUtf8(tz)) => Ok(Arc::new(Field::new(
+        match &args.arg_fields[1].data_type() {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(Arc::new(Field::new(
                 self.name(),
                 DataType::Timestamp(
                     *self.time_unit(),
-                    tz.as_ref().map(|tz| Arc::from(tz.to_string())),
+                    Some(Arc::from(Local::now().offset().to_string())),
                 ),
                 true,
             ))),
@@ -172,35 +171,102 @@ impl ScalarUDFImpl for SparkFromUtcTimestamp {
         }
     }
 
-    // TODO: Implement this method after the FIXME above is fixed so we can accept array input.
-    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        internal_err!("`invoke` should not be called on a simplified `from_utc_timestamp` function")
-    }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = &args.args;
+        let now = Local::now();
+        let local_offset = now.offset();
+        let local_offset_arc = Some(Arc::from(local_offset.to_string()));
 
-    fn simplify(&self, args: Vec<Expr>, _info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
-        if args.len() != 2 {
-            return exec_err!(
-                "Spark `from_utc_timestamp` function requires 2 arguments, got {}",
-                args.len()
-            );
-        }
-        let (timestamp, timezone) = args.two()?;
-        match timezone {
-            Expr::Literal(ScalarValue::Utf8(tz), _metadata)
-            | Expr::Literal(ScalarValue::Utf8View(tz), _metadata)
-            | Expr::Literal(ScalarValue::LargeUtf8(tz), _metadata) => {
-                let expr = Expr::Cast(datafusion_expr::Cast {
-                    expr: Box::new(timestamp),
-                    data_type: DataType::Timestamp(
-                        *self.time_unit(),
-                        tz.map(|tz| Arc::from(tz.to_string())),
-                    ),
-                });
-                Ok(ExprSimplifyResult::Simplified(expr))
+        let from_utc_timestamp_func = |inputs: (Option<i64>, Option<&str>)| match inputs {
+            (Some(ts_nanos), Some(tz_str)) => {
+                let to_zone: Tz = tz_str.parse().unwrap();
+                let to_dt = to_zone.timestamp_nanos(ts_nanos);
+                let result_ts = to_dt
+                    .naive_local()
+                    .and_local_timezone(*local_offset)
+                    .unwrap()
+                    .to_utc();
+                Some(result_ts.timestamp_micros())
             }
-            other => exec_err!(
-                "Second argument for `from_utc_timestamp` must be string, received {other:?}"
-            ),
+            _ => None,
+        };
+
+        let results = match &args[1] {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(tz_str)))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(tz_str)))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(tz_str))) => {
+                let array = args[0].clone().into_array(1)?;
+                let (timestamps, _time_unit, _tz_orig) = _timestamp_to_nanoseconds(array.as_ref());
+                Ok(timestamps
+                    .unwrap()
+                    .iter()
+                    .map(|ts| from_utc_timestamp_func((ts, Some(tz_str.as_str()))))
+                    .collect::<Vec<_>>())
+            }
+            ColumnarValue::Array(_) => {
+                let arrays = ColumnarValue::values_to_arrays(args)?;
+                let (timestamps, _time_unit, _tz_orig) = _timestamp_to_nanoseconds(&arrays[0]);
+                let timezones = match arrays[1].as_string_opt::<i32>() {
+                    Some(res) => Ok(res),
+                    None => exec_err!("Second argument for `from_utc_timestamp` must be string literal or array, received {:?}", arrays[1])
+                };
+                Ok(timestamps
+                    .unwrap()
+                    .iter()
+                    .zip(timezones.unwrap().iter())
+                    .map(from_utc_timestamp_func)
+                    .collect::<Vec<_>>())
+            }
+            default => {
+                exec_err!(
+                    "Second argument for `from_utc_timestamp` must be string literal or array, received {:?}", default
+                )
+            }
+        };
+
+        match args[0] {
+            ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(
+                PrimitiveArray::<TimestampMicrosecondType>::from(results.unwrap())
+                    .with_data_type(DataType::Timestamp(TimeUnit::Microsecond, local_offset_arc)),
+            ) as ArrayRef)),
+            ColumnarValue::Scalar(_) => match results.unwrap().first().unwrap() {
+                Some(value) => Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                    Some(*value),
+                    local_offset_arc,
+                ))),
+                None => Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                    None,
+                    local_offset_arc,
+                ))),
+            },
         }
+    }
+}
+
+fn _timestamp_to_nanoseconds(
+    array: &dyn Array,
+) -> (Option<Int64Array>, Option<TimeUnit>, Option<Arc<str>>) {
+    match array.data_type() {
+        DataType::Timestamp(time_unit, tz) => {
+            let multiplier = match time_unit {
+                TimeUnit::Second => 1_000_000_000,
+                TimeUnit::Millisecond => 1_000_000,
+                TimeUnit::Microsecond => 1_000,
+                TimeUnit::Nanosecond => 1,
+            };
+            let casted = arrow::compute::kernels::cast::cast(array, &DataType::Int64).unwrap();
+            let values = casted
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .iter()
+                .map(|nanos_opt| nanos_opt.map(|nanos| nanos * multiplier));
+            (
+                Some(PrimitiveArray::from_iter(values)),
+                Some(*time_unit),
+                tz.clone(),
+            )
+        }
+        _ => (None, None, None),
     }
 }
