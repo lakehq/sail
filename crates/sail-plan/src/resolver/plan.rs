@@ -37,7 +37,7 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    build_join_schema, col, expr, ident, lit, or, when, Aggregate, AggregateUDF, BinaryExpr,
+    and, build_join_schema, col, expr, ident, lit, or, when, Aggregate, AggregateUDF, BinaryExpr,
     ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
     WindowFrame, WindowFunctionDefinition,
 };
@@ -3876,6 +3876,7 @@ impl PlanResolver<'_> {
             .aggregate(Vec::<Expr>::new(), vec![corr])?
             .build()?)
     }
+
     async fn resolve_query_sample_by(
         &self,
         input: spec::QueryPlan,
@@ -3943,25 +3944,19 @@ impl PlanResolver<'_> {
         let mut acc_exprs: Vec<Expr> = vec![];
         for frac in &fractions {
             let key_val = self.resolve_literal(frac.stratum.clone(), state)?;
-            let f = conjunction(vec![
+            let f = and(
                 Expr::Column(column_expr.clone()).eq(lit(key_val)),
                 col(&rand_column_name).lt_eq(lit(frac.fraction)),
-            ])
-            .expect("non-empty conjunction");
+            );
             acc_exprs.push(f);
         }
 
-        let final_expr: Expr = acc_exprs
-            .into_iter()
-            .reduce(or)
-            .ok_or_else(|| PlanError::invalid("No valid fractions"))?;
-        Ok(LogicalPlanBuilder::from(
-            LogicalPlanBuilder::from(plan_with_rand)
-                .filter(final_expr)?
-                .build()?,
-        )
-        .build()?)
+        let final_expr: Expr = acc_exprs.into_iter().reduce(or).unwrap_or(lit(false));
+        Ok(LogicalPlanBuilder::from(plan_with_rand)
+            .filter(final_expr)?
+            .build()?)
     }
+
     fn rewrite_aggregate(
         &self,
         input: LogicalPlan,
