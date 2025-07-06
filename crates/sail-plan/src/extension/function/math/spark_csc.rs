@@ -62,11 +62,7 @@ impl ScalarUDFImpl for SparkCsc {
         match &args[0] {
             ColumnarValue::Scalar(ScalarValue::Float64(Some(x))) => {
                 let result = 1.0 / x.sin();
-                if result.is_finite() {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(result))))
-                } else {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
-                }
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(result))))
             }
             ColumnarValue::Scalar(ScalarValue::Float64(None)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
@@ -74,11 +70,7 @@ impl ScalarUDFImpl for SparkCsc {
 
             ColumnarValue::Scalar(ScalarValue::Float32(Some(x))) => {
                 let result = 1.0 / x.sin();
-                if result.is_finite() {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(result))))
-                } else {
-                    Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
-                }
+                Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(result))))
             }
             ColumnarValue::Scalar(ScalarValue::Float32(None)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
@@ -95,8 +87,8 @@ impl ScalarUDFImpl for SparkCsc {
             return exec_err!("spark_csc expects 1 argument, got {}", types.len());
         }
 
-        let t = &types[0];
-        let coerced = match t {
+        let t: &DataType = &types[0];
+        let valid_type: DataType = match t {
             DataType::Float32 => DataType::Float32,
             DataType::Float64
             | DataType::Int64
@@ -106,6 +98,6 @@ impl ScalarUDFImpl for SparkCsc {
             _ => return exec_err!("spark_csc does not support argument type {:?}", t),
         };
 
-        Ok(vec![coerced])
+        Ok(vec![valid_type])
     }
 }
