@@ -63,7 +63,7 @@ impl ScalarUDFImpl for SparkCsc {
 
         match &args[0] {
             ColumnarValue::Scalar(ScalarValue::Float64(Some(x))) => {
-                let result = 1.0 / x.sin();
+                let result: f64 = 1.0 / x.sin();
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(result))))
             }
             ColumnarValue::Scalar(ScalarValue::Float64(None)) => {
@@ -71,7 +71,7 @@ impl ScalarUDFImpl for SparkCsc {
             }
 
             ColumnarValue::Scalar(ScalarValue::Float32(Some(x))) => {
-                let result = 1.0 / x.sin();
+                let result: f32 = 1.0 / x.sin();
                 Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(result))))
             }
             ColumnarValue::Scalar(ScalarValue::Float32(None)) => {
@@ -80,7 +80,7 @@ impl ScalarUDFImpl for SparkCsc {
 
             ColumnarValue::Array(array) if array.data_type() == &DataType::Float64 => {
                 let input = as_primitive_array::<Float64Type>(array);
-                let result = input
+                let result: Float64Array = input
                     .iter()
                     .map(|x| x.map(|v| 1.0 / v.sin()))
                     .collect::<Float64Array>();
@@ -88,7 +88,7 @@ impl ScalarUDFImpl for SparkCsc {
             }
             ColumnarValue::Array(array) if array.data_type() == &DataType::Float32 => {
                 let input = as_primitive_array::<Float32Type>(array);
-                let result = input
+                let result: Float32Array = input
                     .iter()
                     .map(|x| x.map(|v| 1.0 / v.sin()))
                     .collect::<Float32Array>();
