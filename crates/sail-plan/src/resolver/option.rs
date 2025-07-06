@@ -292,11 +292,15 @@ impl PlanResolver<'_> {
     pub(crate) fn resolve_json_write_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<JsonOptions> {
+    ) -> PlanResult<(JsonOptions, Vec<(String, String)>)> {
         let mut json_options = self.ctx.copied_table_options().json;
         apply_json_write_options(load_default_options()?, &mut json_options)?;
         apply_json_write_options(load_options(options)?, &mut json_options)?;
-        Ok(json_options)
+        let json_options_vec: Vec<(String, String)> = vec![(
+            "format.compression".to_string(),
+            json_options.compression.to_string(),
+        )];
+        Ok((json_options, json_options_vec))
     }
 
     pub(crate) fn resolve_csv_read_options(
@@ -312,11 +316,38 @@ impl PlanResolver<'_> {
     pub(crate) fn resolve_csv_write_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<CsvOptions> {
+    ) -> PlanResult<(CsvOptions, Vec<(String, String)>)> {
         let mut csv_options = self.ctx.copied_table_options().csv;
         apply_csv_write_options(load_default_options()?, &mut csv_options)?;
         apply_csv_write_options(load_options(options)?, &mut csv_options)?;
-        Ok(csv_options)
+
+        let mut csv_options_vec: Vec<(String, String)> = vec![];
+        csv_options_vec.push((
+            "format.delimiter".to_string(),
+            (csv_options.delimiter as char).to_string(),
+        ));
+        csv_options_vec.push((
+            "format.quote".to_string(),
+            (csv_options.quote as char).to_string(),
+        ));
+        if let Some(escape) = &csv_options.escape {
+            csv_options_vec.push(("format.escape".to_string(), (*escape as char).to_string()));
+        }
+        if let Some(double_quote) = &csv_options.double_quote {
+            csv_options_vec.push(("format.double_quote".to_string(), double_quote.to_string()));
+        }
+        if let Some(has_header) = &csv_options.has_header {
+            csv_options_vec.push(("format.has_header".to_string(), has_header.to_string()));
+        }
+        if let Some(null_value) = &csv_options.null_value {
+            csv_options_vec.push(("format.null_value".to_string(), null_value.to_string()));
+        }
+        csv_options_vec.push((
+            "format.compression".to_string(),
+            csv_options.compression.to_string(),
+        ));
+
+        Ok((csv_options, csv_options_vec))
     }
 
     pub(crate) fn resolve_parquet_read_options(
@@ -332,11 +363,115 @@ impl PlanResolver<'_> {
     pub(crate) fn resolve_parquet_write_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<TableParquetOptions> {
+    ) -> PlanResult<(TableParquetOptions, Vec<(String, String)>)> {
         let mut parquet_options = self.ctx.copied_table_options().parquet;
         apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_write_options(load_options(options)?, &mut parquet_options)?;
-        Ok(parquet_options)
+
+        let mut parquet_options_map: HashMap<String, String> = HashMap::new();
+        parquet_options_map.insert(
+            "format.data_pagesize_limit".to_owned(),
+            parquet_options.global.data_pagesize_limit.to_string(),
+        );
+        parquet_options_map.insert(
+            "format.write_batch_size".to_owned(),
+            parquet_options.global.write_batch_size.to_string(),
+        );
+        parquet_options_map.insert(
+            "format.writer_version".to_owned(),
+            parquet_options.global.writer_version.to_string(),
+        );
+        parquet_options_map.insert(
+            "format.skip_arrow_metadata".to_owned(),
+            parquet_options.global.skip_arrow_metadata.to_string(),
+        );
+        if let Some(compression) = &parquet_options.global.compression {
+            parquet_options_map.insert("format.compression".to_owned(), compression.to_string());
+        }
+        if let Some(dictionary_enabled) = &parquet_options.global.dictionary_enabled {
+            parquet_options_map.insert(
+                "format.dictionary_enabled".to_owned(),
+                dictionary_enabled.to_string(),
+            );
+        }
+        parquet_options_map.insert(
+            "format.dictionary_page_size_limit".to_owned(),
+            parquet_options
+                .global
+                .dictionary_page_size_limit
+                .to_string(),
+        );
+        if let Some(statistics_enabled) = &parquet_options.global.statistics_enabled {
+            parquet_options_map.insert(
+                "format.statistics_enabled".to_owned(),
+                statistics_enabled.to_string(),
+            );
+        }
+        parquet_options_map.insert(
+            "format.max_row_group_size".to_owned(),
+            parquet_options.global.max_row_group_size.to_string(),
+        );
+        if let Some(column_index_truncate_length) =
+            &parquet_options.global.column_index_truncate_length
+        {
+            parquet_options_map.insert(
+                "format.column_index_truncate_length".to_owned(),
+                column_index_truncate_length.to_string(),
+            );
+        }
+        if let Some(statistics_truncate_length) = &parquet_options.global.statistics_truncate_length
+        {
+            parquet_options_map.insert(
+                "format.statistics_truncate_length".to_owned(),
+                statistics_truncate_length.to_string(),
+            );
+        }
+        parquet_options_map.insert(
+            "format.data_page_row_count_limit".to_owned(),
+            parquet_options.global.data_page_row_count_limit.to_string(),
+        );
+        if let Some(encoding) = &parquet_options.global.encoding {
+            parquet_options_map.insert("format.encoding".to_owned(), encoding.to_string());
+        }
+        parquet_options_map.insert(
+            "format.bloom_filter_on_write".to_owned(),
+            parquet_options.global.bloom_filter_on_write.to_string(),
+        );
+        if let Some(bloom_filter_fpp) = &parquet_options.global.bloom_filter_fpp {
+            parquet_options_map.insert(
+                "format.bloom_filter_fpp".to_owned(),
+                bloom_filter_fpp.to_string(),
+            );
+        }
+        if let Some(bloom_filter_ndv) = &parquet_options.global.bloom_filter_ndv {
+            parquet_options_map.insert(
+                "format.bloom_filter_ndv".to_owned(),
+                bloom_filter_ndv.to_string(),
+            );
+        }
+        parquet_options_map.insert(
+            "format.allow_single_file_parallelism".to_owned(),
+            parquet_options
+                .global
+                .allow_single_file_parallelism
+                .to_string(),
+        );
+        parquet_options_map.insert(
+            "format.maximum_parallel_row_group_writers".to_owned(),
+            parquet_options
+                .global
+                .maximum_parallel_row_group_writers
+                .to_string(),
+        );
+        parquet_options_map.insert(
+            "format.maximum_buffered_record_batches_per_stream".to_owned(),
+            parquet_options
+                .global
+                .maximum_buffered_record_batches_per_stream
+                .to_string(),
+        );
+
+        Ok((parquet_options, parquet_options_map.into_iter().collect()))
     }
 }
 
@@ -380,7 +515,7 @@ mod tests {
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
         let options = build_options(&[("compression", "bzip2")]);
-        let options = resolver.resolve_json_write_options(options)?;
+        let (options, _json_options_vec) = resolver.resolve_json_write_options(options)?;
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         Ok(())
@@ -466,7 +601,7 @@ mod tests {
             ("null_value", "MEOW"),
             ("compression", "bzip2"),
         ]);
-        let options = resolver.resolve_csv_write_options(options)?;
+        let (options, _csv_options_vec) = resolver.resolve_csv_write_options(options)?;
         assert_eq!(options.delimiter, b'!');
         assert_eq!(options.quote, b'(');
         assert_eq!(options.escape, Some(b'*'));
@@ -556,7 +691,7 @@ mod tests {
             ("maximum_parallel_row_group_writers", "4"),
             ("maximum_buffered_record_batches_per_stream", "10"),
         ]);
-        let options = resolver.resolve_parquet_write_options(options)?;
+        let (options, _parquet_options_vec) = resolver.resolve_parquet_write_options(options)?;
         assert_eq!(options.global.data_pagesize_limit, 1024);
         assert_eq!(options.global.write_batch_size, 1000);
         assert_eq!(options.global.writer_version, "2.0");
