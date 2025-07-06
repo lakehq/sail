@@ -1,0 +1,111 @@
+use std::any::Any;
+
+use datafusion::arrow::datatypes::DataType;
+use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+
+#[derive(Debug)]
+pub struct SparkCsc {
+    signature: Signature,
+}
+
+impl Default for SparkCsc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkCsc {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::user_defined(Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkCsc {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "spark_csc"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() != 1 {
+            return exec_err!("spark_csc expects 1 argument, got {}", arg_types.len());
+        }
+        match arg_types[0] {
+            DataType::Float64
+            | DataType::Int64
+            | DataType::Int32
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => Ok(DataType::Float64),
+            DataType::Float32 => Ok(DataType::Float32),
+
+            ref other => exec_err!("Unsupported type for spark_csc: {}", other),
+        }
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+
+        if args.len() != 1 {
+            return exec_err!("spark_csc expects exactly 1 argument, got {}", args.len());
+        }
+
+        match &args[0] {
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(x))) => {
+                let result = 1.0 / x.sin();
+                if result.is_finite() {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(result))))
+                } else {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+                }
+            }
+            ColumnarValue::Scalar(ScalarValue::Float64(None)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+            }
+
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(x))) => {
+                let result = 1.0 / x.sin();
+                if result.is_finite() {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(result))))
+                } else {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
+                }
+            }
+            ColumnarValue::Scalar(ScalarValue::Float32(None)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
+            }
+
+            other => {
+                exec_err!("spark_csc only supports Float32 or Float64 as scalar, got {other:?}")
+            }
+        }
+    }
+
+    fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
+        if types.len() != 1 {
+            return exec_err!("spark_csc expects 1 argument, got {}", types.len());
+        }
+
+        let t = &types[0];
+        let coerced = match t {
+            DataType::Float32 => DataType::Float32,
+            DataType::Float64
+            | DataType::Int64
+            | DataType::Int32
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => DataType::Float64,
+            _ => return exec_err!("spark_csc does not support argument type {:?}", t),
+        };
+
+        Ok(vec![coerced])
+    }
+}

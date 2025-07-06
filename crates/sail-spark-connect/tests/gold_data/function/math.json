@@ -921,7 +921,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: csc"
+        "success": "ok"
       }
     },
     {

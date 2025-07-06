@@ -19,6 +19,7 @@ use crate::extension::function::math::spark_bin::SparkBin;
 use crate::extension::function::math::spark_bround::SparkBRound;
 use crate::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use crate::extension::function::math::spark_conv::SparkConv;
+use crate::extension::function::math::spark_csc::SparkCsc;
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_pmod::SparkPmod;
 use crate::extension::function::math::spark_sec::SparkSec;
@@ -562,7 +563,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("cos", F::unary(expr_fn::cos)),
         ("cosh", F::unary(expr_fn::cosh)),
         ("cot", F::unary(expr_fn::cot)),
-        ("csc", F::unknown("csc")),
+        ("csc", F::udf(SparkCsc::new())),
         ("degrees", F::unary(expr_fn::degrees)),
         ("div", F::custom(spark_div)),
         ("e", F::nullary(eulers_constant)),
