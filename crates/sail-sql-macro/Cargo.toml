@@ -3,6 +3,9 @@ name = "sail-sql-macro"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 syn = { workspace = true }
 quote = { workspace = true }

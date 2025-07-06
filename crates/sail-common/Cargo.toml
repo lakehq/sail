@@ -3,6 +3,9 @@ name = "sail-common"
 version = { workspace = true }
 edition = { workspace = true }
 
+[lints]
+workspace = true
+
 # DO NOT add DataFusion dependencies for this crate.
 # All utilities that depend on DataFusion should be defined in the `sail-common-datafusion` crate.
 

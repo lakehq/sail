@@ -15,6 +15,11 @@ repository = "https://github.com/lakehq/sail"
 # Define Minimum Supported Rust Version (MSRV) the same as DataFusion
 rust-version = "1.82.0"
 
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
 [workspace.dependencies]
 thiserror = { version = "2.0.12" }
 tokio = { version = "1.46.0", features = ["full"] }
