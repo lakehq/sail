@@ -124,6 +124,7 @@ datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functi
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
 pyo3 = { version = "0.24.2", features = ["auto-initialize", "serde"] }
+arrow = {version = "55.2.0", features = ["chrono-tz"]}
 arrow-buffer = { version = "55.2.0" }
 arrow-schema = { version = "55.2.0", features = ["serde"] }
 arrow-flight = { version = "55.2.0" }

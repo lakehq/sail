@@ -33,6 +33,7 @@ futures = { workspace = true }
 comfy-table = { workspace = true }
 html-escape = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 ryu = { workspace = true }
 either = { workspace = true }
 tokio = { workspace = true }
@@ -53,3 +54,4 @@ crc32fast = { workspace = true }
 num = { workspace = true }
 chumsky = { workspace = true }
 percent-encoding = { workspace = true }
+arrow = { workspace = true }
