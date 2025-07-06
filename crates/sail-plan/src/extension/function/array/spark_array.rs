@@ -9,7 +9,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -99,22 +99,24 @@ impl ScalarUDFImpl for SparkArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let new_type =
-            arg_types
-                .iter()
-                .skip(1)
-                .try_fold(arg_types.first().unwrap().clone(), |acc, x| {
-                    // The coerced types found by `comparison_coercion` are not guaranteed to be
-                    // coercible for the arguments. `comparison_coercion` returns more loose
-                    // types that can be coerced to both `acc` and `x` for comparison purpose.
-                    // See `maybe_data_types` for the actual coercion.
-                    let coerced_type = comparison_coercion(&acc, x);
-                    if let Some(coerced_type) = coerced_type {
-                        Ok(coerced_type)
-                    } else {
-                        plan_err!("Coercion from {acc:?} to {x:?} failed.")
-                    }
-                })?;
+        let first_type = arg_types.first().ok_or_else(|| {
+            plan_datafusion_err!("Spark array function requires at least one argument")
+        })?;
+        let new_type = arg_types
+            .iter()
+            .skip(1)
+            .try_fold(first_type.clone(), |acc, x| {
+                // The coerced types found by `comparison_coercion` are not guaranteed to be
+                // coercible for the arguments. `comparison_coercion` returns more loose
+                // types that can be coerced to both `acc` and `x` for comparison purpose.
+                // See `maybe_data_types` for the actual coercion.
+                let coerced_type = comparison_coercion(&acc, x);
+                if let Some(coerced_type) = coerced_type {
+                    Ok(coerced_type)
+                } else {
+                    plan_err!("Coercion from {acc:?} to {x:?} failed.")
+                }
+            })?;
         Ok(vec![new_type; arg_types.len()])
     }
 }

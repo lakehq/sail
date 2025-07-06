@@ -138,6 +138,7 @@ mod tests {
 
     use super::*;
 
+    #[allow(clippy::unwrap_used, clippy::panic)]
     #[test]
     fn test_slice() -> PlanResult<()> {
         let l1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![

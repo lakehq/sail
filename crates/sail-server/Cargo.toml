@@ -3,6 +3,9 @@ name = "sail-server"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 sail-telemetry = { path = "../sail-telemetry" }
 sail-common = { path = "../sail-common" }
