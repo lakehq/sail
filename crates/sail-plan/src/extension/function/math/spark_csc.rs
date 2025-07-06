@@ -1,6 +1,8 @@
 use std::any::Any;
+use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::array::{as_primitive_array, ArrayRef, Float32Array, Float64Array};
+use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
@@ -76,9 +78,26 @@ impl ScalarUDFImpl for SparkCsc {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
             }
 
-            other => {
-                exec_err!("spark_csc only supports Float32 or Float64 as scalar, got {other:?}")
+            ColumnarValue::Array(array) if array.data_type() == &DataType::Float64 => {
+                let input = as_primitive_array::<Float64Type>(array);
+                let result = input
+                    .iter()
+                    .map(|x| x.map(|v| 1.0 / v.sin()))
+                    .collect::<Float64Array>();
+                Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
             }
+            ColumnarValue::Array(array) if array.data_type() == &DataType::Float32 => {
+                let input = as_primitive_array::<Float32Type>(array);
+                let result = input
+                    .iter()
+                    .map(|x| x.map(|v| 1.0 / v.sin()))
+                    .collect::<Float32Array>();
+                Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
+            }
+
+            other => exec_err!(
+                "spark_csc only supports Float32 or Float64 as scalar or array, got {other:?}"
+            ),
         }
     }
 
