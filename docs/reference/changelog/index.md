@@ -5,6 +5,34 @@ next: false
 
 # Changelog
 
+## 0.3.1
+
+_July 7, 2025_
+
+- Added support for the following SQL functions ([#570](https://github.com/lakehq/sail/pull/570), [#571](https://github.com/lakehq/sail/pull/571), [#582](https://github.com/lakehq/sail/pull/582), [#585](https://github.com/lakehq/sail/pull/585), and [#586](https://github.com/lakehq/sail/pull/586)):
+  - `dayname`
+  - `nullifzero`
+  - `zeroifnull`
+  - `split` (partial support)
+  - `collect_set`
+  - `count_if`
+- Fixed issues with the `from_utc_timestamp` SQL function ([#596](https://github.com/lakehq/sail/pull/596)).
+- Added support for the `DataFrame.sampleBy` method in the Spark DataFrame API ([#547](https://github.com/lakehq/sail/pull/547)).
+- Added support for the following SQL statements ([#588](https://github.com/lakehq/sail/pull/588)):
+  - `SHOW COLUMNS`
+  - `SHOW DATABASES`
+  - `SHOW TABLES`
+  - `SHOW VIEWS`
+- Improved data source listing performance ([#579](https://github.com/lakehq/sail/pull/579)).
+- Improved the internal logic of data source options ([#587](https://github.com/lakehq/sail/pull/587) and [#598](https://github.com/lakehq/sail/pull/598)).
+- Updated gRPC server TCP and HTTP configuration ([#593](https://github.com/lakehq/sail/pull/593)).
+
+### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) for the first contributions related to SQL functions!
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin) for the continued contributions related to the Spark DataFrame API!
+
 ## 0.3.0
 
 _June 28, 2025_
