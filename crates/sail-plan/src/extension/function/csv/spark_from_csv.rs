@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::io::Cursor;
 use std::sync::Arc;
 
 use crate::extension::function::functions_nested_utils::*;
@@ -7,9 +5,7 @@ use crate::extension::function::functions_utils::make_scalar_function;
 use core::any::type_name;
 use datafusion::arrow::{array::*, datatypes::*};
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{
-    exec_err, DataFusionError as DFCommonError, Result as DFCommonResult, ScalarValue,
-};
+use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::sqlparser::ast::{ArrayElemTypeDef, DataType as SQLType};
 use datafusion_expr::sqlparser::dialect::GenericDialect;
 use datafusion_expr::sqlparser::parser::{Parser, ParserOptions};
@@ -17,7 +13,6 @@ use datafusion_expr::sqlparser::tokenizer::Tokenizer;
 use datafusion_expr::{
     ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
-use sail_common::spec::i256;
 use std::collections::HashSet;
 
 /// UDF implementation of `from_csv`, similar to Spark's `from_csv`.
