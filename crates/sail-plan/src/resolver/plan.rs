@@ -39,7 +39,6 @@ use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
-use sail_data_source::options::DataSourceOptionsResolver;
 use sail_data_source::TableProviderFactory;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
@@ -3068,48 +3067,6 @@ impl PlanResolver<'_> {
             Ok(results) as PlanResult<_>
         }
         .await?;
-
-        let resolver = DataSourceOptionsResolver::new(self.ctx);
-        let options: HashMap<String, String> = options.into_iter().collect();
-        let options: Vec<(String, String)> = match file_format.to_lowercase().as_str() {
-            "json" => {
-                let (_options, json_options_vec) = resolver.resolve_json_write_options(options)?;
-                json_options_vec
-            }
-            "parquet" => {
-                let (_options, parquet_options_vec) =
-                    resolver.resolve_parquet_write_options(options)?;
-                parquet_options_vec
-            }
-            "csv" => {
-                let (_options, csv_options_vec) = resolver.resolve_csv_write_options(options)?;
-                csv_options_vec
-            }
-            "arrow" => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(
-                        "Arrow data source write options are not yet supported",
-                    ));
-                }
-                vec![]
-            }
-            "avro" => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(
-                        "Avro data source write options are not yet supported",
-                    ));
-                }
-                vec![]
-            }
-            other => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(format!(
-                        "{other} data source write options are not supported"
-                    )));
-                }
-                vec![]
-            }
-        };
 
         let command = CatalogCommand::CreateTable {
             table: self.resolve_table_reference(&table)?,
