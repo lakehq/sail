@@ -3,6 +3,8 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use core::any::type_name;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
 use regex::Regex;
 
 use datafusion::arrow::{array::*, datatypes::*};
@@ -112,23 +114,39 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
     let fields: Fields = parse_fields(schema_str, sep)?;
 
-    let rows: Vec<ScalarValue> = (0..array.len())
-        .map(|i| {
-            if array.is_null(i) {
-                Ok(ScalarValue::Null)
-            } else {
-                let line = array.value(i);
-                let values = parse_csv_line_to_scalar_values(line, sep, &fields)?;
-                let values: std::iter::Zip<std::slice::Iter<'_, Arc<Field>>, std::slice::Iter<'_, ScalarValue>> = fields.iter().zip(values.iter())
-                let values: ArrayRef = ScalarValue::iter_to_array(values.into_iter())?;
-                Ok(ScalarValue::Struct(
-                    Arc(StructArray::from((fields, values)))
-                ))
+    let mut children_scalars: Vec<Vec<ScalarValue>> =
+        vec![Vec::with_capacity(array.len()); fields.len()];
+    let mut validity: Vec<bool> = Vec::with_capacity(array.len());
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            // Fila completa null
+            for col in &mut children_scalars {
+                col.push(ScalarValue::Null);
             }
-        })
+            validity.push(false);
+        } else {
+            let line = array.value(i);
+            let values = parse_csv_line_to_scalar_values(line, sep, &fields)?;
+            for (j, value) in values.into_iter().enumerate() {
+                children_scalars[j].push(value);
+            }
+            validity.push(true);
+        }
+    }
+
+    let children_arrays: Vec<ArrayRef> = children_scalars
+        .into_iter()
+        .map(ScalarValue::iter_to_array)
         .collect::<Result<_>>()?;
 
-    ScalarValue::iter_to_array(rows.into_iter())
+    let struct_array = Arc::new(StructArray::new(
+        fields.clone(),
+        children_arrays,
+        Some(validity.into()),
+    ));
+
+    Ok(struct_array)
 }
 
 fn parse_csv_line_to_scalar_values(
@@ -150,24 +168,25 @@ fn parse_csv_line_to_scalar_values(
     values
         .iter()
         .zip(fields.iter())
-        .map(|(value, field)| {
-            if value.is_empty() {
-                Ok(ScalarValue::Null)
-            } else {
-                parse_scalar_value(value, field.data_type())
-            }
-        })
+        .map(|(value, field)| ScalarValue::try_from_string(value.to_string(), field.data_type()))
         .collect()
 }
 
 fn get_sep_from_options(options: &StructArray) -> Result<&str> {
-    // TODO: Control de errores
-    let sep_array: &StringArray = downcast_arg!(
-        options
-            .column_by_name("sep")
-            .expect("'sep' option is not available"),
-        StringArray
-    );
+    let sep_column = options.column_by_name("sep").ok_or_else(|| {
+        DataFusionError::Plan("Missing 'sep' option in from_csv options".to_string())
+    })?;
+
+    let sep_array = sep_column
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DataFusionError::Plan("'sep' option must be a StringArray".to_string()))?;
+
+    if sep_array.is_empty() || sep_array.is_null(0) {
+        return Err(DataFusionError::Plan(
+            "'sep' option cannot be null".to_string(),
+        ));
+    }
 
     Ok(sep_array.value(0))
 }
@@ -270,6 +289,33 @@ fn parse_struct_type(raw: &str) -> Result<Option<DataType>> {
     }
 }
 
+fn parse_data_type(raw: &str) -> Result<DataType> {
+    let dialect = GenericDialect {}; // puedes cambiar a otro dialecto si quieres
+    let sql_type = Parser::parse_sql_type(&dialect, raw)
+        .map_err(|e| DataFusionError::Plan(format!("SQL type parse error: {e}")))?;
+
+    convert_sql_type(&sql_type)
+}
+
+fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
+    match sql_type {
+        SQLType::Int(_) => Ok(DataType::Int32),
+        SQLType::BigInt(_) => Ok(DataType::Int64),
+        SQLType::Varchar(_) | SQLType::Char(_) | SQLType::Text => Ok(DataType::Utf8),
+        SQLType::Float(_) => Ok(DataType::Float64),
+        SQLType::Decimal(precision, scale) => Ok(DataType::Decimal128(
+            precision.unwrap_or(38) as u8,
+            scale.unwrap_or(10) as i8,
+        )),
+        SQLType::Timestamp { .. } => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        // Agrega aquí más conversiones según lo necesites
+        _ => Err(DataFusionError::Plan(format!(
+            "Unsupported SQL type: {:?}",
+            sql_type
+        ))),
+    }
+}
+
 fn parse_simple_type(raw: &str) -> Result<DataType> {
     match raw {
         "boolean" | "bool" => Ok(DataType::Boolean),
@@ -290,7 +336,7 @@ fn parse_simple_type(raw: &str) -> Result<DataType> {
         "binary" | "blob" => Ok(DataType::Binary),
 
         "date" => Ok(DataType::Date32),
-        // "timestamp" => Ok(DataType::Timestamp(None, None)), // TODO: Fix it
+        "timestamp" => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)), // TODO: Fix it
         _ => Err(DataFusionError::Plan(format!(
             "Unsupported SQL type: '{}'",
             raw
@@ -298,118 +344,53 @@ fn parse_simple_type(raw: &str) -> Result<DataType> {
     }
 }
 
-fn parse_scalar_value(raw: &str, dtype: &DataType) -> Result<ScalarValue> {
-    match dtype {
-        DataType::Boolean => Ok(ScalarValue::Boolean(Some(raw.parse::<bool>().unwrap()))),
-        DataType::Float16 => Ok(ScalarValue::Float16(Some(
-            raw.parse::<half::f16>().unwrap(),
-        ))),
-        DataType::Float32 => Ok(ScalarValue::Float32(Some(raw.parse::<f32>().unwrap()))),
-        DataType::Float64 => Ok(ScalarValue::Float64(Some(raw.parse::<f64>().unwrap()))),
+#[test]
+fn test_from_csv_simple_struct() -> Result<()> {
+    // 1. Input CSV lines (name, age)
+    let csv_data = vec![Some("alice,30"), Some("bob,25"), None, Some("charlie,")];
 
-        DataType::Int8 => Ok(ScalarValue::Int8(Some(raw.parse::<i8>().unwrap()))),
-        DataType::Int16 => Ok(ScalarValue::Int16(Some(raw.parse::<i16>().unwrap()))),
-        DataType::Int32 => Ok(ScalarValue::Int32(Some(raw.parse::<i32>().unwrap()))),
-        DataType::Int64 => Ok(ScalarValue::Int64(Some(raw.parse::<i64>().unwrap()))),
+    let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
 
-        DataType::UInt8 => Ok(ScalarValue::UInt8(Some(raw.parse::<u8>().unwrap()))),
-        DataType::UInt16 => Ok(ScalarValue::UInt16(Some(raw.parse::<u16>().unwrap()))),
-        DataType::UInt32 => Ok(ScalarValue::UInt32(Some(raw.parse::<u32>().unwrap()))),
-        DataType::UInt64 => Ok(ScalarValue::UInt64(Some(raw.parse::<u64>().unwrap()))),
+    // 2. Define schema string and separator
+    let schema_str = Arc::new(StringArray::from(vec!["name string, age int"])) as ArrayRef;
 
-        DataType::Decimal128(p, s) => Ok(ScalarValue::Decimal128(
-            Some(raw.parse::<i128>().unwrap()),
-            *p,
-            *s,
-        )),
-        DataType::Decimal256(p, s) => Ok(ScalarValue::Decimal256(
-            Some(raw.parse::<i256>().unwrap()),
-            *p,
-            *s,
-        )),
+    // 3. Call the function
+    let result = spark_from_csv_inner(&[input_array, schema_str])?;
 
-        DataType::Utf8 => Ok(ScalarValue::Utf8(Some(raw.to_string()))),
-        DataType::Utf8View => Ok(ScalarValue::Utf8View(Some(raw.to_string()))),
-        DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some(raw.to_string()))),
+    // 4. Check the output type and content
+    let struct_array = result
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("Expected StructArray");
 
-        DataType::Binary => Ok(ScalarValue::Binary(Some(raw.as_bytes().to_vec()))),
-        DataType::BinaryView => Ok(ScalarValue::BinaryView(Some(raw.as_bytes().to_vec()))),
-        DataType::LargeBinary => Ok(ScalarValue::LargeBinary(Some(raw.as_bytes().to_vec()))),
+    assert_eq!(struct_array.len(), 4);
+    assert_eq!(struct_array.null_count(), 1); // third row is null
 
-        DataType::Date32 => Ok(ScalarValue::Date32(Some(raw.parse::<i32>().unwrap()))),
-        DataType::Date64 => Ok(ScalarValue::Date64(Some(raw.parse::<i64>().unwrap()))),
+    // Field 0: name (Utf8)
+    let name_array = struct_array
+        .column_by_name("name")
+        .expect("name field not found")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
 
-        DataType::Time32(TimeUnit::Second) => {
-            Ok(ScalarValue::Time32Second(Some(raw.parse::<i32>().unwrap())))
-        }
-        DataType::Time32(TimeUnit::Millisecond) => Ok(ScalarValue::Time32Millisecond(Some(
-            raw.parse::<i32>().unwrap(),
-        ))),
-        DataType::Time64(TimeUnit::Microsecond) => Ok(ScalarValue::Time64Microsecond(Some(
-            raw.parse::<i64>().unwrap(),
-        ))),
-        DataType::Time64(TimeUnit::Nanosecond) => Ok(ScalarValue::Time64Nanosecond(Some(
-            raw.parse::<i64>().unwrap(),
-        ))),
+    assert_eq!(name_array.value(0), "alice");
+    assert_eq!(name_array.value(1), "bob");
+    assert!(name_array.is_null(2)); // Struct was null
+    assert_eq!(name_array.value(3), "charlie");
 
-        DataType::Timestamp(TimeUnit::Second, tz) => Ok(ScalarValue::TimestampSecond(
-            Some(raw.parse::<i64>().unwrap()),
-            tz.clone(),
-        )),
-        DataType::Timestamp(TimeUnit::Millisecond, tz) => Ok(ScalarValue::TimestampMillisecond(
-            Some(raw.parse::<i64>().unwrap()),
-            tz.clone(),
-        )),
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => Ok(ScalarValue::TimestampMicrosecond(
-            Some(raw.parse::<i64>().unwrap()),
-            tz.clone(),
-        )),
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => Ok(ScalarValue::TimestampNanosecond(
-            Some(raw.parse::<i64>().unwrap()),
-            tz.clone(),
-        )),
+    // Field 1: age (Int32)
+    let age_array = struct_array
+        .column_by_name("age")
+        .expect("age field not found")
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
 
-        DataType::Interval(IntervalUnit::YearMonth) => Ok(ScalarValue::IntervalYearMonth(Some(
-            raw.parse::<i32>().unwrap(),
-        ))),
-        DataType::Interval(IntervalUnit::DayTime) => Err(DataFusionError::Plan(
-            "Cannot parse IntervalDayTime from string".into(),
-        )),
-        DataType::Interval(IntervalUnit::MonthDayNano) => Err(DataFusionError::Plan(
-            "Cannot parse IntervalMonthDayNano from string".into(),
-        )),
+    assert_eq!(age_array.value(0), 30);
+    assert_eq!(age_array.value(1), 25);
+    assert!(age_array.is_null(2)); // Struct was null
+    assert!(age_array.is_null(3)); // Empty value parsed as null
 
-        DataType::Duration(TimeUnit::Second) => Ok(ScalarValue::DurationSecond(Some(
-            raw.parse::<i64>().unwrap(),
-        ))),
-        DataType::Duration(TimeUnit::Millisecond) => Ok(ScalarValue::DurationMillisecond(Some(
-            raw.parse::<i64>().unwrap(),
-        ))),
-        DataType::Duration(TimeUnit::Microsecond) => Ok(ScalarValue::DurationMicrosecond(Some(
-            raw.parse::<i64>().unwrap(),
-        ))),
-        DataType::Duration(TimeUnit::Nanosecond) => Ok(ScalarValue::DurationNanosecond(Some(
-            raw.parse::<i64>().unwrap(),
-        ))),
-
-        // Tipos complejos no soportados directamente desde string
-        DataType::FixedSizeBinary(_)
-        | DataType::FixedSizeList(_, _)
-        | DataType::List(_)
-        | DataType::LargeList(_)
-        | DataType::Struct(_)
-        | DataType::Map(_, _)
-        | DataType::Union(_, _)
-        | DataType::Dictionary(_, _) => Err(DataFusionError::Plan(format!(
-            "Unsupported complex data type in from_csv: {:?}",
-            dtype
-        ))),
-
-        DataType::Null => Ok(ScalarValue::Null),
-
-        other => Err(DataFusionError::Plan(format!(
-            "Unsupported or unknown data type in from_csv: {:?}",
-            other
-        ))),
-    }
+    Ok(())
 }
