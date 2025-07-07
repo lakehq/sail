@@ -2,23 +2,22 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 
+use crate::extension::function::functions_nested_utils::*;
+use crate::extension::function::functions_utils::make_scalar_function;
 use core::any::type_name;
-use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::Parser;
-use regex::Regex;
-
 use datafusion::arrow::{array::*, datatypes::*};
 use datafusion::error::{DataFusionError, Result};
 use datafusion_common::{
     exec_err, DataFusionError as DFCommonError, Result as DFCommonResult, ScalarValue,
 };
+use datafusion_expr::sqlparser::ast::{ArrayElemTypeDef, DataType as SQLType};
+use datafusion_expr::sqlparser::dialect::GenericDialect;
+use datafusion_expr::sqlparser::parser::{Parser, ParserOptions};
+use datafusion_expr::sqlparser::tokenizer::Tokenizer;
 use datafusion_expr::{
     ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use sail_common::spec::i256;
-
-use crate::extension::function::functions_nested_utils::*;
-use crate::extension::function::functions_utils::make_scalar_function;
 
 #[derive(Debug)]
 pub struct SparkFromCSV {
@@ -217,129 +216,112 @@ fn parse_schema_string(schema_str: &str, sep: &str) -> Result<Fields> {
     fields.map(|f| Fields::from_iter(f))
 }
 
-// TODO: Is there any SQL type parser?
-// TODO: Double-check this implementation
 pub fn parse_data_type(raw: &str) -> Result<DataType> {
-    let raw = raw.trim().to_lowercase();
+    let dialect = GenericDialect {};
+    let mut tokenizer = Tokenizer::new(&dialect, raw);
+    let tokens = tokenizer
+        .tokenize()
+        .map_err(|e| DataFusionError::Plan(format!("Tokenization error: {e}")))?;
 
-    if let Some(dt) = parse_decimal_type(&raw)? {
-        return Ok(dt);
-    }
+    let mut parser = Parser::new(&dialect)
+        .with_options(ParserOptions::default())
+        .with_tokens(tokens);
 
-    if let Some(dt) = parse_array_type(&raw)? {
-        return Ok(dt);
-    }
-
-    if let Some(dt) = parse_struct_type(&raw)? {
-        return Ok(dt);
-    }
-
-    parse_simple_type(&raw)
-}
-
-fn parse_decimal_type(raw: &str) -> Result<Option<DataType>> {
-    let decimal_re = Regex::new(r"^decimal\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)$").unwrap();
-    if let Some(caps) = decimal_re.captures(raw) {
-        let precision: u8 = caps[1].parse().unwrap_or(38);
-        let scale: u8 = caps[2].parse().unwrap_or(10);
-        Ok(Some(DataType::Decimal128(
-            precision,
-            scale.try_into().unwrap(),
-        )))
-    } else {
-        Ok(None)
-    }
-}
-
-fn parse_array_type(raw: &str) -> Result<Option<DataType>> {
-    let array_re = Regex::new(r"^array\s*<\s*(.+)\s*>$").unwrap();
-    if let Some(caps) = array_re.captures(raw) {
-        let inner_type_str = &caps[1];
-        let inner_type = parse_data_type(inner_type_str)?;
-        Ok(Some(DataType::List(Arc::new(Field::new(
-            "element", inner_type, true,
-        )))))
-    } else {
-        Ok(None)
-    }
-}
-
-fn parse_struct_type(raw: &str) -> Result<Option<DataType>> {
-    let struct_re = Regex::new(r"^struct\s*<(.+)>$").unwrap();
-    if let Some(caps) = struct_re.captures(raw) {
-        let fields_str = &caps[1];
-        let fields: Result<Vec<Field>> = fields_str
-            .split(',')
-            .map(|part| {
-                let mut parts = part.splitn(2, ':');
-                let name = parts.next().ok_or_else(|| {
-                    DataFusionError::Plan("Missing field name in struct".to_string())
-                })?;
-                let dtype_str = parts.next().ok_or_else(|| {
-                    DataFusionError::Plan(format!("Missing type for field '{}'", name))
-                })?;
-                let dtype = parse_data_type(dtype_str)?;
-                Ok(Field::new(name.trim(), dtype, true))
-            })
-            .collect();
-
-        Ok(Some(DataType::Struct(Fields::from(fields?))))
-    } else {
-        Ok(None)
-    }
-}
-
-fn parse_data_type(raw: &str) -> Result<DataType> {
-    let dialect = GenericDialect {}; // puedes cambiar a otro dialecto si quieres
-    let sql_type = Parser::parse_sql_type(&dialect, raw)
-        .map_err(|e| DataFusionError::Plan(format!("SQL type parse error: {e}")))?;
+    let sql_type = parser
+        .parse_data_type()
+        .map_err(|e| DataFusionError::Plan(format!("Failed to parse SQL type '{raw}': {e}")))?;
 
     convert_sql_type(&sql_type)
 }
 
 fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
     match sql_type {
-        SQLType::Int(_) => Ok(DataType::Int32),
-        SQLType::BigInt(_) => Ok(DataType::Int64),
-        SQLType::Varchar(_) | SQLType::Char(_) | SQLType::Text => Ok(DataType::Utf8),
-        SQLType::Float(_) => Ok(DataType::Float64),
-        SQLType::Decimal(precision, scale) => Ok(DataType::Decimal128(
-            precision.unwrap_or(38) as u8,
-            scale.unwrap_or(10) as i8,
-        )),
-        SQLType::Timestamp { .. } => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-        // Agrega aquí más conversiones según lo necesites
+        SQLType::Int(_) | SQLType::Integer(_) | SQLType::Int4(_) => Ok(DataType::Int32),
+        SQLType::BigInt(_) | SQLType::Int8(_) | SQLType::Int64 => Ok(DataType::Int64),
+        SQLType::SmallInt(_) | SQLType::Int2(_) | SQLType::Int16 => Ok(DataType::Int16),
+        SQLType::TinyInt(_) => Ok(DataType::Int8),
+
+        SQLType::UInt8 => Ok(DataType::UInt8),
+        SQLType::UInt16 => Ok(DataType::UInt16),
+        SQLType::UInt32 | SQLType::UnsignedInteger => Ok(DataType::UInt32),
+        SQLType::UInt64 | SQLType::BigIntUnsigned(_) => Ok(DataType::UInt64),
+
+        SQLType::Float(_)
+        | SQLType::Float64
+        | SQLType::Double(_)
+        | SQLType::DoublePrecision
+        | SQLType::Float8 => Ok(DataType::Float64),
+        SQLType::Float32 | SQLType::Real | SQLType::Float4 => Ok(DataType::Float32),
+
+        SQLType::Decimal(info) | SQLType::Numeric(info) => {
+            let precision_scale = match info {
+                datafusion_expr::sqlparser::ast::ExactNumberInfo::Precision(p) => Ok((*p, 10)), // default scale
+                datafusion_expr::sqlparser::ast::ExactNumberInfo::PrecisionAndScale(p, s) => {
+                    Ok((*p, *s))
+                }
+                datafusion_expr::sqlparser::ast::ExactNumberInfo::None => Err(
+                    DataFusionError::Plan("Decimal type missing precision and scale".to_string()),
+                ),
+            };
+
+            precision_scale
+                .map(|(precision, scale)| DataType::Decimal128(precision as u8, scale as i8))
+        }
+
+        SQLType::Char(_)
+        | SQLType::Character(_)
+        | SQLType::Varchar(_)
+        | SQLType::CharacterVarying(_)
+        | SQLType::CharVarying(_)
+        | SQLType::Text
+        | SQLType::String(_)
+        | SQLType::Nvarchar(_) => Ok(DataType::Utf8),
+
+        SQLType::Binary(_) | SQLType::Varbinary(_) => Ok(DataType::Binary),
+
+        SQLType::Boolean | SQLType::Bool => Ok(DataType::Boolean),
+
+        SQLType::Date | SQLType::Date32 => Ok(DataType::Date32),
+        SQLType::Timestamp(_, _) | SQLType::Datetime(_) | SQLType::Datetime64(_, _) => {
+            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+        }
+
+        SQLType::Array(inner) => {
+            let inner_type = match inner {
+                ArrayElemTypeDef::AngleBracket(t)
+                | ArrayElemTypeDef::SquareBracket(t, _)
+                | ArrayElemTypeDef::Parenthesis(t) => convert_sql_type(t)?,
+                ArrayElemTypeDef::None => {
+                    return Err(DataFusionError::Plan(
+                        "ARRAY type missing inner element type".to_string(),
+                    ));
+                }
+            };
+            Ok(DataType::List(Arc::new(Field::new(
+                "element", inner_type, true,
+            ))))
+        }
+
+        SQLType::Struct(fields, _) => {
+            let parsed_fields: Result<Vec<Field>> = fields
+                .iter()
+                .map(|f| {
+                    let dt = convert_sql_type(&f.field_type)?;
+                    let name = f
+                        .field_name
+                        .as_ref()
+                        .map(|id| id.value.clone())
+                        .ok_or_else(|| {
+                            DataFusionError::Plan("Missing field name in STRUCT".to_string())
+                        })?;
+                    Ok(Field::new(&name, dt, true))
+                })
+                .collect();
+            Ok(DataType::Struct(Fields::from(parsed_fields?)))
+        }
+
         _ => Err(DataFusionError::Plan(format!(
-            "Unsupported SQL type: {:?}",
-            sql_type
-        ))),
-    }
-}
-
-fn parse_simple_type(raw: &str) -> Result<DataType> {
-    match raw {
-        "boolean" | "bool" => Ok(DataType::Boolean),
-        "tinyint" | "int1" => Ok(DataType::Int8),
-        "smallint" | "int2" => Ok(DataType::Int16),
-        "int" | "integer" | "int4" => Ok(DataType::Int32),
-        "bigint" | "int8" => Ok(DataType::Int64),
-
-        "unsigned tinyint" | "uint1" => Ok(DataType::UInt8),
-        "unsigned smallint" | "uint2" => Ok(DataType::UInt16),
-        "unsigned int" | "unsigned integer" | "uint4" => Ok(DataType::UInt32),
-        "unsigned bigint" | "uint8" => Ok(DataType::UInt64),
-
-        "float" | "float4" => Ok(DataType::Float32),
-        "double" | "float8" | "real" => Ok(DataType::Float64),
-
-        "char" | "character" | "varchar" | "text" | "string" => Ok(DataType::Utf8),
-        "binary" | "blob" => Ok(DataType::Binary),
-
-        "date" => Ok(DataType::Date32),
-        "timestamp" => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)), // TODO: Fix it
-        _ => Err(DataFusionError::Plan(format!(
-            "Unsupported SQL type: '{}'",
-            raw
+            "Unsupported SQL type: {sql_type:?}"
         ))),
     }
 }
