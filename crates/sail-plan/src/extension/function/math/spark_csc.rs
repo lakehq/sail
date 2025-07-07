@@ -82,17 +82,17 @@ impl ScalarUDFImpl for SparkCsc {
                 let input = as_primitive_array::<Float64Type>(array);
                 let result: Float64Array = input
                     .iter()
-                    .map(|x| x.map(|v| 1.0 / v.sin()))
+                    .map(|opt| opt.map(|v| 1.0 / v.sin()))
                     .collect::<Float64Array>();
-                Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
+                Ok(ColumnarValue::Array(Arc::new(result)))
             }
             ColumnarValue::Array(array) if array.data_type() == &DataType::Float32 => {
                 let input = as_primitive_array::<Float32Type>(array);
                 let result: Float32Array = input
                     .iter()
-                    .map(|x| x.map(|v| 1.0 / v.sin()))
+                    .map(|opt| opt.map(|v| 1.0 / v.sin()))
                     .collect::<Float32Array>();
-                Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
+                Ok(ColumnarValue::Array(Arc::new(result)))
             }
 
             other => exec_err!(
