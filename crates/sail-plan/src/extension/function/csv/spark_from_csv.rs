@@ -20,6 +20,12 @@ use datafusion_expr::{
 use sail_common::spec::i256;
 use std::collections::HashSet;
 
+/// UDF implementation of `from_csv`, similar to Spark's `from_csv`.
+/// This parses a column of CSV lines using a provided schema string
+/// and returns a `StructArray` with the parsed fields.
+///
+/// The schema is specified using SQL-like types (e.g., "name STRING, age INT").
+/// A third argument can be provided as a Map with a "sep" field to override the separator (default is ",").
 #[derive(Debug)]
 pub struct SparkFromCSV {
     signature: Signature,
@@ -32,6 +38,7 @@ impl Default for SparkFromCSV {
 }
 
 impl SparkFromCSV {
+    /// Constructor for the UDF
     pub fn new() -> Self {
         Self {
             // Because you could use it with either:
@@ -58,11 +65,13 @@ impl ScalarUDFImpl for SparkFromCSV {
         &self.signature
     }
 
+    /// The base return type is unknown until arguments are provided
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         // We cannot know the final DataType result without knowing the schema input args
         Ok(DataType::Struct(Fields::empty()))
     }
 
+    /// Determines the return type of the function based on the schema string and separator
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         // We need to implement the return type related to the args
         let options_array: Option<&StructArray> =
@@ -75,11 +84,11 @@ impl ScalarUDFImpl for SparkFromCSV {
             Some(ScalarValue::Utf8(Some(schema)))
             | Some(ScalarValue::LargeUtf8(Some(schema)))
             | Some(ScalarValue::Utf8View(Some(schema))) => Ok(schema),
-
             _ => Err(DataFusionError::Internal(
                 "Expected UTF-8 schema string".to_string(),
             )),
         }?;
+
         let sep: &str = get_sep_from_options(options_array.unwrap()).unwrap_or(",");
         let schema: Result<DataType> =
             parse_fields(schema, sep).map(|fields| DataType::Struct(fields));
@@ -87,12 +96,14 @@ impl ScalarUDFImpl for SparkFromCSV {
         schema.map(|dt| ReturnInfo::new_nullable(dt))
     }
 
+    /// Executes the function with given arguments and produces the resulting array
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(spark_from_csv_inner, vec![])(&args)
     }
 }
 
+/// Core implementation of `from_csv` function logic
 fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!(
@@ -103,8 +114,7 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let array: &StringArray = downcast_arg!(&args[0], StringArray);
     let schema_str: &str = downcast_arg!(&args[1], StringArray).value(0);
-    let options: &MapArray = downcast_arg!(&args[2], MapArray);
-    let options: &StructArray = options.entries();
+
     let sep: &str = if args.len() == 3 {
         let options: &MapArray = downcast_arg!(&args[2], MapArray);
         let options: &StructArray = options.entries();
@@ -112,6 +122,7 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     } else {
         ","
     };
+
     let fields: Fields = parse_fields(schema_str, sep)?;
 
     let mut children_scalars: Vec<Vec<ScalarValue>> =
@@ -120,7 +131,6 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     for i in 0..array.len() {
         if array.is_null(i) {
-            // Fila completa null
             for col in &mut children_scalars {
                 col.push(ScalarValue::Null);
             }
@@ -140,15 +150,14 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(ScalarValue::iter_to_array)
         .collect::<Result<_>>()?;
 
-    let struct_array = Arc::new(StructArray::new(
-        fields.clone(),
+    Ok(Arc::new(StructArray::new(
+        fields,
         children_arrays,
         Some(validity.into()),
-    ));
-
-    Ok(struct_array)
+    )))
 }
 
+/// Parses a CSV line into a vector of `ScalarValue`s, according to the given field types
 fn parse_csv_line_to_scalar_values(
     line: &str,
     sep: &str,
@@ -172,6 +181,7 @@ fn parse_csv_line_to_scalar_values(
         .collect()
 }
 
+/// Extracts the separator string ("sep") from a struct options array
 fn get_sep_from_options(options: &StructArray) -> Result<&str> {
     let sep_column = options.column_by_name("sep").ok_or_else(|| {
         DataFusionError::Plan("Missing 'sep' option in from_csv options".to_string())
@@ -191,6 +201,7 @@ fn get_sep_from_options(options: &StructArray) -> Result<&str> {
     Ok(sep_array.value(0))
 }
 
+/// Parses a schema string like "name STRING, age INT" into Arrow `Fields`
 fn parse_fields(schema: &str, sep: &str) -> Result<Fields> {
     let schema: Result<Fields> = parse_schema_string(schema, sep);
     schema.map(|fields| {
@@ -199,6 +210,7 @@ fn parse_fields(schema: &str, sep: &str) -> Result<Fields> {
     })
 }
 
+/// Parses a schema definition string into a `Fields` list with duplicate check
 fn parse_schema_string(schema_str: &str, sep: &str) -> Result<Fields> {
     schema_str
         .split(sep)
@@ -236,6 +248,7 @@ fn parse_schema_string(schema_str: &str, sep: &str) -> Result<Fields> {
         .map(|(_, fields)| Fields::from(fields))
 }
 
+/// Parses a single type string (e.g. "INT", "STRUCT<id INT>") into an Arrow DataType using `sqlparser`
 pub fn parse_data_type(raw: &str) -> Result<DataType> {
     let dialect = GenericDialect {};
     let mut tokenizer = Tokenizer::new(&dialect, raw);
@@ -254,6 +267,7 @@ pub fn parse_data_type(raw: &str) -> Result<DataType> {
     convert_sql_type(&sql_type)
 }
 
+/// Converts a parsed `sqlparser::ast::DataType` into an Arrow `DataType`
 fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
     match sql_type {
         SQLType::Int(_) | SQLType::Integer(_) | SQLType::Int4(_) => Ok(DataType::Int32),
@@ -346,29 +360,36 @@ fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
     }
 }
 
+/// Unit test for `spark_from_csv_inner` that verifies CSV parsing into a `StructArray`.
+/// This test simulates a column of CSV lines and checks:
+/// - correct parsing of valid rows
+/// - handling of null rows
+/// - correct nullability for missing fields
 #[test]
 fn test_from_csv_simple_struct() -> Result<()> {
-    // 1. Input CSV lines (name, age)
+    // Input CSV lines for the column ("name,age"), including a null and an empty field
     let csv_data = vec![Some("alice,30"), Some("bob,25"), None, Some("charlie,")];
 
+    // Wrap input as Arrow StringArray
     let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
 
-    // 2. Define schema string and separator
+    // Define the schema: name is a string, age is an int
     let schema_str = Arc::new(StringArray::from(vec!["name string, age int"])) as ArrayRef;
 
-    // 3. Call the function
+    // Execute the function with CSV column and schema
     let result = spark_from_csv_inner(&[input_array, schema_str])?;
 
-    // 4. Check the output type and content
+    // Downcast the result to a StructArray
     let struct_array = result
         .as_any()
         .downcast_ref::<StructArray>()
         .expect("Expected StructArray");
 
+    // There should be 4 entries total, and 1 null struct (the third)
     assert_eq!(struct_array.len(), 4);
-    assert_eq!(struct_array.null_count(), 1); // third row is null
+    assert_eq!(struct_array.null_count(), 1);
 
-    // Field 0: name (Utf8)
+    // Check the `name` field (Utf8)
     let name_array = struct_array
         .column_by_name("name")
         .expect("name field not found")
@@ -378,10 +399,10 @@ fn test_from_csv_simple_struct() -> Result<()> {
 
     assert_eq!(name_array.value(0), "alice");
     assert_eq!(name_array.value(1), "bob");
-    assert!(name_array.is_null(2)); // Struct was null
+    assert!(name_array.is_null(2)); // Entire struct was null
     assert_eq!(name_array.value(3), "charlie");
 
-    // Field 1: age (Int32)
+    // Check the `age` field (Int32)
     let age_array = struct_array
         .column_by_name("age")
         .expect("age field not found")
