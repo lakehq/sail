@@ -86,9 +86,9 @@ impl ScalarUDFImpl for SparkFromCSV {
 
         let sep: &str = get_sep_from_options(options_array.unwrap()).unwrap_or(",");
         let schema: Result<DataType> =
-            parse_fields(schema, sep).map(|fields| DataType::Struct(fields));
+            parse_fields(schema, sep).map(DataType::Struct);
 
-        schema.map(|dt| ReturnInfo::new_nullable(dt))
+        schema.map(ReturnInfo::new_nullable)
     }
 
     /// Executes the function with given arguments and produces the resulting array
