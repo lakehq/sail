@@ -32,6 +32,7 @@ either.workspace = true
 itertools = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
+parquet = "55.2.0"
 
 [features]
 default = []

@@ -5505,6 +5505,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "object_store",
+ "parquet",
  "sail-common",
  "sail-common-datafusion",
  "serde",

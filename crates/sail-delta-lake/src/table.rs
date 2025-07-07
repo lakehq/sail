@@ -141,7 +141,6 @@ fn create_logstore_with_object_store(
     location: Url,
     storage_config: StorageConfig,
 ) -> DeltaResult<LogStoreRef> {
-
     let prefixed_store = storage_config.decorate_store(Arc::clone(&object_store), &location)?;
 
     // Create the default LogStore with our custom ObjectStore
