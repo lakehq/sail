@@ -141,13 +141,16 @@ fn create_logstore_with_object_store(
     location: Url,
     storage_config: StorageConfig,
 ) -> DeltaResult<LogStoreRef> {
-    // For most cases, we use the same object store for both prefixed and root access
-    // The storage_config.decorate_store method will handle any necessary path prefixing
-    let prefixed_store =
-        storage_config.decorate_store(Arc::clone(&object_store), &location, None)?;
+
+    let prefixed_store = storage_config.decorate_store(Arc::clone(&object_store), &location)?;
 
     // Create the default LogStore with our custom ObjectStore
-    let log_store = default_logstore(Arc::new(prefixed_store), &location, &storage_config);
+    let log_store = default_logstore(
+        Arc::new(prefixed_store),
+        object_store, // root_store
+        &location,
+        &storage_config,
+    );
 
     Ok(log_store)
 }

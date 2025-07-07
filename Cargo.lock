@@ -1542,6 +1542,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
+dependencies = [
+ "darling_core",
+ "darling_macro",
+]
+
+[[package]]
+name = "darling_core"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
+dependencies = [
+ "fnv",
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.20.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
+dependencies = [
+ "darling_core",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "dary_heap"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2243,35 +2278,6 @@ dependencies = [
 
 [[package]]
 name = "delta_kernel"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c96f51383ba327a1403e6e3458f8fc979d09d7200af56fa32681619f6c760dee"
-dependencies = [
- "arrow",
- "bytes",
- "chrono",
- "delta_kernel_derive 0.10.0",
- "futures",
- "indexmap 2.10.0",
- "itertools 0.14.0",
- "object_store",
- "parquet",
- "reqwest",
- "roaring",
- "rustc_version",
- "serde",
- "serde_json",
- "strum 0.27.1",
- "thiserror 2.0.12",
- "tokio",
- "tracing",
- "url",
- "uuid",
- "z85",
-]
-
-[[package]]
-name = "delta_kernel"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de0b553d03fce69da6bedd91ec7e2348d52af2783a95d2dc91970df0cb614783"
@@ -2279,7 +2285,7 @@ dependencies = [
  "arrow",
  "bytes",
  "chrono",
- "delta_kernel_derive 0.12.1",
+ "delta_kernel_derive",
  "futures",
  "indexmap 2.10.0",
  "itertools 0.14.0",
@@ -2297,17 +2303,6 @@ dependencies = [
  "url",
  "uuid",
  "z85",
-]
-
-[[package]]
-name = "delta_kernel_derive"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7b49a2e67ebafbe644e36f251ee985f237bfb39e4ef1e312eb5876535bc449e"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -2324,17 +2319,16 @@ dependencies = [
 [[package]]
 name = "deltalake"
 version = "0.26.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5c9558d4d4f64d006196dd05e01bef3ac25e4250164f04e89f6461b8d8130f8"
+source = "git+https://github.com/lakehq/delta-rs.git?rev=979e177#979e17713acbf65a83b75ffb75c7ada0f49673f0"
 dependencies = [
+ "delta_kernel",
  "deltalake-core",
 ]
 
 [[package]]
 name = "deltalake-core"
-version = "0.26.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d96e6d67a03d7ee6ff55607f58e041d67c9e9cce8b2e43f00f4ca0729f912a0b"
+version = "0.26.2"
+source = "git+https://github.com/lakehq/delta-rs.git?rev=979e177#979e17713acbf65a83b75ffb75c7ada0f49673f0"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -2352,7 +2346,7 @@ dependencies = [
  "cfg-if",
  "chrono",
  "dashmap",
- "delta_kernel 0.10.0",
+ "delta_kernel",
  "deltalake-derive",
  "either",
  "futures",
@@ -2370,7 +2364,6 @@ dependencies = [
  "pin-project-lite",
  "rand 0.8.5",
  "regex",
- "roaring",
  "serde",
  "serde_json",
  "sqlparser 0.56.0",
@@ -2381,14 +2374,13 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
- "z85",
+ "validator",
 ]
 
 [[package]]
 name = "deltalake-derive"
 version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bdd39efa077173455fa69c17437141d14ec6273a371d7d3d25ea7f30f61d4c9"
+source = "git+https://github.com/lakehq/delta-rs.git?rev=979e177#979e17713acbf65a83b75ffb75c7ada0f49673f0"
 dependencies = [
  "convert_case",
  "itertools 0.14.0",
@@ -3390,6 +3382,12 @@ dependencies = [
  "zerotrie",
  "zerovec",
 ]
+
+[[package]]
+name = "ident_case"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
 name = "idna"
@@ -5501,7 +5499,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
- "delta_kernel 0.12.1",
+ "delta_kernel",
  "deltalake",
  "either",
  "futures",
@@ -6792,6 +6790,7 @@ dependencies = [
  "form_urlencoded",
  "idna",
  "percent-encoding",
+ "serde",
 ]
 
 [[package]]
@@ -6829,6 +6828,36 @@ dependencies = [
  "rand 0.9.1",
  "serde",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "validator"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0b4a29d8709210980a09379f27ee31549b73292c87ab9899beee1c0d3be6303"
+dependencies = [
+ "idna",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "url",
+ "validator_derive",
+]
+
+[[package]]
+name = "validator_derive"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bac855a2ce6f843beb229757e6e570a42e837bcb15e5f449dd48d5747d41bf77"
+dependencies = [
+ "darling",
+ "once_cell",
+ "proc-macro-error2",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
