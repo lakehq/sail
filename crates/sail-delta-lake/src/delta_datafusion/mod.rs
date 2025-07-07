@@ -31,7 +31,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone};
 use datafusion::arrow::array::types::UInt16Type;
-use datafusion::arrow::array::{Array, RecordBatch, StringArray, TypedDictionaryArray};
+use datafusion::arrow::array::{RecordBatch, StringArray, TypedDictionaryArray};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
@@ -54,7 +54,6 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
-use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -64,7 +63,6 @@ use datafusion::logical_expr::{
 };
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::pruning::PruningStatistics;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
@@ -72,14 +70,12 @@ use datafusion::physical_plan::{
 use datafusion::sql::planner::ParserOptions;
 // use datafusion_proto::logical_plan::LogicalExtensionCodec;
 // use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use deltalake::errors::{DeltaResult, DeltaTableError};
-use deltalake::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot, StructTypeExt};
+use deltalake::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot};
 use deltalake::logstore::LogStoreRef;
 use deltalake::table::state::DeltaTableState;
 use deltalake::table::{Constraint, GeneratedColumn};
-use futures::TryStreamExt;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -401,9 +397,10 @@ pub(crate) fn files_matching_predicate<'a>(
     Ok(Box::new(filtered))
 }
 
+#[allow(dead_code)]
 pub(crate) fn get_path_column<'a>(
-    batch: &'a RecordBatch,
-    path_column: &str,
+    _batch: &'a RecordBatch,
+    _path_column: &str,
 ) -> DeltaResult<TypedDictionaryArray<'a, UInt16Type, StringArray>> {
     unimplemented!();
 }
@@ -671,7 +668,8 @@ impl ExecutionPlan for DeltaScan {
     }
 
     fn statistics(&self) -> DataFusionResult<Statistics> {
-        self.parquet_scan.statistics()
+        // let partition_stats = self.parquet_scan.partition_statistics()?;
+        Ok(Statistics::default())
     }
 
     fn repartitioned(
@@ -795,7 +793,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let file_schema = schema.clone();
 
-        let (files, files_scanned, files_pruned, pruning_mask) = match self.files {
+        let (files, files_scanned, files_pruned, _pruning_mask) = match self.files {
             Some(files) => {
                 let files = files.to_owned();
                 let files_scanned = files.len();
@@ -983,8 +981,9 @@ fn simplify_expr(
     context.create_physical_expr(simplified, df_schema).unwrap()
 }
 
+#[allow(dead_code)]
 fn prune_file_statistics(
-    record_batches: &Vec<RecordBatch>,
+    record_batches: &[RecordBatch],
     pruning_mask: Vec<bool>,
 ) -> Vec<RecordBatch> {
     record_batches
@@ -1242,14 +1241,16 @@ pub(crate) fn to_correct_scalar_value(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) async fn execute_plan_to_batch(
-    state: &SessionState,
-    plan: Arc<dyn ExecutionPlan>,
+    _state: &SessionState,
+    _plan: Arc<dyn ExecutionPlan>,
 ) -> DeltaResult<datafusion::arrow::record_batch::RecordBatch> {
     unimplemented!();
 }
 
 /// Responsible for checking batches of data conform to table's invariants, constraints and nullability.
+#[allow(dead_code)]
 #[derive(Clone, Default)]
 pub struct DeltaDataChecker {
     constraints: Vec<Constraint>,
@@ -1266,32 +1267,32 @@ impl DeltaDataChecker {
     }
 
     /// Create a new DeltaDataChecker with a specified set of invariants
-    pub fn new_with_invariants(invariants: Vec<Invariant>) -> Self {
+    pub fn new_with_invariants(_invariants: Vec<Invariant>) -> Self {
         unimplemented!();
     }
 
     /// Create a new DeltaDataChecker with a specified set of constraints
-    pub fn new_with_constraints(constraints: Vec<Constraint>) -> Self {
+    pub fn new_with_constraints(_constraints: Vec<Constraint>) -> Self {
         unimplemented!();
     }
 
     /// Create a new DeltaDataChecker with a specified set of generated columns
-    pub fn new_with_generated_columns(generated_columns: Vec<GeneratedColumn>) -> Self {
+    pub fn new_with_generated_columns(_generated_columns: Vec<GeneratedColumn>) -> Self {
         unimplemented!();
     }
 
     /// Specify the Datafusion context
-    pub fn with_session_context(self, context: SessionContext) -> Self {
+    pub fn with_session_context(self, _context: SessionContext) -> Self {
         unimplemented!();
     }
 
     /// Add the specified set of constraints to the current DeltaDataChecker's constraints
-    pub fn with_extra_constraints(self, constraints: Vec<Constraint>) -> Self {
+    pub fn with_extra_constraints(self, _constraints: Vec<Constraint>) -> Self {
         unimplemented!();
     }
 
     /// Create a new DeltaDataChecker
-    pub fn new(snapshot: &DeltaTableState) -> Self {
+    pub fn new(_snapshot: &DeltaTableState) -> Self {
         unimplemented!();
     }
 
@@ -1299,84 +1300,25 @@ impl DeltaDataChecker {
     ///
     /// If it does not, it will return [DeltaTableError::InvalidData] with a list
     /// of values that violated each invariant.
-    pub async fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
+    pub async fn check_batch(&self, _record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
         unimplemented!();
     }
 
     /// Return true if all the nullability checks are valid
-    fn check_nullability(&self, record_batch: &RecordBatch) -> Result<bool, DeltaTableError> {
+    #[allow(dead_code)]
+    fn check_nullability(&self, _record_batch: &RecordBatch) -> Result<bool, DeltaTableError> {
         unimplemented!();
     }
 
+    #[allow(dead_code)]
     async fn enforce_checks<C: DataCheck>(
         &self,
-        record_batch: &RecordBatch,
-        checks: &[C],
+        _record_batch: &RecordBatch,
+        _checks: &[C],
     ) -> Result<(), DeltaTableError> {
         unimplemented!();
     }
 }
-
-/// A codec for deltalake physical plans
-// #[derive(Debug)]
-// pub struct DeltaPhysicalCodec {}
-
-// impl PhysicalExtensionCodec for DeltaPhysicalCodec {
-//     fn try_decode(
-//         &self,
-//         buf: &[u8],
-//         inputs: &[Arc<dyn ExecutionPlan>],
-//         _registry: &dyn FunctionRegistry,
-//     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-//         unimplemented!();
-//     }
-
-//     fn try_encode(
-//         &self,
-//         node: Arc<dyn ExecutionPlan>,
-//         buf: &mut Vec<u8>,
-//     ) -> Result<(), DataFusionError> {
-//         unimplemented!();
-//     }
-// }
-
-/// Does serde on DeltaTables
-// #[derive(Debug)]
-// pub struct DeltaLogicalCodec {}
-
-// impl LogicalExtensionCodec for DeltaLogicalCodec {
-//     fn try_decode(
-//         &self,
-//         _buf: &[u8],
-//         _inputs: &[LogicalPlan],
-//         _ctx: &SessionContext,
-//     ) -> Result<Extension, DataFusionError> {
-//         unimplemented!();
-//     }
-
-//     fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<(), DataFusionError> {
-//         unimplemented!();
-//     }
-
-//     fn try_decode_table_provider(
-//         &self,
-//         buf: &[u8],
-//         _table_ref: &TableReference,
-//         _schema: SchemaRef,
-//         _ctx: &SessionContext,
-//     ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
-//         unimplemented!();
-//     }
-
-//     fn try_encode_table_provider(
-//         &self,
-//         _table_ref: &TableReference,
-//         node: Arc<dyn TableProvider>,
-//         buf: &mut Vec<u8>,
-//     ) -> Result<(), DataFusionError> {
-//         unimplemented!();
-//     }
-// }
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
 #[derive(Debug)]
@@ -1601,6 +1543,7 @@ impl TableProviderFactory for DeltaTableFactory {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) struct FindFilesExprProperties {
     pub partition_columns: Vec<String>,
     pub partition_only: bool,
@@ -1613,7 +1556,7 @@ pub(crate) struct FindFilesExprProperties {
 impl TreeNodeVisitor<'_> for FindFilesExprProperties {
     type Node = Expr;
 
-    fn f_down(&mut self, expr: &Self::Node) -> datafusion::common::Result<TreeNodeRecursion> {
+    fn f_down(&mut self, _expr: &Self::Node) -> datafusion::common::Result<TreeNodeRecursion> {
         unimplemented!();
     }
 }
@@ -1627,43 +1570,47 @@ pub struct FindFiles {
     pub partition_scan: bool,
 }
 
+#[allow(dead_code)]
 fn join_batches_with_add_actions(
-    batches: Vec<RecordBatch>,
-    actions: HashMap<String, Add>,
-    path_column: &str,
-    dict_array: bool,
+    _batches: Vec<RecordBatch>,
+    _actions: HashMap<String, Add>,
+    _path_column: &str,
+    _dict_array: bool,
 ) -> DeltaResult<Vec<Add>> {
     unimplemented!();
 }
 
 /// Determine which files contain a record that satisfies the predicate
+#[allow(dead_code)]
 pub(crate) async fn find_files_scan(
-    snapshot: &DeltaTableState,
-    log_store: LogStoreRef,
-    state: &SessionState,
-    expression: Expr,
+    _snapshot: &DeltaTableState,
+    _log_store: LogStoreRef,
+    _state: &SessionState,
+    _expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     unimplemented!();
 }
 
+#[allow(dead_code)]
 pub(crate) async fn scan_memory_table(
-    snapshot: &DeltaTableState,
-    predicate: &Expr,
+    _snapshot: &DeltaTableState,
+    _predicate: &Expr,
 ) -> DeltaResult<Vec<Add>> {
     unimplemented!();
 }
 
 /// Finds files in a snapshot that match the provided predicate.
 pub async fn find_files(
-    snapshot: &DeltaTableState,
-    log_store: LogStoreRef,
-    state: &SessionState,
-    predicate: Option<Expr>,
+    _snapshot: &DeltaTableState,
+    _log_store: LogStoreRef,
+    _state: &SessionState,
+    _predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
     unimplemented!();
 }
 
 /// A wrapper for sql_parser's ParserOptions to capture sane default table defaults
+#[allow(dead_code)]
 pub struct DeltaParserOptions {
     inner: ParserOptions,
 }
@@ -1675,12 +1622,13 @@ impl Default for DeltaParserOptions {
 }
 
 impl From<DeltaParserOptions> for ParserOptions {
-    fn from(value: DeltaParserOptions) -> Self {
+    fn from(_value: DeltaParserOptions) -> Self {
         unimplemented!();
     }
 }
 
 /// A wrapper for Deltafusion's SessionConfig to capture sane default table defaults
+#[allow(dead_code)]
 pub struct DeltaSessionConfig {
     inner: SessionConfig,
 }
@@ -1692,12 +1640,13 @@ impl Default for DeltaSessionConfig {
 }
 
 impl From<DeltaSessionConfig> for SessionConfig {
-    fn from(value: DeltaSessionConfig) -> Self {
+    fn from(_value: DeltaSessionConfig) -> Self {
         unimplemented!();
     }
 }
 
 /// A wrapper for Deltafusion's SessionContext to capture sane default table defaults
+#[allow(dead_code)]
 pub struct DeltaSessionContext {
     inner: SessionContext,
 }
@@ -1709,45 +1658,46 @@ impl Default for DeltaSessionContext {
 }
 
 impl From<DeltaSessionContext> for SessionContext {
-    fn from(value: DeltaSessionContext) -> Self {
+    fn from(_value: DeltaSessionContext) -> Self {
         unimplemented!();
     }
 }
 
 /// A wrapper for Deltafusion's Column to preserve case-sensitivity during string conversion
+#[allow(dead_code)]
 pub struct DeltaColumn {
     inner: Column,
 }
 
 impl From<&str> for DeltaColumn {
-    fn from(c: &str) -> Self {
+    fn from(_c: &str) -> Self {
         unimplemented!();
     }
 }
 
 /// Create a column, cloning the string
 impl From<&String> for DeltaColumn {
-    fn from(c: &String) -> Self {
+    fn from(_c: &String) -> Self {
         unimplemented!();
     }
 }
 
 /// Create a column, reusing the existing string
 impl From<String> for DeltaColumn {
-    fn from(c: String) -> Self {
+    fn from(_c: String) -> Self {
         unimplemented!();
     }
 }
 
 impl From<DeltaColumn> for Column {
-    fn from(value: DeltaColumn) -> Self {
+    fn from(_value: DeltaColumn) -> Self {
         unimplemented!();
     }
 }
 
 /// Create a column, resuing the existing datafusion column
 impl From<Column> for DeltaColumn {
-    fn from(c: Column) -> Self {
+    fn from(_c: Column) -> Self {
         unimplemented!();
     }
 }

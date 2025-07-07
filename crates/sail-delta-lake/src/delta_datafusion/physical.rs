@@ -15,8 +15,10 @@ use futures::{Stream, StreamExt};
 // Typically the null count for a particular column is pulled after performing a
 // projection since this count is easy to obtain
 
+#[allow(dead_code)]
 pub(crate) type MetricObserverFunction = fn(&RecordBatch, &ExecutionPlanMetricsSet) -> ();
 
+#[allow(dead_code)]
 pub(crate) struct MetricObserverExec {
     parent: Arc<dyn ExecutionPlan>,
     id: String,
@@ -25,6 +27,7 @@ pub(crate) struct MetricObserverExec {
 }
 
 impl MetricObserverExec {
+    #[allow(dead_code)]
     pub fn new(id: String, parent: Arc<dyn ExecutionPlan>, f: MetricObserverFunction) -> Self {
         MetricObserverExec {
             parent,
@@ -34,6 +37,7 @@ impl MetricObserverExec {
         }
     }
 
+    #[allow(dead_code)]
     pub fn try_new(
         id: String,
         inputs: &[Arc<dyn ExecutionPlan>],
@@ -47,6 +51,7 @@ impl MetricObserverExec {
         }
     }
 
+    #[allow(dead_code)]
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -122,6 +127,7 @@ impl ExecutionPlan for MetricObserverExec {
     }
 }
 
+#[allow(dead_code)]
 struct MetricObserverStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
@@ -156,6 +162,7 @@ impl RecordBatchStream for MetricObserverStream {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn find_metric_node(
     id: &str,
     parent: &Arc<dyn ExecutionPlan>,
@@ -177,6 +184,7 @@ pub(crate) fn find_metric_node(
     None
 }
 
+#[allow(dead_code)]
 pub(crate) fn get_metric(metrics: &MetricsSet, name: &str) -> usize {
     metrics.sum_by_name(name).map(|m| m.as_usize()).unwrap_or(0)
 }

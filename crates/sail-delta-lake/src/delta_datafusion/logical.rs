@@ -7,6 +7,7 @@ use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 // Metric Observer is used to update DataFusion metrics from a record batch.
 // See MetricObserverExec for the physical implementation
 
+#[allow(dead_code)]
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd)]
 pub(crate) struct MetricObserver {
     // id is preserved during conversion to physical node

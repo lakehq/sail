@@ -307,7 +307,7 @@ impl CdfLoadBuilder {
     /// Executes the scan
     pub(crate) async fn build(
         &self,
-        session_sate: &SessionState,
+        _session_sate: &SessionState,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         let (cdc, add, remove) = self.determine_files_to_read().await?;
@@ -445,6 +445,7 @@ impl CdfLoadBuilder {
 }
 
 // Helper function to collect batches associated with reading CDF data
+#[allow(dead_code)]
 pub(crate) async fn collect_batches(
     num_partitions: usize,
     stream: Arc<dyn ExecutionPlan>,
