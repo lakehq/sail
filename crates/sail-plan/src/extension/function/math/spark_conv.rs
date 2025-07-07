@@ -3,6 +3,7 @@ use std::any::Any;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr_common::signature::TypeSignature;
 
 #[derive(Debug)]
 pub struct SparkConv {
@@ -18,11 +19,22 @@ impl Default for SparkConv {
 impl SparkConv {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![DataType::Utf8, DataType::Int32, DataType::Int32],
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Int32, DataType::Int32]),
+                    TypeSignature::Exact(vec![
+                        DataType::Utf8View,
+                        DataType::Int32,
+                        DataType::Int32,
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::LargeUtf8,
+                        DataType::Int32,
+                        DataType::Int32,
+                    ]),
+                ],
                 Volatility::Immutable,
             ),
-            // signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -53,11 +65,13 @@ impl ScalarUDFImpl for SparkConv {
 
         match (num, from_base, to_base) {
             (
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(num_str))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(num_str)))
+                | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(num_str)))
+                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(num_str))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(from))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(to))),
             ) => {
-                if *from <= 2 || *from > 36 || *to < 2 || *to > 36 {
+                if *from < 2 || *from > 36 || *to < 2 || *to > 36 {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
                 }
                 match i64::from_str_radix(num_str, *from as u32) {
@@ -69,7 +83,7 @@ impl ScalarUDFImpl for SparkConv {
                         };
                         Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
                     }
-                    Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))), // conversión inválida
+                    Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
                 }
             }
 
