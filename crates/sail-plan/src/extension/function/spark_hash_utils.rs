@@ -191,7 +191,15 @@ fn create_hashes_dictionary<K: ArrowDictionaryKeyType>(
     hashes_buffer: &mut [u32],
     first_col: bool,
 ) -> Result<()> {
-    let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
+    let dict_array = array
+        .as_any()
+        .downcast_ref::<DictionaryArray<K>>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Expected DictionaryArray, found {:?}",
+                array.data_type()
+            ))
+        })?;
     if !first_col {
         // unpack the dictionary array as each row may have a different hash input
         let unpacked = take(dict_array.values().as_ref(), dict_array.keys(), None)?;
@@ -226,7 +234,15 @@ fn create_xxhash64_hashes_dictionary<K: ArrowDictionaryKeyType>(
     hashes_buffer: &mut [u64],
     first_col: bool,
 ) -> Result<()> {
-    let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
+    let dict_array = array
+        .as_any()
+        .downcast_ref::<DictionaryArray<K>>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Expected DictionaryArray, found {:?}",
+                array.data_type()
+            ))
+        })?;
     if !first_col {
         let unpacked = take(dict_array.values().as_ref(), dict_array.keys(), None)?;
         create_xxhash64_hashes(&[unpacked], hashes_buffer)?;
@@ -471,6 +487,7 @@ pub fn create_xxhash64_hashes<'a>(
     Ok(hashes_buffer)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

@@ -44,6 +44,7 @@ impl KubernetesWorkerManager {
     }
 
     pub fn generate_name() -> String {
+        #[allow(clippy::unwrap_used)]
         rand::rng()
             .sample_iter(Uniform::new(0, 36).unwrap())
             .take(10)

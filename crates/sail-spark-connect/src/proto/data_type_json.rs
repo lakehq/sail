@@ -157,12 +157,20 @@ impl Display for YearMonthIntervalField {
     }
 }
 
+fn create_regex(regex: Result<regex::Regex, regex::Error>) -> regex::Regex {
+    #[allow(clippy::unwrap_used)]
+    regex.unwrap()
+}
+
 mod serde_char {
     use lazy_static::lazy_static;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::proto::data_type_json::create_regex;
+
     lazy_static! {
-        static ref CHAR_LENGTH: regex::Regex = regex::Regex::new(r"^char\(\s*(\d+)\s*\)$").unwrap();
+        static ref CHAR_LENGTH: regex::Regex =
+            create_regex(regex::Regex::new(r"^char\(\s*(\d+)\s*\)$"));
     }
 
     pub fn serialize<S>(length: &i32, serializer: S) -> Result<S::Ok, S::Error>
@@ -188,9 +196,11 @@ mod serde_varchar {
     use lazy_static::lazy_static;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::proto::data_type_json::create_regex;
+
     lazy_static! {
         static ref VARCHAR_LENGTH: regex::Regex =
-            regex::Regex::new(r"^varchar\(\s*(\d+)\s*\)$").unwrap();
+            create_regex(regex::Regex::new(r"^varchar\(\s*(\d+)\s*\)$"));
     }
 
     pub fn serialize<S>(length: &i32, serializer: S) -> Result<S::Ok, S::Error>
@@ -216,9 +226,11 @@ mod serde_fixed_decimal {
     use lazy_static::lazy_static;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::proto::data_type_json::create_regex;
+
     lazy_static! {
         static ref FIXED_DECIMAL: regex::Regex =
-            regex::Regex::new(r"^decimal\(\s*(\d+)\s*,\s*(-?\d+)\s*\)$").unwrap();
+            create_regex(regex::Regex::new(r"^decimal\(\s*(\d+)\s*,\s*(-?\d+)\s*\)$"));
     }
 
     pub fn serialize<S>(precision: &i32, scale: &i32, serializer: S) -> Result<S::Ok, S::Error>
@@ -249,11 +261,12 @@ mod serde_day_time_interval {
     use lazy_static::lazy_static;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::proto::data_type_json::create_regex;
+
     lazy_static! {
-        static ref DAY_TIME_INTERVAL: regex::Regex = regex::Regex::new(
+        static ref DAY_TIME_INTERVAL: regex::Regex = create_regex(regex::Regex::new(
             r"^interval\s+(day|hour|minute|second)(\s+to\s+(day|hour|minute|second))?$"
-        )
-        .unwrap();
+        ));
     }
 
     pub fn serialize<S>(
@@ -310,9 +323,12 @@ mod serde_year_month_interval {
     use lazy_static::lazy_static;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::proto::data_type_json::create_regex;
+
     lazy_static! {
-        static ref YEAR_MONTH_INTERVAL: regex::Regex =
-            regex::Regex::new(r"^interval\s+(year|month)(\s+to\s+(year|month))?$").unwrap();
+        static ref YEAR_MONTH_INTERVAL: regex::Regex = create_regex(regex::Regex::new(
+            r"^interval\s+(year|month)(\s+to\s+(year|month))?$"
+        ));
     }
 
     pub fn serialize<S>(
@@ -515,6 +531,7 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
     Ok(out)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

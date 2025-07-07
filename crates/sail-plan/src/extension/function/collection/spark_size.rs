@@ -5,7 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt64Array};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{exec_err, plan_datafusion_err, plan_err, Result};
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
@@ -112,7 +112,17 @@ fn generic_list_size<O: OffsetSizeTrait>(array: &GenericListArray<O>) -> Result<
     let result = array
         .iter()
         .map(|arr| match compute_array_dims(arr)? {
-            Some(vector) => Ok(Some(vector.iter().map(|x| x.unwrap()).product::<u64>())),
+            Some(vector) => {
+                let product = vector
+                    .iter()
+                    .map(|x| {
+                        x.ok_or_else(|| {
+                            plan_datafusion_err!("Unexpected None in compute_array_dims result")
+                        })
+                    })
+                    .product::<Result<u64>>()?;
+                Ok(Some(product))
+            }
             None => Ok(Some(0)),
         })
         .collect::<Result<UInt64Array>>()?;

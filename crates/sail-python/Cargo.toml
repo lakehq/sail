@@ -3,6 +3,9 @@ name = "sail-python"
 version = { workspace = true }
 edition = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-telemetry = { path = "../sail-telemetry" }
