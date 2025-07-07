@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{as_primitive_array, ArrayRef, Float32Array, Float64Array};
+use datafusion::arrow::array::{as_primitive_array, Float32Array, Float64Array};
 use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
