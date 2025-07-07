@@ -412,3 +412,172 @@ fn test_from_csv_simple_struct() -> Result<()> {
 
     Ok(())
 }
+
+/// Unit test for `spark_from_csv_inner` that verifies CSV parsing into a `StructArray` with nested struct field.
+#[test]
+fn test_from_csv_nested_struct() -> Result<()> {
+    let csv_data = vec![
+        Some("1,foo,42"),
+        Some("2,bar,99"),
+        None,
+        Some("3,,")
+    ];
+    let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
+    let schema_str = Arc::new(StringArray::from(vec!["id INT, info STRUCT<name STRING, score INT>"])) as ArrayRef;
+    let result = spark_from_csv_inner(&[input_array, schema_str])?;
+
+    let struct_array = result
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("Expected StructArray");
+
+    assert_eq!(struct_array.len(), 4);
+    assert_eq!(struct_array.null_count(), 1);
+
+    let id_array = struct_array
+        .column_by_name("id")
+        .expect("id field not found")
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+
+    assert_eq!(id_array.value(0), 1);
+    assert_eq!(id_array.value(1), 2);
+    assert!(id_array.is_null(2));
+    assert_eq!(id_array.value(3), 3);
+
+    let info_array = struct_array
+        .column_by_name("info")
+        .expect("info field not found")
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .unwrap();
+
+    let name_array = info_array
+        .column_by_name("name")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+
+    assert_eq!(name_array.value(0), "foo");
+    assert_eq!(name_array.value(1), "bar");
+    assert!(name_array.is_null(2));
+    assert!(name_array.is_null(3));
+
+    let score_array = info_array
+        .column_by_name("score")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+
+    assert_eq!(score_array.value(0), 42);
+    assert_eq!(score_array.value(1), 99);
+    assert!(score_array.is_null(2));
+    assert!(score_array.is_null(3));
+
+    Ok(())
+}
+
+/// Unit test with arrays and boolean types
+#[test]
+fn test_from_csv_with_array_and_bool() -> Result<()> {
+    let csv_data = vec![
+        Some("true,[1,2,3]"),
+        Some("false,[4,5]"),
+        Some("true,[]"),
+        None,
+        Some(",[7,null,9]"),
+        Some("false,")
+    ];
+    let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
+    let schema_str = Arc::new(StringArray::from(vec!["flag BOOLEAN, values ARRAY<INT>"])) as ArrayRef;
+    let result = spark_from_csv_inner(&[input_array, schema_str])?;
+
+    let struct_array = result
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("Expected StructArray");
+
+    assert_eq!(struct_array.len(), 6);
+    assert_eq!(struct_array.null_count(), 1);
+
+    let flag_array = struct_array
+        .column_by_name("flag")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .unwrap();
+
+    assert_eq!(flag_array.value(0), true);
+    assert_eq!(flag_array.value(1), false);
+    assert_eq!(flag_array.value(2), true);
+    assert!(flag_array.is_null(3));
+    assert!(flag_array.is_null(4));
+    assert_eq!(flag_array.value(5), false);
+
+    let values_array = struct_array
+        .column_by_name("values")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .unwrap();
+
+    assert_eq!(values_array.len(), 6);
+    assert_eq!(values_array.null_count(), 1);
+    // Could extend to inspect list content as well
+
+    Ok(())
+}
+
+/// Unit test for decimal and timestamp parsing
+#[test]
+fn test_from_csv_decimal_and_timestamp() -> Result<()> {
+    let csv_data = vec![
+        Some("9.99,2023-01-01 00:00:00"),
+        Some("12.34,2024-05-06 15:45:00"),
+        None,
+        Some(",2025-01-01 12:00:00"),
+        Some("7.77,")
+    ];
+    let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
+    let schema_str = Arc::new(StringArray::from(vec!["price DECIMAL(5,2), created TIMESTAMP"])) as ArrayRef;
+    let result = spark_from_csv_inner(&[input_array, schema_str])?;
+
+    let struct_array = result
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("Expected StructArray");
+
+    assert_eq!(struct_array.len(), 5);
+    assert_eq!(struct_array.null_count(), 1);
+
+    let price_array = struct_array
+        .column_by_name("price")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Decimal128Array>()
+        .unwrap();
+
+    assert_eq!(price_array.value(0), 999);
+    assert_eq!(price_array.value(1), 1234);
+    assert!(price_array.is_null(2));
+    assert!(price_array.is_null(3));
+    assert_eq!(price_array.value(4), 777);
+
+    let ts_array = struct_array
+        .column_by_name("created")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TimestampNanosecondArray>()
+        .unwrap();
+
+    assert_eq!(ts_array.value(0), 1672531200000000000);
+    assert_eq!(ts_array.value(1), 1715010300000000000);
+    assert!(ts_array.is_null(2));
+    assert_eq!(ts_array.value(3), 1735732800000000000);
+    assert!(ts_array.is_null(4));
+
+    Ok(())
+}
