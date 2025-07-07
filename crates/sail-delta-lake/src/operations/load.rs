@@ -97,7 +97,7 @@ impl std::future::IntoFuture for LoadBuilder {
                 .transpose()?;
 
             // Create scan configuration
-            let scan_config = this.scan_config.unwrap_or_else(|| DeltaScanConfig {
+            let scan_config = this.scan_config.unwrap_or(DeltaScanConfig {
                 file_column_name: None,
                 wrap_partition_values: false,
                 enable_parquet_pushdown: true,

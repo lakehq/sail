@@ -15,7 +15,7 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
-use deltalake::{DeltaResult, DeltaTableError};
+use deltalake::DeltaResult;
 
 use super::ADD_PARTITION_SCHEMA;
 use crate::delta_datafusion::{delta_to_datafusion_error, DataFusionMixins};

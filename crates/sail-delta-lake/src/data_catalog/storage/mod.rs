@@ -14,7 +14,6 @@ use deltalake::logstore::{store_for, StorageConfig};
 use deltalake::table::builder::ensure_table_uri;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
-use url::Url;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 

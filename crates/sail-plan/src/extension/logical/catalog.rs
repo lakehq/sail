@@ -525,7 +525,7 @@ impl CatalogCommand {
                 definition,
             } => {
                 manager
-                    .create_view(input, view, replace, definition, false)
+                    .create_view(input, view, replace, definition)
                     .await?;
                 let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?

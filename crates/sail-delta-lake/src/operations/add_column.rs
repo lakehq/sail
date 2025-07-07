@@ -4,8 +4,6 @@
 //! Since we've disabled the datafusion feature in delta-rs, we need to implement
 //! the middleware layer ourselves.
 
-use std::collections::HashMap;
-
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties};
 use deltalake::kernel::{StructField, StructType, StructTypeExt};
 use deltalake::logstore::LogStoreRef;

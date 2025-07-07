@@ -4,9 +4,18 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-sail-common = { path = "../sail-common" }
-
+async-trait = { workspace = true }
 serde = { workspace = true }
+futures = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+object_store = { workspace = true }
+chumsky = { workspace = true }
+glob = { workspace = true }
+url = { workspace = true }
+regex = { workspace = true }
+percent-encoding = { workspace = true }
+sail-delta-lake = { path = "../sail-delta-lake" }
 
 [build-dependencies]
 serde = { workspace = true }

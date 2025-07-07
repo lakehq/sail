@@ -81,7 +81,8 @@ impl ScalarUDFImpl for MakeParquetArray {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let r_type = match arg_types.len() {
+        // debug!("MakeParquetArray return_type -> {r_type:?}");
+        match arg_types.len() {
             0 => Ok(DataType::List(Arc::new(Field::new(
                 "element",
                 DataType::Int32,
@@ -95,9 +96,7 @@ impl ScalarUDFImpl for MakeParquetArray {
                     true,
                 ))))
             }
-        };
-        // debug!("MakeParquetArray return_type -> {r_type:?}");
-        r_type
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -279,11 +278,11 @@ pub fn parse_predicate_expression(
     let sql_to_rel =
         SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
 
-    Ok(sql_to_rel
+    sql_to_rel
         .sql_to_expr(sql, schema, &mut Default::default())
         .map_err(|err| DeltaTableError::GenericError {
             source: Box::new(err),
-        })?)
+        })
 }
 
 struct SqlFormat<'a> {

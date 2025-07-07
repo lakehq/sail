@@ -5,8 +5,7 @@
 
 use std::sync::Arc;
 
-use deltalake::logstore::{default_logstore, LogStoreConfig, LogStoreRef, StorageConfig};
-use deltalake::table::state::DeltaTableState;
+use deltalake::logstore::{default_logstore, LogStoreRef, StorageConfig};
 use deltalake::{DeltaResult, DeltaTable, DeltaTableError};
 use object_store::ObjectStore;
 use url::Url;

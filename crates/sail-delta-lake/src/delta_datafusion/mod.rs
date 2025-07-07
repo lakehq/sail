@@ -29,17 +29,13 @@ use std::sync::Arc;
 // use arrow_select::concat::concat_batches;
 // use arrow_select::filter::filter_record_batch;
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, TimeZone};
 use datafusion::arrow::array::types::UInt16Type;
-use datafusion::arrow::array::{
-    Array, BooleanArray, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray,
-};
-use datafusion::arrow::compute::kernels::cast::{cast_with_options, CastOptions};
+use datafusion::arrow::array::{Array, RecordBatch, StringArray, TypedDictionaryArray};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
-use datafusion::arrow::util::display::array_value_to_string;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::config::ConfigOptions;
@@ -47,7 +43,7 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::Statistics;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::{
-    Column, DFSchema, DataFusionError, Result as DataFusionResult, TableReference, ToDFSchema,
+    Column, DFSchema, DataFusionError, Result as DataFusionResult, ToDFSchema,
 };
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
@@ -56,22 +52,19 @@ use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfigBuilder,
     FileSource, ParquetSource,
 };
-use datafusion::datasource::{MemTable, TableProvider, TableType};
+use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::simplify::SimplifyContext;
-use datafusion::logical_expr::utils::{conjunction, split_conjunction};
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
-    col, BinaryExpr, Expr, Extension, LogicalPlan, Operator, TableProviderFilterPushDown,
-    Volatility,
+    BinaryExpr, Expr, LogicalPlan, Operator, TableProviderFilterPushDown,
 };
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::limit::LocalLimitExec;
+use datafusion::physical_optimizer::pruning::PruningStatistics;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
@@ -81,15 +74,10 @@ use datafusion::sql::planner::ParserOptions;
 // use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use deltalake::errors::{DeltaResult, DeltaTableError};
-use deltalake::kernel::{
-    Add, DataCheck, EagerSnapshot, Invariant, LogDataHandler, Snapshot, StructTypeExt,
-};
+use deltalake::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot, StructTypeExt};
 use deltalake::logstore::LogStoreRef;
-use deltalake::table::builder::ensure_table_uri;
 use deltalake::table::state::DeltaTableState;
 use deltalake::table::{Constraint, GeneratedColumn};
-use deltalake::{open_table, open_table_with_storage_options, DeltaTable};
-use either::Either;
 use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
 use serde::{Deserialize, Serialize};
@@ -339,10 +327,9 @@ fn arrow_type_from_delta_type(
                 PrimitiveType::TimestampNtz => {
                     ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
                 }
-                PrimitiveType::Decimal(decimal_type) => ArrowDataType::Decimal128(
-                    decimal_type.precision() as u8,
-                    decimal_type.scale() as i8,
-                ),
+                PrimitiveType::Decimal(decimal_type) => {
+                    ArrowDataType::Decimal128(decimal_type.precision(), decimal_type.scale() as i8)
+                }
             }
         }
         DeltaType::Array(array_type) => {
@@ -1294,12 +1281,12 @@ impl DeltaDataChecker {
     }
 
     /// Specify the Datafusion context
-    pub fn with_session_context(mut self, context: SessionContext) -> Self {
+    pub fn with_session_context(self, context: SessionContext) -> Self {
         unimplemented!();
     }
 
     /// Add the specified set of constraints to the current DeltaDataChecker's constraints
-    pub fn with_extra_constraints(mut self, constraints: Vec<Constraint>) -> Self {
+    pub fn with_extra_constraints(self, constraints: Vec<Constraint>) -> Self {
         unimplemented!();
     }
 
@@ -1562,8 +1549,7 @@ impl TableProviderFactory for DeltaTableFactory {
         // Parse the location URL
         let location_url = url::Url::parse(&cmd.location).map_err(|e| {
             DataFusionError::External(Box::new(DeltaTableError::InvalidTableLocation(format!(
-                "Invalid table location URL: {}",
-                e
+                "Invalid table location URL: {e}"
             ))))
         })?;
 
@@ -1575,8 +1561,7 @@ impl TableProviderFactory for DeltaTableFactory {
             .get_store(&location_url)
             .map_err(|e| {
                 DataFusionError::External(Box::new(DeltaTableError::Generic(format!(
-                    "Failed to get object store from sail's registry: {}",
-                    e
+                    "Failed to get object store from sail's registry: {e}"
                 ))))
             })?;
 
@@ -1644,7 +1629,7 @@ pub struct FindFiles {
 
 fn join_batches_with_add_actions(
     batches: Vec<RecordBatch>,
-    mut actions: HashMap<String, Add>,
+    actions: HashMap<String, Add>,
     path_column: &str,
     dict_array: bool,
 ) -> DeltaResult<Vec<Add>> {

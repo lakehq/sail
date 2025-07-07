@@ -103,14 +103,13 @@ impl CatalogManager<'_> {
         view: TableReference,
         replace: bool,
         definition: Option<String>,
-        temporary: bool,
     ) -> Result<()> {
         let ddl = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
             name: view,
             input,
             or_replace: replace,
             definition,
-            temporary,
+            temporary: false,
         }));
         self.ctx.execute_logical_plan(ddl).await?;
         Ok(())

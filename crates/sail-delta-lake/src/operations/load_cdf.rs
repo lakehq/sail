@@ -367,7 +367,7 @@ impl CdfLoadBuilder {
 
         // Create object store URL from log store
         let root_uri = url::Url::parse(&self.log_store.root_uri())
-            .map_err(|e| DeltaTableError::Generic(format!("Invalid root URI: {}", e)))?;
+            .map_err(|e| DeltaTableError::Generic(format!("Invalid root URI: {e}")))?;
         let object_store_url = ObjectStoreUrl::parse(root_uri.as_str()).expect("Valid URL");
 
         let cdc_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(

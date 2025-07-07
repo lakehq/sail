@@ -1,4 +1,3 @@
-use datafusion::arrow::array::RecordBatch;
 pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
 use deltalake::{DeltaResult, DeltaTable};
 
