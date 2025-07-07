@@ -18,6 +18,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use sail_common::spec::i256;
+use std::collections::HashSet;
 
 #[derive(Debug)]
 pub struct SparkFromCSV {
@@ -198,22 +199,41 @@ fn parse_fields(schema: &str, sep: &str) -> Result<Fields> {
     })
 }
 
-// TODO: Double-check this implementation
 fn parse_schema_string(schema_str: &str, sep: &str) -> Result<Fields> {
-    let fields: Result<Vec<Field>> = schema_str
+    schema_str
         .split(sep)
-        .map(|c| {
-            let parts: Vec<_> = c.trim().split_whitespace().collect();
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|spec| {
+            let parts: Vec<_> = spec.split_whitespace().collect();
             if parts.len() != 2 {
-                return exec_err!("Invalid field spec: '{}'", c);
-            };
-            let name: String = parts[0].to_string();
-            let data_type: Result<DataType> = parse_data_type(&parts[1].to_uppercase().as_str());
-            data_type.map(|dt| Field::new(&name, dt, true))
-        })
-        .collect();
+                return exec_err!("Invalid field spec: '{}'", spec);
+            }
 
-    fields.map(|f| Fields::from_iter(f))
+            let name = parts[0];
+            let type_str = parts[1];
+            let data_type = parse_data_type(type_str)?;
+            Ok((name.to_string(), Field::new(name, data_type, true)))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .try_fold(
+            (HashSet::new(), Vec::new()),
+            |(seen, mut acc), (name, field)| {
+                if seen.contains(&name) {
+                    Err(DataFusionError::Plan(format!(
+                        "Duplicate field name '{}'",
+                        name
+                    )))
+                } else {
+                    let mut seen = seen;
+                    seen.insert(name);
+                    acc.push(field);
+                    Ok((seen, acc))
+                }
+            },
+        )
+        .map(|(_, fields)| Fields::from(fields))
 }
 
 pub fn parse_data_type(raw: &str) -> Result<DataType> {
