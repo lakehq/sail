@@ -6,6 +6,7 @@ pub use writer::WriteBuilder;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum WriteError {
+    #[allow(dead_code)]
     #[error("No data source supplied to write command.")]
     MissingData,
 

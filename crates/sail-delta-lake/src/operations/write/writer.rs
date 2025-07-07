@@ -326,7 +326,9 @@ pub struct PartitionWriter {
     /// List of files written
     files_written: Vec<Add>,
     /// Number of indexed columns for statistics
+    #[allow(dead_code)]
     num_indexed_cols: i32,
+    #[allow(dead_code)]
     /// Specific columns to collect stats from
     stats_columns: Option<Vec<String>>,
 }
@@ -377,9 +379,10 @@ impl PartitionWriter {
             let slice = batch.slice(offset, length);
 
             if let Some(ref mut writer) = self.arrow_writer {
-                writer.write(&slice).await.map_err(|e| {
-                    DeltaTableError::generic(format!("Failed to write batch: {e}"))
-                })?;
+                writer
+                    .write(&slice)
+                    .await
+                    .map_err(|e| DeltaTableError::generic(format!("Failed to write batch: {e}")))?;
             }
 
             // Check if we need to flush
@@ -401,9 +404,10 @@ impl PartitionWriter {
             .ok_or_else(|| DeltaTableError::generic("Arrow writer not available".to_string()))?;
 
         // Close the current writer
-        let metadata = writer.close().await.map_err(|e| {
-            DeltaTableError::generic(format!("Failed to close arrow writer: {e}"))
-        })?;
+        let metadata = writer
+            .close()
+            .await
+            .map_err(|e| DeltaTableError::generic(format!("Failed to close arrow writer: {e}")))?;
 
         // Skip empty files
         if metadata.num_rows == 0 {
@@ -518,9 +522,7 @@ impl PartitionWriter {
             self.config.file_schema.clone(),
             Some(self.config.writer_properties.clone()),
         )
-        .map_err(|e| {
-            DeltaTableError::generic(format!("Failed to create new arrow writer: {e}"))
-        })?;
+        .map_err(|e| DeltaTableError::generic(format!("Failed to create new arrow writer: {e}")))?;
 
         self.arrow_writer = Some(arrow_writer);
         Ok(())
