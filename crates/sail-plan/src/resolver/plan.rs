@@ -1706,14 +1706,7 @@ impl PlanResolver<'_> {
                 .unnest_column(array_column_name.clone())?
                 .build()?;
 
-            Ok(LogicalPlanBuilder::from(plan)
-                .project(
-                    init_exprs
-                        .into_iter()
-                        .map(Into::into)
-                        .collect::<Vec<SelectExpr>>(),
-                )?
-                .build()?)
+            Ok(LogicalPlanBuilder::from(plan).build()?)
         }
     }
 
