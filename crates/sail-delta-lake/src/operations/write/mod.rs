@@ -2,6 +2,7 @@ pub(crate) mod writer;
 
 use datafusion_common::DataFusionError;
 use deltalake::errors::DeltaTableError;
+pub use writer::WriteBuilder;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum WriteError {

@@ -2,6 +2,7 @@ pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
 use deltalake::{DeltaResult, DeltaTable};
 
 pub use self::load::LoadBuilder;
+pub use self::write::WriteBuilder;
 
 /// High level interface for executing commands against a DeltaTable using sail's DataFusion
 ///
@@ -18,6 +19,12 @@ impl SailDeltaOps {
     pub fn load(self) -> DeltaResult<LoadBuilder> {
         let snapshot = self.0.snapshot()?;
         Ok(LoadBuilder::new(self.0.log_store(), snapshot.clone()))
+    }
+
+    /// Write data to the Delta table
+    pub fn write(self) -> WriteBuilder {
+        let snapshot = self.0.snapshot().ok().cloned();
+        WriteBuilder::new(self.0.log_store(), snapshot)
     }
 }
 

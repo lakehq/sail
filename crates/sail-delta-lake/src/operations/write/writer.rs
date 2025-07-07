@@ -7,11 +7,12 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::dataframe::DataFrame;
 use datafusion::execution::context::{SessionState, TaskContext};
+use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::Scalar;
 use deltalake::errors::{DeltaResult, DeltaTableError};
 use deltalake::kernel::scalars::ScalarExt;
-use deltalake::kernel::transaction::CommitProperties;
-use deltalake::kernel::{Action, Add};
+use deltalake::kernel::transaction::{CommitBuilder, CommitProperties};
+use deltalake::kernel::{Action, Add, StructType};
 use deltalake::logstore::LogStoreRef;
 use deltalake::protocol::SaveMode;
 use deltalake::table::state::DeltaTableState;
@@ -53,7 +54,7 @@ impl PartitionsExt for IndexMap<String, Scalar> {
                 } else {
                     v.serialize()
                 };
-                format!("{}={}", k, value_str)
+                format!("{k}={value_str}")
             })
             .collect::<Vec<_>>()
             .join("/")
@@ -343,7 +344,7 @@ impl PartitionWriter {
             config.file_schema.clone(),
             Some(config.writer_properties.clone()),
         )
-        .map_err(|e| DeltaTableError::generic(format!("Failed to create arrow writer: {}", e)))?;
+        .map_err(|e| DeltaTableError::generic(format!("Failed to create arrow writer: {e}")))?;
 
         Ok(Self {
             object_store,
@@ -377,7 +378,7 @@ impl PartitionWriter {
 
             if let Some(ref mut writer) = self.arrow_writer {
                 writer.write(&slice).await.map_err(|e| {
-                    DeltaTableError::generic(format!("Failed to write batch: {}", e))
+                    DeltaTableError::generic(format!("Failed to write batch: {e}"))
                 })?;
             }
 
@@ -401,7 +402,7 @@ impl PartitionWriter {
 
         // Close the current writer
         let metadata = writer.close().await.map_err(|e| {
-            DeltaTableError::generic(format!("Failed to close arrow writer: {}", e))
+            DeltaTableError::generic(format!("Failed to close arrow writer: {e}"))
         })?;
 
         // Skip empty files
@@ -428,7 +429,7 @@ impl PartitionWriter {
         self.object_store
             .put(&file_path, buffer_data.into())
             .await
-            .map_err(|e| DeltaTableError::generic(format!("Failed to write file: {}", e)))?;
+            .map_err(|e| DeltaTableError::generic(format!("Failed to write file: {e}")))?;
 
         // Create Add action
         let add_action = self.create_add_action(&file_path, file_size, &metadata)?;
@@ -518,7 +519,7 @@ impl PartitionWriter {
             Some(self.config.writer_properties.clone()),
         )
         .map_err(|e| {
-            DeltaTableError::generic(format!("Failed to create new arrow writer: {}", e))
+            DeltaTableError::generic(format!("Failed to create new arrow writer: {e}"))
         })?;
 
         self.arrow_writer = Some(arrow_writer);
@@ -548,7 +549,7 @@ fn record_batch_without_partitions(
 
     record_batch
         .project(&non_partition_columns)
-        .map_err(|e| DeltaTableError::generic(format!("Failed to project record batch: {}", e)))
+        .map_err(|e| DeltaTableError::generic(format!("Failed to project record batch: {e}")))
 }
 
 /// Create Arrow schema without partition columns
@@ -744,6 +745,8 @@ impl WriteBuilder {
         let session_state = self.session_state.unwrap();
         let log_store = self.log_store.clone();
         let snapshot = self.snapshot.clone();
+        let mode = self.mode;
+        let commit_properties = self.commit_properties.clone();
 
         // Convert DataFrame to ExecutionPlan
         let logical_plan = dataframe.logical_plan().clone();
@@ -751,15 +754,6 @@ impl WriteBuilder {
             .create_physical_plan(&logical_plan)
             .await
             .map_err(|e| WriteError::PhysicalPlan { source: e })?;
-
-        // Log partition columns for debugging
-        if !partition_columns.is_empty() {
-            // TODO: Use partition_columns to properly partition the data during writing
-            eprintln!(
-                "DEBUG: Writing with partition columns: {:?}",
-                partition_columns
-            );
-        }
 
         // Execute the plan and write data
         let mut tasks = Vec::new();
@@ -820,34 +814,180 @@ impl WriteBuilder {
         for task in tasks {
             let add_actions = task
                 .await
-                .map_err(|e| WriteError::WriteTask { source: e })?
-                .map_err(|e| e)?;
+                .map_err(|e| WriteError::WriteTask { source: e })??;
 
             for add_action in add_actions {
                 all_actions.push(Action::Add(add_action));
             }
         }
 
-        // Create or update the table
-        let table = if let Some(_snapshot) = snapshot {
-            // Use the public API to create a table from existing state
-            let table = DeltaTable::new(log_store, Default::default());
-            // TODO: Properly handle table state restoration
-            table
+        // Handle different save modes
+        match mode {
+            SaveMode::Overwrite => {
+                // For overwrite mode, we need to add Remove actions for existing files
+                if let Some(ref snapshot) = snapshot {
+                    let existing_files = snapshot
+                        .file_actions()
+                        .map_err(|e| WriteError::DeltaWriter { source: e })?;
+                    let current_time = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
+
+                    for file in existing_files {
+                        all_actions.push(Action::Remove(deltalake::kernel::Remove {
+                            path: file.path.clone(),
+                            deletion_timestamp: Some(current_time),
+                            data_change: true,
+                            extended_file_metadata: Some(true),
+                            partition_values: Some(file.partition_values.clone()),
+                            size: Some(file.size),
+                            deletion_vector: file.deletion_vector.clone(),
+                            tags: None,
+                            base_row_id: file.base_row_id,
+                            default_row_commit_version: file.default_row_commit_version,
+                        }));
+                    }
+                }
+            }
+            SaveMode::ErrorIfExists => {
+                // Check if table exists and has data
+                if let Some(ref snapshot) = snapshot {
+                    let existing_files = snapshot
+                        .file_actions()
+                        .map_err(|e| WriteError::DeltaWriter { source: e })?;
+                    if !existing_files.is_empty() {
+                        return Err(WriteError::AlreadyExists(
+                            "Table already exists and contains data".to_string(),
+                        ));
+                    }
+                }
+            }
+            SaveMode::Append => {
+                // Default behavior - just append new files
+            }
+            SaveMode::Ignore => {
+                // If table exists, do nothing
+                if snapshot.is_some() {
+                    return Ok(DeltaTable::new(log_store, Default::default()));
+                }
+            }
+        }
+
+        // Determine the operation type
+        let operation = if snapshot.is_some() {
+            // Existing table - this is a write operation
+            deltalake::protocol::DeltaOperation::Write {
+                mode,
+                partition_by: if partition_columns.is_empty() {
+                    None
+                } else {
+                    Some(partition_columns.clone())
+                },
+                predicate: None,
+            }
         } else {
-            // TODO: Handle table creation properly
-            return Err(WriteError::CommitFailed {
-                message: "Table creation not yet implemented".to_string(),
-            });
+            // New table - this is a create operation
+            let df_schema = dataframe.schema();
+            let arrow_schema = df_schema.as_arrow();
+            let delta_schema: StructType =
+                arrow_schema
+                    .try_into_kernel()
+                    .map_err(|e| WriteError::SchemaValidation {
+                        message: format!("Failed to convert schema: {e}"),
+                    })?;
+
+            let metadata = deltalake::kernel::Metadata {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: self.name.clone(),
+                description: self.description.clone(),
+                format: deltalake::kernel::Format::default(),
+                schema_string: serde_json::to_string(&delta_schema).map_err(|e| {
+                    WriteError::SchemaValidation {
+                        message: format!("Failed to serialize schema: {e}"),
+                    }
+                })?,
+                partition_columns: partition_columns.clone(),
+                configuration: self.configuration.clone(),
+                created_time: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64,
+                ),
+            };
+
+            deltalake::protocol::DeltaOperation::Create {
+                mode,
+                location: log_store.root_uri().to_string(),
+                protocol: deltalake::kernel::Protocol::default(),
+                metadata,
+            }
         };
 
-        // Commit the transaction
-        // TODO: Use CommitBuilder and handle different SaveModes properly
+        // Create the table if it doesn't exist
+        let mut table = if let Some(snapshot) = snapshot {
+            let mut table = DeltaTable::new(log_store.clone(), Default::default());
+            table.state = Some(snapshot);
+            table
+        } else {
+            // For new tables, we need to add Protocol and Metadata actions
+            let protocol = deltalake::kernel::Protocol::default();
+            let df_schema = dataframe.schema();
+            let arrow_schema = df_schema.as_arrow();
+            let delta_schema: StructType =
+                arrow_schema
+                    .try_into_kernel()
+                    .map_err(|e| WriteError::SchemaValidation {
+                        message: format!("Failed to convert schema: {e}"),
+                    })?;
+
+            let metadata = deltalake::kernel::Metadata {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: self.name.clone(),
+                description: self.description.clone(),
+                format: deltalake::kernel::Format::default(),
+                schema_string: serde_json::to_string(&delta_schema).map_err(|e| {
+                    WriteError::SchemaValidation {
+                        message: format!("Failed to serialize schema: {e}"),
+                    }
+                })?,
+                partition_columns: partition_columns.clone(),
+                configuration: self.configuration.clone(),
+                created_time: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64,
+                ),
+            };
+
+            // Add Protocol and Metadata actions for new tables
+            all_actions.insert(0, Action::Protocol(protocol));
+            all_actions.insert(1, Action::Metadata(metadata));
+
+            DeltaTable::new(log_store.clone(), Default::default())
+        };
+
+        // Commit the transaction using CommitBuilder
         if !all_actions.is_empty() {
-            // TODO: Needs more implementation
-            return Err(WriteError::CommitFailed {
-                message: "Transaction commit logic needs full implementation".to_string(),
-            });
+            let commit_result = CommitBuilder::from(commit_properties)
+                .with_actions(all_actions)
+                .build(
+                    table
+                        .snapshot()
+                        .ok()
+                        .map(|s| s as &dyn deltalake::kernel::transaction::TableReference),
+                    log_store,
+                    operation,
+                )
+                .await
+                .map_err(|e| WriteError::CommitFailed {
+                    message: format!("Failed to commit transaction: {e}"),
+                })?;
+
+            // Update the table with the new state after commit
+            table.state = Some(commit_result.snapshot().clone());
         }
 
         Ok(table)
