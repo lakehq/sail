@@ -507,6 +507,7 @@ pub async fn rewrite_directory_url(url: GlobUrl, session: &SessionContext) -> Re
     }
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

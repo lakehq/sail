@@ -31,7 +31,7 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
+    and, build_join_schema, col, expr, ident, lit, or, when, Aggregate, AggregateUDF, BinaryExpr,
     ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
     WindowFrame, WindowFunctionDefinition,
 };
@@ -39,6 +39,7 @@ use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
+use sail_data_source::options::DataSourceOptionsResolver;
 use sail_data_source::TableProviderFactory;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
@@ -344,8 +345,14 @@ impl PlanResolver<'_> {
             QueryNode::StatFreqItems { .. } => {
                 return Err(PlanError::todo("freq items"));
             }
-            QueryNode::StatSampleBy { .. } => {
-                return Err(PlanError::todo("sample by"));
+            QueryNode::StatSampleBy {
+                input,
+                column,
+                fractions,
+                seed,
+            } => {
+                self.resolve_query_sample_by(*input, column, fractions, seed, state)
+                    .await?
             }
             QueryNode::Empty { produce_one_row } => {
                 LogicalPlan::EmptyRelation(plan::EmptyRelation {
@@ -3062,6 +3069,48 @@ impl PlanResolver<'_> {
         }
         .await?;
 
+        let resolver = DataSourceOptionsResolver::new(self.ctx);
+        let options: HashMap<String, String> = options.into_iter().collect();
+        let options: Vec<(String, String)> = match file_format.to_lowercase().as_str() {
+            "json" => {
+                let (_options, json_options_vec) = resolver.resolve_json_write_options(options)?;
+                json_options_vec
+            }
+            "parquet" => {
+                let (_options, parquet_options_vec) =
+                    resolver.resolve_parquet_write_options(options)?;
+                parquet_options_vec
+            }
+            "csv" => {
+                let (_options, csv_options_vec) = resolver.resolve_csv_write_options(options)?;
+                csv_options_vec
+            }
+            "arrow" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "Arrow data source write options are not yet supported",
+                    ));
+                }
+                vec![]
+            }
+            "avro" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "Avro data source write options are not yet supported",
+                    ));
+                }
+                vec![]
+            }
+            other => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(format!(
+                        "{other} data source write options are not supported"
+                    )));
+                }
+                vec![]
+            }
+        };
+
         let command = CatalogCommand::CreateTable {
             table: self.resolve_table_reference(&table)?,
             definition: CatalogTableDefinition {
@@ -3736,6 +3785,86 @@ impl PlanResolver<'_> {
         .alias(state.register_field_name("corr"));
         Ok(LogicalPlanBuilder::from(input)
             .aggregate(Vec::<Expr>::new(), vec![corr])?
+            .build()?)
+    }
+
+    async fn resolve_query_sample_by(
+        &self,
+        input: spec::QueryPlan,
+        column: spec::Expr,
+        fractions: Vec<spec::Fraction>,
+        seed: Option<i64>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if fractions
+            .iter()
+            .any(|f| f.fraction < 0.0 || f.fraction > 1.0)
+        {
+            return Err(PlanError::invalid(
+                "All fraction values must be >= 0.0 and <= 1.0",
+            ));
+        }
+
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let schema = input.schema();
+        let column_expr: Column = match &column {
+            spec::Expr::UnresolvedAttribute {
+                name,
+                plan_id,
+                is_metadata_column: false,
+            } => {
+                let name: Vec<String> = name.clone().into();
+                let Ok(name) = name.one() else {
+                    return Err(PlanError::invalid("Expected simple column name"));
+                };
+                match self.resolve_optional_column(schema, &name, *plan_id, state)? {
+                    Some(col) => col,
+                    None => {
+                        return Err(PlanError::invalid(format!(
+                            "Could not resolve column: {name}"
+                        )));
+                    }
+                }
+            }
+            _ => {
+                return Err(PlanError::invalid("Expected UnresolvedAttribute"));
+            }
+        };
+
+        let init_exprs: Vec<Expr> = input
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect();
+        let rand_column_name: String = state.register_hidden_field_name("rand_value");
+
+        let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::from(Random::new())),
+            args: vec![Expr::Literal(ScalarValue::Int64(seed), None)],
+        })
+        .alias(&rand_column_name);
+        let mut all_exprs: Vec<Expr> = init_exprs.clone();
+        all_exprs.push(rand_expr);
+        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
+            .project(all_exprs)?
+            .build()?;
+
+        let mut acc_exprs: Vec<Expr> = vec![];
+        for frac in &fractions {
+            let key_val = self.resolve_literal(frac.stratum.clone(), state)?;
+            let f = and(
+                Expr::Column(column_expr.clone()).eq(lit(key_val)),
+                col(&rand_column_name).lt_eq(lit(frac.fraction)),
+            );
+            acc_exprs.push(f);
+        }
+
+        let final_expr: Expr = acc_exprs.into_iter().reduce(or).unwrap_or(lit(false));
+        Ok(LogicalPlanBuilder::from(plan_with_rand)
+            .filter(final_expr)?
             .build()?)
     }
 

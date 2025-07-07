@@ -1186,9 +1186,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.27"
+version = "1.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d487aa071b5f64da6f19a3e848e3578944b726ee5a4854b82172f02aa876bfdc"
+checksum = "5c1599538de2394445747c8cf7935946e3cc27e9625f889d979bfb2aaf569362"
 dependencies = [
  "jobserver",
  "libc",
@@ -5234,7 +5234,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sail-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "fastrace",
@@ -5251,7 +5251,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -5270,7 +5270,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "datafusion",
@@ -5287,7 +5287,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "chumsky",
@@ -5309,7 +5309,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "arrow-flight",
  "datafusion",
@@ -5339,7 +5339,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "lazy_static",
@@ -5351,7 +5351,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -5382,15 +5382,17 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes",
  "aes-gcm",
+ "arrow",
  "async-recursion",
  "async-trait",
  "base64 0.22.1",
  "cbc",
  "chrono",
+ "chrono-tz",
  "comfy-table",
  "crc32fast",
  "datafusion",
@@ -5429,7 +5431,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fastrace",
  "log",
@@ -5443,7 +5445,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "arrow-pyarrow",
  "datafusion",
@@ -5462,7 +5464,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "log",
  "sail-common",
@@ -5476,7 +5478,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-stream",
  "datafusion",
@@ -5513,10 +5515,9 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
- "chrono-tz",
  "chumsky",
  "either",
  "lazy_static",
@@ -5528,7 +5529,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5537,7 +5538,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chumsky",
  "either",
@@ -5551,7 +5552,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "env_logger",
  "fastrace",
@@ -6101,9 +6102,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.46.0"
+version = "1.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1140bb80481756a8cbe10541f37433b459c5aa1e727b4c020fbfebdc25bf3ec4"
+checksum = "0cc3a2344dafbe23a245241fe8b09735b521110d30fcefbbd5feb1797ca35d17"
 dependencies = [
  "backtrace",
  "bytes",

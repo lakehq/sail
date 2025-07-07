@@ -19,6 +19,7 @@ impl Default for LiteralEvaluator {
 impl LiteralEvaluator {
     pub fn new() -> Self {
         let schema = DFSchema::empty();
+        #[allow(clippy::expect_used)]
         let input = RecordBatch::try_new_with_options(
             schema.inner().clone(),
             vec![],

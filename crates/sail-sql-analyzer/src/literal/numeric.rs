@@ -1,4 +1,5 @@
 use lazy_static::lazy_static;
+use regex::Regex;
 use sail_common::spec;
 use sail_common::spec::{
     i256, ARROW_DECIMAL128_MAX_PRECISION, ARROW_DECIMAL256_MAX_PRECISION,
@@ -8,12 +9,19 @@ use sail_common::spec::{
 use crate::error::{SqlError, SqlResult};
 use crate::literal::utils::extract_match;
 
+fn create_regex(regex: Result<Regex, regex::Error>) -> Regex {
+    #[allow(clippy::unwrap_used)]
+    regex.unwrap()
+}
+
 lazy_static! {
-    static ref DECIMAL_REGEX: regex::Regex =
-        regex::Regex::new(r"^(?P<sign>[+-]?)(?P<whole>\d{1,38})[.]?(?P<fraction>\d{0,38})([eE](?P<exponent>[+-]?\d+))?$").unwrap();
-    static ref DECIMAL_FRACTION_REGEX: regex::Regex =
-        regex::Regex::new(r"^(?P<sign>[+-]?)[.](?P<fraction>\d{1,38})([eE](?P<exponent>[+-]?\d+))?$").unwrap();
-    }
+    static ref DECIMAL_REGEX: Regex = create_regex(Regex::new(
+        r"^(?P<sign>[+-]?)(?P<whole>\d{1,38})[.]?(?P<fraction>\d{0,38})([eE](?P<exponent>[+-]?\d+))?$"
+    ));
+    static ref DECIMAL_FRACTION_REGEX: regex::Regex = create_regex(Regex::new(
+        r"^(?P<sign>[+-]?)[.](?P<fraction>\d{1,38})([eE](?P<exponent>[+-]?\d+))?$"
+    ));
+}
 
 pub fn parse_i8_string(value: &str) -> SqlResult<spec::Literal> {
     let n = value

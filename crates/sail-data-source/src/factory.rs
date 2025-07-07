@@ -94,15 +94,15 @@ impl<'a> TableProviderFactory<'a> {
         let resolver = DataSourceOptionsResolver::new(self.ctx);
         let format_factory: Arc<dyn FileFormatFactory> = match source {
             "json" => {
-                let options = resolver.resolve_json_write_options(options)?;
+                let (options, _) = resolver.resolve_json_write_options(options)?;
                 Arc::new(JsonFormatFactory::new_with_options(options))
             }
             "parquet" => {
-                let options = resolver.resolve_parquet_write_options(options)?;
+                let (options, _) = resolver.resolve_parquet_write_options(options)?;
                 Arc::new(ParquetFormatFactory::new_with_options(options))
             }
             "csv" => {
-                let options = resolver.resolve_csv_write_options(options)?;
+                let (options, _) = resolver.resolve_csv_write_options(options)?;
                 Arc::new(CsvFormatFactory::new_with_options(options))
             }
             "arrow" => {
