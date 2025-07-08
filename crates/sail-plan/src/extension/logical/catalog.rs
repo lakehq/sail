@@ -78,6 +78,74 @@ pub(crate) enum CatalogTableFunction {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) struct CatalogTableDefinition {
+    pub schema: DFSchemaRef,
+    pub comment: Option<String>,
+    pub column_defaults: Vec<(String, Expr)>,
+    pub constraints: Constraints,
+    pub location: String,
+    pub file_format: String,
+    pub table_partition_cols: Vec<String>,
+    pub file_sort_order: Vec<Vec<Sort>>,
+    pub if_not_exists: bool,
+    pub or_replace: bool,
+    pub unbounded: bool,
+    pub options: Vec<(String, String)>,
+    pub definition: Option<String>,
+}
+
+#[derive(PartialEq, PartialOrd)]
+struct CatalogTableDefinitionOrd<'a> {
+    comment: &'a Option<String>,
+    column_defaults: &'a Vec<(String, Expr)>,
+    constraints: &'a Constraints,
+    location: &'a String,
+    file_format: &'a String,
+    table_partition_cols: &'a Vec<String>,
+    file_sort_order: &'a Vec<Vec<Sort>>,
+    if_not_exists: bool,
+    or_replace: bool,
+    unbounded: bool,
+    options: &'a Vec<(String, String)>,
+    definition: &'a Option<String>,
+}
+
+impl<'a> From<&'a CatalogTableDefinition> for CatalogTableDefinitionOrd<'a> {
+    fn from(definition: &'a CatalogTableDefinition) -> Self {
+        let CatalogTableDefinition {
+            // ignore schema in comparison
+            schema: _,
+            comment,
+            column_defaults,
+            constraints,
+            location,
+            file_format,
+            table_partition_cols,
+            file_sort_order,
+            if_not_exists,
+            or_replace,
+            unbounded,
+            options,
+            definition,
+        } = definition;
+        CatalogTableDefinitionOrd {
+            comment,
+            column_defaults,
+            constraints,
+            location,
+            file_format,
+            table_partition_cols,
+            file_sort_order,
+            if_not_exists: *if_not_exists,
+            or_replace: *or_replace,
+            unbounded: *unbounded,
+            options,
+            definition,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
 pub(crate) enum CatalogCommand {
     CurrentCatalog,
     SetCurrentCatalog {
@@ -114,20 +182,7 @@ pub(crate) enum CatalogCommand {
     },
     CreateTable {
         table: TableReference,
-        schema: DFSchemaRef,
-        comment: Option<String>,
-        column_defaults: Vec<(String, Expr)>,
-        constraints: Constraints,
-        location: String,
-        file_format: String,
-        table_partition_cols: Vec<String>,
-        file_sort_order: Vec<Vec<Sort>>,
-        if_not_exists: bool,
-        or_replace: bool,
-        unbounded: bool,
-        options: Vec<(String, String)>,
-        definition: Option<String>,
-        copy_to_plan: Option<Arc<LogicalPlan>>,
+        definition: CatalogTableDefinition,
     },
     TableExists {
         table: TableReference,
@@ -138,6 +193,10 @@ pub(crate) enum CatalogCommand {
     ListTables {
         database: Option<SchemaReference>,
         table_pattern: Option<String>,
+    },
+    ListViews {
+        database: Option<SchemaReference>,
+        view_pattern: Option<String>,
     },
     DropTable {
         table: TableReference,
@@ -196,290 +255,9 @@ pub(crate) enum CatalogCommand {
     },
 }
 
-#[derive(PartialEq, PartialOrd)]
-enum CatalogCommandOrd<'a> {
-    CurrentCatalog,
-    SetCurrentCatalog {
-        catalog_name: &'a String,
-    },
-    ListCatalogs {
-        catalog_pattern: &'a Option<String>,
-    },
-    CurrentDatabase,
-    SetCurrentDatabase {
-        database_name: &'a String,
-    },
-    CreateDatabase {
-        database: &'a SchemaReference,
-        if_not_exists: bool,
-        comment: &'a Option<String>,
-        location: &'a Option<String>,
-        properties: &'a Vec<(String, String)>,
-    },
-    DatabaseExists {
-        database: &'a SchemaReference,
-    },
-    GetDatabase {
-        database: &'a SchemaReference,
-    },
-    ListDatabases {
-        catalog: &'a Option<String>,
-        database_pattern: &'a Option<String>,
-    },
-    DropDatabase {
-        database: &'a SchemaReference,
-        if_exists: bool,
-        cascade: bool,
-    },
-    CreateTable {
-        table: &'a TableReference,
-        comment: &'a Option<String>,
-        column_defaults: &'a Vec<(String, Expr)>,
-        constraints: &'a Constraints,
-        location: &'a String,
-        file_format: &'a String,
-        table_partition_cols: &'a Vec<String>,
-        file_sort_order: &'a Vec<Vec<Sort>>,
-        if_not_exists: bool,
-        or_replace: bool,
-        unbounded: bool,
-        options: &'a Vec<(String, String)>,
-        definition: &'a Option<String>,
-        copy_to_plan: &'a Option<Arc<LogicalPlan>>,
-    },
-    TableExists {
-        table: &'a TableReference,
-    },
-    GetTable {
-        table: &'a TableReference,
-    },
-    ListTables {
-        database: &'a Option<SchemaReference>,
-        table_pattern: &'a Option<String>,
-    },
-    DropTable {
-        table: &'a TableReference,
-        if_exists: bool,
-        purge: bool,
-    },
-    ListColumns {
-        table: &'a TableReference,
-    },
-    FunctionExists {
-        function: &'a TableReference,
-    },
-    GetFunction {
-        function: &'a TableReference,
-    },
-    ListFunctions {
-        database: &'a Option<SchemaReference>,
-        function_pattern: &'a Option<String>,
-    },
-    DropFunction {
-        function: &'a TableReference,
-        if_exists: bool,
-        is_temporary: bool,
-    },
-    RegisterFunction {
-        udf: &'a ScalarUDF,
-    },
-    RegisterTableFunction {
-        name: &'a String,
-        // We have to be explicit about the UDTF types we support.
-        // We cannot use `Arc<dyn TableFunctionImpl>` because it does not implement `Eq` and `Hash`.
-        udtf: &'a CatalogTableFunction,
-    },
-    DropTemporaryView {
-        view_name: &'a String,
-        is_global: bool,
-        if_exists: bool,
-    },
-    DropView {
-        view: &'a TableReference,
-        if_exists: bool,
-    },
-    CreateTemporaryView {
-        input: &'a Arc<LogicalPlan>,
-        view_name: &'a String,
-        is_global: bool,
-        replace: bool,
-        definition: &'a Option<String>,
-    },
-    CreateView {
-        input: &'a Arc<LogicalPlan>,
-        view: &'a TableReference,
-        replace: bool,
-        definition: &'a Option<String>,
-    },
-}
-
-impl<'a> From<&'a CatalogCommand> for CatalogCommandOrd<'a> {
-    fn from(command: &'a CatalogCommand) -> Self {
-        match command {
-            CatalogCommand::CurrentCatalog => CatalogCommandOrd::CurrentCatalog,
-            CatalogCommand::SetCurrentCatalog { catalog_name } => {
-                CatalogCommandOrd::SetCurrentCatalog { catalog_name }
-            }
-            CatalogCommand::ListCatalogs { catalog_pattern } => {
-                CatalogCommandOrd::ListCatalogs { catalog_pattern }
-            }
-            CatalogCommand::CurrentDatabase => CatalogCommandOrd::CurrentDatabase,
-            CatalogCommand::SetCurrentDatabase { database_name } => {
-                CatalogCommandOrd::SetCurrentDatabase { database_name }
-            }
-            CatalogCommand::CreateDatabase {
-                database,
-                if_not_exists,
-                comment,
-                location,
-                properties,
-            } => CatalogCommandOrd::CreateDatabase {
-                database,
-                if_not_exists: *if_not_exists,
-                comment,
-                location,
-                properties,
-            },
-            CatalogCommand::DatabaseExists { database } => {
-                CatalogCommandOrd::DatabaseExists { database }
-            }
-            CatalogCommand::GetDatabase { database } => CatalogCommandOrd::GetDatabase { database },
-            CatalogCommand::ListDatabases {
-                catalog,
-                database_pattern,
-            } => CatalogCommandOrd::ListDatabases {
-                catalog,
-                database_pattern,
-            },
-            CatalogCommand::DropDatabase {
-                database,
-                if_exists,
-                cascade,
-            } => CatalogCommandOrd::DropDatabase {
-                database,
-                if_exists: *if_exists,
-                cascade: *cascade,
-            },
-            CatalogCommand::CreateTable {
-                table,
-                // ignore schema in comparison
-                schema: _,
-                comment,
-                column_defaults,
-                constraints,
-                location,
-                file_format,
-                table_partition_cols,
-                file_sort_order,
-                if_not_exists,
-                or_replace,
-                unbounded,
-                options,
-                definition,
-                copy_to_plan,
-            } => CatalogCommandOrd::CreateTable {
-                table,
-                comment,
-                column_defaults,
-                constraints,
-                location,
-                file_format,
-                table_partition_cols,
-                file_sort_order,
-                if_not_exists: *if_not_exists,
-                or_replace: *or_replace,
-                unbounded: *unbounded,
-                options,
-                definition,
-                copy_to_plan,
-            },
-            CatalogCommand::TableExists { table } => CatalogCommandOrd::TableExists { table },
-            CatalogCommand::GetTable { table } => CatalogCommandOrd::GetTable { table },
-            CatalogCommand::ListTables {
-                database,
-                table_pattern,
-            } => CatalogCommandOrd::ListTables {
-                database,
-                table_pattern,
-            },
-            CatalogCommand::DropTable {
-                table,
-                if_exists,
-                purge,
-            } => CatalogCommandOrd::DropTable {
-                table,
-                if_exists: *if_exists,
-                purge: *purge,
-            },
-            CatalogCommand::ListColumns { table } => CatalogCommandOrd::ListColumns { table },
-            CatalogCommand::FunctionExists { function } => {
-                CatalogCommandOrd::FunctionExists { function }
-            }
-            CatalogCommand::GetFunction { function } => CatalogCommandOrd::GetFunction { function },
-            CatalogCommand::ListFunctions {
-                database,
-                function_pattern,
-            } => CatalogCommandOrd::ListFunctions {
-                database,
-                function_pattern,
-            },
-            CatalogCommand::DropFunction {
-                function,
-                if_exists,
-                is_temporary,
-            } => CatalogCommandOrd::DropFunction {
-                function,
-                if_exists: *if_exists,
-                is_temporary: *is_temporary,
-            },
-            CatalogCommand::RegisterFunction { udf } => CatalogCommandOrd::RegisterFunction { udf },
-            CatalogCommand::RegisterTableFunction { name, udtf } => {
-                CatalogCommandOrd::RegisterTableFunction { name, udtf }
-            }
-            CatalogCommand::DropTemporaryView {
-                view_name,
-                is_global,
-                if_exists,
-            } => CatalogCommandOrd::DropTemporaryView {
-                view_name,
-                is_global: *is_global,
-                if_exists: *if_exists,
-            },
-            CatalogCommand::DropView { view, if_exists } => CatalogCommandOrd::DropView {
-                view,
-                if_exists: *if_exists,
-            },
-            CatalogCommand::CreateTemporaryView {
-                input,
-                view_name,
-                is_global,
-                replace,
-                definition,
-            } => CatalogCommandOrd::CreateTemporaryView {
-                input,
-                view_name,
-                is_global: *is_global,
-                replace: *replace,
-                definition,
-            },
-            CatalogCommand::CreateView {
-                input,
-                view,
-                replace,
-                definition,
-            } => CatalogCommandOrd::CreateView {
-                input,
-                view,
-                replace: *replace,
-                definition,
-            },
-        }
-    }
-}
-
-impl PartialOrd for CatalogCommand {
+impl PartialOrd for CatalogTableDefinition {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        CatalogCommandOrd::from(self).partial_cmp(&other.into())
+        CatalogTableDefinitionOrd::from(self).partial_cmp(&other.into())
     }
 }
 
@@ -508,6 +286,7 @@ impl CatalogCommand {
             CatalogCommand::TableExists { .. } => "TableExists",
             CatalogCommand::GetTable { .. } => "GetTable",
             CatalogCommand::ListTables { .. } => "ListTables",
+            CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
@@ -532,7 +311,9 @@ impl CatalogCommand {
             CatalogCommand::GetDatabase { .. } | CatalogCommand::ListDatabases { .. } => {
                 Vec::<FieldRef>::from_type::<DatabaseMetadata>(TracingOptions::default())
             }
-            CatalogCommand::GetTable { .. } | CatalogCommand::ListTables { .. } => {
+            CatalogCommand::GetTable { .. }
+            | CatalogCommand::ListTables { .. }
+            | CatalogCommand::ListViews { .. } => {
                 Vec::<FieldRef>::from_type::<TableMetadata>(TracingOptions::default())
             }
             CatalogCommand::ListColumns { .. } => {
@@ -637,42 +418,8 @@ impl CatalogCommand {
                 let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
-            CatalogCommand::CreateTable {
-                table,
-                schema,
-                comment,
-                column_defaults,
-                constraints,
-                location,
-                file_format,
-                table_partition_cols,
-                file_sort_order,
-                if_not_exists,
-                or_replace,
-                unbounded,
-                options,
-                definition,
-                copy_to_plan,
-            } => {
-                manager
-                    .create_table(CatalogCommand::CreateTable {
-                        table,
-                        schema,
-                        comment,
-                        column_defaults,
-                        constraints,
-                        location,
-                        file_format,
-                        table_partition_cols,
-                        file_sort_order,
-                        if_not_exists,
-                        or_replace,
-                        unbounded,
-                        options,
-                        definition,
-                        copy_to_plan,
-                    })
-                    .await?;
+            CatalogCommand::CreateTable { table, definition } => {
+                manager.create_table(table, definition).await?;
                 let rows = vec![SingleValueMetadata { value: true }];
                 build_record_batch(command_schema, &rows)?
             }
@@ -693,6 +440,15 @@ impl CatalogCommand {
             } => {
                 let rows = manager
                     .list_tables(database, table_pattern.as_deref())
+                    .await?;
+                build_record_batch(command_schema, &rows)?
+            }
+            CatalogCommand::ListViews {
+                database,
+                view_pattern,
+            } => {
+                let rows = manager
+                    .list_views(database, view_pattern.as_deref())
                     .await?;
                 build_record_batch(command_schema, &rows)?
             }

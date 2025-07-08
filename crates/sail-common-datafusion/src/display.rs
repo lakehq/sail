@@ -2,7 +2,7 @@
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
 
-use chrono::{NaiveDate, SecondsFormat, TimeZone, Utc};
+use chrono::{Duration, NaiveDate, SecondsFormat, TimeZone, Utc};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::{
@@ -17,9 +17,9 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion::arrow::temporal_conversions::{
-    as_datetime, date32_to_datetime, date64_to_datetime, duration_ms_to_duration,
-    duration_ns_to_duration, duration_s_to_duration, duration_us_to_duration, time32ms_to_time,
-    time32s_to_time, time64ns_to_time, time64us_to_time,
+    as_datetime, date32_to_datetime, date64_to_datetime, duration_ns_to_duration,
+    duration_us_to_duration, time32ms_to_time, time32s_to_time, time64ns_to_time, time64us_to_time,
+    try_duration_ms_to_duration, try_duration_s_to_duration,
 };
 use lexical_core::FormattedSize;
 
@@ -292,7 +292,11 @@ fn make_formatter<'a>(
         DataType::BinaryView => array_format(array.as_binary_view(), options),
         DataType::LargeBinary => array_format(array.as_binary::<i64>(), options),
         DataType::FixedSizeBinary(_) => {
-            let a = array.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+            let a = array.as_any().downcast_ref::<FixedSizeBinaryArray>().ok_or_else(|| {
+                ArrowError::CastError(
+                    "expected FixedSizeBinaryArray in make_formatter".to_string(),
+                )
+            })?;
             array_format(a, options)
         }
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
@@ -302,7 +306,11 @@ fn make_formatter<'a>(
         DataType::List(_) => array_format(as_generic_list_array::<i32>(array), options),
         DataType::LargeList(_) => array_format(as_generic_list_array::<i64>(array), options),
         DataType::FixedSizeList(_, _) => {
-            let a = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+            let a = array.as_any().downcast_ref::<FixedSizeListArray>().ok_or_else(|| {
+                ArrowError::CastError(
+                    "expected FixedSizeListArray in make_formatter".to_string(),
+                )
+            })?;
             array_format(a, options)
         }
         DataType::Struct(_) => array_format(as_struct_array(array), options),
@@ -622,14 +630,45 @@ macro_rules! duration_display {
     };
 }
 
+enum MaybeDuration {
+    Yes(Duration),
+    No,
+}
+
+impl From<Option<Duration>> for MaybeDuration {
+    fn from(value: Option<Duration>) -> Self {
+        match value {
+            Some(x) => MaybeDuration::Yes(x),
+            None => MaybeDuration::No,
+        }
+    }
+}
+
+impl Display for MaybeDuration {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MaybeDuration::Yes(d) => write!(f, "{d}"),
+            MaybeDuration::No => write!(f, "ERROR"),
+        }
+    }
+}
+
+fn duration_s_to_maybe_duration(v: i64) -> MaybeDuration {
+    try_duration_s_to_duration(v).into()
+}
+
+fn duration_ms_to_maybe_duration(v: i64) -> MaybeDuration {
+    try_duration_ms_to_duration(v).into()
+}
+
 duration_display!(
     DurationSecondType,
-    duration_s_to_duration,
+    duration_s_to_maybe_duration,
     DurationSecondFormatter,
 );
 duration_display!(
     DurationMillisecondType,
-    duration_ms_to_duration,
+    duration_ms_to_maybe_duration,
     DurationMillisecondFormatter,
 );
 duration_display!(
@@ -870,7 +909,12 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
             UnionMode::Dense => self.value_offset(idx),
             UnionMode::Sparse => idx,
         };
-        let (name, field) = s.0[id as usize].as_ref().unwrap();
+        let (name, field) = s.0[id as usize].as_ref().ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Union type id {id} not found in array with {} fields",
+                s.0.len()
+            ))
+        })?;
 
         write!(f, "{{{name}=")?;
         field.write(idx, f)?;
@@ -925,6 +969,7 @@ mod tests {
         assert_eq!(TEST_CONST_OPTIONS.date_format, TimeFormat::Custom("foo"));
     }
 
+    #[allow(clippy::unwrap_used)]
     #[test]
     fn test_map_array_to_string() {
         let keys = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -943,6 +988,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::unwrap_used)]
     fn format_array(array: &dyn Array, fmt: &FormatOptions) -> Vec<String> {
         let fmt = ArrayFormatter::try_new(array, fmt).unwrap();
         (0..array.len()).map(|x| fmt.value(x).to_string()).collect()
@@ -1058,6 +1104,7 @@ mod tests {
         assert_eq!(formatted, &["NULL".to_string(), "NULL".to_string()])
     }
 
+    #[allow(clippy::unwrap_used)]
     #[test]
     fn test_string_run_arry_to_string() {
         let mut builder = StringRunBuilder::<Int32Type>::new();

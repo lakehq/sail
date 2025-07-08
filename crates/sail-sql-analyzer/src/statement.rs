@@ -22,13 +22,10 @@ use sail_sql_parser::ast::statement::{
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{from_ast_expression, from_ast_identifier_list, from_ast_object_name};
-use crate::parser::parse_one_statement;
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
 
 pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
-    // TODO: avoid using SQL string
-    //   We should define a plan spec instead of constructing `information_schema` queries here.
     match statement {
         Statement::Query(query) => {
             let plan = from_ast_query(query)?;
@@ -110,9 +107,32 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowDatabases { .. } => from_ast_statement(parse_one_statement(
-            "SELECT * FROM information_schema.schemata;",
-        )?),
+        Statement::ShowDatabases {
+            show: _,
+            databases: _,
+            from,
+            like,
+        } => {
+            let catalog = from
+                .map(|(_, name)| {
+                    let mut names: Vec<String> = from_ast_object_name(name)?.into();
+                    match (names.pop(), names.is_empty()) {
+                        (Some(name), true) => Ok(name.into()),
+                        _ => Err(SqlError::invalid(
+                            "expected a single identifier for catalog name in SHOW DATABASES",
+                        )),
+                    }
+                })
+                .transpose()?;
+            let database_pattern = like
+                .map(|(_, pattern)| from_ast_string(pattern))
+                .transpose()?;
+            let node = spec::CommandNode::ListDatabases {
+                catalog,
+                database_pattern,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::CreateTable {
             create: _,
             or_replace,
@@ -204,13 +224,38 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowTables { .. } => from_ast_statement(parse_one_statement(
-            "SELECT * FROM information_schema.tables;",
-        )?),
+        Statement::ShowTables {
+            show: _,
+            tables: _,
+            from,
+            like,
+        } => {
+            let database = from
+                .map(|(_, name)| from_ast_object_name(name))
+                .transpose()?;
+            let table_pattern = like
+                .map(|(_, pattern)| from_ast_string(pattern))
+                .transpose()?;
+            let node = spec::CommandNode::ListTables {
+                database,
+                table_pattern,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::ShowCreateTable { .. } => Err(SqlError::todo("SHOW CREATE TABLE")),
-        Statement::ShowColumns { .. } => from_ast_statement(parse_one_statement(
-            "SELECT * FROM information_schema.columns;",
-        )?),
+        Statement::ShowColumns {
+            show: _,
+            columns: _,
+            table: (_, table),
+            database,
+        } => {
+            if database.is_some() {
+                return Err(SqlError::todo("SHOW COLUMNS with database"));
+            }
+            let table = from_ast_object_name(table)?;
+            let node = spec::CommandNode::ListColumns { table };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::CreateView {
             create: _,
             or_replace,
@@ -293,9 +338,24 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowViews { .. } => from_ast_statement(parse_one_statement(
-            "SELECT * FROM information_schema.views;",
-        )?),
+        Statement::ShowViews {
+            show: _,
+            views: _,
+            from,
+            like,
+        } => {
+            let database = from
+                .map(|(_, name)| from_ast_object_name(name))
+                .transpose()?;
+            let view_pattern = like
+                .map(|(_, pattern)| from_ast_string(pattern))
+                .transpose()?;
+            let node = spec::CommandNode::ListViews {
+                database,
+                view_pattern,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::RefreshFunction {
             refresh: _,
             function: _,

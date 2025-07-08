@@ -316,7 +316,7 @@ impl SparkConnectService for SparkConnectServer {
             }
             while let Some(item) = request.next().await {
                 let item = item?;
-                debug!("{:?}", item);
+                debug!("{item:?}");
                 if item.session_id != session_id {
                     Err(Status::invalid_argument("session ID must be consistent"))?;
                 }

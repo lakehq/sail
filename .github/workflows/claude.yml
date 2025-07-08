@@ -1,0 +1,75 @@
+name: Claude Code
+
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  issue_comment:
+    types:
+      - created
+  pull_request_review:
+    types:
+      - submitted
+  pull_request_review_comment:
+    types:
+      - created
+  issues:
+    types:
+      - opened
+      - assigned
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'issues' && contains(github.event.issue.body, '@claude'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/adjust-swap-space
+
+      - uses: ./.github/actions/mount-target-directory
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: pypa/hatch@install
+
+      - uses: ./.github/actions/setup-rust
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.LAKESAIL_CLAUDE_CODE_APP_ID }}
+          private-key: ${{ secrets.LAKESAIL_CLAUDE_CODE_APP_PRIVATE_KEY }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.CLAUDE_CODE_AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - uses: anthropics/claude-code-action@beta
+        with:
+          trigger_phrase: "@claude"
+          timeout_minutes: "60"
+          github_token: ${{ steps.app-token.outputs.token }}
+          use_bedrock: "true"
+          allowed_tools: |
+            Bash
+          model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0"

@@ -5,6 +5,7 @@ use datafusion::functions;
 use datafusion::functions::expr_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::string::contains::ContainsFunc;
+use datafusion::functions_array::string::string_to_array;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, ExprSchemable, ScalarUDF};
 
@@ -23,9 +24,10 @@ fn regexp_replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         return Err(PlanError::invalid("regexp_replace requires 3 arguments"));
     }
     // Spark replaces all occurrences of the pattern.
-    arguments.push(expr::Expr::Literal(ScalarValue::Utf8(Some(
-        "g".to_string(),
-    ))));
+    arguments.push(expr::Expr::Literal(
+        ScalarValue::Utf8(Some("g".to_string())),
+        None,
+    ));
     Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
         func: Arc::new(ScalarUDF::from(
             functions::regex::regexpreplace::RegexpReplaceFunc::new(),
@@ -41,10 +43,10 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     if arguments.len() == 2 {
         let (first, second) = arguments.two()?;
-        let first = match first {
-            expr::Expr::Literal(ScalarValue::Utf8(_))
-            | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-            | expr::Expr::Literal(ScalarValue::Utf8View(_)) => first,
+        let first = match &first {
+            expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+            | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+            | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => first,
             _ => {
                 let first_data_type = first.get_type(function_context.schema)?;
                 if matches!(
@@ -69,10 +71,10 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
     if arguments.len() == 3 {
         let (first, second, third) = arguments.three()?;
-        let first = match first {
-            expr::Expr::Literal(ScalarValue::Utf8(_))
-            | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-            | expr::Expr::Literal(ScalarValue::Utf8View(_)) => first,
+        let first = match &first {
+            expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+            | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+            | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => first,
             _ => {
                 let first_data_type = first.get_type(function_context.schema)?;
                 if matches!(
@@ -102,7 +104,10 @@ fn concat_ws(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
     let (delimiter, args) = arguments.at_least_one()?;
     if args.is_empty() {
-        return Ok(expr::Expr::Literal(ScalarValue::Utf8(Some("".to_string()))));
+        return Ok(expr::Expr::Literal(
+            ScalarValue::Utf8(Some("".to_string())),
+            None,
+        ));
     }
     Ok(expr_fn::concat_ws(delimiter, args))
 }
@@ -115,8 +120,8 @@ fn overlay(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     if arguments.len() == 4 {
         let (str, substr, pos, count) = arguments.four()?;
         return match count {
-            expr::Expr::Literal(ScalarValue::Int64(Some(-1)))
-            | expr::Expr::Literal(ScalarValue::Int32(Some(-1))) => {
+            expr::Expr::Literal(ScalarValue::Int64(Some(-1)), _metadata)
+            | expr::Expr::Literal(ScalarValue::Int32(Some(-1)), _metadata) => {
                 Ok(expr_fn::overlay(vec![str, substr, pos]))
             }
             _ => Ok(expr_fn::overlay(vec![str, substr, pos, count])),
@@ -159,10 +164,10 @@ fn replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn upper(expr: expr::Expr) -> expr::Expr {
     // FIXME: Create UDF for upper to properly determine datatype
-    let expr = match expr {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => expr,
+    let expr = match &expr {
+        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => expr,
         _ => expr::Expr::Cast(expr::Cast {
             expr: Box::new(expr),
             data_type: DataType::Utf8,
@@ -174,19 +179,19 @@ fn upper(expr: expr::Expr) -> expr::Expr {
 fn startswith(str: expr::Expr, substr: expr::Expr) -> expr::Expr {
     // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
     //  Looks like many issues have been opened for this. Revert once fixed.
-    let str = match str {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => str,
+    let str = match &str {
+        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => str,
         _ => expr::Expr::Cast(expr::Cast {
             expr: Box::new(str),
             data_type: DataType::Utf8,
         }),
     };
-    let substr = match substr {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => substr,
+    let substr = match &substr {
+        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => substr,
         _ => expr::Expr::Cast(expr::Cast {
             expr: Box::new(substr),
             data_type: DataType::Utf8,
@@ -198,19 +203,19 @@ fn startswith(str: expr::Expr, substr: expr::Expr) -> expr::Expr {
 fn endswith(str: expr::Expr, substr: expr::Expr) -> expr::Expr {
     // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
     //  Looks like many issues have been opened for this. Revert once fixed.
-    let str = match str {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => str,
+    let str = match &str {
+        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => str,
         _ => expr::Expr::Cast(expr::Cast {
             expr: Box::new(str),
             data_type: DataType::Utf8,
         }),
     };
-    let substr = match substr {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => substr,
+    let substr = match &substr {
+        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => substr,
         _ => expr::Expr::Cast(expr::Cast {
             expr: Box::new(substr),
             data_type: DataType::Utf8,
@@ -222,10 +227,10 @@ fn endswith(str: expr::Expr, substr: expr::Expr) -> expr::Expr {
 fn bit_length(expr: expr::Expr) -> expr::Expr {
     // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
     //  Looks like many issues have been opened for this. Revert once fixed.
-    let expr = match expr {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => expr,
+    let expr = match &expr {
+        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => expr,
         _ => expr::Expr::Cast(expr::Cast {
             expr: Box::new(expr),
             data_type: DataType::Utf8,
@@ -237,10 +242,10 @@ fn bit_length(expr: expr::Expr) -> expr::Expr {
 fn octet_length(expr: expr::Expr) -> expr::Expr {
     // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
     //  Looks like many issues have been opened for this. Revert once fixed.
-    let expr = match expr {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => expr,
+    let expr = match &expr {
+        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => expr,
         _ => expr::Expr::Cast(expr::Cast {
             expr: Box::new(expr),
             data_type: DataType::Utf8,
@@ -252,10 +257,10 @@ fn octet_length(expr: expr::Expr) -> expr::Expr {
 fn ascii(expr: expr::Expr) -> expr::Expr {
     // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
     //  Looks like many issues have been opened for this. Revert once fixed.
-    let expr = match expr {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => expr,
+    let expr = match &expr {
+        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => expr,
         _ => expr::Expr::Cast(expr::Cast {
             expr: Box::new(expr),
             data_type: DataType::Utf8,
@@ -267,19 +272,19 @@ fn ascii(expr: expr::Expr) -> expr::Expr {
 fn contains(str: expr::Expr, search_str: expr::Expr) -> expr::Expr {
     // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
     //  Looks like many issues have been opened for this. Revert once fixed.
-    let str = match str {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => str,
+    let str = match &str {
+        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => str,
         _ => expr::Expr::Cast(expr::Cast {
             expr: Box::new(str),
             data_type: DataType::Utf8,
         }),
     };
-    let search_str = match search_str {
-        expr::Expr::Literal(ScalarValue::Utf8(_))
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_))
-        | expr::Expr::Literal(ScalarValue::Utf8View(_)) => search_str,
+    let search_str = match &search_str {
+        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
+        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => search_str,
         _ => expr::Expr::Cast(expr::Cast {
             expr: Box::new(search_str),
             data_type: DataType::Utf8,
@@ -343,7 +348,10 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("sentences", F::unknown("sentences")),
         ("soundex", F::unknown("soundex")),
         ("space", F::unary(space)),
-        ("split", F::unknown("split")),
+        (
+            "split",
+            F::binary(|arg1, arg2| string_to_array(arg1, arg2, lit(ScalarValue::Utf8(None)))),
+        ),
         ("split_part", F::ternary(expr_fn::split_part)),
         ("startswith", F::binary(startswith)),
         ("substr", F::custom(substr)),

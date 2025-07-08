@@ -3,6 +3,9 @@ name = "sail-sql-parser"
 version = { workspace = true }
 edition = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 sail-sql-macro = { path = "../sail-sql-macro" }
 

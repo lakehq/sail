@@ -1,6 +1,6 @@
+use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion::arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion_common::arrow::array::ArrayData;
 use pyo3::{Bound, BoundObject, IntoPyObject, PyAny, PyErr, PyObject, PyResult, Python};
 

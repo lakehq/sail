@@ -6,11 +6,11 @@ use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
 use datafusion::arrow::datatypes::Int64Type;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
-use datafusion::datasource::file_format::avro::AvroFormatFactory;
-use datafusion::datasource::file_format::csv::CsvFormatFactory;
-use datafusion::datasource::file_format::json::JsonFormatFactory;
-use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
+use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
+use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
+use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
+use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
+use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
 use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
@@ -31,15 +31,17 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort, WindowFunctionParams};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
     columnize_expr, conjunction, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    build_join_schema, col, expr, ident, lit, when, Aggregate, AggregateUDF, BinaryExpr,
+    and, build_join_schema, col, expr, ident, lit, or, when, Aggregate, AggregateUDF, BinaryExpr,
     ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
     WindowFrame, WindowFunctionDefinition,
 };
+use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
@@ -51,12 +53,14 @@ use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
-use crate::data_source::csv::CsvReadOptions;
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::array::spark_sequence::SparkSequence;
+use crate::extension::function::math::rand_poisson::RandPoisson;
+use crate::extension::function::math::random::Random;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
-    CatalogCommand, CatalogCommandNode, MapPartitionsNode, RangeNode, ShowStringFormat,
-    ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
+    CatalogCommand, CatalogCommandNode, CatalogTableDefinition, MapPartitionsNode, RangeNode,
+    ShowStringFormat, ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::extension::source::rename::RenameTableProvider;
 use crate::function::{
@@ -345,8 +349,14 @@ impl PlanResolver<'_> {
             QueryNode::StatFreqItems { .. } => {
                 return Err(PlanError::todo("freq items"));
             }
-            QueryNode::StatSampleBy { .. } => {
-                return Err(PlanError::todo("sample by"));
+            QueryNode::StatSampleBy {
+                input,
+                column,
+                fractions,
+                seed,
+            } => {
+                self.resolve_query_sample_by(*input, column, fractions, seed, state)
+                    .await?
             }
             QueryNode::Empty { produce_one_row } => {
                 LogicalPlan::EmptyRelation(plan::EmptyRelation {
@@ -475,6 +485,15 @@ impl PlanResolver<'_> {
                     .map(|db| self.resolve_schema_reference(&db))
                     .transpose()?,
                 table_pattern,
+            }),
+            CommandNode::ListViews {
+                database,
+                view_pattern,
+            } => self.resolve_catalog_command(CatalogCommand::ListViews {
+                database: database
+                    .map(|db| self.resolve_schema_reference(&db))
+                    .transpose()?,
+                view_pattern,
             }),
             CommandNode::ListFunctions {
                 database,
@@ -843,62 +862,53 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("missing data source format"));
         };
         let options: HashMap<String, String> = options.into_iter().collect();
-        let options: ListingOptions = match format.to_lowercase().as_str() {
+        // TODO: infer compression type from file extension
+        // TODO: support global configuration to ignore file extension (by setting it to empty)
+        let options = match format.to_lowercase().as_str() {
             "json" => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(
-                        "JSON data source read options are not supported yet",
-                    ));
-                }
-                ListingOptions::new(JsonFormatFactory::new().create(&self.ctx.state(), &options)?)
-                    .with_file_extension(".json")
+                let options = self.resolve_json_read_options(options)?;
+                ListingOptions::new(Arc::new(JsonFormat::default().with_options(options)))
             }
             "csv" => {
-                let csv_read_options = CsvReadOptions::load(options.clone())?;
-                Self::resolve_csv_read_options(csv_read_options)?
+                let options = self.resolve_csv_read_options(options)?;
+                ListingOptions::new(Arc::new(CsvFormat::default().with_options(options)))
             }
             "parquet" => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(
-                        "Parquet data source read options are not supported yet",
-                    ));
-                }
-                ListingOptions::new(
-                    ParquetFormatFactory::new().create(&self.ctx.state(), &options)?,
-                )
-                .with_file_extension(".parquet")
+                let options = self.resolve_parquet_read_options(options)?;
+                ListingOptions::new(Arc::new(ParquetFormat::default().with_options(options)))
             }
             "arrow" => {
                 if !options.is_empty() {
                     return Err(PlanError::unsupported(
-                        "Arrow data source read options are not supported yet",
+                        "Arrow data source read options are not yet supported",
                     ));
                 }
-                ListingOptions::new(ArrowFormatFactory::new().create(&self.ctx.state(), &options)?)
-                    .with_file_extension(".arrow")
+                ListingOptions::new(Arc::new(ArrowFormat))
             }
             "avro" => {
                 if !options.is_empty() {
                     return Err(PlanError::unsupported(
-                        "Avro data source read options are not supported yet",
+                        "Avro data source read options are not yet supported",
                     ));
                 }
-                ListingOptions::new(AvroFormatFactory::new().create(&self.ctx.state(), &options)?)
-                    .with_file_extension(".avro")
+                ListingOptions::new(Arc::new(AvroFormat))
             }
             other => {
                 return Err(PlanError::unsupported(format!(
-                    "unsupported data source format: {:?}",
-                    other
+                    "unsupported data source format: {other:?}"
                 )))
             }
         };
+        let options = options.with_session_config_options(&self.ctx.copied_config());
         let schema = self
             .resolve_listing_schema(&urls, &options, schema, state)
             .await?;
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(options)
-            .with_schema(Arc::new(schema));
+            .with_schema(Arc::new(schema))
+            .infer_partitions_from_path(&self.ctx.state())
+            .await?;
+        let config = Self::rewrite_listing_partitions(config)?;
         let table_provider = Arc::new(ListingTable::try_new(config)?);
         let names = state.register_fields(table_provider.schema().fields());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;
@@ -1156,7 +1166,7 @@ impl PlanResolver<'_> {
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
                                     )),
-                                    Expr::Literal(ScalarValue::Null)
+                                    Expr::Literal(ScalarValue::Null, None)
                                         .alias(state.register_field_name(left_name)),
                                 )),
                                 None => Err(PlanError::invalid(format!(
@@ -1179,7 +1189,7 @@ impl PlanResolver<'_> {
                                 })
                                 .map(|(right_idx, right_name)| {
                                     (
-                                        Expr::Literal(ScalarValue::Null)
+                                        Expr::Literal(ScalarValue::Null, None)
                                             .alias(state.register_field_name(right_name)),
                                         Expr::Column(Column::from(
                                             right.schema().qualified_field(right_idx),
@@ -1235,38 +1245,40 @@ impl PlanResolver<'_> {
                 let plan = if is_all {
                     let left_row_number_alias = state.register_field_name("row_num");
                     let right_row_number_alias = state.register_field_name("row_num");
-                    let left_row_number_window = Expr::WindowFunction(expr::WindowFunction {
-                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                        params: WindowFunctionParams {
-                            args: vec![],
-                            partition_by: left
-                                .schema()
-                                .fields()
-                                .iter()
-                                .map(|field| Expr::Column(Column::from_name(field.name())))
-                                .collect::<Vec<_>>(),
-                            order_by: vec![],
-                            window_frame: WindowFrame::new(None),
-                            null_treatment: Some(NullTreatment::RespectNulls),
-                        },
-                    })
-                    .alias(left_row_number_alias.as_str());
-                    let right_row_number_window = Expr::WindowFunction(expr::WindowFunction {
-                        fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                        params: WindowFunctionParams {
-                            args: vec![],
-                            partition_by: right
-                                .schema()
-                                .fields()
-                                .iter()
-                                .map(|field| Expr::Column(Column::from_name(field.name())))
-                                .collect::<Vec<_>>(),
-                            order_by: vec![],
-                            window_frame: WindowFrame::new(None),
-                            null_treatment: Some(NullTreatment::RespectNulls),
-                        },
-                    })
-                    .alias(right_row_number_alias.as_str());
+                    let left_row_number_window =
+                        Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                            params: WindowFunctionParams {
+                                args: vec![],
+                                partition_by: left
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|field| Expr::Column(Column::from_name(field.name())))
+                                    .collect::<Vec<_>>(),
+                                order_by: vec![],
+                                window_frame: WindowFrame::new(None),
+                                null_treatment: Some(NullTreatment::RespectNulls),
+                            },
+                        }))
+                        .alias(left_row_number_alias.as_str());
+                    let right_row_number_window =
+                        Expr::WindowFunction(Box::new(expr::WindowFunction {
+                            fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                            params: WindowFunctionParams {
+                                args: vec![],
+                                partition_by: right
+                                    .schema()
+                                    .fields()
+                                    .iter()
+                                    .map(|field| Expr::Column(Column::from_name(field.name())))
+                                    .collect::<Vec<_>>(),
+                                order_by: vec![],
+                                window_frame: WindowFrame::new(None),
+                                null_treatment: Some(NullTreatment::RespectNulls),
+                            },
+                        }))
+                        .alias(right_row_number_alias.as_str());
                     let left = LogicalPlanBuilder::from(left)
                         .window(vec![left_row_number_window])?
                         .build()?;
@@ -1425,7 +1437,7 @@ impl PlanResolver<'_> {
                     sorts.push(sort_expr);
                 }
                 if sorts.len() != 1 {
-                    Err(PlanError::invalid(format!("sort expression: {sort:?}",)))
+                    Err(PlanError::invalid(format!("sort expression: {sort:?}")))
                 } else {
                     Ok(sorts.one()?)
                 }
@@ -1599,10 +1611,110 @@ impl PlanResolver<'_> {
 
     async fn resolve_query_sample(
         &self,
-        _sample: spec::Sample,
-        _state: &mut PlanResolverState,
+        sample: spec::Sample,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("sample"))
+        let spec::Sample {
+            input,
+            lower_bound,
+            upper_bound,
+            with_replacement,
+            seed,
+            ..
+        } = sample;
+        if lower_bound >= upper_bound {
+            return Err(PlanError::invalid(format!(
+                "invalid sample bounds: [{lower_bound}, {upper_bound})"
+            )));
+        }
+        // if defined seed use these values otherwise use random seed
+        // to generate the random values in with_replacement mode, in lambda value
+        let seed: i64 = seed.unwrap_or_else(|| {
+            let mut rng = rng();
+            rng.random::<i64>()
+        });
+
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(*input, state)
+            .await?;
+        let rand_column_name: String = state.register_field_name("rand_value");
+        let rand_expr: Expr = if with_replacement {
+            Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(RandPoisson::new())),
+                args: vec![
+                    Expr::Literal(ScalarValue::Float64(Some(upper_bound)), None),
+                    Expr::Literal(ScalarValue::Int64(Some(seed)), None),
+                ],
+            })
+            .alias(&rand_column_name)
+        } else {
+            Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(Random::new())),
+                args: vec![Expr::Literal(ScalarValue::Int64(Some(seed)), None)],
+            })
+            .alias(&rand_column_name)
+        };
+        let init_exprs: Vec<Expr> = input
+            .schema()
+            .columns()
+            .iter()
+            .map(|col| Expr::Column(col.clone()))
+            .collect();
+        let mut all_exprs: Vec<Expr> = init_exprs.clone();
+        all_exprs.push(rand_expr);
+        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
+            .project(all_exprs)?
+            .build()?;
+
+        if !with_replacement {
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan_with_rand)
+                .filter(col(&rand_column_name).lt(lit(upper_bound)))?
+                .filter(col(&rand_column_name).gt_eq(lit(lower_bound)))?
+                .build()?;
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
+                .project(init_exprs)?
+                .build()?;
+            Ok(plan)
+        } else {
+            let plan: LogicalPlan = plan_with_rand.clone();
+            let init_exprs_aux: Vec<Expr> = plan
+                .schema()
+                .columns()
+                .iter()
+                .map(|col| Expr::Column(col.clone()))
+                .collect();
+            let array_column_name: String = state.register_field_name("array_value");
+            let arr_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+                func: Arc::new(ScalarUDF::from(SparkSequence::new())),
+                args: vec![
+                    Expr::Literal(ScalarValue::Int64(Some(1)), None),
+                    col(&rand_column_name),
+                ],
+            })
+            .alias(&array_column_name);
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
+                .project(
+                    init_exprs_aux
+                        .clone()
+                        .into_iter()
+                        .chain(vec![arr_expr])
+                        .map(Into::into)
+                        .collect::<Vec<SelectExpr>>(),
+                )?
+                .build()?;
+            let plan: LogicalPlan = LogicalPlanBuilder::from(plan)
+                .unnest_column(array_column_name.clone())?
+                .build()?;
+
+            Ok(LogicalPlanBuilder::from(plan)
+                .project(
+                    init_exprs
+                        .into_iter()
+                        .map(Into::into)
+                        .collect::<Vec<SelectExpr>>(),
+                )?
+                .build()?)
+        }
     }
 
     async fn resolve_query_deduplicate(
@@ -1658,8 +1770,7 @@ impl PlanResolver<'_> {
         let num_partitions = num_partitions.unwrap_or(1);
         if num_partitions < 1 {
             return Err(PlanError::invalid(format!(
-                "invalid number of partitions: {}",
-                num_partitions
+                "invalid number of partitions: {num_partitions}"
             )));
         }
         let alias = state.register_field_name("id");
@@ -1823,15 +1934,15 @@ impl PlanResolver<'_> {
         let limit = self
             .resolve_expression(limit, input.schema(), state)
             .await?;
-        let limit_num = match limit {
-            Expr::Literal(ScalarValue::Int8(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int16(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int32(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
-            Expr::Literal(ScalarValue::UInt8(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt16(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt32(Some(value))) => Ok(value as i64),
-            Expr::Literal(ScalarValue::UInt64(Some(value))) => Ok(value as i64),
+        let limit_num = match &limit {
+            Expr::Literal(ScalarValue::Int8(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int16(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int32(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::Int64(Some(value)), _metadata) => Ok(*value),
+            Expr::Literal(ScalarValue::UInt8(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt16(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt32(Some(value)), _metadata) => Ok(*value as i64),
+            Expr::Literal(ScalarValue::UInt64(Some(value)), _metadata) => Ok(*value as i64),
             _ => Err(PlanError::invalid("`tail` limit must be an integer")),
         }?;
         // TODO: This can be expensive for large input datasets
@@ -1842,7 +1953,7 @@ impl PlanResolver<'_> {
         let count_expr = Expr::AggregateFunction(expr::AggregateFunction {
             func: count_udaf(),
             params: AggregateFunctionParams {
-                args: vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+                args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
                 distinct: false,
                 filter: None,
                 order_by: None,
@@ -2820,49 +2931,90 @@ impl PlanResolver<'_> {
             table_properties: _,
             overwrite_condition: _,
         } = write;
-        if !sort_columns.is_empty() {
-            return Err(PlanError::unsupported("sort column names"));
-        }
-        if !partitioning_columns.is_empty() {
-            return Err(PlanError::unsupported("partitioning columns"));
-        }
         if !clustering_columns.is_empty() {
             return Err(PlanError::unsupported("clustering columns"));
         }
         if bucket_by.is_some() {
             return Err(PlanError::unsupported("bucketing"));
         }
-        let partitioning_columns: Vec<String> =
-            partitioning_columns.into_iter().map(String::from).collect();
 
         let plan = self.resolve_query_plan(*input, state).await?;
         let fields = Self::get_field_names(plan.schema(), state)?;
         let plan = rename_logical_plan(plan, &fields)?;
+
+        let sort_columns = self
+            .resolve_sort_orders(sort_columns, true, plan.schema(), state)
+            .await?;
+        let partitioning_columns: Vec<String> =
+            partitioning_columns.into_iter().map(String::from).collect();
+
         let plan = match save_type {
             SaveType::Path(path) => {
                 // always write multi-file output
                 let path = if path.ends_with(object_store::path::DELIMITER) {
                     path
                 } else {
-                    format!("{}{}", path, object_store::path::DELIMITER)
+                    format!("{path}{}", object_store::path::DELIMITER)
                 };
                 let Some(source) = source else {
                     return Err(PlanError::invalid("missing source"));
                 };
-                let options = Self::resolve_data_writer_options(&source, options)?;
-                let format_factory: Arc<dyn FileFormatFactory> = match source.as_str() {
-                    "json" => Arc::new(JsonFormatFactory::new()),
-                    "parquet" => Arc::new(ParquetFormatFactory::new()),
-                    "csv" => Arc::new(CsvFormatFactory::new()),
-                    "arrow" => Arc::new(ArrowFormatFactory::new()),
-                    "avro" => Arc::new(AvroFormatFactory::new()),
+                let options: HashMap<String, String> = options.into_iter().collect();
+                let (format_factory, _options): (
+                    Arc<dyn FileFormatFactory>,
+                    Vec<(String, String)>,
+                ) = match source.as_str() {
+                    "json" => {
+                        let (options, json_options_vec) =
+                            self.resolve_json_write_options(options)?;
+                        (
+                            Arc::new(JsonFormatFactory::new_with_options(options)),
+                            json_options_vec,
+                        )
+                    }
+                    "parquet" => {
+                        let (options, parquet_options_vec) =
+                            self.resolve_parquet_write_options(options)?;
+                        (
+                            Arc::new(ParquetFormatFactory::new_with_options(options)),
+                            parquet_options_vec,
+                        )
+                    }
+                    "csv" => {
+                        let (options, csv_options_vec) = self.resolve_csv_write_options(options)?;
+                        (
+                            Arc::new(CsvFormatFactory::new_with_options(options)),
+                            csv_options_vec,
+                        )
+                    }
+                    "arrow" => {
+                        if !options.is_empty() {
+                            return Err(PlanError::unsupported(
+                                "Arrow data source write options are not yet supported",
+                            ));
+                        }
+                        (Arc::new(ArrowFormatFactory), vec![])
+                    }
+                    "avro" => {
+                        if !options.is_empty() {
+                            return Err(PlanError::unsupported(
+                                "Avro data source write options are not yet supported",
+                            ));
+                        }
+                        (Arc::new(AvroFormatFactory), vec![])
+                    }
                     _ => return Err(PlanError::invalid(format!("unsupported source: {source}"))),
+                };
+                let plan = if sort_columns.is_empty() {
+                    plan
+                } else {
+                    LogicalPlanBuilder::from(plan).sort(sort_columns)?.build()?
                 };
                 LogicalPlanBuilder::copy_to(
                     plan,
                     path,
                     format_as_file_type(format_factory),
-                    options,
+                    HashMap::new(),
                     partitioning_columns,
                 )?
                 .build()?
@@ -2941,20 +3093,15 @@ impl PlanResolver<'_> {
             definition,
         } = definition;
 
+        if query.is_some() {
+            return Err(PlanError::todo("CREATE TABLE AS SELECT statement"));
+        }
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
         }
 
-        let (schema, query_logical_plan) = if let Some(query) = query {
-            // FIXME: Query plan has cols renamed to #1, #2, etc. So I think there's more work here.
-            let plan = self.resolve_query_plan(*query, state).await?;
-            (plan.schema().clone(), Some(plan))
-        } else {
-            let fields = self.resolve_fields(&schema.fields, state)?;
-            let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
-            (schema, None)
-        };
-
+        let fields = self.resolve_fields(&schema.fields, state)?;
+        let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
         let column_defaults: Vec<(String, Expr)> = async {
             let mut results: Vec<(String, Expr)> = Vec::with_capacity(column_defaults.len());
             for (name, expr) in column_defaults {
@@ -3012,51 +3159,64 @@ impl PlanResolver<'_> {
         }
         .await?;
 
-        let copy_to_plan = if let Some(query_logical_plan) = query_logical_plan {
-            let options = Self::resolve_data_writer_options(&file_format, options.clone())?;
-            let format_factory: Arc<dyn FileFormatFactory> =
-                match file_format.to_lowercase().as_str() {
-                    "json" => Arc::new(JsonFormatFactory::new()),
-                    "parquet" => Arc::new(ParquetFormatFactory::new()),
-                    "csv" => Arc::new(CsvFormatFactory::new()),
-                    "arrow" => Arc::new(ArrowFormatFactory::new()),
-                    "avro" => Arc::new(AvroFormatFactory::new()),
-                    _ => {
-                        return Err(PlanError::invalid(format!(
-                            "unsupported file format: {file_format}",
-                        )))
-                    }
-                };
-            Some(Arc::new(
-                LogicalPlanBuilder::copy_to(
-                    query_logical_plan,
-                    location.clone(),
-                    format_as_file_type(format_factory),
-                    options,
-                    table_partition_cols.clone(),
-                )?
-                .build()?,
-            ))
-        } else {
-            None
+        let options: HashMap<String, String> = options.into_iter().collect();
+        let options: Vec<(String, String)> = match file_format.to_lowercase().as_str() {
+            "json" => {
+                let (_options, json_options_vec) = self.resolve_json_write_options(options)?;
+                json_options_vec
+            }
+            "parquet" => {
+                let (_options, parquet_options_vec) =
+                    self.resolve_parquet_write_options(options)?;
+                parquet_options_vec
+            }
+            "csv" => {
+                let (_options, csv_options_vec) = self.resolve_csv_write_options(options)?;
+                csv_options_vec
+            }
+            "arrow" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "Arrow data source write options are not yet supported",
+                    ));
+                }
+                vec![]
+            }
+            "avro" => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(
+                        "Avro data source write options are not yet supported",
+                    ));
+                }
+                vec![]
+            }
+            other => {
+                if !options.is_empty() {
+                    return Err(PlanError::unsupported(format!(
+                        "{other} data source write options are not supported"
+                    )));
+                }
+                vec![]
+            }
         };
 
         let command = CatalogCommand::CreateTable {
             table: self.resolve_table_reference(&table)?,
-            schema,
-            comment,
-            column_defaults,
-            constraints,
-            location,
-            file_format,
-            table_partition_cols,
-            file_sort_order,
-            if_not_exists,
-            or_replace,
-            unbounded,
-            options,
-            definition,
-            copy_to_plan,
+            definition: CatalogTableDefinition {
+                schema,
+                comment,
+                column_defaults,
+                constraints,
+                location,
+                file_format,
+                table_partition_cols,
+                file_sort_order,
+                if_not_exists,
+                or_replace,
+                unbounded,
+                options,
+                definition,
+            },
         };
         self.resolve_catalog_command(command)
     }
@@ -3302,7 +3462,7 @@ impl PlanResolver<'_> {
                     None => table_source
                         .get_column_default(field.name())
                         .cloned()
-                        .unwrap_or_else(|| Expr::Literal(ScalarValue::Null))
+                        .unwrap_or_else(|| Expr::Literal(ScalarValue::Null, None))
                         .cast_to(field.data_type(), &DFSchema::empty())?,
                 };
                 Ok(expr.alias(field.name()))
@@ -3621,7 +3781,7 @@ impl PlanResolver<'_> {
             .map(|named_expr| {
                 let NamedExpr { expr, .. } = &named_expr;
                 match expr {
-                    Expr::Literal(scalar_value) => {
+                    Expr::Literal(scalar_value, _metadata) => {
                         let position = match scalar_value {
                             ScalarValue::Int32(Some(position)) => *position as i64,
                             ScalarValue::Int64(Some(position)) => *position,
@@ -3714,6 +3874,86 @@ impl PlanResolver<'_> {
         .alias(state.register_field_name("corr"));
         Ok(LogicalPlanBuilder::from(input)
             .aggregate(Vec::<Expr>::new(), vec![corr])?
+            .build()?)
+    }
+
+    async fn resolve_query_sample_by(
+        &self,
+        input: spec::QueryPlan,
+        column: spec::Expr,
+        fractions: Vec<spec::Fraction>,
+        seed: Option<i64>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if fractions
+            .iter()
+            .any(|f| f.fraction < 0.0 || f.fraction > 1.0)
+        {
+            return Err(PlanError::invalid(
+                "All fraction values must be >= 0.0 and <= 1.0",
+            ));
+        }
+
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let schema = input.schema();
+        let column_expr: Column = match &column {
+            spec::Expr::UnresolvedAttribute {
+                name,
+                plan_id,
+                is_metadata_column: false,
+            } => {
+                let name: Vec<String> = name.clone().into();
+                let Ok(name) = name.one() else {
+                    return Err(PlanError::invalid("Expected simple column name"));
+                };
+                match self.resolve_optional_column(schema, &name, *plan_id, state)? {
+                    Some(col) => col,
+                    None => {
+                        return Err(PlanError::invalid(format!(
+                            "Could not resolve column: {name}"
+                        )));
+                    }
+                }
+            }
+            _ => {
+                return Err(PlanError::invalid("Expected UnresolvedAttribute"));
+            }
+        };
+
+        let init_exprs: Vec<Expr> = input
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect();
+        let rand_column_name: String = state.register_hidden_field_name("rand_value");
+
+        let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::from(Random::new())),
+            args: vec![Expr::Literal(ScalarValue::Int64(seed), None)],
+        })
+        .alias(&rand_column_name);
+        let mut all_exprs: Vec<Expr> = init_exprs.clone();
+        all_exprs.push(rand_expr);
+        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
+            .project(all_exprs)?
+            .build()?;
+
+        let mut acc_exprs: Vec<Expr> = vec![];
+        for frac in &fractions {
+            let key_val = self.resolve_literal(frac.stratum.clone(), state)?;
+            let f = and(
+                Expr::Column(column_expr.clone()).eq(lit(key_val)),
+                col(&rand_column_name).lt_eq(lit(frac.fraction)),
+            );
+            acc_exprs.push(f);
+        }
+
+        let final_expr: Expr = acc_exprs.into_iter().reduce(or).unwrap_or(lit(false));
+        Ok(LogicalPlanBuilder::from(plan_with_rand)
+            .filter(final_expr)?
             .build()?)
     }
 
@@ -4036,6 +4276,25 @@ impl PlanResolver<'_> {
                 Ok(data_type)
             })
             .collect::<PlanResult<Vec<_>>>()
+    }
+
+    /// The inferred partition columns are of `Dictionary` types by default, which cannot be
+    /// understood by the Spark client. So we rewrite the type to be `Utf8`.
+    fn rewrite_listing_partitions(
+        mut config: ListingTableConfig,
+    ) -> PlanResult<ListingTableConfig> {
+        let Some(options) = config.options.as_mut() else {
+            return Err(PlanError::internal(
+                "listing options should be present in the config",
+            ));
+        };
+        options
+            .table_partition_cols
+            .iter_mut()
+            .for_each(|(_col, data_type)| {
+                *data_type = adt::DataType::Utf8;
+            });
+        Ok(config)
     }
 }
 

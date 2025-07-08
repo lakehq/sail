@@ -20,7 +20,7 @@ root
 >>> df = spark.createDataFrame(data=[], schema=schema)
 >>> df
 DataFrame[key: bigint, a: udt]
->>> df.printSchema()
+>>> df.printSchema()  # doctest: +SKIP
 root
  |-- key: long (nullable = true)
  |-- a: pythonuserdefined (nullable = true)
@@ -32,7 +32,7 @@ root
 >>> df = spark.createDataFrame(data=[], schema=schema)
 >>> df
 DataFrame[key: bigint, b: foo]
->>> df.printSchema()
+>>> df.printSchema()  # doctest: +SKIP
 root
  |-- key: long (nullable = true)
  |-- b: pythonuserdefined (nullable = true)

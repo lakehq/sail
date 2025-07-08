@@ -82,27 +82,30 @@ fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> 
     });
     let interval = match unit.to_lowercase().as_str() {
         "years" | "year" => match interval {
-            Expr::Literal(ScalarValue::Int32(Some(years))) => lit(ScalarValue::IntervalYearMonth(
-                Some(IntervalYearMonthType::make_value(years, 0)),
-            )),
+            Expr::Literal(ScalarValue::Int32(Some(years)), metadata) => Expr::Literal(
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(years, 0))),
+                metadata,
+            ),
             _ => Expr::Cast(expr::Cast {
                 expr: Box::new(format_interval(interval, "years")),
                 data_type: DataType::Interval(IntervalUnit::YearMonth),
             }),
         },
         "months" | "month" => match interval {
-            Expr::Literal(ScalarValue::Int32(Some(months))) => lit(ScalarValue::IntervalYearMonth(
-                Some(IntervalYearMonthType::make_value(0, months)),
-            )),
+            Expr::Literal(ScalarValue::Int32(Some(months)), metadata) => Expr::Literal(
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, months))),
+                metadata,
+            ),
             _ => Expr::Cast(expr::Cast {
                 expr: Box::new(format_interval(interval, "months")),
                 data_type: DataType::Interval(IntervalUnit::YearMonth),
             }),
         },
         "days" | "day" => match interval {
-            Expr::Literal(ScalarValue::Int32(Some(days))) => lit(ScalarValue::IntervalDayTime(
-                Some(IntervalDayTimeType::make_value(days, 0)),
-            )),
+            Expr::Literal(ScalarValue::Int32(Some(days)), metadata) => Expr::Literal(
+                ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(days, 0))),
+                metadata,
+            ),
             _ => Expr::Cast(expr::Cast {
                 expr: Box::new(format_interval(interval, "days")),
                 data_type: DataType::Interval(IntervalUnit::DayTime),
@@ -130,19 +133,19 @@ fn format_interval(interval: Expr, unit: &str) -> Expr {
 }
 
 fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
-    if matches!(&year, Expr::Literal(ScalarValue::Null))
-        || matches!(&month, Expr::Literal(ScalarValue::Null))
-        || matches!(&day, Expr::Literal(ScalarValue::Null))
-    {
-        Expr::Literal(ScalarValue::Null)
-    } else {
-        expr_fn::make_date(year, month, day)
+    match (&year, &month, &day) {
+        (Expr::Literal(ScalarValue::Null, metadata), _, _)
+        | (_, Expr::Literal(ScalarValue::Null, metadata), _)
+        | (_, _, Expr::Literal(ScalarValue::Null, metadata)) => {
+            Expr::Literal(ScalarValue::Null, metadata.clone())
+        }
+        _ => expr_fn::make_date(year, month, day),
     }
 }
 
 fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
     let (dt1, dt2) = match (&dt1, &dt2) {
-        (Expr::Literal(ScalarValue::Date32(_)), Expr::Literal(ScalarValue::Date32(_))) => {
+        (Expr::Literal(ScalarValue::Date32(_), _), Expr::Literal(ScalarValue::Date32(_), _)) => {
             (dt1, dt2)
         }
         _ => (
@@ -173,20 +176,23 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
 
 fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     input.arguments.zero()?;
-    Ok(Expr::Literal(ScalarValue::Utf8(Some(
-        input
-            .function_context
-            .plan_config
-            .session_timezone
-            .to_string(),
-    ))))
+    Ok(Expr::Literal(
+        ScalarValue::Utf8(Some(
+            input
+                .function_context
+                .plan_config
+                .session_timezone
+                .to_string(),
+        )),
+        None,
+    ))
 }
 
 fn to_chrono_fmt(format: Expr) -> PlanResult<Expr> {
     // FIXME: Implement UDFs for all callers of this function so that we have `format` as a string
     //  instead of some arbitrary expression
     match format {
-        Expr::Literal(ScalarValue::Utf8(Some(format))) => {
+        Expr::Literal(ScalarValue::Utf8(Some(format)), _metadata) => {
             let format = spark_datetime_format_to_chrono_strftime(&format)?;
             Ok(lit(ScalarValue::Utf8(Some(format))))
         }
@@ -443,6 +449,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("datepart", F::binary(expr_fn::date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
+        (
+            "dayname",
+            F::unary(|arg| expr_fn::to_char(arg, lit(ScalarValue::Utf8(Some("%a".into()))))),
+        ),
         ("dayofmonth", F::unary(|arg| integer_part(arg, "DAY"))),
         (
             "dayofweek",
@@ -516,8 +526,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("to_timestamp", F::custom(to_timestamp)),
         // The description for `to_timestamp_ltz` and `to_timestamp_ntz` are the same:
         //  "Parses the timestamp with the format to a timestamp without time zone. Returns null with invalid input."
-        // https://spark.apache.org/docs/3.5.5/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ltz.html
-        // https://spark.apache.org/docs/3.5.5/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
+        // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ltz.html
+        // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
         ("to_timestamp_ltz", F::custom(to_timestamp)),
         ("to_timestamp_ntz", F::custom(to_timestamp)),
         ("to_unix_timestamp", F::unknown("to_unix_timestamp")),

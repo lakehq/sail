@@ -3,6 +3,9 @@ name = "sail-spark-connect"
 version = { workspace = true }
 edition = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
@@ -11,6 +14,7 @@ sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-execution = { path = "../sail-execution" }
+sail-object-store = { path = "../sail-object-store" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }

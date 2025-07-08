@@ -125,7 +125,7 @@ impl ScalarUDFImpl for SparkUnHex {
 // [Credit]: <https://github.com/apache/datafusion-comet/blob/bfd7054c02950219561428463d3926afaf8edbba/native/spark-expr/src/scalar_funcs/hex.rs>
 
 fn hex_int64(num: i64) -> String {
-    format!("{:X}", num)
+    format!("{num:X}")
 }
 
 #[inline(always)]

@@ -1,44 +1,41 @@
->>> spark.sql(r"SELECT U&'a\2014b\+002014c' AS text").show()
+>>> spark.sql(r"SELECT U&'a\2014b\+002014c' AS text").show()  # doctest: +SAIL_ONLY
 +-----+
 | text|
 +-----+
 |a—b—c|
 +-----+
->>>
->>> spark.sql(r"SELECT U&'a\2014b\+002014c' UESCAPE '\\' AS text").show()
+
+>>> spark.sql(r"SELECT U&'a\2014b\+002014c' UESCAPE '\\' AS text").show()  # doctest: +SAIL_ONLY
 +-----+
 | text|
 +-----+
 |a—b—c|
 +-----+
->>>
->>> spark.sql(r"SELECT U&'a#2014b#+002014c' UESCAPE '#' AS text").show()
+
+>>> spark.sql(r"SELECT U&'a#2014b#+002014c' UESCAPE '#' AS text").show()  # doctest: +SAIL_ONLY
 +-----+
 | text|
 +-----+
 |a—b—c|
 +-----+
->>>
->>> spark.sql(r"SELECT U&'\2014' UESCAPE AS text").show()
+
+>>> spark.sql(r"SELECT U&'\2014' UESCAPE AS text").show()  # doctest: +SAIL_ONLY
 Traceback (most recent call last):
 ...
 pyspark.errors.exceptions.connect.IllegalArgumentException: ...
->>> spark.sql(r"SELECT U&'##2014' UESCAPE '##'").show()
+>>> spark.sql(r"SELECT U&'##2014' UESCAPE '##'").show()  # doctest: +SAIL_ONLY
 Traceback (most recent call last):
 ...
 pyspark.errors.exceptions.connect.IllegalArgumentException: ...
->>>
->>> spark.sql(r"SELECT '\2014' UESCAPE '\\'").show()
+>>> spark.sql(r"SELECT '\2014' UESCAPE '\\'").show()  # doctest: +SAIL_ONLY
 Traceback (most recent call last):
 ...
 pyspark.errors.exceptions.connect.IllegalArgumentException: ...
->>>
->>> spark.sql(r"SELECT U&'2014' UESCAPE '\''").show()
+>>> spark.sql(r"SELECT U&'2014' UESCAPE '\''").show()  # doctest: +SAIL_ONLY
 Traceback (most recent call last):
 ...
 pyspark.errors.exceptions.connect.IllegalArgumentException: ...
->>>
->>> spark.sql(r"SELECT U&'\+02014'").show()
+>>> spark.sql(r"SELECT U&'\+02014'").show()  # doctest: +SAIL_ONLY
 Traceback (most recent call last):
 ...
 pyspark.errors.exceptions.connect.IllegalArgumentException: ...

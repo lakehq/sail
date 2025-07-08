@@ -46,6 +46,28 @@
     },
     {
       "input": {
+        "query": "SELECT COLLATION('Spark SQL' collate UTF8_LCASE);",
+        "result": [
+          "SYSTEM.BUILTIN.UTF8_LCASE"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "collation(collate(Spark SQL, UTF8_LCASE))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found 'Spark SQL' at 17:28 expected identifier"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT POSITION('bar' IN 'foobarbar');",
         "result": [
           "4"
@@ -253,7 +275,7 @@
           "fields": [
             {
               "name": "btrim(encode(    SparkSQL   , utf-8))",
-              "nullable": false,
+              "nullable": true,
               "type": "string",
               "metadata": {}
             }
@@ -275,7 +297,7 @@
           "fields": [
             {
               "name": "btrim(encode(SSparkSQLS, utf-8), encode(SL, utf-8))",
-              "nullable": false,
+              "nullable": true,
               "type": "string",
               "metadata": {}
             }
@@ -416,6 +438,28 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT collation('Spark SQL');",
+        "result": [
+          "SYSTEM.BUILTIN.UTF8_BINARY"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "collation(Spark SQL)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: collation"
       }
     },
     {
@@ -691,7 +735,7 @@
           "fields": [
             {
               "name": "decode(encode(abc, utf-8), utf-8)",
-              "nullable": false,
+              "nullable": true,
               "type": "string",
               "metadata": {}
             }
@@ -779,7 +823,7 @@
           "fields": [
             {
               "name": "encode(abc, utf-8)",
-              "nullable": false,
+              "nullable": true,
               "type": "binary",
               "metadata": {}
             }
@@ -1122,6 +1166,94 @@
     },
     {
       "input": {
+        "query": "SELECT is_valid_utf8('Spark');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_valid_utf8(Spark)",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: is_valid_utf8"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT is_valid_utf8(x'61');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_valid_utf8(X'61')",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: is_valid_utf8"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT is_valid_utf8(x'61C262');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_valid_utf8(X'61C262')",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: is_valid_utf8"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT is_valid_utf8(x'80');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_valid_utf8(X'80')",
+              "nullable": true,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: is_valid_utf8"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT lcase('SparkSql');",
         "result": [
           "sparksql"
@@ -1175,7 +1307,7 @@
           "fields": [
             {
               "name": "left(encode(Spark SQL, utf-8), 3)",
-              "nullable": false,
+              "nullable": true,
               "type": "binary",
               "metadata": {}
             }
@@ -1536,6 +1668,94 @@
       },
       "output": {
         "failure": "not implemented: function: luhn_check"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT make_valid_utf8('Spark');",
+        "result": [
+          "Spark"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_valid_utf8(Spark)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: make_valid_utf8"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT make_valid_utf8(x'61');",
+        "result": [
+          "a"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_valid_utf8(X'61')",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: make_valid_utf8"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT make_valid_utf8(x'61C262');",
+        "result": [
+          "a�b"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_valid_utf8(X'61C262')",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: make_valid_utf8"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT make_valid_utf8(x'80');",
+        "result": [
+          "�"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_valid_utf8(X'80')",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: make_valid_utf8"
       }
     },
     {
@@ -1967,7 +2187,7 @@
           "fields": [
             {
               "name": "overlay(encode(Spark SQL, utf-8), encode(ANSI , utf-8), 7, 0)",
-              "nullable": false,
+              "nullable": true,
               "type": "binary",
               "metadata": {}
             }
@@ -1989,7 +2209,7 @@
           "fields": [
             {
               "name": "overlay(encode(Spark SQL, utf-8), encode(CORE, utf-8), 7, -1)",
-              "nullable": false,
+              "nullable": true,
               "type": "binary",
               "metadata": {}
             }
@@ -2011,7 +2231,7 @@
           "fields": [
             {
               "name": "overlay(encode(Spark SQL, utf-8), encode(_, utf-8), 6, -1)",
-              "nullable": false,
+              "nullable": true,
               "type": "binary",
               "metadata": {}
             }
@@ -2033,7 +2253,7 @@
           "fields": [
             {
               "name": "overlay(encode(Spark SQL, utf-8), encode(tructured, utf-8), 2, 4)",
-              "nullable": false,
+              "nullable": true,
               "type": "binary",
               "metadata": {}
             }
@@ -2112,6 +2332,28 @@
     },
     {
       "input": {
+        "query": "SELECT randstr(3, 0) AS result;",
+        "result": [
+          "ceV"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "result",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: randstr"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', 'Ste(v|ph)en');",
         "result": [
           "2"
@@ -2178,7 +2420,55 @@
     },
     {
       "input": {
+        "query": "SELECT regexp_extract('100-200', r'(\\d+)-(\\d+)', 1);",
+        "result": [
+          "100"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_extract(100-200, (\\d+)-(\\d+), 1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: regexp_extract"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT regexp_extract_all('100-200, 300-400', '(\\\\d+)-(\\\\d+)', 1);",
+        "result": [
+          "[\"100\",\"300\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_extract_all(100-200, 300-400, (\\d+)-(\\d+), 1)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": "string",
+                "containsNull": true
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: regexp_extract_all"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_extract_all('100-200, 300-400', r'(\\d+)-(\\d+)', 1);",
         "result": [
           "[\"100\",\"300\"]"
         ],
@@ -2226,7 +2516,51 @@
     },
     {
       "input": {
+        "query": "SELECT regexp_instr(r\"\\abc\", r\"^\\\\abc$\");",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_instr(\\abc, ^\\\\abc$, 0)",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: regexp_instr"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT regexp_replace('100-200', '(\\\\d+)', 'num');",
+        "result": [
+          "num-num"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "regexp_replace(100-200, (\\d+), num, 1)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT regexp_replace('100-200', r'(\\d+)', 'num');",
         "result": [
           "num-num"
         ],
@@ -2476,6 +2810,66 @@
     },
     {
       "input": {
+        "query": "SELECT sentences('Hi there! Good morning.', 'en');",
+        "result": [
+          "[[\"Hi\",\"there\"],[\"Good\",\"morning\"]]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sentences(Hi there! Good morning., en, )",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "array",
+                  "elementType": "string",
+                  "containsNull": false
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: sentences"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT sentences('Hi there! Good morning.', 'en', 'US');",
+        "result": [
+          "[[\"Hi\",\"there\"],[\"Good\",\"morning\"]]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "sentences(Hi there! Good morning., en, US)",
+              "nullable": true,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "array",
+                  "elementType": "string",
+                  "containsNull": false
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: sentences"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT soundex('Miller');",
         "result": [
           "M460"
@@ -2519,7 +2913,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: split"
+        "success": "ok"
       }
     },
     {
@@ -2545,7 +2939,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: split"
+        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"oneAtwoBthreeC\"), None), Literal(Utf8(\"[ABC]\"), None), Negative(Literal(Int32(1), None))]"
       }
     },
     {
@@ -2571,7 +2965,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: split"
+        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"oneAtwoBthreeC\"), None), Literal(Utf8(\"[ABC]\"), None), Literal(Int32(2), None)]"
       }
     },
     {
@@ -2849,7 +3243,7 @@
           "fields": [
             {
               "name": "substr(encode(Spark SQL, utf-8), 5, 2147483647)",
-              "nullable": false,
+              "nullable": true,
               "type": "binary",
               "metadata": {}
             }
@@ -3003,7 +3397,7 @@
           "fields": [
             {
               "name": "substring(encode(Spark SQL, utf-8), 5, 2147483647)",
-              "nullable": false,
+              "nullable": true,
               "type": "binary",
               "metadata": {}
             }
@@ -3047,7 +3441,7 @@
           "fields": [
             {
               "name": "to_binary(abc, utf-8)",
-              "nullable": false,
+              "nullable": true,
               "type": "binary",
               "metadata": {}
             }
@@ -3157,6 +3551,94 @@
           "fields": [
             {
               "name": "to_char(78.12, $99.99)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_char"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_char(date'2016-04-08', 'y');",
+        "result": [
+          "2016"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "date_format(DATE '2016-04-08', y)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_char"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_char(encode('abc', 'utf-8'), 'utf-8');",
+        "result": [
+          "abc"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "decode(encode(abc, utf-8), utf-8)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_char"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_char(x'537061726b2053514c', 'base64');",
+        "result": [
+          "U3BhcmsgU1FM"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "base64(X'537061726B2053514C')",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_char"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_char(x'537061726b2053514c', 'hex');",
+        "result": [
+          "537061726B2053514C"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(X'537061726B2053514C')",
               "nullable": false,
               "type": "string",
               "metadata": {}
@@ -3377,6 +3859,94 @@
           "fields": [
             {
               "name": "to_char(78.12, $99.99)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_varchar"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_varchar(date'2016-04-08', 'y');",
+        "result": [
+          "2016"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "date_format(DATE '2016-04-08', y)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_varchar"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_varchar(encode('abc', 'utf-8'), 'utf-8');",
+        "result": [
+          "abc"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_varchar(encode(abc, utf-8), utf-8)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_varchar"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_varchar(x'537061726b2053514c', 'base64');",
+        "result": [
+          "U3BhcmsgU1FM"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_varchar(X'537061726B2053514C')",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_varchar"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_varchar(x'537061726b2053514c', 'hex');",
+        "result": [
+          "537061726B2053514C"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_varchar(X'537061726B2053514C')",
               "nullable": false,
               "type": "string",
               "metadata": {}
@@ -3720,6 +4290,94 @@
     },
     {
       "input": {
+        "query": "SELECT try_validate_utf8('Spark');",
+        "result": [
+          "Spark"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_validate_utf8(Spark)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_validate_utf8"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_validate_utf8(x'61');",
+        "result": [
+          "a"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_validate_utf8(X'61')",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_validate_utf8"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_validate_utf8(x'61C262');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_validate_utf8(X'61C262')",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_validate_utf8"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_validate_utf8(x'80');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_validate_utf8(X'80')",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_validate_utf8"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT ucase('SparkSql');",
         "result": [
           "SPARKSQL"
@@ -3782,6 +4440,50 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT validate_utf8('Spark');",
+        "result": [
+          "Spark"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "validate_utf8(Spark)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: validate_utf8"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT validate_utf8(x'61');",
+        "result": [
+          "a"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "validate_utf8(X'61')",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: validate_utf8"
       }
     },
     {

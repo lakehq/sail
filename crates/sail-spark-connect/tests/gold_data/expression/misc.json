@@ -817,7 +817,7 @@
     },
     {
       "input": "1 - f('o', o(bar)) hello * world",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '*'.(line 1, pos 25)\n\n== SQL ==\n1 - f('o', o(bar)) hello * world\n-------------------------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '*'. SQLSTATE: 42601 (line 1, pos 25)\n\n== SQL ==\n1 - f('o', o(bar)) hello * world\n-------------------------^^^\n",
       "output": {
         "failure": "invalid argument: found something at 25:26 expected something else"
       }
@@ -865,7 +865,7 @@
     },
     {
       "input": "GEO '(10,-6)'",
-      "exception": "\n[UNSUPPORTED_TYPED_LITERAL] Literals of the type \"GEO\" are not supported. Supported types are \"DATE\", \"TIMESTAMP_NTZ\", \"TIMESTAMP_LTZ\", \"TIMESTAMP\", \"INTERVAL\", \"X\".(line 1, pos 0)\n\n== SQL ==\nGEO '(10,-6)'\n^^^\n",
+      "exception": "\n[UNSUPPORTED_TYPED_LITERAL] Literals of the type \"GEO\" are not supported. Supported types are \"DATE\", \"TIMESTAMP_NTZ\", \"TIMESTAMP_LTZ\", \"TIMESTAMP\", \"INTERVAL\", \"X\". SQLSTATE: 0A000\n== SQL (line 1, position 1) ==\nGEO '(10,-6)'\n^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found something at 4:13 expected something else"
       }
@@ -944,7 +944,7 @@
     },
     {
       "input": "`fo`o.`ba`r",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'.(line 1, pos 5)\n\n== SQL ==\n`fo`o.`ba`r\n-----^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'. SQLSTATE: 42601 (line 1, pos 5)\n\n== SQL ==\n`fo`o.`ba`r\n-----^^^\n",
       "output": {
         "failure": "invalid argument: found something at 5:6 expected something else"
       }
@@ -3446,6 +3446,66 @@
       }
     },
     {
+      "input": "any_value(a ignore nulls)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": [
+              "any_value"
+            ],
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null,
+                  "isMetadataColumn": false
+                }
+              }
+            ],
+            "namedArguments": [],
+            "isDistinct": false,
+            "isUserDefinedFunction": false,
+            "isInternal": null,
+            "ignoreNulls": true,
+            "filter": null,
+            "orderBy": null
+          }
+        }
+      }
+    },
+    {
+      "input": "any_value(a)",
+      "output": {
+        "success": {
+          "unresolvedFunction": {
+            "functionName": [
+              "any_value"
+            ],
+            "arguments": [
+              {
+                "unresolvedAttribute": {
+                  "name": [
+                    "a"
+                  ],
+                  "planId": null,
+                  "isMetadataColumn": false
+                }
+              }
+            ],
+            "namedArguments": [],
+            "isDistinct": false,
+            "isUserDefinedFunction": false,
+            "isInternal": null,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
+          }
+        }
+      }
+    },
+    {
       "input": "columns",
       "output": {
         "success": {
@@ -3894,7 +3954,7 @@
     },
     {
       "input": "foo(a x)",
-      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'x': extra input 'x'.(line 1, pos 6)\n\n== SQL ==\nfoo(a x)\n------^^^\n",
+      "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'x': extra input 'x'. SQLSTATE: 42601 (line 1, pos 6)\n\n== SQL ==\nfoo(a x)\n------^^^\n",
       "output": {
         "failure": "invalid argument: found x at 6:7 expected ',', or ')'"
       }
@@ -4418,7 +4478,7 @@
     },
     {
       "input": "x'A1OC'",
-      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"X\" is invalid: 'A1OC'.(line 1, pos 0)\n\n== SQL ==\nx'A1OC'\n^^^\n",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"X\" is invalid: 'A1OC'. SQLSTATE: 42604\n== SQL (line 1, position 1) ==\nx'A1OC'\n^^^^^^^\n",
       "output": {
         "failure": "invalid argument: hex string: A1OC"
       }

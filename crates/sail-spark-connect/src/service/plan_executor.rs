@@ -57,6 +57,7 @@ impl Stream for ExecutePlanResponseStream {
             poll.map(|item| {
                 let mut response = ExecutePlanResponse::default();
                 response.session_id.clone_from(&self.session_id);
+                response.server_side_session_id.clone_from(&self.session_id);
                 response.operation_id.clone_from(&self.operation_id.clone());
                 response.response_id = item.id;
                 match item.batch {
@@ -80,7 +81,7 @@ impl Stream for ExecutePlanResponseStream {
                             Some(ResponseType::ResultComplete(ResultComplete::default()));
                     }
                 }
-                debug!("{:?}", response);
+                debug!("{response:?}");
                 Ok(response)
             })
         })
@@ -189,16 +190,20 @@ pub(crate) async fn handle_execute_sql_command(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let spark = SparkExtension::get(ctx)?;
-    let relation = Relation {
-        common: None,
-        #[expect(deprecated)]
-        rel_type: Some(relation::RelType::Sql(sc::Sql {
-            query: sql.sql,
-            args: sql.args,
-            pos_args: sql.pos_args,
-            named_arguments: sql.named_arguments,
-            pos_arguments: sql.pos_arguments,
-        })),
+    let relation = if let Some(input) = sql.input {
+        input
+    } else {
+        Relation {
+            common: None,
+            #[expect(deprecated)]
+            rel_type: Some(relation::RelType::Sql(sc::Sql {
+                query: sql.sql,
+                args: sql.args,
+                pos_args: sql.pos_args,
+                named_arguments: sql.named_arguments,
+                pos_arguments: sql.pos_arguments,
+            })),
+        }
     };
     let plan: spec::Plan = relation.clone().try_into()?;
     let relation = match plan {
@@ -321,11 +326,10 @@ pub(crate) async fn handle_reattach_execute(
     let spark = SparkExtension::get(ctx)?;
     let executor = spark
         .get_executor(operation_id.as_str())?
-        .ok_or_else(|| SparkError::invalid(format!("operation not found: {}", operation_id)))?;
+        .ok_or_else(|| SparkError::invalid(format!("operation not found: {operation_id}")))?;
     if !executor.metadata.reattachable {
         return Err(SparkError::invalid(format!(
-            "operation not reattachable: {}",
-            operation_id
+            "operation not reattachable: {operation_id}"
         )));
     }
     executor.pause_if_running().await?;

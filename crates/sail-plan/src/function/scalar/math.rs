@@ -5,17 +5,18 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, BinaryExpr, Cast, Expr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_spark::function::math::expm1::SparkExpm1;
 use half::f16;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::error_utils::generic_exec_err;
 use crate::extension::function::math::least_greatest;
+use crate::extension::function::math::rand_poisson::RandPoisson;
 use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::math::spark_abs::SparkAbs;
 use crate::extension::function::math::spark_bin::SparkBin;
 use crate::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
-use crate::extension::function::math::spark_expm1::SparkExpm1;
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_pmod::SparkPmod;
 use crate::extension::function::math::spark_signum::SparkSignum;
@@ -260,25 +261,28 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
+
     if matches!(
-        divisor,
-        Expr::Literal(ScalarValue::Int8(Some(0)))
-            | Expr::Literal(ScalarValue::Int16(Some(0)))
-            | Expr::Literal(ScalarValue::Int32(Some(0)))
-            | Expr::Literal(ScalarValue::Int64(Some(0)))
-            | Expr::Literal(ScalarValue::UInt8(Some(0)))
-            | Expr::Literal(ScalarValue::UInt16(Some(0)))
-            | Expr::Literal(ScalarValue::UInt32(Some(0)))
-            | Expr::Literal(ScalarValue::UInt64(Some(0)))
-            | Expr::Literal(ScalarValue::Float32(Some(0.0)))
-            | Expr::Literal(ScalarValue::Float64(Some(0.0)))
-    ) || divisor == Expr::Literal(ScalarValue::Float16(Some(f16::from_f32(0.0))))
-    {
+        &divisor,
+        Expr::Literal(ScalarValue::Int8(Some(0)), _metadata)
+            | Expr::Literal(ScalarValue::Int16(Some(0)), _metadata)
+            | Expr::Literal(ScalarValue::Int32(Some(0)), _metadata)
+            | Expr::Literal(ScalarValue::Int64(Some(0)), _metadata)
+            | Expr::Literal(ScalarValue::UInt8(Some(0)), _metadata)
+            | Expr::Literal(ScalarValue::UInt16(Some(0)), _metadata)
+            | Expr::Literal(ScalarValue::UInt32(Some(0)), _metadata)
+            | Expr::Literal(ScalarValue::UInt64(Some(0)), _metadata)
+            | Expr::Literal(ScalarValue::Float32(Some(0.0)), _metadata)
+            | Expr::Literal(ScalarValue::Float64(Some(0.0)), _metadata)
+    ) || matches!(
+        &divisor,
+        Expr::Literal(ScalarValue::Float16(Some(f16)), _metadata) if *f16 == f16::from_f32(0.0)
+    ) {
         // FIXME: Account for array input.
         return if function_context.plan_config.ansi_mode {
             Err(PlanError::ArrowError(ArrowError::DivideByZero))
         } else {
-            Ok(Expr::Literal(ScalarValue::Null))
+            Ok(Expr::Literal(ScalarValue::Null, None))
         };
     }
 
@@ -421,7 +425,7 @@ fn log1p(expr: Expr) -> Expr {
     let expr = Expr::BinaryExpr(BinaryExpr {
         left: Box::new(expr),
         op: Operator::Plus,
-        right: Box::new(Expr::Literal(ScalarValue::Float64(Some(1.0)))),
+        right: Box::new(Expr::Literal(ScalarValue::Float64(Some(1.0)), None)),
     });
     expr_fn::ln(expr)
 }
@@ -441,8 +445,11 @@ fn spark_ln(expr: Expr) -> Expr {
     Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(
-            Box::new(expr.clone().eq(Expr::Literal(ScalarValue::Int64(Some(0))))),
-            Box::new(Expr::Literal(ScalarValue::Null)),
+            Box::new(
+                expr.clone()
+                    .eq(Expr::Literal(ScalarValue::Int64(Some(0)), None)),
+            ),
+            Box::new(Expr::Literal(ScalarValue::Null, None)),
         )],
         else_expr: Some(Box::new(expr_fn::ln(expr))),
     })
@@ -450,7 +457,7 @@ fn spark_ln(expr: Expr) -> Expr {
 
 #[inline]
 fn eulers_constant() -> Expr {
-    Expr::Literal(ScalarValue::Float64(Some(std::f64::consts::E)))
+    Expr::Literal(ScalarValue::Float64(Some(std::f64::consts::E)), None)
 }
 
 fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
@@ -459,34 +466,41 @@ fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
     let arguments = if arguments.len() == 2 {
         let (arg, target_scale) = arguments.two()?;
         let target_scale = match target_scale {
-            Expr::Literal(_) => Ok(target_scale),
+            Expr::Literal(_, _) => Ok(target_scale),
             Expr::Negative(negative) => {
-                if let Expr::Literal(scalar) = negative.as_ref() {
+                if let Expr::Literal(scalar, metadata) = *negative {
                     match scalar {
-                        ScalarValue::Int8(v) => {
-                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -v as i32))))
-                        }
-                        ScalarValue::Int16(v) => {
-                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -v as i32))))
-                        }
+                        ScalarValue::Int8(v) => Ok(Expr::Literal(
+                            ScalarValue::Int32(v.map(|v| -v as i32)),
+                            metadata,
+                        )),
+                        ScalarValue::Int16(v) => Ok(Expr::Literal(
+                            ScalarValue::Int32(v.map(|v| -v as i32)),
+                            metadata,
+                        )),
                         ScalarValue::Int32(v) => {
-                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -v))))
+                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -v)), metadata))
                         }
-                        ScalarValue::Int64(v) => {
-                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
-                        }
-                        ScalarValue::UInt8(v) => {
-                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
-                        }
-                        ScalarValue::UInt16(v) => {
-                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
-                        }
-                        ScalarValue::UInt32(v) => {
-                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
-                        }
-                        ScalarValue::UInt64(v) => {
-                            Ok(Expr::Literal(ScalarValue::Int32(v.map(|v| -(v as i32)))))
-                        }
+                        ScalarValue::Int64(v) => Ok(Expr::Literal(
+                            ScalarValue::Int32(v.map(|v| -(v as i32))),
+                            metadata,
+                        )),
+                        ScalarValue::UInt8(v) => Ok(Expr::Literal(
+                            ScalarValue::Int32(v.map(|v| -(v as i32))),
+                            metadata,
+                        )),
+                        ScalarValue::UInt16(v) => Ok(Expr::Literal(
+                            ScalarValue::Int32(v.map(|v| -(v as i32))),
+                            metadata,
+                        )),
+                        ScalarValue::UInt32(v) => Ok(Expr::Literal(
+                            ScalarValue::Int32(v.map(|v| -(v as i32))),
+                            metadata,
+                        )),
+                        ScalarValue::UInt64(v) => Ok(Expr::Literal(
+                            ScalarValue::Int32(v.map(|v| -(v as i32))),
+                            metadata,
+                        )),
                         other => Err(generic_exec_err(
                             "ceil",
                             format!("Target scale must be Integer literal, got {other}").as_str(),
@@ -571,12 +585,12 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("power", F::binary(power)),
         ("radians", F::unary(expr_fn::radians)),
         ("rand", F::udf(Random::new())),
+        ("random_poisson", F::udf(RandPoisson::new())),
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
         ("rint", F::unary(rint)),
         ("round", F::var_arg(expr_fn::round)),
         ("sec", F::unknown("sec")),
-        ("shiftleft", F::binary_op(Operator::BitwiseShiftLeft)),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),
         ("sin", F::unary(expr_fn::sin)),

@@ -2,7 +2,7 @@
   "tests": [
     {
       "input": "\n INSERT OVERWRITE LOCAL DIRECTORY\n USING parquet\n OPTIONS (\n  path 'xxx'\n )\n SELECT i from t1",
-      "exception": "[INTERNAL_ERROR] INSERT OVERWRITE DIRECTORY is not supported.",
+      "exception": "[INTERNAL_ERROR] INSERT OVERWRITE DIRECTORY is not supported. SQLSTATE: XX000",
       "output": {
         "success": {
           "command": {
@@ -274,7 +274,7 @@
     },
     {
       "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source",
-      "exception": "\nOperation not allowed: IF NOT EXISTS with dynamic partitions: p2.(line 1, pos 0)\n\n== SQL ==\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\n^^^\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source\n",
+      "exception": "\nOperation not allowed: IF NOT EXISTS with dynamic partitions: p2.\n== SQL (line 1, position 1) ==\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPARTITION (p1 = 3, p2) IF NOT EXISTS\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "success": {
           "command": {

@@ -19,11 +19,15 @@ use regex::Regex;
 use reqwest::StatusCode;
 use tonic::codegen::http;
 
+fn create_regex(regex: Result<Regex, regex::Error>) -> Regex {
+    #[allow(clippy::unwrap_used)]
+    regex.unwrap()
+}
+
 lazy_static! {
-    static ref HF_PATH_PATTERN: Regex = Regex::new(
+    static ref HF_PATH_PATTERN: Regex = create_regex(Regex::new(
         r"^(?P<username>[^/]+)/(?P<dataset>[^/@]+)(@(?P<revision>[^/]+))?/(?P<path>.*)$"
-    )
-    .unwrap();
+    ));
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -99,10 +103,22 @@ impl HuggingFacePath {
         let Some(captures) = HF_PATH_PATTERN.captures(path.as_ref()) else {
             Err(HuggingFaceError::InvalidPath(path.as_ref().into()))?
         };
-        let username = captures.name("username").unwrap().as_str().to_string();
-        let dataset = captures.name("dataset").unwrap().as_str().to_string();
+        let username = captures
+            .name("username")
+            .ok_or_else(|| HuggingFaceError::InvalidPath(path.as_ref().into()))?
+            .as_str()
+            .to_string();
+        let dataset = captures
+            .name("dataset")
+            .ok_or_else(|| HuggingFaceError::InvalidPath(path.as_ref().into()))?
+            .as_str()
+            .to_string();
         let revision = captures.name("revision").map(|m| m.as_str().to_string());
-        let path = captures.name("path").unwrap().as_str().to_string();
+        let path = captures
+            .name("path")
+            .ok_or_else(|| HuggingFaceError::InvalidPath(path.as_ref().into()))?
+            .as_str()
+            .to_string();
         Ok(Self {
             username,
             dataset,
@@ -314,7 +330,6 @@ impl ObjectStore for HuggingFaceObjectStore {
             Ok(x) => x,
             Err(e) => return Box::pin(stream::once(async { Err(e) })),
         };
-        debug!("Listing Hugging Face files: {path:?}");
         let api = self.api.clone();
         let stream = async_stream::try_stream! {
             let repo = api.repo(path.repo());

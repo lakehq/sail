@@ -72,7 +72,7 @@ impl ShowStringFormat {
     fn show_footer(&self, num_rows: usize, has_more: bool) -> String {
         match (has_more, num_rows) {
             (true, 1) => "only showing top 1 row\n".to_string(),
-            (true, n) => format!("only showing top {} rows\n", n),
+            (true, n) => format!("only showing top {n} rows\n"),
             _ => "".to_string(),
         }
     }
@@ -118,7 +118,7 @@ impl ShowStringFormat {
             table.add_row(row);
         }
         let footer = self.show_footer(batch.num_rows(), has_more);
-        let table = format!("{}\n{}", table, footer);
+        let table = format!("{table}\n{footer}");
         Ok(table)
     }
 
@@ -188,7 +188,7 @@ impl ShowStringFormat {
             .map(|f| format!("<th>{}</th>", html_escape::encode_text(f.name())))
             .collect::<Vec<_>>()
             .join("");
-        table.push(format!("<tr>{}</tr>", header));
+        table.push(format!("<tr>{header}</tr>"));
         for row in 0..batch.num_rows() {
             let row = formatters
                 .iter()

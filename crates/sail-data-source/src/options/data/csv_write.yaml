@@ -1,0 +1,177 @@
+# References:
+#   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-csv.html#data-source-option
+#   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L767-L787
+
+# TODO: Delimiter can be one or more characters
+- key: delimiter
+  aliases:
+    - sep
+  default: ","
+  description: |
+    Sets a single character separator for each field and value.
+  supported: true
+  rust_type: char
+  rust_deserialize_with: crate::options::serde::deserialize_char
+
+- key: quote
+  default: "\""
+  description: |
+    Sets a single character used for escaping quoted values where the delimiter can be part of the value.
+    For writing, if an empty string is set, it uses u0000 (null character).
+  supported: true
+  rust_type: Option<char>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_char
+
+- key: escape
+  default: "\\"
+  description: |
+    Sets a single character used for escaping quotes inside an already quoted value.
+  supported: true
+  rust_type: Option<char>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_char
+
+- key: escape_quotes
+  aliases:
+    - escapeQuotes
+  default: "true"
+  description: |
+    A flag indicating whether values containing quotes should always be enclosed in quotes.
+    When enabled (which is the default), quotes are escaped by doubling them (e.g., `"` escapes to `""`).
+    When disabled, quotes are escaped with the escape character (which is `\\` by default).
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: header
+  default: "false"
+  description: |
+    For writing, writes the names of columns as the first line. CSV built-in functions ignore this option.
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: null_value
+  aliases:
+    - nullValue
+  default: ""
+  description: |
+    Sets the string representation of a null value. Defaults to treating empty values as null.
+  supported: true
+
+- key: compression
+  aliases:
+    - codec
+  default: "UNCOMPRESSED"
+  description: |
+    Specifies the file compression type. The following compression types are supported:
+      - `GZIP` or `GZ`
+      - `BZIP2` or `BZ2`
+      - `XZ`
+      - `ZSTD` or `ZST`
+      - `UNCOMPRESSED` or ""
+  supported: true
+
+- key: extension
+  default: "csv"
+  description: |
+    Sets the file extension for the output files. Limited to letters. Length must equal 3.
+  supported: false
+
+- key: quoteAll
+  default: "false"
+  description: |
+    A flag indicating whether all values should always be enclosed in quotes.
+    Default is to only escape values containing a quote character.
+  supported: false
+
+- key: encoding
+  aliases:
+    - charset
+  default: "UTF-8"
+  description: |
+    For writing, specifies encoding (charset) of saved CSV files. CSV built-in functions ignore this option.
+  supported: false
+
+- key: line_sep
+  aliases:
+    - lineSep
+    - terminator
+  default: "\n"
+  description: |
+    Sets the single character line separator that should be used for writing.
+    CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
+  supported: false
+
+- key: ignore_leading_white_space
+  aliases:
+    - ignoreLeadingWhiteSpace
+  default: "true"
+  description: |
+    A flag indicating whether or not leading whitespaces from values being written should be skipped.
+    Defaults to true for writing.
+  supported: false
+
+- key: ignore_trailing_white_space
+  aliases:
+    - ignoreTrailingWhiteSpace
+  default: "false"
+  description: |
+    A flag indicating whether or not trailing whitespaces from values being read should be skipped.
+    Defaults to false for reading.
+  supported: false
+
+- key: date_format
+  aliases:
+    - dateFormat
+  default: "yyyy-MM-dd"
+  description: |
+    Sets the string that indicates a date format. Custom date formats follow the formats at `Datetime` Patterns.
+  supported: false
+
+- key: timestamp_format
+  aliases:
+    - timestampFormat
+  default: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
+  description: |
+    Sets the string that indicates a timestamp format. Custom date formats follow the formats at `Datetime` Patterns.
+  supported: false
+
+- key: timestamp_ntz_format
+  aliases:
+    - timestampNTZFormat
+  default: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
+  description: |
+    Sets the string that indicates a timestamp without timezone format. Custom date formats follow the formats at
+    `Datetime` Patterns.
+  supported: false
+
+- key: char_to_escape_quote_escaping
+  aliases:
+    - charToEscapeQuoteEscaping
+  default: ""
+  description: |
+    Sets a single character used for escaping the escape for the quote character.
+    The default value is escape character when escape and quote characters are different, \\0 otherwise.
+  supported: false
+
+- key: empty_value
+  aliases:
+    - emptyValue
+  default: "\"\""
+  description: |
+    Sets the string representation of an empty value.
+  supported: false
+
+- key: time_zone
+  aliases:
+    - timeZone
+  default: ""
+  description: |
+    Sets the string that indicates a time zone ID to be used to format timestamps in the CSV data sources or
+    partition values. The following formats of timeZone are supported:
+      - Region-based zone ID: It should have the form 'area/city', such as 'America/Los_Angeles'.
+      - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
+        Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
+    Other short names like 'CST' are not recommended to use because they can be ambiguous.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
+  supported: false

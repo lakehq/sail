@@ -2,12 +2,24 @@
 
 set -euo 'pipefail'
 
-source "$(dirname "$0")/prepare-server.sh"
-
-if [[ -z "${BENCHMARK:-}" ]]; then
-  cargo run -p sail-cli -- spark server -C opt/spark
-else
-  # We build for the current CPU to get the best performance.
-  # See also: https://crates.io/crates/arrow
-  env RUSTFLAGS="-C target-cpu=native" cargo run -r -p sail-cli -- spark server
+if [ -z "${VIRTUAL_ENV:-}" ]; then
+  echo "The server must be run in a Python virtual environment."
+  echo "Please run the script via \`hatch run [<env>:]<command> <options>\`."
+  exit 1
 fi
+
+echo "Python environment: ${VIRTUAL_ENV}"
+
+python_version="$(python -c 'import sys; print("%s.%s" % (sys.version_info.major, sys.version_info.minor))')"
+
+export PYO3_PYTHON="${VIRTUAL_ENV}/bin/python"
+export RUST_LOG="${RUST_LOG:-sail=debug}"
+export RUST_BACKTRACE="${RUST_BACKTRACE:-full}"
+# We have to set `PYTHONPATH` even if we are using the virtual environment.
+# This is because the Python executable is the Rust program itself, and there is
+# no `pyvenv.cfg` at its required location (one directory above the executable).
+export PYTHONPATH="${VIRTUAL_ENV}/lib/python${python_version}/site-packages"
+export PYARROW_IGNORE_TIMEZONE="1"
+
+work_dir="$(python -c 'import os, pyspark; print(os.path.dirname(pyspark.__file__))')"
+cargo run -p sail-cli -- spark server -C "${work_dir}"

@@ -65,7 +65,7 @@ pub(super) fn transform_count_star_wildcard_expr(arguments: Vec<Expr>) -> Vec<Ex
             qualifier: None,
             options: _,
         }] => {
-            vec![Expr::Literal(COUNT_STAR_EXPANSION)]
+            vec![Expr::Literal(COUNT_STAR_EXPANSION, None)]
         }
         _ => arguments,
     }

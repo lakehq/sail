@@ -222,7 +222,7 @@ impl PlanResolver<'_> {
         } = field;
         let mut metadata: HashMap<_, _> = metadata
             .iter()
-            .map(|(k, v)| (format!("metadata.{}", k), v.to_string()))
+            .map(|(k, v)| (format!("metadata.{k}"), v.to_string()))
             .collect();
         let data_type = match data_type {
             spec::DataType::UserDefined {

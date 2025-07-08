@@ -1,6 +1,4 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 :root {
   --vp-sidebar-width: 280px;
@@ -26,7 +24,7 @@ kbd {
 }
 
 dl dt {
-  @apply mt-8 font-bold leading-7;
+  @apply mt-8 leading-7 font-bold;
 }
 
 dl dd {

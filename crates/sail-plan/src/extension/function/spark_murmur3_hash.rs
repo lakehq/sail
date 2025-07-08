@@ -85,12 +85,10 @@ pub fn spark_murmur3_hash(args: &[ColumnarValue]) -> Result<ColumnarValue, DataF
             let arrays = args[0..args.len() - 1]
                 .iter()
                 .map(|arg| match arg {
-                    ColumnarValue::Array(array) => Arc::clone(array),
-                    ColumnarValue::Scalar(scalar) => {
-                        scalar.clone().to_array_of_size(num_rows).unwrap()
-                    }
+                    ColumnarValue::Array(array) => Ok(Arc::clone(array)),
+                    ColumnarValue::Scalar(scalar) => scalar.clone().to_array_of_size(num_rows),
                 })
-                .collect::<Vec<ArrayRef>>();
+                .collect::<Result<Vec<ArrayRef>>>()?;
             create_murmur3_hashes(&arrays, &mut hashes)?;
             if num_rows == 1 {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(

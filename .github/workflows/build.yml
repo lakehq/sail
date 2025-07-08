@@ -12,9 +12,46 @@ on:
       - synchronize
 
 jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      build_package: ${{ github.event_name == 'push' || steps.filter.outputs.package == 'true' || steps.baseline-workflow.outputs.workflow_run_id == '' }}
+      baseline_run_id: ${{ steps.baseline-workflow.outputs.workflow_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            package:
+              - ".github/**"
+              - "crates/**"
+              - "python/**"
+              - "scripts/**"
+              - "Cargo.lock"
+              - "Cargo.toml"
+              - "clippy.toml"
+              - "pyproject.toml"
+              - "rustfmt.toml"
+
+      - uses: ./.github/actions/commit-baseline
+        id: baseline
+
+      - uses: ./.github/actions/commit-workflow
+        id: baseline-workflow
+        with:
+          sha: ${{ steps.baseline.outputs.sha }}
+          workflow_name: Build
+          artifact_name: python-package
+
   build:
     name: Build
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
     runs-on: ubuntu-latest
+    needs:
+      - setup
     steps:
       - uses: actions/checkout@v4
 
@@ -45,44 +82,57 @@ jobs:
         with:
           name: python-package
           path: target/wheels
-          retention-days: 1
+          retention-days: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 30 || 1 }}
 
   spark-tests:
     name: Spark Tests
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/spark-tests.yml
+    strategy:
+      matrix:
+        spark-version: ["3.5.5", "4.0.0"]
+    with:
+      spark_version: ${{ matrix.spark-version }}
     needs:
+      - setup
       - build
 
   python-build:
     name: Python Build
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/python-build.yml
     needs:
+      - setup
       - build
 
   docs-build:
     name: Docs Build
+    # We must specify an explicit condition so that the job still runs when the build is skipped.
+    if: ${{ !failure() && !cancelled() }}
     uses: ./.github/workflows/docs-build.yml
+    needs:
+      - setup
+      - build
     strategy:
       matrix:
         stage: ${{ fromJSON(github.event_name == 'push' && '["dev", "prod"]' || '["test"]') }}
-    needs:
-      - build
     with:
       stage: ${{ matrix.stage }}
       version: main
+      package_run_id: ${{ needs.setup.outputs.build_package == 'true' && github.run_id || needs.setup.outputs.baseline_run_id }}
 
   docs-deploy:
     name: Docs Deploy
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     uses: ./.github/workflows/docs-deploy.yml
+    needs:
+      - docs-build
     strategy:
       max-parallel: 1
       matrix:
         stage: [dev, prod]
     permissions:
       id-token: write
-    needs:
-      - docs-build
     with:
       stage: ${{ matrix.stage }}
       version: main

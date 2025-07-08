@@ -35,8 +35,8 @@ Replace `/path/to/sail` with the absolute path to the Sail CLI on your system.
 If you have installed Sail via `pip` in a Python virtual environment, the path is `$VENV/bin/sail` where `$VENV` is the absolute path to the virtual environment.
 Please note that you must install the PySail library with MCP dependencies.
 
-```bash
-pip install "pysail[spark,mcp]"
+```bash-vue
+pip install "pysail[mcp]=={{ libVersion }}" "pyspark-client==4.0.0"
 ```
 
 ::: info
@@ -64,3 +64,12 @@ For remote data sources, we also recommend that you use credentials with read-on
 ## Cleaning Up
 
 To remove the Sail MCP server from Claude for Desktop, remove the content from the configuration file and restart Claude for Desktop.
+
+<script setup>
+import { useData } from "vitepress";
+import { computed } from "vue";
+
+const { site } = useData();
+
+const libVersion = computed(() => site.value.contentProps?.libVersion);
+</script>

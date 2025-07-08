@@ -1,0 +1,80 @@
+# References:
+#   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-json.html#data-source-option
+#   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L720-L730
+
+- key: compression
+  aliases:
+    - codec
+  default: "UNCOMPRESSED"
+  description: |
+    Specifies the compression codec to use when saving to file. The following compression types are supported:
+      - `GZIP` or `GZ`
+      - `BZIP2` or `BZ2`
+      - `XZ`
+      - `ZSTD` or `ZST`
+      - `UNCOMPRESSED` or ""
+  supported: true
+
+- key: time_zone
+  aliases:
+    - timeZone
+  default: ""
+  description: |
+    Sets the string that indicates a time zone ID to be used to format timestamps in the JSON data sources or
+    partition values. The following formats of timeZone are supported:
+      - Region-based zone ID: It should have the form 'area/city', such as 'America/Los_Angeles'.
+      - Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00' or '+01:00'.
+        Also 'UTC' and 'Z' are supported as aliases of '+00:00'.
+    Other short names like 'CST' are not recommended to use because they can be ambiguous.
+    Defaults to the Sail configuration option `session.time_zone` (to be implemented).
+  supported: false
+
+- key: date_format
+  aliases:
+    - dateFormat
+  default: "yyyy-MM-dd"
+  description: |
+    Sets the string that indicates a date format. Custom date formats follow the formats at `Datetime` Patterns.
+  supported: false
+
+- key: timestamp_format
+  aliases:
+    - timestampFormat
+  default: "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
+  description: |
+    Sets the string that indicates a timestamp format. Custom date formats follow the formats at `Datetime` Patterns.
+  supported: false
+
+- key: timestamp_ntz_format
+  aliases:
+    - timestampNTZFormat
+  default: "yyyy-MM-dd'T'HH:mm:ss[.SSS]"
+  description: |
+    Sets the string that indicates a timestamp without timezone format. Custom date formats follow the formats at
+    `Datetime` Patterns.
+  supported: false
+
+- key: encoding
+  default: "UTF-8"
+  description: |
+    For writing, specifies encoding (charset) of saved JSON files. JSON built-in functions ignore this option.
+  supported: false
+
+- key: line_sep
+  aliases:
+    - lineSep
+    - terminator
+  default: "\n"
+  description: |
+    Sets the single character line separator that should be used for parsing.
+    JSON built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
+  supported: false
+
+- key: ignore_null_fields
+  aliases:
+    - ignoreNullFields
+  default: ""
+  description: |
+    Whether to ignore null fields when generating JSON objects.
+    Defaults to the Sail configuration option `json_generator.ignore_null_fields` (to be implemented).
+  supported: false

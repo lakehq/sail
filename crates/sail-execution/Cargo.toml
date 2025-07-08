@@ -3,12 +3,16 @@ name = "sail-execution"
 version = { workspace = true }
 edition = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-server = { path = "../sail-server" }
 sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
+sail-object-store = { path = "../sail-object-store" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -17,6 +21,7 @@ tonic-types = { workspace = true }
 prost = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
+datafusion-spark = { workspace = true }
 datafusion-functions-json = { workspace = true }
 arrow-flight = { workspace = true }
 log = { workspace = true }

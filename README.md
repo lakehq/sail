@@ -8,18 +8,21 @@
 The mission of Sail is to unify stream processing, batch processing, and compute-intensive (AI) workloads.
 Currently, Sail features a drop-in replacement for Spark SQL and the Spark DataFrame API in both single-host and distributed settings.
 
-**✨News✨: Please check out our [MCP server](https://lakesail.com/blog/spark-mcp-server/) that brings data analytics in Spark to both LLM agents and humans!**
+**✨Please check out our [MCP server](https://lakesail.com/blog/spark-mcp-server/) that brings data analytics in Spark to both LLM agents and humans!✨**
 
 ## Installation
 
-Sail is available as a Python package on PyPI. You can install it using `pip`.
+Sail is available as a Python package on PyPI. You can install it along with PySpark in your Python environment.
 
 ```bash
-pip install "pysail[spark]"
+pip install pysail
+pip install "pyspark[connect]"
 ```
 
-Alternatively, you can install Sail from source for better performance for your hardware architecture.
-You can follow the [Installation](https://docs.lakesail.com/sail/latest/guide/installation/) guide for more information.
+Alternatively, you can install the lightweight client package `pyspark-client` since Spark 4.0.
+The `pyspark-connect` package, which is equivalent to `pyspark[connect]`, is also available since Spark 4.0.
+
+The [Installation](https://docs.lakesail.com/sail/latest/introduction/installation/) guide contains more information about installing Sail from source for better performance for your hardware architecture.
 
 ## Getting Started
 
@@ -60,7 +63,7 @@ spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()
 spark.sql("SELECT 1 + 1").show()
 ```
 
-Please refer to the [Getting Started](https://docs.lakesail.com/sail/latest/guide/getting-started/) guide for further details.
+Please refer to the [Getting Started](https://docs.lakesail.com/sail/latest/introduction/getting-started/) guide for further details.
 
 ## Documentation
 

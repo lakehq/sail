@@ -4,6 +4,7 @@ use std::str::FromStr;
 use chrono;
 use chrono::TimeDelta;
 use lazy_static::lazy_static;
+use regex::Regex;
 use sail_common::spec;
 use sail_sql_parser::ast::data_type::{IntervalDayTimeUnit, IntervalYearMonthUnit};
 use sail_sql_parser::ast::expression::{
@@ -15,33 +16,46 @@ use crate::literal::utils::{extract_fraction_match, extract_match, parse_signed_
 use crate::parser::parse_interval_literal;
 use crate::value::from_ast_string;
 
+fn create_regex(regex: Result<Regex, regex::Error>) -> Regex {
+    #[allow(clippy::unwrap_used)]
+    regex.unwrap()
+}
+
 lazy_static! {
-    static ref INTERVAL_YEAR_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<year>\d+)\s*$").unwrap();
-    static ref INTERVAL_YEAR_TO_MONTH_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<year>\d+)-(?P<month>\d+)\s*$").unwrap();
-    static ref INTERVAL_MONTH_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<month>\d+)\s*$").unwrap();
-    static ref INTERVAL_DAY_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<day>\d+)\s*$").unwrap();
-    static ref INTERVAL_DAY_TO_HOUR_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<day>\d+)\s+(?P<hour>\d+)\s*$").unwrap();
-    static ref INTERVAL_DAY_TO_MINUTE_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<day>\d+)\s+(?P<hour>\d+):(?P<minute>\d+)\s*$").unwrap();
-    static ref INTERVAL_DAY_TO_SECOND_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<day>\d+)\s+(?P<hour>\d+):(?P<minute>\d+):(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$").unwrap();
-    static ref INTERVAL_HOUR_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<hour>\d+)\s*$").unwrap();
-    static ref INTERVAL_HOUR_TO_MINUTE_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<hour>\d+):(?P<minute>\d+)\s*$").unwrap();
-    static ref INTERVAL_HOUR_TO_SECOND_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<hour>\d+):(?P<minute>\d+):(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$").unwrap();
-    static ref INTERVAL_MINUTE_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<minute>\d+)\s*$").unwrap();
-    static ref INTERVAL_MINUTE_TO_SECOND_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<minute>\d+):(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$").unwrap();
-    static ref INTERVAL_SECOND_REGEX: regex::Regex =
-        regex::Regex::new(r"^\s*(?P<sign>[+-]?)(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$").unwrap();
+    static ref INTERVAL_YEAR_REGEX: Regex =
+        create_regex(Regex::new(r"^\s*(?P<sign>[+-]?)(?P<year>\d+)\s*$"));
+    static ref INTERVAL_YEAR_TO_MONTH_REGEX: Regex = create_regex(Regex::new(
+        r"^\s*(?P<sign>[+-]?)(?P<year>\d+)-(?P<month>\d+)\s*$"
+    ));
+    static ref INTERVAL_MONTH_REGEX: Regex =
+        create_regex(Regex::new(r"^\s*(?P<sign>[+-]?)(?P<month>\d+)\s*$"));
+    static ref INTERVAL_DAY_REGEX: Regex =
+        create_regex(Regex::new(r"^\s*(?P<sign>[+-]?)(?P<day>\d+)\s*$"));
+    static ref INTERVAL_DAY_TO_HOUR_REGEX: Regex = create_regex(Regex::new(
+        r"^\s*(?P<sign>[+-]?)(?P<day>\d+)\s+(?P<hour>\d+)\s*$"
+    ));
+    static ref INTERVAL_DAY_TO_MINUTE_REGEX: Regex = create_regex(Regex::new(
+        r"^\s*(?P<sign>[+-]?)(?P<day>\d+)\s+(?P<hour>\d+):(?P<minute>\d+)\s*$"
+    ));
+    static ref INTERVAL_DAY_TO_SECOND_REGEX: Regex = create_regex(Regex::new(
+        r"^\s*(?P<sign>[+-]?)(?P<day>\d+)\s+(?P<hour>\d+):(?P<minute>\d+):(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$"
+    ));
+    static ref INTERVAL_HOUR_REGEX: Regex =
+        create_regex(Regex::new(r"^\s*(?P<sign>[+-]?)(?P<hour>\d+)\s*$"));
+    static ref INTERVAL_HOUR_TO_MINUTE_REGEX: Regex = create_regex(Regex::new(
+        r"^\s*(?P<sign>[+-]?)(?P<hour>\d+):(?P<minute>\d+)\s*$"
+    ));
+    static ref INTERVAL_HOUR_TO_SECOND_REGEX: Regex = create_regex(Regex::new(
+        r"^\s*(?P<sign>[+-]?)(?P<hour>\d+):(?P<minute>\d+):(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$"
+    ));
+    static ref INTERVAL_MINUTE_REGEX: Regex =
+        create_regex(Regex::new(r"^\s*(?P<sign>[+-]?)(?P<minute>\d+)\s*$"));
+    static ref INTERVAL_MINUTE_TO_SECOND_REGEX: Regex = create_regex(Regex::new(
+        r"^\s*(?P<sign>[+-]?)(?P<minute>\d+):(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$"
+    ));
+    static ref INTERVAL_SECOND_REGEX: Regex = create_regex(Regex::new(
+        r"^\s*(?P<sign>[+-]?)(?P<second>\d+)[.]?(?P<fraction>\d+)?\s*$"
+    ));
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -143,7 +157,7 @@ impl FromStr for Signed<DecimalSecond> {
     type Err = SqlError;
 
     fn from_str(s: &str) -> SqlResult<Self> {
-        let error = || SqlError::invalid(format!("second: {:?}", s));
+        let error = || SqlError::invalid(format!("second: {s:?}"));
         let captures = INTERVAL_SECOND_REGEX.captures(s).ok_or_else(error)?;
         let negated = captures.name("sign").map(|s| s.as_str()) == Some("-");
         let seconds: u32 = extract_match(&captures, "second", error)?.unwrap_or(0);
@@ -164,7 +178,7 @@ impl FromStr for Signed<DecimalSecond> {
 fn parse_interval_year_month_string(
     s: &str,
     negated: bool,
-    interval_regex: &regex::Regex,
+    interval_regex: &Regex,
 ) -> SqlResult<IntervalValue> {
     let error = || SqlError::invalid(format!("interval: {s}"));
     let captures = interval_regex.captures(s).ok_or_else(error)?;
@@ -187,7 +201,7 @@ fn parse_interval_year_month_string(
 fn parse_interval_day_time_string(
     s: &str,
     negated: bool,
-    interval_regex: &regex::Regex,
+    interval_regex: &Regex,
 ) -> SqlResult<IntervalValue> {
     let error = || SqlError::invalid(format!("interval: {s}"));
     let captures = interval_regex.captures(s).ok_or_else(error)?;

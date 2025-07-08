@@ -284,6 +284,10 @@ pub enum CommandNode {
         database: Option<ObjectName>,
         table_pattern: Option<String>,
     },
+    ListViews {
+        database: Option<ObjectName>,
+        view_pattern: Option<String>,
+    },
     ListFunctions {
         database: Option<ObjectName>,
         function_pattern: Option<String>,
@@ -800,7 +804,7 @@ pub struct Write {
     pub source: Option<String>, // TODO: is this the same as "provider" in `WriteOperationV2`?
     pub save_type: SaveType,
     pub mode: SaveMode,
-    pub sort_columns: Vec<Identifier>,
+    pub sort_columns: Vec<SortOrder>,
     pub partitioning_columns: Vec<Identifier>,
     pub clustering_columns: Vec<Identifier>,
     pub bucket_by: Option<SaveBucketBy>,

@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: type_coercion\ncaused by\nError during planning: Cannot get result type for temporal operation Interval(MonthDayNano) / Interval(MonthDayNano): Invalid argument error: Invalid interval arithmetic operation: Interval(MonthDayNano) / Interval(MonthDayNano)"
+        "failure": "error in DataFusion: Error during planning: Cannot get result type for temporal operation Interval(MonthDayNano) / Interval(MonthDayNano): Invalid argument error: Invalid interval arithmetic operation: Interval(MonthDayNano) / Interval(MonthDayNano)"
       }
     },
     {
@@ -1806,28 +1806,6 @@
     },
     {
       "input": {
-        "query": "SELECT shiftleft(2, 1);",
-        "result": [
-          "4"
-        ],
-        "schema": {
-          "type": "struct",
-          "fields": [
-            {
-              "name": "shiftleft(2, 1)",
-              "nullable": false,
-              "type": "integer",
-              "metadata": {}
-            }
-          ]
-        }
-      },
-      "output": {
-        "success": "ok"
-      }
-    },
-    {
-      "input": {
         "query": "SELECT sign(40);",
         "result": [
           "1.0"
@@ -2268,6 +2246,94 @@
     },
     {
       "input": {
+        "query": "SELECT try_mod(1, 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_mod(1, 0)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_mod"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_mod(2L, 2L);",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_mod(2, 2)",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_mod"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_mod(3, 2);",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_mod(3, 2)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_mod"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_mod(3.0, 2.0);",
+        "result": [
+          "1.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_mod(3.0, 2.0)",
+              "nullable": true,
+              "type": "decimal(2, 1)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_mod"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT try_multiply(-2147483648, 10);",
         "result": [
           "NULL"
@@ -2462,6 +2528,28 @@
       },
       "output": {
         "failure": "not implemented: function: try_subtract"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT uniform(10, 20, 0) > 0 AS result;",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "result",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: uniform"
       }
     },
     {

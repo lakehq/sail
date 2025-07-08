@@ -5,6 +5,65 @@ next: false
 
 # Changelog
 
+## 0.3.1
+
+_July 7, 2025_
+
+- Added support for the following SQL functions ([#570](https://github.com/lakehq/sail/pull/570), [#571](https://github.com/lakehq/sail/pull/571), [#582](https://github.com/lakehq/sail/pull/582), [#585](https://github.com/lakehq/sail/pull/585), and [#586](https://github.com/lakehq/sail/pull/586)):
+  - `dayname`
+  - `nullifzero`
+  - `zeroifnull`
+  - `split` (partial support)
+  - `collect_set`
+  - `count_if`
+- Fixed issues with the `from_utc_timestamp` SQL function ([#596](https://github.com/lakehq/sail/pull/596)).
+- Added support for the `DataFrame.sampleBy` method in the Spark DataFrame API ([#547](https://github.com/lakehq/sail/pull/547)).
+- Added support for the following SQL statements ([#588](https://github.com/lakehq/sail/pull/588)):
+  - `SHOW COLUMNS`
+  - `SHOW DATABASES`
+  - `SHOW TABLES`
+  - `SHOW VIEWS`
+- Improved data source listing performance ([#579](https://github.com/lakehq/sail/pull/579)).
+- Improved the internal logic of data source options ([#587](https://github.com/lakehq/sail/pull/587) and [#598](https://github.com/lakehq/sail/pull/598)).
+- Updated gRPC server TCP and HTTP configuration ([#593](https://github.com/lakehq/sail/pull/593)).
+
+### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) for the first contributions related to SQL functions!
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin) for the continued contributions related to the Spark DataFrame API!
+
+## 0.3.0
+
+_June 28, 2025_
+
+The 0.3.0 release introduces support for Spark 4.0 in Sail, alongside the existing support for Spark 3.5. One of the most notable changes in Spark 4.0 is the new `pyspark-client` package, a lightweight PySpark client. When using Sail in your PySpark applications, you can now choose to install this client package, instead of the full `pyspark` package that includes all the JAR files.
+
+Here is a summary of the new features and improvements in this release.
+
+- Improved remote data access performance by caching object stores ([#515](https://github.com/lakehq/sail/pull/515)).
+- Added support for data reader and writer configuration ([#466](https://github.com/lakehq/sail/pull/466) and [#535](https://github.com/lakehq/sail/pull/535)).
+- Added support for the following SQL functions ([#527](https://github.com/lakehq/sail/pull/527)):
+  - `crc32`
+  - `sha`
+  - `sha1`
+- Fixed issues with casting integers to timestamps ([#533](https://github.com/lakehq/sail/pull/533)).
+- Fixed issues with the `random` and `randn` SQL functions ([#530](https://github.com/lakehq/sail/pull/530)).
+- Added support for the `DataFrame.sample` method in the Spark DataFrame API ([#496](https://github.com/lakehq/sail/pull/496)).
+- Added support for Spark 4.0 ([#467](https://github.com/lakehq/sail/pull/467), [#498](https://github.com/lakehq/sail/pull/498), and [#559](https://github.com/lakehq/sail/pull/559)).
+- Updated the default value of a few configuration options ([#565](https://github.com/lakehq/sail/pull/565)).
+
+### Breaking Changes
+
+The `spark` "extra" has been removed from the `pysail` package. As a result, you can no longer use commands like `pip install pysail[spark]` to install Sail along with Spark. Instead, you must install the PySpark package separately in your Python environment.
+
+This change allows you to freely choose the PySpark version when using Sail. Depending on your requirements, you can opt for either the `pyspark` package (Spark 3.5 or later) or the `pyspark-client` package (introduced in Spark 4.0).
+
+### Contributors
+
+We are thrilled by the growing interest from the community.
+Huge thanks to [@rafafrdz](https://github.com/rafafrdz), [@davidlghellin](https://github.com/davidlghellin), [@lonless9](https://github.com/lonless9), and [@pimlie](https://github.com/pimlie) for making their first contributions to Sail!
+
 ## 0.2.6
 
 _May 14, 2025_

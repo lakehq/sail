@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"%SystemDrive%/Users/John\")), Literal(Utf8(\"/%SYSTEMDrive/%//Users%\")), Literal(Utf8(\"/\"))]"
+        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"%SystemDrive%/Users/John\"), None), Literal(Utf8(\"/%SYSTEMDrive/%//Users%\"), None), Literal(Utf8(\"/\"), None)]"
       }
     },
     {
@@ -98,7 +98,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "%SystemDrive%/Users/John LIKE /%SystemDrive/%//Users%",
+              "name": "%SystemDrive%/Users/John LIKE /%SystemDrive/%//Users% ESCAPE '/'",
               "nullable": false,
               "type": "boolean",
               "metadata": {}
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"%SystemDrive%/Users/John\")), Literal(Utf8(\"/%SystemDrive/%//Users%\")), Literal(Utf8(\"/\"))]"
+        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"%SystemDrive%/Users/John\"), None), Literal(Utf8(\"/%SystemDrive/%//Users%\"), None), Literal(Utf8(\"/\"), None)]"
       }
     },
     {
@@ -156,7 +156,7 @@
     },
     {
       "input": {
-        "query": "SELECT '%SystemDrive%\\\\USERS\\\\John' ilike '\\%SystemDrive\\%\\\\\\\\Users%';",
+        "query": "SELECT '%SystemDrive%\\\\USERS\\\\John' ilike r'%SystemDrive%\\\\Users%';",
         "result": [
           "true"
         ],
@@ -164,7 +164,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "ilike(%SystemDrive%\\USERS\\John, \\%SystemDrive\\%\\\\Users%)",
+              "name": "ilike(%SystemDrive%\\USERS\\John, %SystemDrive%\\\\Users%)",
               "nullable": false,
               "type": "boolean",
               "metadata": {}
@@ -178,7 +178,7 @@
     },
     {
       "input": {
-        "query": "SELECT '%SystemDrive%\\\\Users\\\\John' like '\\%SystemDrive\\%\\\\\\\\Users%';",
+        "query": "SELECT '%SystemDrive%\\\\Users\\\\John' like r'%SystemDrive%\\\\Users%';",
         "result": [
           "true"
         ],
@@ -186,7 +186,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "%SystemDrive%\\Users\\John LIKE \\%SystemDrive\\%\\\\Users%",
+              "name": "%SystemDrive%\\Users\\John LIKE %SystemDrive%\\\\Users%",
               "nullable": false,
               "type": "boolean",
               "metadata": {}
@@ -196,6 +196,74 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT '\\\\abc' AS S, S ilike r'\\\\abc', S ilike '\\\\\\\\abc';",
+        "result": [
+          "\\abc\ttrue\ttrue"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "S",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "ilike(lateralAliasReference(S), \\\\abc)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            },
+            {
+              "name": "ilike(lateralAliasReference(S), \\\\abc)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"S\")])"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT '\\\\abc' AS S, S like r'\\\\abc', S like '\\\\\\\\abc';",
+        "result": [
+          "\\abc\ttrue\ttrue"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "S",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            },
+            {
+              "name": "lateralAliasReference(S) LIKE \\\\abc",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            },
+            {
+              "name": "lateralAliasReference(S) LIKE \\\\abc",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"S\")])"
       }
     },
     {
@@ -706,6 +774,116 @@
     },
     {
       "input": {
+        "query": "SELECT equal_null(1, '11');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "equal_null(1, 11)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT equal_null(3, 3);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "equal_null(3, 3)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT equal_null(NULL, 'abc');",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "equal_null(NULL, abc)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT equal_null(NULL, NULL);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "equal_null(NULL, NULL)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT equal_null(true, NULL);",
+        "result": [
+          "false"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "equal_null(true, NULL)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT false and NULL;",
         "result": [
           "false"
@@ -1036,6 +1214,28 @@
     },
     {
       "input": {
+        "query": "SELECT regexp('%SystemDrive%\\\\Users\\\\John', r'%SystemDrive%\\\\Users.*');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "REGEXP(%SystemDrive%\\Users\\John, %SystemDrive%\\\\Users.*)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT regexp_like('%SystemDrive%\\Users\\John', '%SystemDrive%\\\\Users.*');",
         "result": [
           "true"
@@ -1080,6 +1280,28 @@
     },
     {
       "input": {
+        "query": "SELECT regexp_like('%SystemDrive%\\\\Users\\\\John', r'%SystemDrive%\\\\Users.*');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "REGEXP_LIKE(%SystemDrive%\\Users\\John, %SystemDrive%\\\\Users.*)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT rlike('%SystemDrive%\\Users\\John', '%SystemDrive%\\\\Users.*');",
         "result": [
           "true"
@@ -1103,6 +1325,28 @@
     {
       "input": {
         "query": "SELECT rlike('%SystemDrive%\\\\Users\\\\John', '%SystemDrive%\\\\\\\\Users.*');",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "RLIKE(%SystemDrive%\\Users\\John, %SystemDrive%\\\\Users.*)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT rlike('%SystemDrive%\\\\Users\\\\John', r'%SystemDrive%\\\\Users.*');",
         "result": [
           "true"
         ],

@@ -32,6 +32,7 @@ pub enum JsonDataType {
     TimestampNtz,
     #[serde(rename = "interval")]
     CalendarInterval,
+    Variant,
     #[serde(untagged, with = "serde_char")]
     Char {
         length: i32,
@@ -110,8 +111,7 @@ impl FromStr for DayTimeIntervalField {
             "minute" => Ok(DayTimeIntervalField::Minute),
             "second" => Ok(DayTimeIntervalField::Second),
             _ => Err(serde::de::Error::custom(format!(
-                "invalid day time interval field: {}",
-                s
+                "invalid day time interval field: {s}"
             ))),
         }
     }
@@ -142,8 +142,7 @@ impl FromStr for YearMonthIntervalField {
             "year" => Ok(YearMonthIntervalField::Year),
             "month" => Ok(YearMonthIntervalField::Month),
             _ => Err(serde::de::Error::custom(format!(
-                "invalid year month interval field: {}",
-                s
+                "invalid year month interval field: {s}"
             ))),
         }
     }
@@ -158,12 +157,20 @@ impl Display for YearMonthIntervalField {
     }
 }
 
+fn create_regex(regex: Result<regex::Regex, regex::Error>) -> regex::Regex {
+    #[allow(clippy::unwrap_used)]
+    regex.unwrap()
+}
+
 mod serde_char {
     use lazy_static::lazy_static;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::proto::data_type_json::create_regex;
+
     lazy_static! {
-        static ref CHAR_LENGTH: regex::Regex = regex::Regex::new(r"^char\(\s*(\d+)\s*\)$").unwrap();
+        static ref CHAR_LENGTH: regex::Regex =
+            create_regex(regex::Regex::new(r"^char\(\s*(\d+)\s*\)$"));
     }
 
     pub fn serialize<S>(length: &i32, serializer: S) -> Result<S::Ok, S::Error>
@@ -180,7 +187,7 @@ mod serde_char {
         let s = String::deserialize(deserializer)?;
         let caps = CHAR_LENGTH
             .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid char type: {}", s)))?;
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid char type: {s}")))?;
         caps[1].parse().map_err(serde::de::Error::custom)
     }
 }
@@ -189,9 +196,11 @@ mod serde_varchar {
     use lazy_static::lazy_static;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::proto::data_type_json::create_regex;
+
     lazy_static! {
         static ref VARCHAR_LENGTH: regex::Regex =
-            regex::Regex::new(r"^varchar\(\s*(\d+)\s*\)$").unwrap();
+            create_regex(regex::Regex::new(r"^varchar\(\s*(\d+)\s*\)$"));
     }
 
     pub fn serialize<S>(length: &i32, serializer: S) -> Result<S::Ok, S::Error>
@@ -208,7 +217,7 @@ mod serde_varchar {
         let s = String::deserialize(deserializer)?;
         let caps = VARCHAR_LENGTH
             .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid varchar type: {}", s)))?;
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid varchar type: {s}")))?;
         caps[1].parse().map_err(serde::de::Error::custom)
     }
 }
@@ -217,9 +226,11 @@ mod serde_fixed_decimal {
     use lazy_static::lazy_static;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::proto::data_type_json::create_regex;
+
     lazy_static! {
         static ref FIXED_DECIMAL: regex::Regex =
-            regex::Regex::new(r"^decimal\(\s*(\d+)\s*,\s*(-?\d+)\s*\)$").unwrap();
+            create_regex(regex::Regex::new(r"^decimal\(\s*(\d+)\s*,\s*(-?\d+)\s*\)$"));
     }
 
     pub fn serialize<S>(precision: &i32, scale: &i32, serializer: S) -> Result<S::Ok, S::Error>
@@ -236,7 +247,7 @@ mod serde_fixed_decimal {
         let s = String::deserialize(deserializer)?;
         let caps = FIXED_DECIMAL
             .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid decimal type: {}", s)))?;
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid decimal type: {s}")))?;
         Ok((
             caps[1].parse().map_err(serde::de::Error::custom)?,
             caps[2].parse().map_err(serde::de::Error::custom)?,
@@ -250,11 +261,12 @@ mod serde_day_time_interval {
     use lazy_static::lazy_static;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::proto::data_type_json::create_regex;
+
     lazy_static! {
-        static ref DAY_TIME_INTERVAL: regex::Regex = regex::Regex::new(
+        static ref DAY_TIME_INTERVAL: regex::Regex = create_regex(regex::Regex::new(
             r"^interval\s+(day|hour|minute|second)(\s+to\s+(day|hour|minute|second))?$"
-        )
-        .unwrap();
+        ));
     }
 
     pub fn serialize<S>(
@@ -268,8 +280,8 @@ mod serde_day_time_interval {
         let start = start.as_ref().map(|f| f.to_string());
         let end = end.as_ref().map(|f| f.to_string());
         let interval = match (start, end) {
-            (Some(start), Some(end)) => format!("interval {} to {}", start, end),
-            (Some(start), None) => format!("interval {}", start),
+            (Some(start), Some(end)) => format!("interval {start} to {end}"),
+            (Some(start), None) => format!("interval {start}"),
             _ => return Err(serde::ser::Error::custom("invalid day time interval")),
         };
         interval.serialize(serializer)
@@ -290,7 +302,7 @@ mod serde_day_time_interval {
         let s = String::deserialize(deserializer)?;
         let caps = DAY_TIME_INTERVAL
             .captures(&s)
-            .ok_or_else(|| serde::de::Error::custom(format!("invalid day time interval: {}", s)))?;
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid day time interval: {s}")))?;
         let start = caps
             .get(1)
             .map(|m| super::DayTimeIntervalField::from_str(m.as_str()))
@@ -311,9 +323,12 @@ mod serde_year_month_interval {
     use lazy_static::lazy_static;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::proto::data_type_json::create_regex;
+
     lazy_static! {
-        static ref YEAR_MONTH_INTERVAL: regex::Regex =
-            regex::Regex::new(r"^interval\s+(year|month)(\s+to\s+(year|month))?$").unwrap();
+        static ref YEAR_MONTH_INTERVAL: regex::Regex = create_regex(regex::Regex::new(
+            r"^interval\s+(year|month)(\s+to\s+(year|month))?$"
+        ));
     }
 
     pub fn serialize<S>(
@@ -327,8 +342,8 @@ mod serde_year_month_interval {
         let start = start.as_ref().map(|f| f.to_string());
         let end = end.as_ref().map(|f| f.to_string());
         let interval = match (start, end) {
-            (Some(start), Some(end)) => format!("interval {} to {}", start, end),
-            (Some(start), None) => format!("interval {}", start),
+            (Some(start), Some(end)) => format!("interval {start} to {end}"),
+            (Some(start), None) => format!("interval {start}"),
             _ => return Err(serde::ser::Error::custom("invalid year month interval")),
         };
         interval.serialize(serializer)
@@ -347,9 +362,9 @@ mod serde_year_month_interval {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        let caps = YEAR_MONTH_INTERVAL.captures(&s).ok_or_else(|| {
-            serde::de::Error::custom(format!("invalid year month interval: {}", s))
-        })?;
+        let caps = YEAR_MONTH_INTERVAL
+            .captures(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid year month interval: {s}")))?;
         let start = caps
             .get(1)
             .map(|m| super::YearMonthIntervalField::from_str(m.as_str()))
@@ -449,6 +464,9 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
                 type_variation_reference: 0,
             })),
         },
+        JsonDataType::Variant => sc::DataType {
+            kind: Some(dt::Kind::Variant(dt::Variant::default())),
+        },
         JsonDataType::Array {
             r#type: _,
             element_type,
@@ -513,6 +531,7 @@ fn from_spark_json_data_type(data_type: JsonDataType) -> SparkResult<sc::DataTyp
     Ok(out)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

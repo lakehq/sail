@@ -3,33 +3,37 @@ name = "sail-plan"
 version = { workspace = true }
 edition = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
+sail-data-source = { path = "../sail-data-source" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+datafusion-spark = { workspace = true }
 datafusion-functions-json = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 tokio-stream = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
-async-stream = { workspace = true }
 lazy_static = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_arrow = { workspace = true }
-serde_yaml = { workspace = true }
 futures = { workspace = true }
 comfy-table = { workspace = true }
 html-escape = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 ryu = { workspace = true }
 either = { workspace = true }
 tokio = { workspace = true }
@@ -39,26 +43,15 @@ rand_distr = { workspace = true }
 url = { workspace = true }
 glob = { workspace = true }
 object_store = { workspace = true }
-aws-config = { workspace = true }
-aws-credential-types = { workspace = true }
-aws-smithy-runtime-api = { workspace = true }
-aws-smithy-types = { workspace = true }
-aws-smithy-async = { workspace = true }
-hdfs-native-object-store = { workspace = true, optional = true }
+sha1 = { workspace = true }
 twox-hash = { workspace = true }
 aes = { workspace = true }
 aes-gcm = { workspace = true }
 cbc = { workspace = true }
 base64 = { workspace = true }
 half = { workspace = true }
+crc32fast = { workspace = true }
 num = { workspace = true }
-hf-hub = { workspace = true }
-reqwest = { workspace = true }
-log = { workspace = true }
 chumsky = { workspace = true }
 percent-encoding = { workspace = true }
-dashmap = { workspace = true }
-
-[features]
-hdfs = ["dep:hdfs-native-object-store"]
-default = ["hdfs"]
+arrow = { workspace = true }

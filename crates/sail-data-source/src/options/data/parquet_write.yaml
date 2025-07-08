@@ -1,0 +1,205 @@
+# References:
+#   - [1] https://spark.apache.org/docs/4.0.0/sql-data-sources-parquet.html#data-source-option
+#   - [2] https://github.com/apache/spark/blob/b0c2ba357bf080dd328b95e4a6402b134a641a1a/python/pyspark/sql/connect/readwriter.py#L744-L750
+#   - [3] TODO: Spark global options: https://spark.apache.org/docs/4.0.0/sql-data-sources-parquet.html#configuration
+
+- key: data_page_size_limit
+  aliases:
+    - dataPageSizeLimit
+  description: |
+    (Writing) The best-effort maximum size of a data page in bytes.
+    Defaults to the Sail configuration option `parquet.data_page_size_limit`.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: write_batch_size
+  aliases:
+    - writeBatchSize
+  description: |
+    (Writing) The Parquet writer batch size in bytes.
+    Defaults to the Sail configuration option `parquet.write_batch_size`.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: writer_version
+  aliases:
+    - writerVersion
+  description: |
+    (Writing) The Parquet writer version.
+    Valid values are `1.0` and `2.0`.
+    Defaults to the Sail configuration option `parquet.writer_version`.
+  supported: true
+
+- key: skip_arrow_metadata
+  aliases:
+    - skipArrowMetadata
+  description: |
+    (Writing) Whether to skip encoding the embedded arrow metadata when writing Parquet files.
+    Defaults to the Sail configuration option `parquet.skip_arrow_metadata`.
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: compression
+  aliases:
+    - codec
+  description: |
+    (Writing) The default Parquet compression codec.
+    Valid values are `uncompressed`, `snappy`, `gzip(level)`,
+    `lzo`, `brotli(level)`, `lz4`, `zstd(level)`, and `lz4_raw`,
+    where `level` is an integer defining the compression level.
+    These values are not case-sensitive.
+    Defaults to the Sail configuration option `parquet.compression`.
+  supported: true
+
+- key: dictionary_enabled
+  aliases:
+    - dictionaryEnabled
+  description: |
+    (Writing) Whether to enable dictionary encoding for the Parquet writer.
+    Defaults to the Sail configuration option `parquet.dictionary_enabled`.
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: dictionary_page_size_limit
+  aliases:
+    - dictionaryPageSizeLimit
+  description: |
+    (Writing) The best-effort maximum dictionary page size in bytes for the Parquet writer.
+    Defaults to the Sail configuration option `parquet.dictionary_page_size_limit`.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: statistics_enabled
+  aliases:
+    - statisticsEnabled
+  description: |
+    (Writing) Whether statistics are enabled for any column for the Parquet writer.
+    Valid values are `none`, `chunk`, and `page`.
+    These values are not case-sensitive.
+    Defaults to the Sail configuration option `parquet.statistics_enabled`.
+  supported: true
+
+- key: max_row_group_size
+  aliases:
+    - maxRowGroupSize
+  description: |
+    (Writing) The target maximum number of rows in each row group for the Parquet writer.
+    Larger row groups require more memory to write, but
+    can get better compression and be faster to read.
+    Defaults to the Sail configuration option `parquet.max_row_group_size`.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: column_index_truncate_length
+  aliases:
+    - columnIndexTruncateLength
+  description: |
+    (Writing) The column index truncate length for the Parquet writer.
+    Defaults to the Sail configuration option `parquet.column_index_truncate_length`.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: statistics_truncate_length
+  aliases:
+    - statisticsTruncateLength
+  description: |
+    (Writing) The statistics truncate length for the Parquet writer.
+    If the value is `0`, no truncation is applied.
+    Defaults to the Sail configuration option `parquet.statistics_truncate_length`.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: data_page_row_count_limit
+  aliases:
+    - dataPageRowCountLimit
+  description: |
+    (Writing) The best-effort maximum number of rows in data page for the Parquet writer.
+    Defaults to the Sail configuration option `parquet.data_page_row_count_limit`.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: encoding
+  description: |
+    (Writing) The default encoding for any column.
+    Valid values are `plain`, `plain_dictionary`, `rle`,
+    `bit_packed` (deprecated), `delta_binary_packed`, `delta_length_byte_array`,
+    `delta_byte_array`, `rle_dictionary`, and `byte_stream_split`.
+    These values are not case sensitive.
+    An empty value can also be used, which allows the Parquet writer to choose
+    the encoding for each column to achieve good performance.
+    Defaults to the Sail configuration option `parquet.encoding`.
+  supported: true
+
+- key: bloom_filter_on_write
+  aliases:
+    - bloomFilterOnWrite
+  description: |
+    (Writing) Whether to write bloom filters for all columns when writing Parquet files.
+    Defaults to the Sail configuration option `parquet.bloom_filter_on_write`.
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: bloom_filter_fpp
+  aliases:
+    - bloomFilterFpp
+  description: |
+    (Writing) The false positive probability for bloom filters when writing Parquet files.
+    Defaults to the Sail configuration option `parquet.bloom_filter_fpp`.
+  supported: true
+  rust_type: f64
+  rust_deserialize_with: crate::options::serde::deserialize_f64
+
+- key: bloom_filter_ndv
+  aliases:
+    - bloomFilterNdv
+  description: |
+    (Writing) The number of distinct values for bloom filters when writing Parquet files.
+    Defaults to the Sail configuration option `parquet.bloom_filter_ndv`.
+  supported: true
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
+
+- key: allow_single_file_parallelism
+  aliases:
+    - allowSingleFileParallelism
+  description: |
+    (Writing) Whether to parallelize writing for each single Parquet file.
+    If the value is `true`, each column in each row group in each file are serialized in parallel.
+    Defaults to the Sail configuration option `parquet.allow_single_file_parallelism`.
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: maximum_parallel_row_group_writers
+  aliases:
+    - maximumParallelRowGroupWriters
+  description: |
+    (Writing) The maximum number of row group writers to use for the Parquet writer.
+    This may improve performance when writing large Parquet files,
+    at the expense of higher memory usage.
+    Defaults to the Sail configuration option `parquet.maximum_parallel_row_group_writers`.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: maximum_buffered_record_batches_per_stream
+  aliases:
+    - maximumBufferedRecordBatchesPerStream
+  description: |
+    (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
+    This may improve performance when writing large Parquet files,
+    at the expense of higher memory usage.
+    Defaults to the Sail configuration option `parquet.maximum_buffered_record_batches_per_stream`.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize

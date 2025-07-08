@@ -90,15 +90,15 @@ The `DESCRIBE QUERY` statement is not supported yet.
 | `REFRESH FUNCTION`   | :construction:               |
 | `REFRESH TABLE`      | :construction:               |
 | `REPAIR TABLE`       | :construction:               |
-| `SHOW COLUMNS`       | :construction:               |
+| `SHOW COLUMNS`       | :white_check_mark:           |
 | `SHOW CREATE TABLE`  | :construction:               |
-| `SHOW DATABASES`     | :construction:               |
+| `SHOW DATABASES`     | :white_check_mark:           |
 | `SHOW FUNCTIONS`     | :construction:               |
 | `SHOW PARTITIONS`    | :construction:               |
 | `SHOW TABLE`         | :construction:               |
-| `SHOW TABLES`        | :construction:               |
+| `SHOW TABLES`        | :white_check_mark:           |
 | `SHOW TBLPROPERTIES` | :construction:               |
-| `SHOW VIEWS`         | :construction:               |
+| `SHOW VIEWS`         | :white_check_mark:           |
 | `TRUNCATE TABLE`     | :construction:               |
 | `USE DATABASE`       | :white_check_mark:           |
 

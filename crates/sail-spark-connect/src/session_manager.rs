@@ -13,13 +13,13 @@ use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
+use sail_object_store::DynamicObjectStoreRegistry;
 use sail_plan::extension::analyzer::default_analyzer_rules;
 use sail_plan::extension::optimizer::default_optimizer_rules;
 use sail_plan::function::{
     BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
 };
 use sail_plan::new_query_planner;
-use sail_plan::object_store::DynamicObjectStoreRegistry;
 use sail_plan::temp_view::TemporaryViewManager;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
@@ -98,7 +98,9 @@ impl SessionManager {
         let mut session_config = SessionConfig::new()
             .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
-            .with_information_schema(true)
+            // We do not use the information schema since we use the catalog/schema/table providers
+            // directly for catalog operations.
+            .with_information_schema(false)
             .with_extension(Arc::new(TemporaryViewManager::default()))
             .with_extension(Arc::new(SparkExtension::try_new(
                 key.user_id,
@@ -111,6 +113,7 @@ impl SessionManager {
             let execution = &mut session_config.options_mut().execution;
 
             execution.batch_size = options.config.execution.batch_size;
+            execution.collect_statistics = options.config.execution.collect_statistics;
             execution.listing_table_ignore_subdirectory = false;
         }
 
@@ -252,7 +255,7 @@ impl SessionManagerActor {
             Entry::Occupied(o) => Ok(o.get().clone()),
             Entry::Vacant(v) => {
                 let key = v.key().clone();
-                info!("creating session {}", key);
+                info!("creating session {key}");
                 match SessionManager::create_session_context(system, key, self.options.clone()) {
                     Ok(context) => Ok(v.insert(context).clone()),
                     Err(e) => Err(e),
@@ -286,7 +289,7 @@ impl SessionManagerActor {
         if let Some(context) = context {
             if let Ok(spark) = SparkExtension::get(context) {
                 if spark.active_at().is_ok_and(|x| x <= instant) {
-                    info!("removing idle session {}", key);
+                    info!("removing idle session {key}");
                     ctx.spawn(async move { spark.job_runner().stop().await });
                     self.sessions.remove(&key);
                 }

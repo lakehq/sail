@@ -1,0 +1,21 @@
+[package]
+name = "sail-data-source"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+
+serde = { workspace = true }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+syn = { workspace = true }
+prettyplease = { workspace = true }
+regex = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }

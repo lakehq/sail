@@ -1,0 +1,39 @@
+[package]
+name = "sail-object-store"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+
+object_store = { workspace = true }
+aws-config = { workspace = true }
+aws-credential-types = { workspace = true }
+aws-smithy-runtime-api = { workspace = true }
+aws-smithy-types = { workspace = true }
+aws-smithy-async = { workspace = true }
+hdfs-native-object-store = { workspace = true, optional = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tokio-stream = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+lazy_static = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+log = { workspace = true }
+url = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+dashmap = { workspace = true }
+hf-hub = { workspace = true }
+
+[features]
+hdfs = ["dep:hdfs-native-object-store"]
+default = ["hdfs"]

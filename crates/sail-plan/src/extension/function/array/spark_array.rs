@@ -7,13 +7,13 @@ use datafusion::arrow::array::{
     MutableArrayData, NullArray, OffsetSizeTrait,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
-    ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 
 use crate::extension::function::functions_nested_utils::make_scalar_function;
@@ -78,9 +78,15 @@ impl ScalarUDFImpl for SparkArray {
         }
     }
 
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        let return_type = self.return_type(args.arg_types)?;
-        Ok(ReturnInfo::new_non_nullable(return_type))
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type())
+            .cloned()
+            .collect::<Vec<_>>();
+        let return_type = self.return_type(&data_types)?;
+        Ok(Arc::new(Field::new(self.name(), return_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -93,22 +99,24 @@ impl ScalarUDFImpl for SparkArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let new_type =
-            arg_types
-                .iter()
-                .skip(1)
-                .try_fold(arg_types.first().unwrap().clone(), |acc, x| {
-                    // The coerced types found by `comparison_coercion` are not guaranteed to be
-                    // coercible for the arguments. `comparison_coercion` returns more loose
-                    // types that can be coerced to both `acc` and `x` for comparison purpose.
-                    // See `maybe_data_types` for the actual coercion.
-                    let coerced_type = comparison_coercion(&acc, x);
-                    if let Some(coerced_type) = coerced_type {
-                        Ok(coerced_type)
-                    } else {
-                        plan_err!("Coercion from {acc:?} to {x:?} failed.")
-                    }
-                })?;
+        let first_type = arg_types.first().ok_or_else(|| {
+            plan_datafusion_err!("Spark array function requires at least one argument")
+        })?;
+        let new_type = arg_types
+            .iter()
+            .skip(1)
+            .try_fold(first_type.clone(), |acc, x| {
+                // The coerced types found by `comparison_coercion` are not guaranteed to be
+                // coercible for the arguments. `comparison_coercion` returns more loose
+                // types that can be coerced to both `acc` and `x` for comparison purpose.
+                // See `maybe_data_types` for the actual coercion.
+                let coerced_type = comparison_coercion(&acc, x);
+                if let Some(coerced_type) = coerced_type {
+                    Ok(coerced_type)
+                } else {
+                    plan_err!("Coercion from {acc:?} to {x:?} failed.")
+                }
+            })?;
         Ok(vec![new_type; arg_types.len()])
     }
 }
