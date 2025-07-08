@@ -79,14 +79,15 @@ impl FileFormat for DeltaFileFormat {
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.insert_op != InsertOp::Append {
-            return not_impl_err!("Overwrites are not implemented yet for Delta Lake format");
+        let mut options = self.options.clone();
+
+        // The save mode can be controlled by SQL statements like `INSERT OVERWRITE` or
+        // `COPY ... (OVERWRITE TRUE)`, which sets `conf.insert_op`.
+        if conf.insert_op == InsertOp::Overwrite {
+            options.insert("mode".to_string(), "overwrite".to_string());
         }
 
-        let sink = Arc::new(DeltaDataSink::new(
-            self.options.clone(),
-            conf.table_paths.clone(),
-        ));
+        let sink = Arc::new(DeltaDataSink::new(options, conf.table_paths.clone()));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)))
     }
