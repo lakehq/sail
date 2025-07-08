@@ -87,7 +87,11 @@ impl FileFormat for DeltaFileFormat {
             options.insert("mode".to_string(), "overwrite".to_string());
         }
 
-        let sink = Arc::new(DeltaDataSink::new(options, conf.table_paths.clone()));
+        let sink = Arc::new(DeltaDataSink::new(
+            options,
+            conf.table_paths.clone(),
+            conf.output_schema().clone(),
+        ));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)))
     }

@@ -757,6 +757,7 @@ impl WriteBuilder {
             .await
             .map_err(|e| WriteError::PhysicalPlan { source: e })?;
 
+        dbg!("Physical plan inside WriteBuilder: {:?}", &execution_plan);
         // Execute the plan and write data
         let mut tasks = Vec::new();
         let partition_count = execution_plan
