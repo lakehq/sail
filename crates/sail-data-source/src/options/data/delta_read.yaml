@@ -1,0 +1,265 @@
+# References:
+#   - [1] https://docs.delta.io/latest/delta-batch.html#read-a-table
+#   - [2] https://github.com/delta-io/delta-rs/blob/main/python/docs/source/usage.rst
+#   - [3] https://github.com/delta-io/delta-rs/blob/main/docs/usage/loading-table.md
+
+# Delta Lake read options for the Delta table format
+# These options configure how Delta tables are read and queried
+
+# Time travel options
+- key: version
+  description: |
+    Specifies the version of the Delta table to read.
+    Use this for time travel to read a specific historical version of the table.
+    The version number is a monotonically increasing integer starting from 0.
+    Example: version=5 reads the table at version 5.
+  supported: false
+  rust_type: Option<i64>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_i64
+
+- key: timestamp
+  aliases:
+    - datetime
+  description: |
+    Specifies the timestamp for time travel to read the table state at a specific point in time.
+    The timestamp should be in ISO 8601 format (e.g., "2025-01-01T12:00:00Z").
+    This will read the latest version of the table that was committed before or at the specified timestamp.
+  supported: false
+
+# Storage and connection options
+- key: aws_access_key_id
+  aliases:
+    - AWS_ACCESS_KEY_ID
+  description: |
+    AWS access key ID for accessing Delta tables stored in S3.
+    Required when reading Delta tables from S3 without using IAM roles.
+  supported: false
+
+- key: aws_secret_access_key
+  aliases:
+    - AWS_SECRET_ACCESS_KEY
+  description: |
+    AWS secret access key for accessing Delta tables stored in S3.
+    Required when reading Delta tables from S3 without using IAM roles.
+  supported: false
+
+- key: aws_region
+  aliases:
+    - AWS_REGION
+  description: |
+    AWS region where the S3 bucket containing the Delta table is located.
+    Example: "us-west-2"
+  supported: false
+
+- key: aws_endpoint_url
+  aliases:
+    - AWS_ENDPOINT_URL
+  description: |
+    Custom S3 endpoint URL for S3-compatible storage systems like MinIO.
+    Example: "http://localhost:9000" for local MinIO instance.
+  supported: false
+
+- key: aws_allow_http
+  aliases:
+    - AWS_ALLOW_HTTP
+  default: "false"
+  description: |
+    Whether to allow HTTP connections to S3-compatible storage.
+    Set to "true" when using HTTP endpoints (not recommended for production).
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: aws_s3_locking_provider
+  aliases:
+    - AWS_S3_LOCKING_PROVIDER
+  description: |
+    Locking provider for safe concurrent writes to S3.
+    Valid values: "dynamodb" for DynamoDB-based locking.
+    Required for safe concurrent writes to Delta tables on S3.
+  supported: false
+
+- key: delta_dynamo_table_name
+  aliases:
+    - DELTA_DYNAMO_TABLE_NAME
+  default: "delta_log"
+  description: |
+    DynamoDB table name used for Delta table locking when aws_s3_locking_provider is set to "dynamodb".
+    The DynamoDB table must exist and be properly configured for Delta Lake locking.
+  supported: false
+
+- key: aws_conditional_put
+  description: |
+    Strategy for conditional put operations in S3-compatible storage.
+    Valid values: "etag" for ETag-based conditional puts.
+    Provides safe concurrency without requiring DynamoDB.
+  supported: false
+
+# Schema and data handling options
+- key: schema_force_view_types
+  aliases:
+    - schemaForceViewTypes
+  default: "false"
+  description: |
+    Whether to force view types for binary and string columns when reading Delta tables.
+    If set to "true", string columns will be read as StringView and binary columns as BinaryView.
+    This can improve performance for string-heavy workloads.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: binary_as_string
+  aliases:
+    - binaryAsString
+  default: "false"
+  description: |
+    Whether to read binary columns as string columns.
+    Useful when reading Delta tables created by legacy writers that don't set UTF-8 flags correctly.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+# Partition and file handling
+- key: file_column_name
+  aliases:
+    - fileColumnName
+  description: |
+    Name of the column to include file path information.
+    When specified, an additional column with this name will be added containing the file path.
+    Useful for debugging and data lineage tracking.
+  supported: false
+
+- key: wrap_partition_values
+  aliases:
+    - wrapPartitionValues
+  default: "false"
+  description: |
+    Whether to wrap partition values in dictionary arrays.
+    Can improve memory efficiency when reading partitioned tables with many repeated partition values.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+# Performance and optimization options
+- key: enable_parquet_pushdown
+  aliases:
+    - enableParquetPushdown
+  default: "true"
+  description: |
+    Whether to enable predicate pushdown to the Parquet level.
+    When enabled, filters are pushed down to Parquet readers for better performance.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: merge_schema
+  aliases:
+    - mergeSchema
+  default: "false"
+  description: |
+    Whether to merge schemas when reading multiple files with different but compatible schemas.
+    Useful when the table schema has evolved over time.
+  supported: false
+
+- key: skip_metadata
+  aliases:
+    - skipMetadata
+  default: "false"
+  description: |
+    Whether to skip reading optional metadata from Parquet files.
+    Can help avoid schema conflicts when reading files with different metadata.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+# Bloom filter options
+- key: bloom_filter_on_read
+  aliases:
+    - bloomFilterOnRead
+  default: "true"
+  description: |
+    Whether to use bloom filters during read operations for better performance.
+    Bloom filters can significantly speed up point lookups and equality filters.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+# Unity Catalog options
+- key: databricks_workspace_url
+  aliases:
+    - DATABRICKS_WORKSPACE_URL
+  description: |
+    Databricks workspace URL for Unity Catalog integration.
+    Required when reading tables from Unity Catalog.
+    Example: "https://adb-1234567890.XX.azuredatabricks.net"
+  supported: false
+
+- key: databricks_access_token
+  aliases:
+    - DATABRICKS_ACCESS_TOKEN
+  description: |
+    Databricks access token for Unity Catalog authentication.
+    Required when reading tables from Unity Catalog.
+  supported: false
+
+# Google Cloud Storage options
+- key: google_service_account
+  aliases:
+    - GOOGLE_SERVICE_ACCOUNT
+  description: |
+    Path to Google Cloud service account key file for GCS access.
+    Alternative to using Application Default Credentials.
+  supported: false
+
+- key: google_service_account_key
+  aliases:
+    - GOOGLE_SERVICE_ACCOUNT_KEY
+  description: |
+    Google Cloud service account key content (JSON string) for GCS access.
+    Alternative to using a key file.
+  supported: false
+
+# Azure options
+- key: azure_storage_account_name
+  aliases:
+    - AZURE_STORAGE_ACCOUNT_NAME
+  description: |
+    Azure storage account name for accessing Delta tables in Azure Blob Storage.
+  supported: false
+
+- key: azure_storage_account_key
+  aliases:
+    - AZURE_STORAGE_ACCOUNT_KEY
+  description: |
+    Azure storage account key for authentication.
+  supported: false
+
+- key: azure_storage_sas_token
+  aliases:
+    - AZURE_STORAGE_SAS_TOKEN
+  description: |
+    Azure storage SAS token for authentication.
+    Alternative to using account key.
+  supported: false
+
+# Debugging and development options
+- key: without_files
+  aliases:
+    - withoutFiles
+  default: "false"
+  description: |
+    Whether to load table metadata without loading file information.
+    Useful for quickly inspecting table schema and metadata without full file scanning.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: log_level
+  aliases:
+    - logLevel
+  description: |
+    Logging level for Delta operations.
+    Valid values: "trace", "debug", "info", "warn", "error"
+    Helps with debugging Delta table operations.
+  supported: false
+  rust_deserialize_with: crate::options::serde::deserialize_log_level

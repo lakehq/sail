@@ -1,0 +1,454 @@
+# References:
+#   - [1] https://docs.delta.io/latest/delta-batch.html#write-to-a-table
+#   - [2] https://github.com/delta-io/delta-rs/blob/main/python/docs/source/usage.rst
+#   - [3] https://github.com/delta-io/delta-rs/blob/main/docs/usage/writing/index.md
+
+# Delta Lake write options for the Delta table format
+# These options configure how Delta tables are written and created
+
+# Write mode options
+- key: mode
+  aliases:
+    - saveMode
+  default: "append"
+  description: |
+    The write mode for the Delta table operation.
+    Valid values are:
+      - `append`: Append new data to the existing table
+      - `overwrite`: Replace the entire table with new data
+      - `error`: Throw an error if the table already exists (default for new tables)
+      - `ignore`: Ignore the operation if the table already exists
+  supported: false
+  rust_deserialize_with: crate::options::serde::deserialize_save_mode
+
+- key: overwrite_schema
+  aliases:
+    - overwriteSchema
+  default: "false"
+  description: |
+    Whether to overwrite the schema when writing in overwrite mode.
+    If true, the schema of the new data will replace the existing table schema.
+    Only applicable when mode is 'overwrite'.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: merge_schema
+  aliases:
+    - mergeSchema
+  default: "false"
+  description: |
+    Whether to merge the schema of the new data with the existing table schema.
+    If true, new columns will be added to the table schema.
+    Only applicable when mode is 'append'.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+# Partitioning options
+- key: partition_by
+  aliases:
+    - partitionBy
+  description: |
+    Comma-separated list of column names to partition the table by.
+    Example: "year,month" will create partitions based on year and month columns.
+    Partitioning can improve query performance for filtered queries.
+  supported: false
+
+- key: partition_filters
+  aliases:
+    - partitionFilters
+  description: |
+    Partition filters to apply when overwriting specific partitions.
+    Only applicable when mode is 'overwrite'.
+    Example: "year=2025,month=01" will only overwrite the specified partition.
+  supported: false
+
+# Storage and connection options
+- key: aws_access_key_id
+  aliases:
+    - AWS_ACCESS_KEY_ID
+  description: |
+    AWS access key ID for writing Delta tables to S3.
+    Required when writing Delta tables to S3 without using IAM roles.
+  supported: false
+
+- key: aws_secret_access_key
+  aliases:
+    - AWS_SECRET_ACCESS_KEY
+  description: |
+    AWS secret access key for writing Delta tables to S3.
+    Required when writing Delta tables to S3 without using IAM roles.
+  supported: false
+
+- key: aws_region
+  aliases:
+    - AWS_REGION
+  description: |
+    AWS region where the S3 bucket for the Delta table is located.
+    Example: "us-west-2"
+  supported: false
+
+- key: aws_endpoint_url
+  aliases:
+    - AWS_ENDPOINT_URL
+  description: |
+    Custom S3 endpoint URL for S3-compatible storage systems like MinIO.
+    Example: "http://localhost:9000" for local MinIO instance.
+  supported: false
+
+- key: aws_allow_http
+  aliases:
+    - AWS_ALLOW_HTTP
+  default: "false"
+  description: |
+    Whether to allow HTTP connections to S3-compatible storage.
+    Set to "true" when using HTTP endpoints (not recommended for production).
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: aws_s3_locking_provider
+  aliases:
+    - AWS_S3_LOCKING_PROVIDER
+  description: |
+    Locking provider for safe concurrent writes to S3.
+    Valid values: "dynamodb" for DynamoDB-based locking.
+    Required for safe concurrent writes to Delta tables on S3.
+  supported: false
+
+- key: delta_dynamo_table_name
+  aliases:
+    - DELTA_DYNAMO_TABLE_NAME
+  default: "delta_log"
+  description: |
+    DynamoDB table name used for Delta table locking when aws_s3_locking_provider is set to "dynamodb".
+    The DynamoDB table must exist and be properly configured for Delta Lake locking.
+  supported: false
+
+- key: aws_conditional_put
+  description: |
+    Strategy for conditional put operations in S3-compatible storage.
+    Valid values: "etag" for ETag-based conditional puts.
+    Provides safe concurrency without requiring DynamoDB.
+  supported: false
+
+# Google Cloud Storage options
+- key: google_service_account
+  aliases:
+    - GOOGLE_SERVICE_ACCOUNT
+  description: |
+    Path to Google Cloud service account key file for GCS access.
+    Alternative to using Application Default Credentials.
+  supported: false
+
+- key: google_service_account_key
+  aliases:
+    - GOOGLE_SERVICE_ACCOUNT_KEY
+  description: |
+    Google Cloud service account key content (JSON string) for GCS access.
+    Alternative to using a key file.
+  supported: false
+
+# Azure options
+- key: azure_storage_account_name
+  aliases:
+    - AZURE_STORAGE_ACCOUNT_NAME
+  description: |
+    Azure storage account name for writing Delta tables to Azure Blob Storage.
+  supported: false
+
+- key: azure_storage_account_key
+  aliases:
+    - AZURE_STORAGE_ACCOUNT_KEY
+  description: |
+    Azure storage account key for authentication.
+  supported: false
+
+- key: azure_storage_sas_token
+  aliases:
+    - AZURE_STORAGE_SAS_TOKEN
+  description: |
+    Azure storage SAS token for authentication.
+    Alternative to using account key.
+  supported: false
+
+# Unity Catalog options
+- key: databricks_workspace_url
+  aliases:
+    - DATABRICKS_WORKSPACE_URL
+  description: |
+    Databricks workspace URL for Unity Catalog integration.
+    Required when writing tables to Unity Catalog.
+    Example: "https://adb-1234567890.XX.azuredatabricks.net"
+  supported: false
+
+- key: databricks_access_token
+  aliases:
+    - DATABRICKS_ACCESS_TOKEN
+  description: |
+    Databricks access token for Unity Catalog authentication.
+    Required when writing tables to Unity Catalog.
+  supported: false
+
+# Parquet writer options (inherited from underlying Parquet writer)
+- key: data_page_size_limit
+  aliases:
+    - dataPageSizeLimit
+  description: |
+    The best-effort maximum size of a data page in bytes for underlying Parquet files.
+    Defaults to the Sail configuration option `parquet.data_page_size_limit`.
+  supported: false
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: write_batch_size
+  aliases:
+    - writeBatchSize
+  description: |
+    The Parquet writer batch size in bytes for underlying Parquet files.
+    Defaults to the Sail configuration option `parquet.write_batch_size`.
+  supported: false
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: compression
+  aliases:
+    - codec
+  description: |
+    The default compression codec for underlying Parquet files.
+    Valid values are `uncompressed`, `snappy`, `gzip(level)`,
+    `lzo`, `brotli(level)`, `lz4`, `zstd(level)`, and `lz4_raw`,
+    where `level` is an integer defining the compression level.
+    These values are not case-sensitive.
+    Defaults to the Sail configuration option `parquet.compression`.
+  supported: false
+
+- key: dictionary_enabled
+  aliases:
+    - dictionaryEnabled
+  description: |
+    Whether to enable dictionary encoding for the underlying Parquet writer.
+    Defaults to the Sail configuration option `parquet.dictionary_enabled`.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: statistics_enabled
+  aliases:
+    - statisticsEnabled
+  description: |
+    Whether statistics are enabled for any column in underlying Parquet files.
+    Valid values are `none`, `chunk`, and `page`.
+    These values are not case-sensitive.
+    Defaults to the Sail configuration option `parquet.statistics_enabled`.
+  supported: false
+
+- key: max_row_group_size
+  aliases:
+    - maxRowGroupSize
+  description: |
+    The target maximum number of rows in each row group for underlying Parquet files.
+    Larger row groups require more memory to write, but
+    can get better compression and be faster to read.
+    Defaults to the Sail configuration option `parquet.max_row_group_size`.
+  supported: false
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+# Bloom filter options
+- key: bloom_filter_on_write
+  aliases:
+    - bloomFilterOnWrite
+  description: |
+    Whether to write bloom filters for all columns when writing Parquet files.
+    Bloom filters can significantly improve query performance for point lookups.
+    Defaults to the Sail configuration option `parquet.bloom_filter_on_write`.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: bloom_filter_fpp
+  aliases:
+    - bloomFilterFpp
+  description: |
+    The false positive probability for bloom filters when writing Parquet files.
+    Lower values result in larger bloom filters but fewer false positives.
+    Defaults to the Sail configuration option `parquet.bloom_filter_fpp`.
+  supported: false
+  rust_type: f64
+  rust_deserialize_with: crate::options::serde::deserialize_f64
+
+- key: bloom_filter_ndv
+  aliases:
+    - bloomFilterNdv
+  description: |
+    The number of distinct values for bloom filters when writing Parquet files.
+    This helps optimize bloom filter size.
+    Defaults to the Sail configuration option `parquet.bloom_filter_ndv`.
+  supported: false
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
+
+# Writer properties and optimization
+- key: statistics_truncate_length
+  aliases:
+    - statisticsTruncateLength
+  description: |
+    The statistics truncate length for the underlying Parquet writer.
+    If the value is `0`, no truncation is applied.
+    This can help control metadata size in Parquet files.
+    Defaults to the Sail configuration option `parquet.statistics_truncate_length`.
+  supported: false
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: allow_single_file_parallelism
+  aliases:
+    - allowSingleFileParallelism
+  description: |
+    Whether to parallelize writing for each single Parquet file.
+    If the value is `true`, each column in each row group in each file are serialized in parallel.
+    This can improve write performance but increases memory usage.
+    Defaults to the Sail configuration option `parquet.allow_single_file_parallelism`.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: maximum_parallel_row_group_writers
+  aliases:
+    - maximumParallelRowGroupWriters
+  description: |
+    The maximum number of row group writers to use for the Parquet writer.
+    This may improve performance when writing large Parquet files,
+    at the expense of higher memory usage.
+    Defaults to the Sail configuration option `parquet.maximum_parallel_row_group_writers`.
+  supported: false
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: maximum_buffered_record_batches_per_stream
+  aliases:
+    - maximumBufferedRecordBatchesPerStream
+  description: |
+    The maximum number of buffered record batches per stream for the Parquet writer.
+    This may improve performance when writing large Parquet files,
+    at the expense of higher memory usage.
+    Defaults to the Sail configuration option `parquet.maximum_buffered_record_batches_per_stream`.
+  supported: false
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+# Delta-specific writer options
+- key: writer_properties
+  aliases:
+    - writerProperties
+  description: |
+    Custom writer properties for fine-grained control over the Delta writer.
+    This allows setting column-specific properties like bloom filters and statistics.
+    Advanced users can use this to override default writer behavior.
+  supported: false
+
+- key: table_name
+  aliases:
+    - tableName
+  description: |
+    The name of the Delta table to be created.
+    This is stored in the table metadata and can be used for table identification.
+  supported: false
+
+- key: description
+  aliases:
+    - tableDescription
+  description: |
+    A description of the Delta table to be created.
+    This is stored in the table metadata for documentation purposes.
+  supported: false
+
+- key: configuration
+  aliases:
+    - tableConfiguration
+  description: |
+    Custom configuration properties for the Delta table.
+    These are key-value pairs stored in the table metadata.
+    Example: "delta.autoOptimize.optimizeWrite=true"
+  supported: false
+
+# Schema handling options
+- key: schema_force_view_types
+  aliases:
+    - schemaForceViewTypes
+  default: "false"
+  description: |
+    Whether to force view types for binary and string columns when writing Delta tables.
+    If set to "true", string columns will be written as StringView and binary columns as BinaryView.
+    This can improve performance for string-heavy workloads.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: binary_as_string
+  aliases:
+    - binaryAsString
+  default: "false"
+  description: |
+    Whether to write binary columns as string columns.
+    Useful for compatibility with systems that don't properly handle binary data.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+# Transaction and consistency options
+- key: isolation_level
+  aliases:
+    - isolationLevel
+  description: |
+    The isolation level for Delta table transactions.
+    Valid values are `Serializable` and `WriteSerializable`.
+    Defaults to `Serializable` for maximum consistency.
+  supported: false
+  rust_deserialize_with: crate::options::serde::deserialize_isolation_level
+
+- key: auto_compact
+  aliases:
+    - autoCompact
+  default: "false"
+  description: |
+    Whether to automatically compact small files after write operations.
+    This can help maintain optimal file sizes but may increase write latency.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: optimized_writes
+  aliases:
+    - optimizedWrites
+  default: "false"
+  description: |
+    Whether to enable optimized writes that aim to produce files closer to the target size.
+    This can reduce the number of small files created during write operations.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+# Debugging and development options
+- key: log_level
+  aliases:
+    - logLevel
+  description: |
+    Logging level for Delta write operations.
+    Valid values: "trace", "debug", "info", "warn", "error"
+    Helps with debugging Delta table write operations.
+  supported: false
+  rust_deserialize_with: crate::options::serde::deserialize_log_level
+
+- key: dry_run
+  aliases:
+    - dryRun
+  default: "false"
+  description: |
+    Whether to perform a dry run without actually writing data.
+    Useful for testing and validation of write operations.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
