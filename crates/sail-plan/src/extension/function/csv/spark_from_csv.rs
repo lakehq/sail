@@ -104,6 +104,12 @@ impl ScalarUDFImpl for SparkFromCSV {
         schema.map(|dt| Arc::new(Field::new(self.name(), dt, true)))
     }
 
+    /// Executes the function with given arguments and produces the resulting array
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        make_scalar_function(spark_from_csv_inner, vec![])(&args)
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => {
@@ -129,12 +135,6 @@ impl ScalarUDFImpl for SparkFromCSV {
                 arg_types.len()
             ),
         }
-    }
-
-    /// Executes the function with given arguments and produces the resulting array
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(spark_from_csv_inner, vec![])(&args)
     }
 }
 
