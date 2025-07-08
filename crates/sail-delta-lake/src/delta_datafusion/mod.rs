@@ -31,7 +31,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone};
 use datafusion::arrow::array::types::UInt16Type;
-use datafusion::arrow::array::{RecordBatch, StringArray, TypedDictionaryArray};
+use datafusion::arrow::array::{RecordBatch, StringArray, TypedDictionaryArray, UInt64Array};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
@@ -54,6 +54,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -81,6 +82,7 @@ use url::Url;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
+use crate::operations::WriteBuilder;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -1408,6 +1410,88 @@ impl TableProvider for DeltaTableProvider {
 
     fn statistics(&self) -> Option<Statistics> {
         self.snapshot.datafusion_table_statistics()
+    }
+
+    async fn insert_into(
+        &self,
+        state: &dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        // Convert Session to SessionState
+        let session_state = state
+            .as_any()
+            .downcast_ref::<SessionState>()
+            .ok_or_else(|| {
+                DataFusionError::Internal("Failed to downcast Session to SessionState".to_string())
+            })?;
+
+        // Determine the save mode based on InsertOp
+        let save_mode = match insert_op {
+            InsertOp::Append => deltalake::protocol::SaveMode::Append,
+            InsertOp::Overwrite => deltalake::protocol::SaveMode::Overwrite,
+            InsertOp::Replace => deltalake::protocol::SaveMode::Overwrite, // Use Overwrite for Replace
+        };
+
+        // Execute the input plan to collect the data and count rows
+        let task_ctx = Arc::new(TaskContext::from(session_state));
+        let mut all_batches = Vec::new();
+        let mut total_rows = 0u64;
+
+        // Execute all partitions and collect the data
+        let partition_count = input.properties().output_partitioning().partition_count();
+        for partition_id in 0..partition_count {
+            let mut stream = input
+                .execute(partition_id, task_ctx.clone())
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            while let Some(batch_result) = futures::StreamExt::next(&mut stream).await {
+                let batch = batch_result.map_err(|e| DataFusionError::External(Box::new(e)))?;
+                total_rows += batch.num_rows() as u64;
+                all_batches.push(batch);
+            }
+        }
+
+        // Create a MemTable from the collected batches
+        let mem_table = MemTable::try_new(input.schema(), vec![all_batches])
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Create a DataFrame from the MemTable
+        let ctx = SessionContext::new_with_state(session_state.clone());
+        let dataframe = ctx
+            .read_table(Arc::new(mem_table))
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Create WriteBuilder and execute the write
+        let write_builder = WriteBuilder::new(self.log_store.clone(), Some(self.snapshot.clone()))
+            .with_input_dataframe(dataframe)
+            .with_session_state(session_state.clone())
+            .with_save_mode(save_mode);
+
+        // Execute the write and get the result
+        let _result_table = write_builder
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Create a schema with a single "count" column of type UInt64
+        let count_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "count",
+            ArrowDataType::UInt64,
+            false,
+        )]));
+
+        // Create a RecordBatch with the count result
+        let count_array = Arc::new(UInt64Array::from(vec![total_rows]));
+        let count_batch = RecordBatch::try_new(count_schema.clone(), vec![count_array])
+            .map_err(|e| DataFusionError::ArrowError(e, None))?;
+
+        // Create a MemTable to return the count result
+        use datafusion::datasource::memory::MemTable;
+        let mem_table = MemTable::try_new(count_schema.clone(), vec![vec![count_batch]])
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Create an execution plan from the memory table
+        mem_table.scan(state, None, &[], None).await
     }
 }
 
