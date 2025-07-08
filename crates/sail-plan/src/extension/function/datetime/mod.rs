@@ -1,5 +1,6 @@
 mod datetime_utils;
 pub mod spark_date;
+pub mod spark_date_part;
 pub mod spark_from_utc_timestamp;
 pub mod spark_interval;
 pub mod spark_last_day;

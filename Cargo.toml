@@ -117,6 +117,7 @@ datafusion-common = { version = "48.0.0", features = ["object_store", "avro"] }
 datafusion-expr = { version = "48.0.0" }
 datafusion-expr-common = { version = "48.0.0" }
 datafusion-proto = { version = "48.0.0" }
+datafusion-functions = { version = "48.0.0" }
 datafusion-functions-nested = { version = "48.0.0" }
 datafusion-spark = { version = "48.0.0" }
 datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "c4f4298" }
