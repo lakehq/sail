@@ -85,7 +85,6 @@ impl FileFormat for DeltaFileFormat {
 
         let sink = Arc::new(DeltaDataSink::new(
             self.options.clone(),
-            conf.object_store_url.clone(),
             conf.table_paths.clone(),
         ));
 
