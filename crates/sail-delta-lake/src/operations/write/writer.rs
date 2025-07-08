@@ -411,15 +411,8 @@ impl PartitionWriter {
 
         // Get the buffer data
         let buffer_data = {
-            // Clone the buffer to get data without consuming it
-            let buffer_clone = self.buffer.clone();
-            if let Some(data) = buffer_clone.into_inner() {
-                Bytes::from(data)
-            } else {
-                // Buffer is still shared, recreate the writer for next use
-                self.reset_writer()?;
-                return Ok(());
-            }
+            let mut buffer = self.buffer.buffer.lock().unwrap();
+            Bytes::from(std::mem::take(&mut *buffer))
         };
 
         // Generate file path
