@@ -18,11 +18,15 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::Volatility;
 
 /// UDF implementation of `from_csv`, similar to Spark's `from_csv`.
-/// This parses a column of CSV lines using a provided schema string
+/// This function parses a column of CSV entries using a specified schema string
 /// and returns a `StructArray` with the parsed fields.
 ///
-/// The schema is specified using SQL-like types (e.g., "name STRING, age INT").
-/// A third argument can be provided as a Map with a "sep" field to override the separator (default is ",").
+/// Parameters include:
+/// - The first input is a `StringArray` containing the CSV-formatted values.
+/// - The second input is a `StringArray` specifying the schema for parsing, using SQL-like types
+///   (e.g., "name STRING, age INT") for the CSV data.
+/// - Optionally, a third input can be provided as a `MapArray` containing options related to the parsing.
+///   This may include a "sep" field to specify a custom separator, with the default being a comma (",").
 #[derive(Debug)]
 pub struct SparkFromCSV {
     signature: Signature,
@@ -42,9 +46,9 @@ impl SparkFromCSV {
     /// Constructor for the UDF
     pub fn new() -> Self {
         Self {
-            // Because you could use it with either:
-            // - One column expression + the literal string representing the schema + options
-            // - One column expression + the literal string column with a string value representing the schema + options
+            /// - The first element is a `StringArray` containing CSV-formatted values.
+            /// - The second element is a `StringArray` representing the schema associated with the CSV data.
+            /// - Optionally, the third element is a `MapArray` containing options related to CSV parsing.
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
