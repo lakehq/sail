@@ -2,20 +2,20 @@ use core::any::type_name;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::extension::function::functions_nested_utils::*;
+use crate::extension::function::functions_utils::make_scalar_function;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::{exec_err, internal_err, plan_datafusion_err, plan_err, ScalarValue};
 use datafusion_expr::sqlparser::ast::{ArrayElemTypeDef, DataType as SQLType};
 use datafusion_expr::sqlparser::dialect::GenericDialect;
 use datafusion_expr::sqlparser::parser::{Parser, ParserOptions};
 use datafusion_expr::sqlparser::tokenizer::Tokenizer;
 use datafusion_expr::{
-    ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
-
-use crate::extension::function::functions_nested_utils::*;
-use crate::extension::function::functions_utils::make_scalar_function;
+use datafusion_expr_common::signature::Volatility;
 
 /// UDF implementation of `from_csv`, similar to Spark's `from_csv`.
 /// This parses a column of CSV lines using a provided schema string
@@ -35,16 +35,17 @@ impl Default for SparkFromCSV {
 }
 
 impl SparkFromCSV {
+    pub const FROM_CSV_NAME: &'static str = "from_csv";
+    pub const SEP_OPTION: &'static str = "sep";
+    pub const SEP_DEFAULT: &'static str = ",";
+
     /// Constructor for the UDF
     pub fn new() -> Self {
         Self {
             // Because you could use it with either:
             // - One column expression + the literal string representing the schema + options
             // - One column expression + the literal string column with a string value representing the schema + options
-            signature: Signature::variadic(
-                vec![DataType::Utf8, DataType::Utf8View, DataType::LargeUtf8],
-                datafusion_expr::Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -55,7 +56,7 @@ impl ScalarUDFImpl for SparkFromCSV {
     }
 
     fn name(&self) -> &str {
-        "from_csv"
+        Self::FROM_CSV_NAME
     }
 
     fn signature(&self) -> &Signature {
@@ -69,27 +70,56 @@ impl ScalarUDFImpl for SparkFromCSV {
     }
 
     /// Determines the return type of the function based on the schema string and separator
-    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        // We need to implement the return type related to the args
-        let options_array: Option<&StructArray> =
-            args.scalar_arguments.get(2).and_then(|opt| match opt {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let ReturnFieldArgs {
+            scalar_arguments, ..
+        } = args;
+        let options = scalar_arguments
+            .get(2)
+            .and_then(|opt| match opt {
                 Some(ScalarValue::Map(map_array)) => Some(map_array.entries()),
                 _ => None,
-            });
+            })
+            .expect("Expected options as a MapArray in the third argument");
 
-        let schema: &String = match args.scalar_arguments[1] {
+        let schema: &String = match scalar_arguments[1] {
             Some(ScalarValue::Utf8(Some(schema)))
             | Some(ScalarValue::LargeUtf8(Some(schema)))
             | Some(ScalarValue::Utf8View(Some(schema))) => Ok(schema),
-            _ => Err(DataFusionError::Internal(
-                "Expected UTF-8 schema string".to_string(),
-            )),
+            _ => internal_err!("Expected UTF-8 schema string"),
         }?;
 
-        let sep: &str = get_sep_from_options(options_array.unwrap()).unwrap_or(",");
-        let schema: Result<DataType> = parse_fields(schema, sep).map(DataType::Struct);
+        let sep: String =
+            get_sep_from_options(options).unwrap_or(SparkFromCSV::SEP_DEFAULT.to_string());
+        let schema: Result<DataType> = parse_fields(&schema, &sep).map(DataType::Struct);
+        schema.map(|dt| Arc::new(Field::new(self.name(), dt, true)))
+    }
 
-        schema.map(ReturnInfo::new_nullable)
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        match arg_types {
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => {
+                Ok(vec![
+                    arg_types[0].clone(),
+                    arg_types[1].clone(),
+                    DataType::Map(
+                        Arc::new(Field::new(Self::SEP_OPTION, DataType::Utf8, true)),
+                        false,
+                    ),
+                ])
+            }
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(_, _)] => {
+                Ok(vec![
+                    arg_types[0].clone(),
+                    arg_types[1].clone(),
+                    arg_types[2].clone(),
+                ])
+            }
+            _ => plan_err!(
+                "`{}` function requires 2 or 3 arguments, got {}",
+                Self::FROM_CSV_NAME,
+                arg_types.len()
+            ),
+        }
     }
 
     /// Executes the function with given arguments and produces the resulting array
@@ -103,7 +133,8 @@ impl ScalarUDFImpl for SparkFromCSV {
 fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!(
-            "`from_csv` function requires 2 or 3 arguments, got {}",
+            "`{}` function requires 2 or 3 arguments, got {}",
+            SparkFromCSV::FROM_CSV_NAME,
             args.len()
         );
     };
@@ -111,15 +142,15 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array: &StringArray = downcast_arg!(&args[0], StringArray);
     let schema_str: &str = downcast_arg!(&args[1], StringArray).value(0);
 
-    let sep: &str = if args.len() == 3 {
+    let sep = if args.len() == 3 {
         let options: &MapArray = downcast_arg!(&args[2], MapArray);
         let options: &StructArray = options.entries();
-        get_sep_from_options(options).unwrap_or(",")
+        get_sep_from_options(options).unwrap_or(SparkFromCSV::SEP_DEFAULT.to_string())
     } else {
-        ","
+        SparkFromCSV::SEP_DEFAULT.to_string()
     };
 
-    let fields: Fields = parse_fields(schema_str, sep)?;
+    let fields: Fields = parse_fields(schema_str, &sep)?;
 
     let mut children_scalars: Vec<Vec<ScalarValue>> =
         vec![Vec::with_capacity(array.len()); fields.len()];
@@ -133,7 +164,7 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             validity.push(false);
         } else {
             let line = array.value(i);
-            let values = parse_csv_line_to_scalar_values(line, sep, &fields)?;
+            let values = parse_csv_line_to_scalar_values(line, &sep, &fields)?;
             for (j, value) in values.into_iter().enumerate() {
                 children_scalars[j].push(value);
             }
@@ -178,23 +209,30 @@ fn parse_csv_line_to_scalar_values(
 }
 
 /// Extracts the separator string ("sep") from a struct options array
-fn get_sep_from_options(options: &StructArray) -> Result<&str> {
+fn get_sep_from_options(options: &StructArray) -> Result<String> {
     let sep_column = options.column_by_name("sep").ok_or_else(|| {
-        DataFusionError::Plan("Missing 'sep' option in from_csv options".to_string())
+        plan_datafusion_err!(
+            "Missing '{}' option in `{}` options",
+            SparkFromCSV::SEP_OPTION,
+            SparkFromCSV::FROM_CSV_NAME
+        )
     })?;
 
-    let sep_array = sep_column
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| DataFusionError::Plan("'sep' option must be a StringArray".to_string()))?;
+    let default_sep = Arc::new(StringArray::from(vec![
+        SparkFromCSV::SEP_DEFAULT.to_string()
+    ]));
+
+    let sep_array = match sep_column.as_any().downcast_ref::<StringArray>() {
+        Some(sep_array) => sep_array,
+        None => default_sep.as_ref(),
+    };
 
     if sep_array.is_empty() || sep_array.is_null(0) {
-        return Err(DataFusionError::Plan(
-            "'sep' option cannot be null".to_string(),
-        ));
+        return plan_err!("'{}' option cannot be null", SparkFromCSV::SEP_OPTION);
     }
 
-    Ok(sep_array.value(0))
+    let sep = sep_array.value(0).to_string(); // Convert to owned String
+    Ok(sep)
 }
 
 /// Parses a schema string like "name STRING, age INT" into Arrow `Fields`
