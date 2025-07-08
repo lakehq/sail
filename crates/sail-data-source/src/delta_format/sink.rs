@@ -14,7 +14,8 @@ use futures::StreamExt;
 use sail_delta_lake::operations::write::writer::{DeltaWriter, WriterConfig};
 use sail_delta_lake::{
     create_delta_table_with_object_store, open_table_with_object_store, Action, CommitBuilder,
-    CommitProperties, DeltaOperation, Remove, SaveMode, StorageConfig, WriterProperties, TableReference
+    CommitProperties, DeltaOperation, Remove, SaveMode, StorageConfig, TableReference,
+    WriterProperties,
 };
 
 /// Delta Lake data sink implementation
@@ -244,7 +245,26 @@ impl DataSink for DeltaDataSink {
             None,
         );
 
-        let mut writer = DeltaWriter::new(object_store.clone(), writer_config);
+        // Parse the table path URL and extract the correct path for DeltaWriter
+        let table_url = url::Url::parse(&table_path)
+            .map_err(|e| DataFusionError::Plan(format!("Invalid table URI: {}", e)))?;
+
+        let writer_path = if table_url.scheme() == "file" {
+            // For file:// URLs, extract the local filesystem path
+            let filesystem_path = table_url.path();
+            dbg!(
+                "Converting file URL to filesystem path: {} -> {}",
+                &table_path,
+                filesystem_path
+            );
+            object_store::path::Path::from(filesystem_path)
+        } else {
+            // For other schemes (s3://, etc.), use the full URL as-is
+            dbg!("Using full URL for non-file scheme: {}", &table_path);
+            object_store::path::Path::from(table_path.as_str())
+        };
+
+        let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
         let mut total_rows = 0;
 
         // 3. Consume input stream and write data
@@ -315,7 +335,7 @@ impl DataSink for DeltaDataSink {
                 },
                 predicate: self.options.get("replaceWhere").cloned(),
             }
-                } else {
+        } else {
             // For new tables, use Write operation instead of Create for now
             // This is a simplified approach that should work for basic cases
             DeltaOperation::Write {
@@ -338,7 +358,11 @@ impl DataSink for DeltaDataSink {
         // 6. Commit transaction
         let snapshot = if table_exists {
             dbg!(&table.state); // Debug: Check table state before snapshot
-            Some(table.snapshot().map_err(|e| DataFusionError::External(Box::new(e)))?)
+            Some(
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            )
         } else {
             dbg!("Table does not exist, no snapshot available");
             None
@@ -346,7 +370,11 @@ impl DataSink for DeltaDataSink {
 
         CommitBuilder::from(CommitProperties::default())
             .with_actions(actions)
-            .build(snapshot.as_ref().map(|s| *s as &dyn TableReference), table.log_store(), operation)
+            .build(
+                snapshot.as_ref().map(|s| *s as &dyn TableReference),
+                table.log_store(),
+                operation,
+            )
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 

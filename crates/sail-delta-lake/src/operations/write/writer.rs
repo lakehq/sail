@@ -160,6 +160,8 @@ impl WriterConfig {
 pub struct DeltaWriter {
     /// Object store for writing files
     object_store: Arc<dyn ObjectStore>,
+    /// Table root path
+    table_path: Path,
     /// Writer configuration
     config: WriterConfig,
     /// Partition writers for individual partitions
@@ -167,9 +169,10 @@ pub struct DeltaWriter {
 }
 
 impl DeltaWriter {
-    pub fn new(object_store: Arc<dyn ObjectStore>, config: WriterConfig) -> Self {
+    pub fn new(object_store: Arc<dyn ObjectStore>, table_path: Path, config: WriterConfig) -> Self {
         Self {
             object_store,
+            table_path,
             config,
             partition_writers: HashMap::new(),
         }
@@ -206,6 +209,7 @@ impl DeltaWriter {
             }
             None => {
                 let config = PartitionWriterConfig::new(
+                    self.table_path.clone(),
                     self.config.file_schema(),
                     partition_values.clone(),
                     self.config.writer_properties.clone(),
@@ -264,6 +268,8 @@ pub struct PartitionResult {
 /// Configuration for partition writers
 #[derive(Debug, Clone)]
 pub struct PartitionWriterConfig {
+    /// Table root path
+    pub table_path: Path,
     /// Schema of the data written to disk
     pub file_schema: ArrowSchemaRef,
     /// Partition path prefix
@@ -280,6 +286,7 @@ pub struct PartitionWriterConfig {
 
 impl PartitionWriterConfig {
     pub fn new(
+        table_path: Path,
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
         writer_properties: WriterProperties,
@@ -290,6 +297,7 @@ impl PartitionWriterConfig {
         let prefix = Path::parse(part_path).unwrap_or_else(|_| Path::from(""));
 
         Self {
+            table_path,
             file_schema,
             prefix,
             partition_values,
@@ -456,7 +464,17 @@ impl PartitionWriter {
             self.part_counter, self.writer_id, compression_suffix
         );
 
-        self.config.prefix.child(file_name)
+        // Construct full path: table_path / prefix / file_name
+        if self.config.prefix.as_ref().is_empty() {
+            // For non-partitioned tables, put files directly in table root
+            self.config.table_path.child(file_name)
+        } else {
+            // For partitioned tables, include the partition path
+            self.config
+                .table_path
+                .child(self.config.prefix.as_ref())
+                .child(file_name)
+        }
     }
 
     /// Create Add action for the written file
@@ -748,6 +766,10 @@ impl WriteBuilder {
             .map_err(|e| WriteError::PhysicalPlan { source: e })?;
 
         dbg!("Physical plan inside WriteBuilder: {:?}", &execution_plan);
+
+        // Get table path before moving log_store into tasks
+        let table_path = Path::from(log_store.root_uri());
+
         // Execute the plan and write data
         let mut tasks = Vec::new();
         let partition_count = execution_plan
@@ -763,6 +785,7 @@ impl WriteBuilder {
             let write_batch_size = self.write_batch_size;
             let writer_properties = self.writer_properties.clone();
             let partition_columns = partition_columns.clone();
+            let table_path = table_path.clone();
 
             // Convert schema properly
             let df_schema = dataframe.schema();
@@ -779,7 +802,7 @@ impl WriteBuilder {
                     None, // Default stats_columns
                 );
 
-                let mut writer = DeltaWriter::new(object_store, config);
+                let mut writer = DeltaWriter::new(object_store, table_path, config);
                 let mut stream = plan
                     .execute(partition_id, task_ctx)
                     .map_err(|e| WriteError::PhysicalPlan { source: e })?;
