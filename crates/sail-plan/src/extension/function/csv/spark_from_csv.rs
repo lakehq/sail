@@ -74,13 +74,17 @@ impl ScalarUDFImpl for SparkFromCSV {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let options = scalar_arguments
-            .get(2)
-            .and_then(|opt| match opt {
-                Some(ScalarValue::Map(map_array)) => Some(map_array.entries()),
-                _ => None,
-            })
-            .expect("Expected options as a MapArray in the third argument");
+        let options = scalar_arguments.get(2).and_then(|opt| match opt {
+            Some(ScalarValue::Map(map_array)) => Some(map_array.entries()),
+            _ => None,
+        });
+
+        let Some(options) = options else {
+            return plan_err!(
+                "`{}` function requires a third argument of type MapArray",
+                SparkFromCSV::FROM_CSV_NAME
+            );
+        };
 
         let schema: &String = match scalar_arguments[1] {
             Some(ScalarValue::Utf8(Some(schema)))
@@ -91,7 +95,7 @@ impl ScalarUDFImpl for SparkFromCSV {
 
         let sep: String =
             get_sep_from_options(options).unwrap_or(SparkFromCSV::SEP_DEFAULT.to_string());
-        let schema: Result<DataType> = parse_fields(&schema, &sep).map(DataType::Struct);
+        let schema: Result<DataType> = parse_fields(schema, &sep).map(DataType::Struct);
         schema.map(|dt| Arc::new(Field::new(self.name(), dt, true)))
     }
 
@@ -268,8 +272,7 @@ fn parse_schema_string(schema_str: &str, sep: &str) -> Result<Fields> {
             |(seen, mut acc), (name, field)| {
                 if seen.contains(&name) {
                     Err(DataFusionError::Plan(format!(
-                        "Duplicate field name '{}'",
-                        name
+                        "Duplicate field name '{name}'"
                     )))
                 } else {
                     let mut seen = seen;
@@ -414,22 +417,37 @@ fn test_from_csv_simple_struct() -> Result<()> {
     let result = spark_from_csv_inner(&[input_array, schema_str])?;
 
     // Downcast the result to a StructArray
-    let struct_array = result
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .expect("Expected StructArray");
+    let struct_array = result.as_any().downcast_ref::<StructArray>();
+
+    let Some(struct_array) = struct_array else {
+        return internal_err!(
+            "[test][{}] Expected StructArray",
+            SparkFromCSV::FROM_CSV_NAME
+        );
+    };
 
     // There should be 4 entries total, and 1 null struct (the third)
     assert_eq!(struct_array.len(), 4);
     assert_eq!(struct_array.null_count(), 1);
 
     // Check the `name` field (Utf8)
-    let name_array = struct_array
-        .column_by_name("name")
-        .expect("name field not found")
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
+    let name_array = struct_array.column_by_name("name");
+
+    let Some(name_array) = name_array else {
+        return internal_err!(
+            "[test][{}] Expected `name` field not found",
+            SparkFromCSV::FROM_CSV_NAME
+        );
+    };
+
+    let name_array = name_array.as_any().downcast_ref::<StringArray>();
+
+    let Some(name_array) = name_array else {
+        return internal_err!(
+            "[test][{}] Expected StringArray",
+            SparkFromCSV::FROM_CSV_NAME
+        );
+    };
 
     assert_eq!(name_array.value(0), "alice");
     assert_eq!(name_array.value(1), "bob");
@@ -437,12 +455,23 @@ fn test_from_csv_simple_struct() -> Result<()> {
     assert_eq!(name_array.value(3), "charlie");
 
     // Check the `age` field (Int32)
-    let age_array = struct_array
-        .column_by_name("age")
-        .expect("age field not found")
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .unwrap();
+    let age_array = struct_array.column_by_name("age");
+
+    let Some(age_array) = age_array else {
+        return internal_err!(
+            "[test][{}] Expected `age` field not found",
+            SparkFromCSV::FROM_CSV_NAME
+        );
+    };
+
+    let age_array = age_array.as_any().downcast_ref::<Int32Array>();
+
+    let Some(age_array) = age_array else {
+        return internal_err!(
+            "[test][{}] Expected Int32Array",
+            SparkFromCSV::FROM_CSV_NAME
+        );
+    };
 
     assert_eq!(age_array.value(0), 30);
     assert_eq!(age_array.value(1), 25);
@@ -450,6 +479,23 @@ fn test_from_csv_simple_struct() -> Result<()> {
     assert!(age_array.is_null(3)); // Empty value parsed as null
 
     Ok(())
+}
+
+
+#[cfg(test)]
+macro_rules! downcast_option {
+    ($opt:expr, $typ:ty, $err_msg:expr) => {{
+        let some_value = $opt;
+        let some_value = match some_value {
+            Some(value) => value,
+            None => return internal_err!(concat!("[test][{}] ", $err_msg), SparkFromCSV::FROM_CSV_NAME),
+        };
+        let downcasted_value = some_value.as_any().downcast_ref::<$typ>();
+        match downcasted_value {
+            Some(downcasted_value) => downcasted_value,
+            None => return internal_err!(concat!("[test][{}] ", stringify!(Expected $typ)), SparkFromCSV::FROM_CSV_NAME),
+        }
+    }};
 }
 
 /// Unit test for `spark_from_csv_inner` that verifies CSV parsing into a `StructArray` with nested struct field.
@@ -462,52 +508,27 @@ fn test_from_csv_nested_struct() -> Result<()> {
     ])) as ArrayRef;
     let result = spark_from_csv_inner(&[input_array, schema_str])?;
 
-    let struct_array = result
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .expect("Expected StructArray");
+    let struct_array: &StructArray = downcast_option!(result.as_any().downcast_ref::<StructArray>(), StructArray, "Expected StructArray");
 
     assert_eq!(struct_array.len(), 4);
     assert_eq!(struct_array.null_count(), 1);
 
-    let id_array = struct_array
-        .column_by_name("id")
-        .expect("id field not found")
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .unwrap();
+    let id_array: &Int32Array = downcast_option!(struct_array.column_by_name("id"), Int32Array, "Expected `id` field not found");
 
     assert_eq!(id_array.value(0), 1);
     assert_eq!(id_array.value(1), 2);
     assert!(id_array.is_null(2));
     assert_eq!(id_array.value(3), 3);
 
-    let info_array = struct_array
-        .column_by_name("info")
-        .expect("info field not found")
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .unwrap();
+    let info_array: &StructArray = downcast_option!(struct_array.column_by_name("info"), StructArray, "Expected `info` field not found");
 
-    let name_array = info_array
-        .column_by_name("name")
-        .unwrap()
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap();
-
+    let name_array: &StringArray = downcast_option!(info_array.column_by_name("name"), StringArray, "Expected `name` field not found");
     assert_eq!(name_array.value(0), "foo");
     assert_eq!(name_array.value(1), "bar");
     assert!(name_array.is_null(2));
     assert!(name_array.is_null(3));
 
-    let score_array = info_array
-        .column_by_name("score")
-        .unwrap()
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .unwrap();
-
+    let score_array: &Int32Array = downcast_option!(info_array.column_by_name("score"), Int32Array, "Expected `score` field not found");
     assert_eq!(score_array.value(0), 42);
     assert_eq!(score_array.value(1), 99);
     assert!(score_array.is_null(2));
@@ -516,7 +537,6 @@ fn test_from_csv_nested_struct() -> Result<()> {
     Ok(())
 }
 
-/// Unit test with arrays and boolean types
 #[test]
 fn test_from_csv_with_array_and_bool() -> Result<()> {
     let csv_data = vec![
@@ -532,21 +552,12 @@ fn test_from_csv_with_array_and_bool() -> Result<()> {
         Arc::new(StringArray::from(vec!["flag BOOLEAN, values ARRAY<INT>"])) as ArrayRef;
     let result = spark_from_csv_inner(&[input_array, schema_str])?;
 
-    let struct_array = result
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .expect("Expected StructArray");
+    let struct_array: &StructArray = downcast_option!(result.as_any().downcast_ref::<StructArray>(), StructArray, "Expected StructArray");
 
     assert_eq!(struct_array.len(), 6);
     assert_eq!(struct_array.null_count(), 1);
 
-    let flag_array = struct_array
-        .column_by_name("flag")
-        .unwrap()
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .unwrap();
-
+    let flag_array: &BooleanArray = downcast_option!(struct_array.column_by_name("flag"), BooleanArray, "Expected `flag` field not found");
     assert!(flag_array.value(0));
     assert!(!flag_array.value(1));
     assert!(flag_array.value(2));
@@ -554,21 +565,13 @@ fn test_from_csv_with_array_and_bool() -> Result<()> {
     assert!(flag_array.is_null(4));
     assert!(!flag_array.value(5));
 
-    let values_array = struct_array
-        .column_by_name("values")
-        .unwrap()
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .unwrap();
-
+    let values_array: &ListArray = downcast_option!(struct_array.column_by_name("values"), ListArray, "Expected `values` field not found");
     assert_eq!(values_array.len(), 6);
     assert_eq!(values_array.null_count(), 1);
-    // Could extend to inspect list content as well
 
     Ok(())
 }
 
-/// Unit test for decimal and timestamp parsing
 #[test]
 fn test_from_csv_decimal_and_timestamp() -> Result<()> {
     let csv_data = vec![
@@ -584,34 +587,19 @@ fn test_from_csv_decimal_and_timestamp() -> Result<()> {
     ])) as ArrayRef;
     let result = spark_from_csv_inner(&[input_array, schema_str])?;
 
-    let struct_array = result
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .expect("Expected StructArray");
+    let struct_array: &StructArray = downcast_option!(result.as_any().downcast_ref::<StructArray>(), StructArray, "Expected StructArray");
 
     assert_eq!(struct_array.len(), 5);
     assert_eq!(struct_array.null_count(), 1);
 
-    let price_array = struct_array
-        .column_by_name("price")
-        .unwrap()
-        .as_any()
-        .downcast_ref::<Decimal128Array>()
-        .unwrap();
-
+    let price_array: &Decimal128Array = downcast_option!(struct_array.column_by_name("price"), Decimal128Array, "Expected `price` field not found");
     assert_eq!(price_array.value(0), 999);
     assert_eq!(price_array.value(1), 1234);
     assert!(price_array.is_null(2));
     assert!(price_array.is_null(3));
     assert_eq!(price_array.value(4), 777);
 
-    let ts_array = struct_array
-        .column_by_name("created")
-        .unwrap()
-        .as_any()
-        .downcast_ref::<TimestampNanosecondArray>()
-        .unwrap();
-
+    let ts_array: &TimestampNanosecondArray = downcast_option!(struct_array.column_by_name("created"), TimestampNanosecondArray, "Expected `created` field not found");
     assert_eq!(ts_array.value(0), 1672531200000000000);
     assert_eq!(ts_array.value(1), 1715010300000000000);
     assert!(ts_array.is_null(2));
