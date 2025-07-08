@@ -51,6 +51,7 @@ use sail_plan::extension::function::array::spark_sequence::SparkSequence;
 use sail_plan::extension::function::collection::spark_concat::SparkConcat;
 use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
 use sail_plan::extension::function::collection::spark_size::SparkSize;
+use sail_plan::extension::function::csv::spark_from_csv::SparkFromCSV;
 use sail_plan::extension::function::datetime::spark_date::SparkDate;
 use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
 use sail_plan::extension::function::datetime::spark_interval::{
@@ -769,6 +770,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
             }
             "spark_concat" | "concat" => Ok(Arc::new(ScalarUDF::from(SparkConcat::new()))),
+            "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::new()))),
             "spark_hex" | "hex" => Ok(Arc::new(ScalarUDF::from(SparkHex::new()))),
             "spark_unhex" | "unhex" => Ok(Arc::new(ScalarUDF::from(SparkUnHex::new()))),
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
