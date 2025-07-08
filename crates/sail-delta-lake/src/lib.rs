@@ -7,6 +7,8 @@ pub mod table;
 // Re-export key types from delta_datafusion for public API
 pub use delta_datafusion::{DeltaScanConfig, DeltaTableProvider};
 pub use operations::{LoadBuilder, SailDeltaOps, WriteBuilder};
+// Re-export common types from deltalake
+pub use deltalake::protocol::SaveMode;
 pub use table::{
     create_delta_table_provider_with_object_store, create_delta_table_with_object_store,
     open_table_with_object_store, open_table_with_object_store_simple,

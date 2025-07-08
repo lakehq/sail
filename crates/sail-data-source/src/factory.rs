@@ -17,6 +17,7 @@ use datafusion_common::{internal_err, plan_err, Result};
 use futures::{StreamExt, TryStreamExt};
 use sail_delta_lake::create_delta_table_provider_with_object_store;
 
+use crate::delta_format::DeltaFormatFactory;
 use crate::options::DataSourceOptionsResolver;
 use crate::url::{rewrite_directory_url, GlobUrl};
 
@@ -142,6 +143,10 @@ impl<'a> TableProviderFactory<'a> {
                     return plan_err!("Avro data source write options are not yet supported");
                 }
                 Arc::new(AvroFormatFactory)
+            }
+            "delta" | "deltalake" => {
+                // TODO: leave options validation to DeltaFormatFactory
+                Arc::new(DeltaFormatFactory::new_with_options(options))
             }
             _ => return plan_err!("unsupported source: {source}"),
         };
