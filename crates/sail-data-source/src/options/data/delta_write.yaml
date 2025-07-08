@@ -18,7 +18,7 @@
       - `overwrite`: Replace the entire table with new data
       - `error`: Throw an error if the table already exists (default for new tables)
       - `ignore`: Ignore the operation if the table already exists
-  supported: false
+  supported: true
   rust_deserialize_with: crate::options::serde::deserialize_save_mode
 
 - key: overwrite_schema
@@ -29,7 +29,7 @@
     Whether to overwrite the schema when writing in overwrite mode.
     If true, the schema of the new data will replace the existing table schema.
     Only applicable when mode is 'overwrite'.
-  supported: false
+  supported: true
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
 
@@ -41,7 +41,7 @@
     Whether to merge the schema of the new data with the existing table schema.
     If true, new columns will be added to the table schema.
     Only applicable when mode is 'append'.
-  supported: false
+  supported: true
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
 
@@ -53,7 +53,7 @@
     Comma-separated list of column names to partition the table by.
     Example: "year,month" will create partitions based on year and month columns.
     Partitioning can improve query performance for filtered queries.
-  supported: false
+  supported: true
 
 - key: partition_filters
   aliases:

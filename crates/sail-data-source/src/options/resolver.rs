@@ -6,10 +6,17 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
 use datafusion_common::{plan_err, Result};
 
+use crate::options::internal::{DeltaReadOptions, DeltaWriteOptions};
 use crate::options::{
     load_default_options, load_options, CsvReadOptions, CsvWriteOptions, JsonReadOptions,
     JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
 };
+
+#[derive(Debug, Clone, Default)]
+pub struct TableDeltaLakeOptions {
+    pub read_options: Option<DeltaReadOptions>,
+    pub write_options: Option<DeltaWriteOptions>,
+}
 
 fn char_to_u8(c: char, option: &str) -> Result<u8> {
     if c.is_ascii() {
@@ -274,6 +281,21 @@ fn apply_parquet_write_options(
     Ok(())
 }
 
+fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaLakeOptions) -> Result<()> {
+    //TODO: implement delta read options
+    to.read_options = Some(from);
+    Ok(())
+}
+
+fn apply_delta_write_options(
+    from: DeltaWriteOptions,
+    to: &mut TableDeltaLakeOptions,
+) -> Result<()> {
+    //TODO: implement delta write options
+    to.write_options = Some(from);
+    Ok(())
+}
+
 pub struct DataSourceOptionsResolver<'a> {
     ctx: &'a SessionContext,
 }
@@ -338,6 +360,26 @@ impl<'a> DataSourceOptionsResolver<'a> {
         apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_write_options(load_options(options)?, &mut parquet_options)?;
         Ok(parquet_options)
+    }
+
+    pub fn resolve_delta_read_options(
+        &self,
+        options: HashMap<String, String>,
+    ) -> Result<TableDeltaLakeOptions> {
+        let mut delta_options = TableDeltaLakeOptions::default();
+        apply_delta_read_options(load_default_options()?, &mut delta_options)?;
+        apply_delta_read_options(load_options(options)?, &mut delta_options)?;
+        Ok(delta_options)
+    }
+
+    pub fn resolve_delta_write_options(
+        &self,
+        options: HashMap<String, String>,
+    ) -> Result<TableDeltaLakeOptions> {
+        let mut delta_options = TableDeltaLakeOptions::default();
+        apply_delta_write_options(load_default_options()?, &mut delta_options)?;
+        apply_delta_write_options(load_options(options)?, &mut delta_options)?;
+        Ok(delta_options)
     }
 }
 
