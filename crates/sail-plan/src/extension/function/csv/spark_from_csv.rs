@@ -1,9 +1,9 @@
+use core::any::type_name;
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::extension::function::functions_nested_utils::*;
-use crate::extension::function::functions_utils::make_scalar_function;
-use core::any::type_name;
-use datafusion::arrow::{array::*, datatypes::*};
+use datafusion::arrow::array::*;
+use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_expr::sqlparser::ast::{ArrayElemTypeDef, DataType as SQLType};
@@ -13,7 +13,9 @@ use datafusion_expr::sqlparser::tokenizer::Tokenizer;
 use datafusion_expr::{
     ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
-use std::collections::HashSet;
+
+use crate::extension::function::functions_nested_utils::*;
+use crate::extension::function::functions_utils::make_scalar_function;
 
 /// UDF implementation of `from_csv`, similar to Spark's `from_csv`.
 /// This parses a column of CSV lines using a provided schema string
@@ -85,8 +87,7 @@ impl ScalarUDFImpl for SparkFromCSV {
         }?;
 
         let sep: &str = get_sep_from_options(options_array.unwrap()).unwrap_or(",");
-        let schema: Result<DataType> =
-            parse_fields(schema, sep).map(DataType::Struct);
+        let schema: Result<DataType> = parse_fields(schema, sep).map(DataType::Struct);
 
         schema.map(ReturnInfo::new_nullable)
     }
@@ -416,14 +417,11 @@ fn test_from_csv_simple_struct() -> Result<()> {
 /// Unit test for `spark_from_csv_inner` that verifies CSV parsing into a `StructArray` with nested struct field.
 #[test]
 fn test_from_csv_nested_struct() -> Result<()> {
-    let csv_data = vec![
-        Some("1,foo,42"),
-        Some("2,bar,99"),
-        None,
-        Some("3,,")
-    ];
+    let csv_data = vec![Some("1,foo,42"), Some("2,bar,99"), None, Some("3,,")];
     let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
-    let schema_str = Arc::new(StringArray::from(vec!["id INT, info STRUCT<name STRING, score INT>"])) as ArrayRef;
+    let schema_str = Arc::new(StringArray::from(vec![
+        "id INT, info STRUCT<name STRING, score INT>",
+    ])) as ArrayRef;
     let result = spark_from_csv_inner(&[input_array, schema_str])?;
 
     let struct_array = result
@@ -489,10 +487,11 @@ fn test_from_csv_with_array_and_bool() -> Result<()> {
         Some("true,[]"),
         None,
         Some(",[7,null,9]"),
-        Some("false,")
+        Some("false,"),
     ];
     let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
-    let schema_str = Arc::new(StringArray::from(vec!["flag BOOLEAN, values ARRAY<INT>"])) as ArrayRef;
+    let schema_str =
+        Arc::new(StringArray::from(vec!["flag BOOLEAN, values ARRAY<INT>"])) as ArrayRef;
     let result = spark_from_csv_inner(&[input_array, schema_str])?;
 
     let struct_array = result
@@ -510,12 +509,12 @@ fn test_from_csv_with_array_and_bool() -> Result<()> {
         .downcast_ref::<BooleanArray>()
         .unwrap();
 
-    assert_eq!(flag_array.value(0), true);
-    assert_eq!(flag_array.value(1), false);
-    assert_eq!(flag_array.value(2), true);
+    assert!(flag_array.value(0));
+    assert!(!flag_array.value(1));
+    assert!(flag_array.value(2));
     assert!(flag_array.is_null(3));
     assert!(flag_array.is_null(4));
-    assert_eq!(flag_array.value(5), false);
+    assert!(!flag_array.value(5));
 
     let values_array = struct_array
         .column_by_name("values")
@@ -539,10 +538,12 @@ fn test_from_csv_decimal_and_timestamp() -> Result<()> {
         Some("12.34,2024-05-06 15:45:00"),
         None,
         Some(",2025-01-01 12:00:00"),
-        Some("7.77,")
+        Some("7.77,"),
     ];
     let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
-    let schema_str = Arc::new(StringArray::from(vec!["price DECIMAL(5,2), created TIMESTAMP"])) as ArrayRef;
+    let schema_str = Arc::new(StringArray::from(vec![
+        "price DECIMAL(5,2), created TIMESTAMP",
+    ])) as ArrayRef;
     let result = spark_from_csv_inner(&[input_array, schema_str])?;
 
     let struct_array = result
