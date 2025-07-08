@@ -1,4 +1,4 @@
-pub(crate) mod writer;
+pub mod writer;
 
 use datafusion_common::DataFusionError;
 use deltalake::errors::DeltaTableError;

@@ -2873,7 +2873,7 @@ impl PlanResolver<'_> {
             partitioning_columns,
             clustering_columns,
             bucket_by,
-            options,
+            mut options,
             table_properties: _,
             overwrite_condition: _,
         } = write;
@@ -2883,6 +2883,19 @@ impl PlanResolver<'_> {
         if bucket_by.is_some() {
             return Err(PlanError::unsupported("bucketing"));
         }
+
+        // Add the save mode to the options map so it can be picked up by the sink
+        let mode_string = match mode {
+            SaveMode::Append => "append",
+            SaveMode::Overwrite => "overwrite",
+            SaveMode::ErrorIfExists => "errorifexists",
+            SaveMode::Ignore => "ignore",
+            SaveMode::Create => "create",
+            SaveMode::CreateOrReplace => "createorreplace",
+            SaveMode::Replace => "replace",
+            SaveMode::OverwritePartitions => "overwritepartitions",
+        };
+        options.push(("mode".to_string(), mode_string.to_string()));
 
         let plan = self.resolve_query_plan(*input, state).await?;
         let fields = Self::get_field_names(plan.schema(), state)?;

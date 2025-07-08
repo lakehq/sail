@@ -2,18 +2,20 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::sink::DataSink;
-use datafusion::datasource::MemTable;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
 use datafusion_common::{DataFusionError, Result};
-use futures::TryStreamExt;
+use futures::StreamExt;
+use sail_delta_lake::operations::write::writer::{DeltaWriter, WriterConfig};
 use sail_delta_lake::{
-    create_delta_table_with_object_store, open_table_with_object_store, DeltaTable, SaveMode,
-    StorageConfig, WriteBuilder,
+    create_delta_table_with_object_store, open_table_with_object_store, Action, CommitBuilder,
+    CommitProperties, DeltaOperation, DeltaTable, Remove, SaveMode, StorageConfig,
+    WriterProperties,
 };
 
 /// Delta Lake data sink implementation
@@ -191,94 +193,140 @@ impl DataSink for DeltaDataSink {
         mut data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        // Collect all RecordBatch data
-        let batches = data.try_collect::<Vec<_>>().await?;
-
-        if batches.is_empty() {
-            return Ok(0);
-        }
-
-        // Calculate total rows
-        let total_rows = batches.iter().map(|batch| batch.num_rows() as u64).sum();
-
-        // Use TaskContext's configuration to create a new SessionContext, not the default configuration
-        let session_config = context.session_config().clone();
-        let runtime_env = context.runtime_env();
-        let session_context = datafusion::execution::context::SessionContext::new_with_config_rt(
-            session_config,
-            runtime_env,
-        );
-
-        // Create MemTable from RecordBatch
-        let mem_table = MemTable::try_new(self.schema.clone(), vec![batches])?;
-
-        // Register MemTable to SessionContext
-        session_context.register_table("temp_table", Arc::new(mem_table))?;
-
-        // Create DataFrame
-        let df = session_context.table("temp_table").await?;
-
-        // Get table path, storage config and object store
         let table_path = self.table_path()?;
         let storage_config = self.extract_storage_config()?;
         let object_store = self.get_object_store(context)?;
+        let save_mode = self.parse_save_mode();
 
-        // Check if table exists
-        let table_exists =
-            open_table_with_object_store(&table_path, object_store.clone(), storage_config.clone())
+        dbg!("Starting write_all with save_mode: {:?}", &save_mode);
+
+        // 1. Get or create DeltaTable instance
+        let table = match open_table_with_object_store(
+            &table_path,
+            object_store.clone(),
+            storage_config.clone(),
+        )
+        .await
+        {
+            Ok(table) => {
+                dbg!("Table exists, using existing table");
+                table
+            }
+            Err(_) if save_mode == SaveMode::Overwrite => {
+                dbg!("Table does not exist, creating new table with SaveMode::Overwrite");
+                // If in overwrite mode and table does not exist, create a new table
+                create_delta_table_with_object_store(
+                    &table_path,
+                    object_store.clone(),
+                    storage_config.clone(),
+                )
                 .await
-                .is_ok();
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                .into()
+            }
+            Err(e) => return Err(DataFusionError::External(Box::new(e))),
+        };
 
-        if table_exists {
-            // Table exists, execute append operation
-            let table = open_table_with_object_store(&table_path, object_store, storage_config)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        // 2. Configure and create DeltaWriter
+        let partition_columns = self.parse_partition_columns();
+        let writer_properties = WriterProperties::builder().build();
 
-            let mut write_builder = WriteBuilder::new(
-                table.log_store().clone(),
-                Some(
-                    table
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .clone(),
-                ),
-            );
+        let writer_config = WriterConfig::new(
+            self.schema.clone(),
+            partition_columns.clone(),
+            Some(writer_properties),
+            self.parse_target_file_size(),
+            self.parse_write_batch_size(),
+            32, // Default num_indexed_cols for now
+            None,
+        );
 
-            // Set save mode to append
-            write_builder = write_builder.with_save_mode(SaveMode::Append);
+        let mut writer = DeltaWriter::new(object_store.clone(), writer_config);
+        let mut total_rows = 0;
 
-            // Set input data and session state
-            write_builder = write_builder.with_input_dataframe(df);
-            write_builder = write_builder.with_session_state(session_context.state());
-
-            // Execute write
-            let _result = write_builder
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        } else {
-            // Table does not exist, create new table
-            let delta_ops =
-                create_delta_table_with_object_store(&table_path, object_store, storage_config)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-            let table: DeltaTable = delta_ops.into();
-            let mut write_builder = WriteBuilder::new(table.log_store().clone(), None);
-
-            // Set save mode to overwrite (create new table)
-            write_builder = write_builder.with_save_mode(SaveMode::Overwrite);
-
-            // Set input data and session state
-            write_builder = write_builder.with_input_dataframe(df);
-            write_builder = write_builder.with_session_state(session_context.state());
-
-            // Execute
-            let _result = write_builder
+        // 3. Consume input stream and write data
+        while let Some(batch_result) = data.next().await {
+            let batch = batch_result?;
+            total_rows += batch.num_rows() as u64;
+            dbg!("Writing batch with {} rows", batch.num_rows());
+            writer
+                .write(&batch)
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         }
 
+        // 4. Close writer and get Add actions
+        let add_actions = writer
+            .close()
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        dbg!("Writer closed, got {} add actions", add_actions.len());
+
+        if add_actions.is_empty() && save_mode != SaveMode::Overwrite {
+            // If no data is written and not in overwrite mode, return
+            return Ok(0);
+        }
+
+        // 5. Execute transaction commit
+        let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
+
+        if save_mode == SaveMode::Overwrite {
+            // In overwrite mode, delete existing files
+            if let Ok(snapshot) = table.snapshot() {
+                let existing_files = snapshot
+                    .file_actions()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let current_timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64;
+
+                let remove_actions: Vec<Action> = existing_files
+                    .into_iter()
+                    .map(|add| {
+                        Action::Remove(Remove {
+                            path: add.path.clone(),
+                            deletion_timestamp: Some(current_timestamp),
+                            data_change: true,
+                            extended_file_metadata: Some(true),
+                            partition_values: Some(add.partition_values.clone()),
+                            size: Some(add.size),
+                            deletion_vector: add.deletion_vector.clone(),
+                            tags: None,
+                            base_row_id: add.base_row_id,
+                            default_row_commit_version: add.default_row_commit_version,
+                        })
+                    })
+                    .collect();
+                actions.extend(remove_actions);
+            }
+        }
+
+        let operation = DeltaOperation::Write {
+            mode: save_mode,
+            partition_by: if partition_columns.is_empty() {
+                None
+            } else {
+                Some(partition_columns)
+            },
+            predicate: self.options.get("replaceWhere").cloned(),
+        };
+
+        dbg!("Committing transaction with {} actions", actions.len());
+
+        // Use CommitBuilder to handle transaction
+        let commit_properties = CommitProperties::default();
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        CommitBuilder::from(commit_properties)
+            .with_actions(actions)
+            .build(Some(snapshot), table.log_store(), operation)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        dbg!("Transaction committed successfully");
         Ok(total_rows)
     }
 }
