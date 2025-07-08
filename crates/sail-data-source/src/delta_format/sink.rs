@@ -14,8 +14,7 @@ use futures::StreamExt;
 use sail_delta_lake::operations::write::writer::{DeltaWriter, WriterConfig};
 use sail_delta_lake::{
     create_delta_table_with_object_store, open_table_with_object_store, Action, CommitBuilder,
-    CommitProperties, DeltaOperation, DeltaTable, Remove, SaveMode, StorageConfig,
-    WriterProperties,
+    CommitProperties, DeltaOperation, Remove, SaveMode, StorageConfig, WriterProperties, TableReference
 };
 
 /// Delta Lake data sink implementation
@@ -200,8 +199,8 @@ impl DataSink for DeltaDataSink {
 
         dbg!("Starting write_all with save_mode: {:?}", &save_mode);
 
-        // 1. Get or create DeltaTable instance
-        let table = match open_table_with_object_store(
+        // 1. Try to open existing table or determine if we need to create a new one
+        let (table, table_exists) = match open_table_with_object_store(
             &table_path,
             object_store.clone(),
             storage_config.clone(),
@@ -210,21 +209,25 @@ impl DataSink for DeltaDataSink {
         {
             Ok(table) => {
                 dbg!("Table exists, using existing table");
-                table
+                (table, true)
             }
-            Err(_) if save_mode == SaveMode::Overwrite => {
-                dbg!("Table does not exist, creating new table with SaveMode::Overwrite");
-                // If in overwrite mode and table does not exist, create a new table
-                create_delta_table_with_object_store(
+            Err(e) => {
+                dbg!("Table does not exist, will create during commit");
+                // For new tables, we'll handle creation during commit
+                // Return error for now if table doesn't exist and mode is not overwrite
+                if save_mode != SaveMode::Overwrite && save_mode != SaveMode::Append {
+                    return Err(DataFusionError::External(Box::new(e)));
+                }
+                // Create a minimal table object for new tables
+                let delta_ops = create_delta_table_with_object_store(
                     &table_path,
                     object_store.clone(),
                     storage_config.clone(),
                 )
                 .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .into()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                (delta_ops.0, false)
             }
-            Err(e) => return Err(DataFusionError::External(Box::new(e))),
         };
 
         // 2. Configure and create DeltaWriter
@@ -262,67 +265,88 @@ impl DataSink for DeltaDataSink {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         dbg!("Writer closed, got {} add actions", add_actions.len());
 
-        if add_actions.is_empty() && save_mode != SaveMode::Overwrite {
-            // If no data is written and not in overwrite mode, return
-            return Ok(0);
-        }
-
-        // 5. Execute transaction commit
-        let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
-
-        if save_mode == SaveMode::Overwrite {
-            // In overwrite mode, delete existing files
-            if let Ok(snapshot) = table.snapshot() {
-                let existing_files = snapshot
-                    .file_actions()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let current_timestamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as i64;
-
-                let remove_actions: Vec<Action> = existing_files
-                    .into_iter()
-                    .map(|add| {
-                        Action::Remove(Remove {
-                            path: add.path.clone(),
-                            deletion_timestamp: Some(current_timestamp),
-                            data_change: true,
-                            extended_file_metadata: Some(true),
-                            partition_values: Some(add.partition_values.clone()),
-                            size: Some(add.size),
-                            deletion_vector: add.deletion_vector.clone(),
-                            tags: None,
-                            base_row_id: add.base_row_id,
-                            default_row_commit_version: add.default_row_commit_version,
-                        })
-                    })
-                    .collect();
-                actions.extend(remove_actions);
+        if add_actions.is_empty() && table_exists {
+            if save_mode != SaveMode::Overwrite {
+                return Ok(0);
             }
         }
 
-        let operation = DeltaOperation::Write {
-            mode: save_mode,
-            partition_by: if partition_columns.is_empty() {
-                None
-            } else {
-                Some(partition_columns)
-            },
-            predicate: self.options.get("replaceWhere").cloned(),
+        // 5. Prepare actions for commit
+        let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
+
+        let operation = if table_exists {
+            if save_mode == SaveMode::Overwrite {
+                // In overwrite mode, delete existing files
+                if let Ok(snapshot) = table.snapshot() {
+                    let existing_files = snapshot
+                        .file_actions()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let current_timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
+
+                    let remove_actions: Vec<Action> = existing_files
+                        .into_iter()
+                        .map(|add| {
+                            Action::Remove(Remove {
+                                path: add.path.clone(),
+                                deletion_timestamp: Some(current_timestamp),
+                                data_change: true,
+                                extended_file_metadata: Some(true),
+                                partition_values: Some(add.partition_values.clone()),
+                                size: Some(add.size),
+                                deletion_vector: add.deletion_vector.clone(),
+                                tags: None,
+                                base_row_id: add.base_row_id,
+                                default_row_commit_version: add.default_row_commit_version,
+                            })
+                        })
+                        .collect();
+                    actions.extend(remove_actions);
+                }
+            }
+            DeltaOperation::Write {
+                mode: save_mode,
+                partition_by: if partition_columns.is_empty() {
+                    None
+                } else {
+                    Some(partition_columns)
+                },
+                predicate: self.options.get("replaceWhere").cloned(),
+            }
+                } else {
+            // For new tables, use Write operation instead of Create for now
+            // This is a simplified approach that should work for basic cases
+            DeltaOperation::Write {
+                mode: save_mode,
+                partition_by: if partition_columns.is_empty() {
+                    None
+                } else {
+                    Some(partition_columns)
+                },
+                predicate: self.options.get("replaceWhere").cloned(),
+            }
         };
+
+        if actions.is_empty() {
+            return Ok(total_rows);
+        }
 
         dbg!("Committing transaction with {} actions", actions.len());
 
-        // Use CommitBuilder to handle transaction
-        let commit_properties = CommitProperties::default();
-        let snapshot = table
-            .snapshot()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        // 6. Commit transaction
+        let snapshot = if table_exists {
+            dbg!(&table.state); // Debug: Check table state before snapshot
+            Some(table.snapshot().map_err(|e| DataFusionError::External(Box::new(e)))?)
+        } else {
+            dbg!("Table does not exist, no snapshot available");
+            None
+        };
 
-        CommitBuilder::from(commit_properties)
+        CommitBuilder::from(CommitProperties::default())
             .with_actions(actions)
-            .build(Some(snapshot), table.log_store(), operation)
+            .build(snapshot.as_ref().map(|s| *s as &dyn TableReference), table.log_store(), operation)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 

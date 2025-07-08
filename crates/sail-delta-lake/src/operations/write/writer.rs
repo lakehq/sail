@@ -64,19 +64,18 @@ impl PartitionsExt for IndexMap<String, Scalar> {
 /// An in-memory buffer that implements AsyncWrite for use with AsyncArrowWriter
 #[derive(Debug, Default, Clone)]
 pub struct AsyncShareableBuffer {
-    buffer: Arc<tokio::sync::RwLock<Vec<u8>>>,
+    buffer: Arc<std::sync::Mutex<Vec<u8>>>,
 }
 
 impl AsyncShareableBuffer {
-    pub async fn len(&self) -> usize {
-        let buffer = self.buffer.read().await;
-        buffer.len()
+    pub fn len(&self) -> usize {
+        self.buffer.lock().unwrap().len()
     }
 
-    pub async fn into_inner(self) -> Option<Vec<u8>> {
+    pub fn into_inner(self) -> Option<Vec<u8>> {
         Arc::try_unwrap(self.buffer)
             .ok()
-            .map(|lock| lock.into_inner())
+            .map(|lock| lock.into_inner().unwrap())
     }
 }
 
@@ -86,15 +85,7 @@ impl AsyncWrite for AsyncShareableBuffer {
         _cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        let buffer = self.buffer.clone();
-        let buf_vec = buf.to_vec();
-
-        // Spawn a task to handle the async write
-        tokio::spawn(async move {
-            let mut buffer = buffer.write().await;
-            buffer.extend_from_slice(&buf_vec);
-        });
-
+        self.buffer.lock().unwrap().extend_from_slice(buf);
         std::task::Poll::Ready(Ok(buf.len()))
     }
 
@@ -386,7 +377,7 @@ impl PartitionWriter {
             }
 
             // Check if we need to flush
-            let buffer_size = self.buffer.len().await;
+            let buffer_size = self.buffer.len();
             if buffer_size >= self.config.target_file_size {
                 self.flush_writer().await?;
             }
@@ -409,6 +400,8 @@ impl PartitionWriter {
             .await
             .map_err(|e| DeltaTableError::generic(format!("Failed to close arrow writer: {e}")))?;
 
+        dbg!(&metadata); // Debug: Check if metadata contains the expected row count
+
         // Skip empty files
         if metadata.num_rows == 0 {
             // Recreate the writer for next use
@@ -417,12 +410,16 @@ impl PartitionWriter {
         }
 
         // Get the buffer data
-        let buffer_data = if let Some(data) = self.buffer.clone().into_inner().await {
-            Bytes::from(data)
-        } else {
-            // Recreate the writer for next use
-            self.reset_writer()?;
-            return Ok(());
+        let buffer_data = {
+            // Clone the buffer to get data without consuming it
+            let buffer_clone = self.buffer.clone();
+            if let Some(data) = buffer_clone.into_inner() {
+                Bytes::from(data)
+            } else {
+                // Buffer is still shared, recreate the writer for next use
+                self.reset_writer()?;
+                return Ok(());
+            }
         };
 
         // Generate file path
