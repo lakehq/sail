@@ -47,9 +47,9 @@ impl SparkFromCSV {
     /// Constructor for the UDF
     pub fn new() -> Self {
         Self {
-            /// - The first element is a `StringArray` containing CSV-formatted values.
-            /// - The second element is a `StringArray` representing the schema associated with the CSV data.
-            /// - Optionally, the third element is a `MapArray` containing options related to CSV parsing.
+            // - The first element is a `StringArray` containing CSV-formatted values.
+            // - The second element is a `StringArray` representing the schema associated with the CSV data.
+            // - Optionally, the third element is a `MapArray` containing options related to CSV parsing.
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
