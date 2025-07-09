@@ -1,8 +1,3 @@
-//! Load data from a Delta Table
-//!
-//! Since we've disabled the datafusion feature in delta-rs, we need to implement
-//! the load operation using sail's datafusion version.
-
 use std::sync::Arc;
 
 use datafusion::datasource::TableProvider;
@@ -18,7 +13,6 @@ use futures::future::BoxFuture;
 
 use crate::delta_datafusion::{DataFusionMixins, DeltaScanConfig, DeltaTableProvider};
 
-/// Builder for loading data from a Delta table
 #[derive(Debug, Clone)]
 pub struct LoadBuilder {
     /// A snapshot of the to-be-loaded table's state
@@ -63,24 +57,18 @@ impl std::future::IntoFuture for LoadBuilder {
         let this = self;
 
         Box::pin(async move {
-            // Check protocol compatibility - access the snapshot field through the public API
             PROTOCOL.can_read_from(this.snapshot.snapshot())?;
 
-            // Ensure the table is initialized with files
             if !this.snapshot.load_config().require_files {
                 return Err(DeltaTableError::NotInitializedWithFiles("reading".into()));
             }
 
-            // Create a new DeltaTable using the public API
-            // We need to create a proper DeltaTableConfig
             let config = DeltaTableConfig::default();
             let mut table = DeltaTable::new(this.log_store.clone(), config);
             table.state = Some(this.snapshot.clone());
 
-            // Get the arrow schema for column projection
             let schema = this.snapshot.arrow_schema()?;
 
-            // Convert column names to projection indices
             let projection = this
                 .columns
                 .map(|cols| {
@@ -96,7 +84,6 @@ impl std::future::IntoFuture for LoadBuilder {
                 })
                 .transpose()?;
 
-            // Create scan configuration
             let scan_config = this.scan_config.unwrap_or(DeltaScanConfig {
                 file_column_name: None,
                 wrap_partition_values: false,
@@ -104,14 +91,11 @@ impl std::future::IntoFuture for LoadBuilder {
                 schema: None,
             });
 
-            // Create DeltaTableProvider for scanning
             let table_provider =
                 DeltaTableProvider::try_new(this.snapshot, this.log_store, scan_config)?;
 
-            // Create session context for scanning
             let ctx = SessionContext::new();
 
-            // Perform the scan
             let scan_plan = table_provider
                 .scan(&ctx.state(), projection.as_ref(), &[], None)
                 .await

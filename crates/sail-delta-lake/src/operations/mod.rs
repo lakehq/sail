@@ -4,9 +4,18 @@ use deltalake::{DeltaResult, DeltaTable};
 pub use self::load::LoadBuilder;
 pub use self::write::WriteBuilder;
 
-/// High level interface for executing commands against a DeltaTable using sail's DataFusion
-///
-/// This is similar to delta-rs DeltaOps but uses sail's DataFusion version
+pub mod add_column;
+pub mod cast;
+mod cdc;
+pub mod constraints;
+pub mod delete;
+pub mod load;
+pub mod load_cdf;
+pub mod merge;
+pub mod optimize;
+pub mod update;
+pub mod write;
+
 pub struct SailDeltaOps(pub DeltaTable);
 
 impl SailDeltaOps {
@@ -59,16 +68,3 @@ impl AsRef<DeltaTable> for SailDeltaOps {
 //     drop_constraints::DropConstraintBuilder, load_cdf::CdfLoadBuilder,
 //     merge::MergeBuilder, update::UpdateBuilder, write::WriteBuilder,
 // };
-
-pub mod add_column;
-pub mod cast;
-mod cdc;
-pub mod constraints;
-pub mod delete;
-pub mod load;
-pub mod load_cdf;
-pub mod merge;
-pub mod optimize;
-pub mod set_tbl_properties;
-pub mod update;
-pub mod write;

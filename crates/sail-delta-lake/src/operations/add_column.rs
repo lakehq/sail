@@ -1,9 +1,3 @@
-//! Add a new column to a table
-//!
-//! This module provides the AddColumnBuilder for adding new columns to Delta tables.
-//! Since we've disabled the datafusion feature in delta-rs, we need to implement
-//! the middleware layer ourselves.
-
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties};
 use deltalake::kernel::{StructField, StructType, StructTypeExt};
 use deltalake::logstore::LogStoreRef;
