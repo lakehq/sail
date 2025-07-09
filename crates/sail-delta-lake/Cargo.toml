@@ -6,15 +6,15 @@ edition = { workspace = true }
 [dependencies]
 # Core sail dependencies
 sail-common = { path = "../sail-common" }
-sail-common-datafusion = { path = "../sail-common-datafusion", features = ["delta-lake"] }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
 
-# Delta Lake core (without datafusion feature)
-deltalake = { workspace = true}
-delta_kernel = { workspace = true}
+# Delta Lake
+deltalake = { workspace = true }
+delta_kernel = { workspace = true }
 
 dashmap = { workspace = true }
 
-# DataFusion dependencies - these are needed because we disabled delta-rs datafusion feature
+# DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
@@ -37,9 +37,6 @@ either.workspace = true
 itertools = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
-parquet = "55.2.0"
-bytes = "1.9.0"
-indexmap = "2.7.0"
-
-[features]
-default = []
+parquet = { workspace = true }
+bytes = { workspace = true }
+indexmap = { workspace = true }
