@@ -9,6 +9,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err,
 };
+
 #[derive(Debug)]
 pub struct SparkCsc {
     signature: Signature,
