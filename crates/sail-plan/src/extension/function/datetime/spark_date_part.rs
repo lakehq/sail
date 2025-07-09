@@ -2,9 +2,10 @@ use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::Decimal128Array;
+use arrow::array::{ArrayRef, Decimal128Array, DurationMicrosecondArray};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use arrow::temporal_conversions::MICROSECONDS;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
@@ -39,47 +40,62 @@ impl SparkDatePart {
         } = args;
 
         args.get(1).map_or_else(
-            || exec_err!(
-                "Spark `date_part` function requires 2 arguments, got {}",
-                arg_fields.len()
-            ),
+            || {
+                exec_err!(
+                    "Spark `date_part` function requires 2 arguments, got {}",
+                    arg_fields.len()
+                )
+            },
             |second_arg| {
-                self.inner.invoke_with_args(ScalarFunctionArgs {
-                    args: vec![
-                        ColumnarValue::Scalar(ScalarValue::Utf8(Some("microseconds".to_string()))),
-                        second_arg.clone(),
-                    ],
-                    arg_fields: arg_fields.clone(),
-                    number_rows,
-                    return_field: Arc::new(Field::new(
-                        return_field.name(),
-                        DataType::Int32,
-                        true,
-                    )),
-                })
+                match second_arg.data_type() {
+                    DataType::Duration(TimeUnit::Microsecond) => {
+                        truncate_duration_microseconds(second_arg.clone())
+                    }
+                    _ => self.inner.invoke_with_args(ScalarFunctionArgs {
+                        args: vec![
+                            ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                                "microseconds".to_string(),
+                            ))),
+                            second_arg.clone(),
+                        ],
+                        arg_fields: arg_fields.clone(),
+                        number_rows,
+                        return_field: Arc::new(Field::new(
+                            return_field.name(),
+                            DataType::Int32,
+                            true,
+                        )),
+                    }),
+                }
                 .and_then(|value| value.cast_to(&DataType::Decimal128(8, 0), None))
                 .and_then(|value| {
-                    let is_scalar = matches!(value, ColumnarValue::Scalar(_));
-                    let array = match value {
-                        ColumnarValue::Array(array) => Arc::clone(&array),
-                        ColumnarValue::Scalar(scalar) => scalar.to_array()?,
+                    let (is_scalar, array) = match value {
+                        ColumnarValue::Array(arr) => (false, arr),
+                        ColumnarValue::Scalar(scalar) => (true, scalar.to_array()?),
                     };
+
                     array
                         .as_any()
                         .downcast_ref::<Decimal128Array>()
                         .and_then(|arr| arr.clone().with_precision_and_scale(8, 6).ok())
                         .map_or_else(
-                            || exec_err!("Spark `date_part`: Error when cast microseconds to decimal"),
+                            || {
+                                exec_err!(
+                                    "Spark `date_part`: Error when cast microseconds to decimal"
+                                )
+                            },
                             |divided| {
                                 if is_scalar {
-                                    Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(&divided, 0)?))
+                                    Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                                        &divided, 0,
+                                    )?))
                                 } else {
                                     Ok(ColumnarValue::Array(Arc::new(divided)))
                                 }
-                            }
+                            },
                         )
                 })
-            }
+            },
         )
     }
 }
@@ -134,4 +150,35 @@ impl ScalarUDFImpl for SparkDatePart {
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
+}
+
+fn truncate_duration_microseconds(value: ColumnarValue) -> Result<ColumnarValue> {
+    let (is_scalar, array) = match value {
+        ColumnarValue::Array(arr) => (false, arr),
+        ColumnarValue::Scalar(scalar) => (true, scalar.to_array()?),
+    };
+
+    array
+        .as_any()
+        .downcast_ref::<DurationMicrosecondArray>()
+        .map(|arr| {
+            Arc::new(
+                arr.iter()
+                    .map(|v| v.map(|d| d % (60 * MICROSECONDS)))
+                    .collect::<DurationMicrosecondArray>(),
+            ) as ArrayRef
+        })
+        .map_or_else(
+            || exec_err!("Spark `date_part`: Error truncating interval to seconds"),
+            |result_array| {
+                if is_scalar {
+                    Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                        &result_array,
+                        0,
+                    )?))
+                } else {
+                    Ok(ColumnarValue::Array(result_array))
+                }
+            },
+        )
 }
