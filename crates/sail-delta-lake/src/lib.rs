@@ -1,5 +1,6 @@
 pub mod data_catalog;
 pub mod delta_datafusion;
+pub mod delta_format;
 pub mod operations;
 pub mod table;
 

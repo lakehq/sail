@@ -11,8 +11,9 @@ use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
 use datafusion_common::{DataFusionError, Result};
 use futures::StreamExt;
-use sail_delta_lake::operations::write::writer::{DeltaWriter, WriterConfig};
-use sail_delta_lake::{
+
+use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::{
     create_delta_table_with_object_store, open_table_with_object_store, Action, CommitBuilder,
     CommitProperties, DeltaOperation, Format, Metadata, Protocol, Remove, SaveMode, StorageConfig,
     StructType, TableReference, TryIntoKernel, WriterProperties,

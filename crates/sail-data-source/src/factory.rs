@@ -15,9 +15,9 @@ use datafusion::datasource::listing::{
 use datafusion::prelude::SessionContext;
 use datafusion_common::{internal_err, plan_err, Result};
 use futures::{StreamExt, TryStreamExt};
+use sail_delta_lake::delta_format::DeltaFormatFactory;
 use sail_delta_lake::{create_delta_table_provider_with_object_store, DeltaScanConfig};
 
-use crate::delta_format::DeltaFormatFactory;
 use crate::options::DataSourceOptionsResolver;
 use crate::url::{rewrite_directory_url, GlobUrl};
 

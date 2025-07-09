@@ -16,8 +16,6 @@ url = { workspace = true }
 regex = { workspace = true }
 percent-encoding = { workspace = true }
 sail-delta-lake = { path = "../sail-delta-lake" }
-uuid = { workspace = true }
-serde_json = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }
