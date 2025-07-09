@@ -8,7 +8,6 @@ use datafusion::datasource::file_format::file_compression_type::FileCompressionT
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig, FileSource};
 use datafusion::datasource::sink::DataSinkExec;
-use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, Result, Statistics};
@@ -79,13 +78,7 @@ impl FileFormat for DeltaFileFormat {
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut options = self.options.clone();
-
-        // The save mode can be controlled by SQL statements like `INSERT OVERWRITE` or
-        // `COPY ... (OVERWRITE TRUE)`, which sets `conf.insert_op`.
-        if conf.insert_op == InsertOp::Overwrite {
-            options.insert("mode".to_string(), "overwrite".to_string());
-        }
+        let options = self.options.clone();
 
         let sink = Arc::new(DeltaDataSink::new(
             options,

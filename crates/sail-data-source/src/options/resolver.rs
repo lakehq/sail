@@ -289,10 +289,22 @@ fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaLakeOptio
 
 fn apply_delta_write_options(
     from: DeltaWriteOptions,
-    to: &mut TableDeltaLakeOptions,
+    options_map: &mut HashMap<String, String>,
 ) -> Result<()> {
-    //TODO: implement delta write options
-    to.write_options = Some(from);
+    if let Some(mode) = from.mode {
+        options_map.insert("mode".to_string(), mode);
+    }
+
+    if let Some(overwrite_schema) = from.overwrite_schema {
+        options_map.insert("overwriteSchema".to_string(), overwrite_schema.to_string());
+    }
+    if let Some(merge_schema) = from.merge_schema {
+        options_map.insert("mergeSchema".to_string(), merge_schema.to_string());
+    }
+    if let Some(partition_by) = from.partition_by {
+        options_map.insert("partitionBy".to_string(), partition_by);
+    }
+
     Ok(())
 }
 
@@ -375,11 +387,12 @@ impl<'a> DataSourceOptionsResolver<'a> {
     pub fn resolve_delta_write_options(
         &self,
         options: HashMap<String, String>,
-    ) -> Result<TableDeltaLakeOptions> {
-        let mut delta_options = TableDeltaLakeOptions::default();
-        apply_delta_write_options(load_default_options()?, &mut delta_options)?;
-        apply_delta_write_options(load_options(options)?, &mut delta_options)?;
-        Ok(delta_options)
+    ) -> Result<HashMap<String, String>> {
+        let mut final_options = HashMap::new();
+        apply_delta_write_options(load_default_options()?, &mut final_options)?;
+        apply_delta_write_options(load_options(options)?, &mut final_options)?;
+
+        Ok(final_options)
     }
 }
 

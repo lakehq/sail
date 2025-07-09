@@ -145,8 +145,8 @@ impl<'a> TableProviderFactory<'a> {
                 Arc::new(AvroFormatFactory)
             }
             "delta" | "deltalake" => {
-                // TODO: leave options validation to DeltaFormatFactory
-                Arc::new(DeltaFormatFactory::new_with_options(options))
+                let delta_options = resolver.resolve_delta_write_options(options)?;
+                Arc::new(DeltaFormatFactory::new_with_options(delta_options))
             }
             _ => return plan_err!("unsupported source: {source}"),
         };
