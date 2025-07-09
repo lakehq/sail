@@ -9,6 +9,7 @@ use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::datetime::spark_date_part::SparkDatePart;
 use crate::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
 use crate::extension::function::datetime::spark_last_day::SparkLastDay;
 use crate::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
@@ -399,6 +400,13 @@ fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
 }
 
+fn date_part(part: Expr, date: Expr) -> Expr {
+    Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(SparkDatePart::new())),
+        args: vec![part, date],
+    })
+}
+
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -433,7 +441,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("date_format", F::custom(date_format)),
         ("date_from_unix_date", F::cast(DataType::Date32)),
-        ("date_part", F::binary(expr_fn::date_part)),
+        ("date_part", F::binary(date_part)),
         (
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
@@ -447,7 +455,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "datediff",
             F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
         ),
-        ("datepart", F::binary(expr_fn::date_part)),
+        ("datepart", F::binary(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
         (
             "dayname",
@@ -465,7 +473,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             }),
         ),
         ("dayofyear", F::unary(|arg| integer_part(arg, "DOY"))),
-        ("extract", F::binary(expr_fn::date_part)),
+        ("extract", F::binary(date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
         ("from_utc_timestamp", F::binary(from_utc_timestamp)),
         ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),
