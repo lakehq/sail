@@ -5,15 +5,15 @@ pub use self::load::LoadBuilder;
 pub use self::write::WriteBuilder;
 
 pub mod add_column;
-pub mod cast;
+mod cast;
 mod cdc;
-pub mod constraints;
-pub mod delete;
+// pub mod constraints;
+// pub mod delete;
 pub mod load;
 pub mod load_cdf;
-pub mod merge;
-pub mod optimize;
-pub mod update;
+// pub mod merge;
+// pub mod optimize;
+// pub mod update;
 pub mod write;
 
 pub struct SailDeltaOps(pub DeltaTable);

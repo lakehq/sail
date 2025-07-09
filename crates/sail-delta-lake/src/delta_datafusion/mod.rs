@@ -80,18 +80,12 @@ use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::operations::WriteBuilder;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod cdf;
-pub mod expr;
-pub mod logical;
-pub mod physical;
-pub mod planner;
-
 pub use cdf::scan::DeltaCdfTableProvider;
 
 mod schema_adapter;
@@ -143,13 +137,6 @@ pub trait DataFusionMixins {
 
     /// Get the table schema as an [`ArrowSchemaRef`]
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef>;
-
-    /// Parse an expression string into a datafusion [`Expr`]
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr>;
 }
 
 impl DataFusionMixins for Snapshot {
@@ -159,16 +146,6 @@ impl DataFusionMixins for Snapshot {
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         arrow_schema_impl(self, false)
-    }
-
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())
-            .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
-        parse_predicate_expression(&schema, expr, df_state)
     }
 }
 
@@ -180,16 +157,6 @@ impl DataFusionMixins for EagerSnapshot {
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         arrow_schema_from_struct_type(self.schema(), &self.metadata().partition_columns, false)
     }
-
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())
-            .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
-        parse_predicate_expression(&schema, expr, df_state)
-    }
 }
 
 impl DataFusionMixins for DeltaTableState {
@@ -199,14 +166,6 @@ impl DataFusionMixins for DeltaTableState {
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         self.snapshot().input_schema()
-    }
-
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr> {
-        self.snapshot().parse_predicate_expression(expr, df_state)
     }
 }
 
