@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
-#[cfg(feature = "delta-lake")]
 use deltalake::DeltaTableError;
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::{intern, PyErr, PyResult, Python};
@@ -134,7 +133,6 @@ impl CommonErrorCause {
             };
         }
 
-        #[cfg(feature = "delta-lake")]
         if let Some(e) = error.downcast_ref::<DeltaTableError>() {
             return Self::DeltaTable(e.to_string());
         }
