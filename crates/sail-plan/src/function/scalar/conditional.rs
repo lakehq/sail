@@ -1,7 +1,7 @@
+use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, ExprSchemable};
-use arrow::datatypes::DataType;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -81,30 +81,36 @@ fn create_zero_literal(data_type: &DataType) -> ScalarValue {
 
 /// Implementation of nullifzero function with type-aware casting
 fn nullifzero(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, function_context } = input;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
     let arg = arguments.one()?;
-    
+
     // Get the data type of the input argument
     let (data_type, _) = arg.data_type_and_nullable(function_context.schema)?;
-    
+
     // Create a zero literal with the same type as the input
     let zero_literal = lit(create_zero_literal(&data_type));
-    
+
     // Return nullif(arg, zero_literal)
     Ok(expr_fn::nullif(arg, zero_literal))
 }
 
 /// Implementation of zeroifnull function with type-aware casting
 fn zeroifnull(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, function_context } = input;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
     let arg = arguments.one()?;
-    
+
     // Get the data type of the input argument
     let (data_type, _) = arg.data_type_and_nullable(function_context.schema)?;
-    
+
     // Create a zero literal with the same type as the input
     let zero_literal = lit(create_zero_literal(&data_type));
-    
+
     // Return nvl(arg, zero_literal)
     Ok(expr_fn::nvl(arg, zero_literal))
 }
