@@ -61,11 +61,11 @@ The `DESCRIBE QUERY` statement is not supported yet.
 
 ### Data Manipulation
 
-| Statement                    | Supported      |
-| ---------------------------- | -------------- |
-| `INSERT TABLE`               | :construction: |
-| `INSERT OVERWRITE DIRECTORY` | :construction: |
-| `LOAD DATA`                  | :construction: |
+| Statement                    | Supported          |
+| ---------------------------- | ------------------ |
+| `INSERT TABLE`               | :white_check_mark: |
+| `INSERT OVERWRITE DIRECTORY` | :construction:     |
+| `LOAD DATA`                  | :construction:     |
 
 ### Catalog Management
 
