@@ -56,18 +56,24 @@ impl ScalarUDFImpl for SparkConv {
             return Err(invalid_arg_count_exec_err("spark_conv", (3, 3), args.len()));
         };
 
-        match (num, from_base, to_base) {
+        let num_str: Option<String> = match num {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Some(s.clone()),
+            ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => Some(s.to_string()),
+            ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => Some(s.clone()),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(i))) => Some(i.to_string()),
+            _ => None,
+        };
+
+        match (num_str, from_base, to_base) {
             (
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(num_str)))
-                | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(num_str)))
-                | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(num_str))),
+                Some(num_str),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(from))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(to))),
             ) => {
                 if *from < 2 || *from > 36 || *to < 2 || *to > 36 {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
                 }
-                match i64::from_str_radix(num_str, *from as u32) {
+                match i64::from_str_radix(&num_str, *from as u32) {
                     Ok(n) => {
                         let result = if *to == 10 {
                             format!("{n}")
@@ -83,7 +89,7 @@ impl ScalarUDFImpl for SparkConv {
                 let types = vec![num.data_type(), from_base.data_type(), to_base.data_type()];
                 Err(unsupported_data_types_exec_err(
                     "spark_conv",
-                    "(Utf8 | Utf8View | LargeUtf8, Int32, Int32)",
+                    "(Utf8 | Utf8View | LargeUtf8 | Int32, Int32, Int32)",
                     &types,
                 ))
             }
@@ -101,7 +107,7 @@ impl ScalarUDFImpl for SparkConv {
 
         let valid_string: bool = matches!(
             input_type,
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Int32
         );
         let valid_from: bool = matches!(from_base_type, DataType::Int32);
         let valid_to: bool = matches!(to_base_type, DataType::Int32);
@@ -115,7 +121,7 @@ impl ScalarUDFImpl for SparkConv {
         } else {
             Err(unsupported_data_types_exec_err(
                 "spark_conv",
-                "Utf8 | Utf8View | LargeUtf8, Int32, Int32",
+                "Utf8 | Utf8View | LargeUtf8 | Int32, Int32, Int32",
                 types,
             ))
         }
