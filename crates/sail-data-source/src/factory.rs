@@ -15,7 +15,7 @@ use datafusion::datasource::listing::{
 use datafusion::prelude::SessionContext;
 use datafusion_common::{internal_err, plan_err, Result};
 use futures::{StreamExt, TryStreamExt};
-use sail_delta_lake::create_delta_table_provider_with_object_store;
+use sail_delta_lake::{create_delta_table_provider_with_object_store, DeltaScanConfig};
 
 use crate::delta_format::DeltaFormatFactory;
 use crate::options::DataSourceOptionsResolver;
@@ -41,23 +41,38 @@ impl<'a> TableProviderFactory<'a> {
             return plan_err!("empty data source paths");
         }
 
+        let options_map: HashMap<String, String> = options.into_iter().collect();
+
         // Handle delta format early
         if matches!(format.to_lowercase().as_str(), "delta" | "deltalake") {
             let table_uri = paths.first().ok_or_else(|| {
                 datafusion_common::DataFusionError::Plan("empty delta table path".to_string())
             })?;
+
+            let resolver = DataSourceOptionsResolver::new(self.ctx);
+            let delta_options = resolver.resolve_delta_read_options(options_map)?;
+
+            let enable_parquet_pushdown = delta_options
+                .read_options
+                .as_ref()
+                .and_then(|opts| opts.enable_parquet_pushdown)
+                .unwrap_or(true);
+
             let url = ListingTableUrl::parse(table_uri)?;
             let object_store = self.ctx.runtime_env().object_store(&url)?;
 
-            // Use default configuration for now, can be extended later
             let storage_config = Default::default();
-            let scan_config = None;
+
+            let scan_config = DeltaScanConfig {
+                enable_parquet_pushdown,
+                ..Default::default()
+            };
 
             let table_provider = create_delta_table_provider_with_object_store(
                 table_uri,
                 object_store,
                 storage_config,
-                scan_config,
+                Some(scan_config),
             )
             .await
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
@@ -69,7 +84,7 @@ impl<'a> TableProviderFactory<'a> {
         // TODO: infer compression type from file extension
         // TODO: support global configuration to ignore file extension (by setting it to empty)
         let resolver = DataSourceOptionsResolver::new(self.ctx);
-        let options: HashMap<String, String> = options.into_iter().collect();
+        let options = options_map;
         let options = match format.to_lowercase().as_str() {
             "json" => {
                 let options = resolver.resolve_json_read_options(options)?;

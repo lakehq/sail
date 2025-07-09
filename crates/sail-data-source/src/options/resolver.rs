@@ -282,8 +282,18 @@ fn apply_parquet_write_options(
 }
 
 fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaLakeOptions) -> Result<()> {
-    //TODO: implement delta read options
-    to.read_options = Some(from);
+    if to.read_options.is_none() {
+        to.read_options = Some(DeltaReadOptions {
+            enable_parquet_pushdown: None,
+        });
+    }
+
+    if let Some(ref mut existing) = to.read_options {
+        if from.enable_parquet_pushdown.is_some() {
+            existing.enable_parquet_pushdown = from.enable_parquet_pushdown;
+        }
+    }
+
     Ok(())
 }
 

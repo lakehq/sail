@@ -18,7 +18,6 @@ use sail_delta_lake::{
     StructType, TableReference, TryIntoKernel, WriterProperties,
 };
 
-/// Delta Lake data sink implementation
 #[derive(Debug)]
 pub struct DeltaDataSink {
     options: HashMap<String, String>,
@@ -27,7 +26,6 @@ pub struct DeltaDataSink {
 }
 
 impl DeltaDataSink {
-    /// Create a new DeltaDataSink
     pub fn new(
         options: HashMap<String, String>,
         table_paths: Vec<datafusion::datasource::listing::ListingTableUrl>,
@@ -40,12 +38,10 @@ impl DeltaDataSink {
         }
     }
 
-    /// Get the table path as a string
     fn table_path(&self) -> Result<String> {
         Ok(self.table_paths[0].as_str().to_string())
     }
 
-    /// Extract storage configuration from options
     fn extract_storage_config(&self) -> Result<StorageConfig> {
         let mut storage_options = HashMap::new();
 
@@ -105,7 +101,7 @@ impl DeltaDataSink {
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
-    /// Parse save mode from options
+    /// Parse save mode from options, maybe there is a better way, see sail-plan/src/resolver/plan.rs
     fn parse_save_mode(&self) -> SaveMode {
         match self.options.get("save_mode").or(self.options.get("mode")) {
             Some(mode) => match mode.to_lowercase().as_str() {

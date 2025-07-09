@@ -148,7 +148,7 @@
   description: |
     Whether to enable predicate pushdown to the Parquet level.
     When enabled, filters are pushed down to Parquet readers for better performance.
-  supported: false
+  supported: true
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
 

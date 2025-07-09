@@ -7,21 +7,18 @@ use datafusion::catalog::Session;
 use datafusion::datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_common::{GetExt, Result};
 
-/// Factory for creating Delta Lake file format instances
 #[derive(Debug, Default)]
 pub struct DeltaFormatFactory {
     options: HashMap<String, String>,
 }
 
 impl DeltaFormatFactory {
-    /// Create a new DeltaFormatFactory with default options
     pub fn new() -> Self {
         Self {
             options: HashMap::new(),
         }
     }
 
-    /// Create a new DeltaFormatFactory with specified default options
     pub fn new_with_options(options: HashMap<String, String>) -> Self {
         Self { options }
     }
