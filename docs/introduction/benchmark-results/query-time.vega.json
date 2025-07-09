@@ -41,7 +41,7 @@
       "name": "color",
       "type": "ordinal",
       "domain": ["Spark", "Sail"],
-      "range": ["#E25A1C", "#3695BF"]
+      "range": ["#E25A1C", "#3762E0"]
     }
   ],
   "signals": [
