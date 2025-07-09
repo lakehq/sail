@@ -111,7 +111,7 @@ impl DeltaDataSink {
                 "errorifexists" | "error" => SaveMode::ErrorIfExists,
                 "ignore" => SaveMode::Ignore,
                 _ => {
-                    dbg!("Unknown save mode '{}', defaulting to Append", mode);
+                    // dbg!("Unknown save mode '{}', defaulting to Append", mode);
                     SaveMode::Append
                 }
             },
@@ -195,9 +195,8 @@ impl DataSink for DeltaDataSink {
         let object_store = self.get_object_store(context)?;
         let save_mode = self.parse_save_mode();
 
-        dbg!("Starting write_all with save_mode: {:?}", &save_mode);
+        // dbg!("Starting write_all with save_mode: {:?}", &save_mode);
 
-        // 1. Try to open existing table or determine if we need to create a new one
         let (table, table_exists) = match open_table_with_object_store(
             &table_path,
             object_store.clone(),
@@ -206,17 +205,14 @@ impl DataSink for DeltaDataSink {
         .await
         {
             Ok(table) => {
-                dbg!("Table exists, using existing table");
+                // dbg!("Table exists, using existing table");
                 (table, true)
             }
             Err(e) => {
-                dbg!("Table does not exist, will create during commit");
-                // For new tables, we'll handle creation during commit
-                // Return error for now if table doesn't exist and mode is not overwrite
+                // dbg!("Table does not exist, will create during commit");
                 if save_mode != SaveMode::Overwrite && save_mode != SaveMode::Append {
                     return Err(DataFusionError::External(Box::new(e)));
                 }
-                // Create a minimal table object for new tables
                 let delta_ops = create_delta_table_with_object_store(
                     &table_path,
                     object_store.clone(),
@@ -228,7 +224,6 @@ impl DataSink for DeltaDataSink {
             }
         };
 
-        // 2. Configure and create DeltaWriter
         let partition_columns = self.parse_partition_columns();
         let writer_properties = WriterProperties::builder().build();
 
@@ -238,7 +233,7 @@ impl DataSink for DeltaDataSink {
             Some(writer_properties),
             self.parse_target_file_size(),
             self.parse_write_batch_size(),
-            32, // Default num_indexed_cols for now
+            32, // TODO: Default num_indexed_cols for now
             None,
         );
 
@@ -249,40 +244,40 @@ impl DataSink for DeltaDataSink {
         let writer_path = if table_url.scheme() == "file" {
             // For file:// URLs, extract the local filesystem path
             let filesystem_path = table_url.path();
-            dbg!(
-                "Converting file URL to filesystem path: {} -> {}",
-                &table_path,
-                filesystem_path
-            );
+            // dbg!(
+            //     "Converting file URL to filesystem path: {} -> {}",
+            //     &table_path,
+            //     filesystem_path
+            // );
             object_store::path::Path::from(filesystem_path)
         } else {
             // For other schemes (s3://, etc.), use the full URL as-is
-            dbg!("Using full URL for non-file scheme: {}", &table_path);
+            // dbg!("Using full URL for non-file scheme: {}", &table_path);
             object_store::path::Path::from(table_path.as_str())
         };
 
         let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
         let mut total_rows = 0;
 
-        // 3. Consume input stream and write data
+        // Consume input stream and write data
         while let Some(batch_result) = data.next().await {
             let batch = batch_result?;
             total_rows += batch.num_rows() as u64;
-            dbg!("Writing batch with {} rows", batch.num_rows());
+            // dbg!("Writing batch with {} rows", batch.num_rows());
             writer
                 .write(&batch)
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         }
 
-        // 4. Close writer and get Add actions
+        // Close writer and get Add actions
         let add_actions = writer
             .close()
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        dbg!("Writer closed, got {} add actions", add_actions.len());
+        // dbg!("Writer closed, got {} add actions", add_actions.len());
 
-        dbg!(&add_actions);
+        // dbg!(&add_actions);
 
         if add_actions.is_empty() && table_exists {
             if save_mode != SaveMode::Overwrite {
@@ -290,7 +285,7 @@ impl DataSink for DeltaDataSink {
             }
         }
 
-        // 5. Prepare actions for commit
+        // Prepare actions for commit
         let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
 
         let operation = if table_exists {
@@ -349,8 +344,8 @@ impl DataSink for DeltaDataSink {
             // Create Metadata action
             let metadata = Metadata {
                 id: uuid::Uuid::new_v4().to_string(),
-                name: None,
-                description: None,
+                name: None,        // TODO: Handle table name
+                description: None, // TODO: Handle table description
                 format: Format::default(),
                 schema_string: serde_json::to_string(&delta_schema)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?,
@@ -381,39 +376,39 @@ impl DataSink for DeltaDataSink {
             return Ok(total_rows);
         }
 
-        dbg!("Committing transaction with {} actions", actions.len());
+        // dbg!("Committing transaction with {} actions", actions.len());
 
         // Debug: Print actions
-        if !table_exists {
-            dbg!("Creating new table with Protocol and Metadata actions");
-            for (i, action) in actions.iter().enumerate() {
-                match action {
-                    Action::Protocol(_) => {
-                        dbg!("Action {}: Protocol", i);
-                    }
-                    Action::Metadata(_) => {
-                        dbg!("Action {}: Metadata", i);
-                    }
-                    Action::Add(_) => {
-                        dbg!("Action {}: Add", i);
-                    }
-                    _ => {
-                        dbg!("Action {}: Other", i);
-                    }
-                }
-            }
-        }
+        // if !table_exists {
+        //     dbg!("Creating new table with Protocol and Metadata actions");
+        //     for (i, action) in actions.iter().enumerate() {
+        //         match action {
+        //             Action::Protocol(_) => {
+        //                 dbg!("Action {}: Protocol", i);
+        //             }
+        //             Action::Metadata(_) => {
+        //                 dbg!("Action {}: Metadata", i);
+        //             }
+        //             Action::Add(_) => {
+        //                 dbg!("Action {}: Add", i);
+        //             }
+        //             _ => {
+        //                 dbg!("Action {}: Other", i);
+        //             }
+        //         }
+        //     }
+        // }
 
-        // 6. Commit transaction
+        // Commit transaction
         let snapshot = if table_exists {
-            dbg!(&table.state); // Debug: Check table state before snapshot
+            // dbg!(&table.state); // Check table state before snapshot
             Some(
                 table
                     .snapshot()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?,
             )
         } else {
-            dbg!("Table does not exist, no snapshot available");
+            // dbg!("Table does not exist, no snapshot available");
             None
         };
 
@@ -427,7 +422,7 @@ impl DataSink for DeltaDataSink {
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        dbg!("Transaction committed successfully");
+        // dbg!("Transaction committed successfully");
         Ok(total_rows)
     }
 }
