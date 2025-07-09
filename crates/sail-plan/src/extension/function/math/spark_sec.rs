@@ -3,10 +3,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, AsArray};
 use datafusion::arrow::datatypes::{DataType, Float64Type};
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-use crate::extension::function::error_utils::unsupported_data_type_exec_err;
+use crate::extension::function::error_utils::{
+    invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
+};
 
 #[derive(Debug)]
 pub struct SparkSec {
@@ -22,11 +24,7 @@ impl Default for SparkSec {
 impl SparkSec {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Float32, DataType::Float64],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -45,10 +43,10 @@ impl ScalarUDFImpl for SparkSec {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            DataType::Float64 => Ok(DataType::Float64),
-            DataType::Float32 => Ok(DataType::Float32),
-            _ => internal_err!("Unsupported data type {} for sec", arg_types[0]),
+        match arg_types.first() {
+            Some(DataType::Float32) => Ok(DataType::Float32),
+            Some(DataType::Float64) => Ok(DataType::Float64),
+            _ => Ok(DataType::Float64),
         }
     }
 
@@ -56,10 +54,7 @@ impl ScalarUDFImpl for SparkSec {
         let ScalarFunctionArgs { args, .. } = args;
 
         let [arg] = args.as_slice() else {
-            return exec_err!(
-                "Spark `sec` function requires 1 argument, got {}",
-                args.len()
-            );
+            return Err(invalid_arg_count_exec_err("spark_sec", (1, 1), args.len()));
         };
 
         match arg {
@@ -86,11 +81,39 @@ impl ScalarUDFImpl for SparkSec {
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             other => Err(unsupported_data_type_exec_err(
-                "sec",
+                "spark_sec",
                 "Float32 or Float64",
                 &other.data_type(),
             )),
         }
+    }
+
+    fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
+        if types.len() != 1 {
+            return Err(invalid_arg_count_exec_err("spark_sec", (1, 1), types.len()));
+        }
+
+        let t: &DataType = &types[0];
+
+        let coerced = match t {
+            DataType::Float64 => DataType::Float64,
+            DataType::Float32 => DataType::Float32,
+            DataType::Int32
+            | DataType::Int64
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => DataType::Float64,
+            _ => {
+                return Err(unsupported_data_types_exec_err(
+                    "spark_sec",
+                    "Float32 | Float64 | Integer | Decimal",
+                    types,
+                ));
+            }
+        };
+
+        Ok(vec![coerced])
     }
 }
 

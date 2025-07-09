@@ -1,9 +1,12 @@
 use std::any::Any;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr_common::signature::TypeSignature;
+
+use crate::extension::function::error_utils::{
+    invalid_arg_count_exec_err, unsupported_data_types_exec_err,
+};
 
 #[derive(Debug)]
 pub struct SparkConv {
@@ -19,22 +22,7 @@ impl Default for SparkConv {
 impl SparkConv {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Int32, DataType::Int32]),
-                    TypeSignature::Exact(vec![
-                        DataType::Utf8View,
-                        DataType::Int32,
-                        DataType::Int32,
-                    ]),
-                    TypeSignature::Exact(vec![
-                        DataType::LargeUtf8,
-                        DataType::Int32,
-                        DataType::Int32,
-                    ]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -52,15 +40,20 @@ impl ScalarUDFImpl for SparkConv {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match arg_types.first() {
+            Some(DataType::Utf8) => Ok(DataType::Utf8),
+            Some(DataType::Utf8View) => Ok(DataType::Utf8View),
+            Some(DataType::LargeUtf8) => Ok(DataType::LargeUtf8),
+            _ => Ok(DataType::Utf8),
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
         let [num, from_base, to_base] = args.as_slice() else {
-            return exec_err!("conv() requires 3 arguments, got {}", args.len());
+            return Err(invalid_arg_count_exec_err("spark_conv", (3, 3), args.len()));
         };
 
         match (num, from_base, to_base) {
@@ -86,10 +79,45 @@ impl ScalarUDFImpl for SparkConv {
                     Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
                 }
             }
+            _ => {
+                let types = vec![num.data_type(), from_base.data_type(), to_base.data_type()];
+                Err(unsupported_data_types_exec_err(
+                    "spark_conv",
+                    "(Utf8 | Utf8View | LargeUtf8, Int32, Int32)",
+                    &types,
+                ))
+            }
+        }
+    }
 
-            _ => exec_err!(
-                "conv() expects (Utf8, Int32, Int32), got {num:?}, {from_base:?}, {to_base:?}"
-            ),
+    fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
+        let [input_type, from_base_type, to_base_type] = types else {
+            return Err(invalid_arg_count_exec_err(
+                "spark_conv",
+                (3, 3),
+                types.len(),
+            ));
+        };
+
+        let valid_string: bool = matches!(
+            input_type,
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+        );
+        let valid_from: bool = matches!(from_base_type, DataType::Int32);
+        let valid_to: bool = matches!(to_base_type, DataType::Int32);
+
+        if valid_string && valid_from && valid_to {
+            Ok(vec![
+                input_type.clone(),
+                from_base_type.clone(),
+                to_base_type.clone(),
+            ])
+        } else {
+            Err(unsupported_data_types_exec_err(
+                "spark_conv",
+                "Utf8 | Utf8View | LargeUtf8, Int32, Int32",
+                types,
+            ))
         }
     }
 }

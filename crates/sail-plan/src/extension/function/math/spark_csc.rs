@@ -1,9 +1,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::extension::function::error_utils::{
+    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
+};
 use datafusion::arrow::array::{as_primitive_array, Float32Array, Float64Array};
 use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -40,9 +43,14 @@ impl ScalarUDFImpl for SparkCsc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() != 1 {
-            return exec_err!("spark_csc expects 1 argument, got {}", arg_types.len());
+            return Err(invalid_arg_count_exec_err(
+                "spark_csc",
+                (1, 1),
+                arg_types.len(),
+            ));
         }
-        match arg_types[0] {
+        let t: &DataType = &arg_types[0];
+        match t {
             DataType::Float64
             | DataType::Int64
             | DataType::Int32
@@ -50,7 +58,11 @@ impl ScalarUDFImpl for SparkCsc {
             | DataType::Decimal256(_, _) => Ok(DataType::Float64),
             DataType::Float32 => Ok(DataType::Float32),
 
-            ref other => exec_err!("Unsupported type for spark_csc: {}", other),
+            _ => Err(unsupported_data_type_exec_err(
+                "spark_csc",
+                "Float32 or Float64",
+                t,
+            )),
         }
     }
 
@@ -58,7 +70,7 @@ impl ScalarUDFImpl for SparkCsc {
         let ScalarFunctionArgs { args, .. } = args;
 
         if args.len() != 1 {
-            return exec_err!("spark_csc expects exactly 1 argument, got {}", args.len());
+            return Err(invalid_arg_count_exec_err("spark_csc", (1, 1), args.len()));
         }
 
         match &args[0] {
@@ -95,15 +107,17 @@ impl ScalarUDFImpl for SparkCsc {
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
 
-            other => exec_err!(
-                "spark_csc only supports Float32 or Float64 as scalar or array, got {other:?}"
-            ),
+            other => Err(unsupported_data_type_exec_err(
+                "spark_csc",
+                "Float32 or Float64",
+                &other.data_type(),
+            )),
         }
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
         if types.len() != 1 {
-            return exec_err!("spark_csc expects 1 argument, got {}", types.len());
+            return Err(invalid_arg_count_exec_err("spark_csc", (1, 1), types.len()));
         }
 
         let t: &DataType = &types[0];
@@ -114,7 +128,13 @@ impl ScalarUDFImpl for SparkCsc {
             | DataType::Int32
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => DataType::Float64,
-            _ => return exec_err!("spark_csc does not support argument type {:?}", t),
+            _ => {
+                return Err(unsupported_data_type_exec_err(
+                    "spark_csc",
+                    "Float32 or Float64",
+                    t,
+                ))
+            }
         };
 
         Ok(vec![valid_type])

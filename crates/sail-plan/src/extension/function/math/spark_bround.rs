@@ -1,9 +1,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::extension::function::error_utils::{
+    invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
+};
 use datafusion::arrow::array::{as_primitive_array, Array, Float32Array, Float64Array};
 use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type, Int64Type};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -40,30 +43,43 @@ impl ScalarUDFImpl for SparkBRound {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() != 2 {
-            return exec_err!("spark_bround expects 2 arguments, got {}", arg_types.len());
+            return Err(invalid_arg_count_exec_err(
+                "spark_bround",
+                (2, 2),
+                arg_types.len(),
+            ));
         }
-        match &arg_types[0] {
+        let t = &arg_types[0];
+        match t {
             DataType::Float64
             | DataType::Float32
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::Int32
             | DataType::Int64 => Ok(DataType::Float64),
-
-            other => exec_err!("Unsupported type for spark_bround: {}", other),
+            _ => Err(unsupported_data_type_exec_err(
+                "spark_bround",
+                "Float64, Float32, Decimal128, Decimal256, Int32, Int64",
+                t,
+            )),
         }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         if args.len() != 2 {
-            return exec_err!(
-                "spark_bround expects exactly 2 arguments, got {}",
-                args.len()
-            );
+            return Err(invalid_arg_count_exec_err(
+                "spark_bround",
+                (2, 2),
+                args.len(),
+            ));
         }
         let [x, d] = args.as_slice() else {
-            return exec_err!("bround() requires exactly 2 arguments, got {}", args.len());
+            return Err(invalid_arg_count_exec_err(
+                "spark_bround",
+                (2, 2),
+                args.len(),
+            ));
         };
         if let (
             ColumnarValue::Scalar(ScalarValue::Decimal128(Some(val), _, scale)),
@@ -91,10 +107,6 @@ impl ScalarUDFImpl for SparkBRound {
             ColumnarValue::Array(arr) => arr.clone(),
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(len)?,
         };
-
-        if x_array.len() != d_array.len() {
-            return exec_err!("Arguments to bround must have the same length");
-        }
 
         match (x_array.data_type(), d_array.data_type()) {
             (DataType::Float64, DataType::Int32) => {
@@ -202,24 +214,27 @@ impl ScalarUDFImpl for SparkBRound {
             }
 
             // fallback
-            (DataType::Decimal128(_, _), DataType::Int32) => {
-                exec_err!("bround does not support vectorized Decimal128 yet")
-            }
+            (DataType::Decimal128(_, _), DataType::Int32) => Err(unsupported_data_types_exec_err(
+                "spark_bround",
+                "vectorized Decimal128",
+                &[x_array.data_type().clone(), d_array.data_type().clone()],
+            )),
 
-            (dt_x, dt_d) => exec_err!(
-                "bround does not support argument types {:?} and {:?}",
-                dt_x,
-                dt_d
-            ),
+            (dt_x, dt_d) => Err(unsupported_data_types_exec_err(
+                "spark_bround",
+                "Float32 | Float64 | Int32 | Int64 with Int32/Float64",
+                &[dt_x.clone(), dt_d.clone()],
+            )),
         }
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
         if types.len() != 2 {
-            return exec_err!(
-                "Function spark_bround expects 2 arguments, got {}",
-                types.len()
-            );
+            return Err(invalid_arg_count_exec_err(
+                "spark_bround",
+                (2, 2),
+                types.len(),
+            ));
         }
 
         let x_type: &DataType = &types[0];
@@ -239,11 +254,11 @@ impl ScalarUDFImpl for SparkBRound {
         if valid_x && valid_scale {
             Ok(vec![x_type.clone(), scale_type.clone()])
         } else {
-            exec_err!(
-                "Function spark_bround does not support argument types ({:?}, {:?})",
-                x_type,
-                scale_type
-            )
+            Err(unsupported_data_types_exec_err(
+                "spark_bround",
+                "Float32 | Float64 | Decimal128 | Decimal256 | Int32 | Int64, Int32",
+                types,
+            ))
         }
     }
 }
