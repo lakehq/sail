@@ -337,6 +337,336 @@
       "output": {
         "success": "ok"
       }
+    },
+    {
+      "input": {
+        "query": "SELECT nullifzero(CAST(0 AS TINYINT));",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nullifzero(CAST(0 AS TINYINT))",
+              "nullable": true,
+              "type": "tinyint",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nullifzero(CAST(2 AS TINYINT));",
+        "result": [
+          "2"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nullifzero(CAST(2 AS TINYINT))",
+              "nullable": true,
+              "type": "tinyint",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nullifzero(CAST(0 AS SMALLINT));",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nullifzero(CAST(0 AS SMALLINT))",
+              "nullable": true,
+              "type": "smallint",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nullifzero(CAST(0 AS BIGINT));",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nullifzero(CAST(0 AS BIGINT))",
+              "nullable": true,
+              "type": "bigint",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nullifzero(CAST(0.0 AS FLOAT));",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nullifzero(CAST(0.0 AS FLOAT))",
+              "nullable": true,
+              "type": "float",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nullifzero(CAST(0.0 AS DOUBLE));",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nullifzero(CAST(0.0 AS DOUBLE))",
+              "nullable": true,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nullifzero(CAST(0.00 AS DECIMAL(10,2)));",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nullifzero(CAST(0.00 AS DECIMAL(10,2)))",
+              "nullable": true,
+              "type": "decimal(10, 2)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT zeroifnull(CAST(NULL AS TINYINT));",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "zeroifnull(CAST(NULL AS TINYINT))",
+              "nullable": false,
+              "type": "tinyint",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT zeroifnull(CAST(NULL AS SMALLINT));",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "zeroifnull(CAST(NULL AS SMALLINT))",
+              "nullable": false,
+              "type": "smallint",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT zeroifnull(CAST(NULL AS BIGINT));",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "zeroifnull(CAST(NULL AS BIGINT))",
+              "nullable": false,
+              "type": "bigint",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT zeroifnull(CAST(NULL AS FLOAT));",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "zeroifnull(CAST(NULL AS FLOAT))",
+              "nullable": false,
+              "type": "float",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT zeroifnull(CAST(NULL AS DOUBLE));",
+        "result": [
+          "0.0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "zeroifnull(CAST(NULL AS DOUBLE))",
+              "nullable": false,
+              "type": "double",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT zeroifnull(CAST(NULL AS DECIMAL(10,2)));",
+        "result": [
+          "0.00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "zeroifnull(CAST(NULL AS DECIMAL(10,2)))",
+              "nullable": false,
+              "type": "decimal(10, 2)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT zeroifnull(CAST(5.25 AS DECIMAL(10,2)));",
+        "result": [
+          "5.25"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "zeroifnull(CAST(5.25 AS DECIMAL(10,2)))",
+              "nullable": false,
+              "type": "decimal(10, 2)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT nullifzero(CAST(5.25 AS DECIMAL(10,2)));",
+        "result": [
+          "5.25"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "nullifzero(CAST(5.25 AS DECIMAL(10,2)))",
+              "nullable": true,
+              "type": "decimal(10, 2)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
     }
   ]
 }
