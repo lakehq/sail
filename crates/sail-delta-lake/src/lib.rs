@@ -6,11 +6,14 @@ pub mod table;
 // Re-export the main functions for convenience
 // Re-export key types from delta_datafusion for public API
 pub use delta_datafusion::{DeltaScanConfig, DeltaTableProvider};
+// Re-export additional types for schema conversion
+pub use delta_kernel::engine::arrow_conversion::TryIntoKernel;
+pub use delta_kernel::schema::StructType;
 pub use deltalake::errors::DeltaTableError;
 pub use deltalake::kernel::transaction::TableReference;
 // Re-export transaction and kernel types
 pub use deltalake::kernel::transaction::{CommitBuilder, CommitProperties};
-pub use deltalake::kernel::{Action, Add, Remove};
+pub use deltalake::kernel::{Action, Add, Format, Metadata, Protocol, Remove};
 pub use deltalake::logstore::StorageConfig;
 pub use deltalake::parquet::file::properties::WriterProperties;
 pub use deltalake::protocol::DeltaOperation;

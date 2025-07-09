@@ -5483,9 +5483,11 @@ dependencies = [
  "regex",
  "sail-delta-lake",
  "serde",
+ "serde_json",
  "serde_yaml",
  "syn",
  "url",
+ "uuid",
 ]
 
 [[package]]

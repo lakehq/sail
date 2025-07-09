@@ -423,18 +423,19 @@ impl PartitionWriter {
             Bytes::from(std::mem::take(&mut *buffer))
         };
 
-        // Generate file path
-        let file_path = self.next_data_path();
+        // Generate file path, returning both relative and full paths
+        let (relative_path, full_path) = self.next_data_path();
         let file_size = buffer_data.len() as i64;
 
         // Write to object store
         self.object_store
-            .put(&file_path, buffer_data.into())
+            .put(&full_path, buffer_data.into())
             .await
             .map_err(|e| DeltaTableError::generic(format!("Failed to write file: {e}")))?;
 
         // Create Add action
-        let add_action = self.create_add_action(&file_path, file_size, &metadata)?;
+        let add_action =
+            self.create_add_action(&relative_path.to_string(), file_size, &metadata)?;
         self.files_written.push(add_action);
 
         // Reset for next file
@@ -443,8 +444,8 @@ impl PartitionWriter {
         Ok(())
     }
 
-    /// Generate the next data file path
-    fn next_data_path(&mut self) -> Path {
+    /// Generate the next data file path, returning both relative and full paths
+    fn next_data_path(&mut self) -> (Path, Path) {
         self.part_counter += 1;
 
         let column_path = ColumnPath::new(Vec::new());
@@ -464,23 +465,22 @@ impl PartitionWriter {
             self.part_counter, self.writer_id, compression_suffix
         );
 
-        // Construct full path: table_path / prefix / file_name
-        if self.config.prefix.as_ref().is_empty() {
+        let relative_path = if self.config.prefix.as_ref().is_empty() {
             // For non-partitioned tables, put files directly in table root
-            self.config.table_path.child(file_name)
+            Path::from(file_name)
         } else {
             // For partitioned tables, include the partition path
-            self.config
-                .table_path
-                .child(self.config.prefix.as_ref())
-                .child(file_name)
-        }
+            self.config.prefix.child(file_name)
+        };
+
+        let full_path = self.config.table_path.child(relative_path.to_string());
+        (relative_path, full_path)
     }
 
     /// Create Add action for the written file
     fn create_add_action(
         &self,
-        path: &Path,
+        path: &str,
         file_size: i64,
         _metadata: &parquet::format::FileMetaData,
     ) -> Result<Add, DeltaTableError> {

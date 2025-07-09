@@ -14,8 +14,8 @@ use futures::StreamExt;
 use sail_delta_lake::operations::write::writer::{DeltaWriter, WriterConfig};
 use sail_delta_lake::{
     create_delta_table_with_object_store, open_table_with_object_store, Action, CommitBuilder,
-    CommitProperties, DeltaOperation, Remove, SaveMode, StorageConfig, TableReference,
-    WriterProperties,
+    CommitProperties, DeltaOperation, Format, Metadata, Protocol, Remove, SaveMode, StorageConfig,
+    StructType, TableReference, TryIntoKernel, WriterProperties,
 };
 
 /// Delta Lake data sink implementation
@@ -285,6 +285,8 @@ impl DataSink for DeltaDataSink {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         dbg!("Writer closed, got {} add actions", add_actions.len());
 
+        dbg!(&add_actions);
+
         if add_actions.is_empty() && table_exists {
             if save_mode != SaveMode::Overwrite {
                 return Ok(0);
@@ -336,16 +338,45 @@ impl DataSink for DeltaDataSink {
                 predicate: self.options.get("replaceWhere").cloned(),
             }
         } else {
-            // For new tables, use Write operation instead of Create for now
-            // This is a simplified approach that should work for basic cases
-            DeltaOperation::Write {
-                mode: save_mode,
-                partition_by: if partition_columns.is_empty() {
-                    None
-                } else {
-                    Some(partition_columns)
-                },
-                predicate: self.options.get("replaceWhere").cloned(),
+            // For new tables, we need to create Protocol and Metadata actions
+            // Convert Arrow schema to Delta kernel schema
+            let delta_schema: StructType = self
+                .schema
+                .as_ref()
+                .try_into_kernel()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            // Create Protocol action with default values
+            let protocol = Protocol::default();
+
+            // Create Metadata action
+            let metadata = Metadata {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: None,
+                description: None,
+                format: Format::default(),
+                schema_string: serde_json::to_string(&delta_schema)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                partition_columns: partition_columns.clone(),
+                configuration: HashMap::new(),
+                created_time: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64,
+                ),
+            };
+
+            // Insert Protocol and Metadata actions at the beginning
+            actions.insert(0, Action::Protocol(protocol.clone()));
+            actions.insert(1, Action::Metadata(metadata.clone()));
+
+            // For new tables, use Create operation
+            DeltaOperation::Create {
+                mode: SaveMode::ErrorIfExists, // Required for Create operation
+                location: table_path.clone(),
+                protocol,
+                metadata,
             }
         };
 
@@ -354,6 +385,27 @@ impl DataSink for DeltaDataSink {
         }
 
         dbg!("Committing transaction with {} actions", actions.len());
+
+        // Debug: Print actions
+        if !table_exists {
+            dbg!("Creating new table with Protocol and Metadata actions");
+            for (i, action) in actions.iter().enumerate() {
+                match action {
+                    Action::Protocol(_) => {
+                        dbg!("Action {}: Protocol", i);
+                    }
+                    Action::Metadata(_) => {
+                        dbg!("Action {}: Metadata", i);
+                    }
+                    Action::Add(_) => {
+                        dbg!("Action {}: Add", i);
+                    }
+                    _ => {
+                        dbg!("Action {}: Other", i);
+                    }
+                }
+            }
+        }
 
         // 6. Commit transaction
         let snapshot = if table_exists {
