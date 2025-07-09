@@ -6,7 +6,7 @@ pub use self::write::WriteBuilder;
 
 pub mod add_column;
 mod cast;
-mod cdc;
+// mod cdc;
 // pub mod constraints;
 // pub mod delete;
 pub mod load;
