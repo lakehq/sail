@@ -2,12 +2,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::datasource::TableProvider;
-use datafusion_common::{
-    exec_err, Constraints, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference,
-};
-use datafusion_expr::{
-    CreateExternalTable, CreateMemoryTable, DdlStatement, DropTable, Expr, LogicalPlan, TableType,
-};
+use datafusion_common::{exec_err, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference};
+use datafusion_expr::{DdlStatement, DropTable, LogicalPlan, TableType};
+use sail_data_source::TableProviderFactory;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::utils::match_pattern;
@@ -115,67 +112,45 @@ impl TableMetadata {
 }
 
 impl CatalogManager<'_> {
-    #[allow(dead_code)]
-    pub(crate) async fn create_memory_table(
-        &self,
-        table: TableReference,
-        plan: Arc<LogicalPlan>,
-        constraints: Constraints,
-        if_not_exists: bool,
-        or_replace: bool,
-        column_defaults: Vec<(String, Expr)>,
-    ) -> Result<()> {
-        let ddl = LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
-            name: table,
-            constraints,
-            input: plan,
-            if_not_exists,
-            or_replace,
-            column_defaults,
-            temporary: false, // TODO: Propagate temporary
-        }));
-        // TODO: process the output
-        _ = self.ctx.execute_logical_plan(ddl).await?;
-        Ok(())
-    }
-
     pub(crate) async fn create_table(
         &self,
         table: TableReference,
         definition: CatalogTableDefinition,
     ) -> Result<()> {
+        // TODO: handle all the fields in table definition
         let CatalogTableDefinition {
             schema,
-            comment: _, // TODO: support comment
-            column_defaults,
-            constraints,
+            comment: _,
+            column_defaults: _,
+            constraints: _,
             location,
             file_format,
-            table_partition_cols,
-            file_sort_order,
+            table_partition_cols: _,
+            file_sort_order: _,
             if_not_exists,
-            or_replace: _, // TODO: support or_replace
-            unbounded,
+            or_replace: _,
+            unbounded: _,
             options,
-            definition,
+            definition: _,
         } = definition;
-        let ddl = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
-            schema,
-            name: table,
-            location: location.clone(),
-            file_type: file_format.clone(),
-            table_partition_cols,
-            if_not_exists,
-            temporary: false, // TODO: Propagate temporary
-            definition,
-            order_exprs: file_sort_order,
-            unbounded,
-            options: options.into_iter().collect(),
-            constraints,
-            column_defaults: column_defaults.into_iter().collect(),
-        }));
-        // TODO: process the output
-        _ = self.ctx.execute_logical_plan(ddl).await?;
+        let exist = self.ctx.table_exist(table.clone())?;
+        if exist {
+            return match if_not_exists {
+                true => Ok(()),
+                false => exec_err!("table already exists: {table}"),
+            };
+        }
+        let factory = TableProviderFactory::new(self.ctx);
+        // TODO: This only registers the table for read and we need to support write as well.
+        let table_provider = factory
+            .read_table(
+                &file_format,
+                vec![location],
+                Some(schema.inner().as_ref().clone()),
+                options,
+            )
+            .await?;
+        self.ctx.register_table(table, table_provider)?;
         Ok(())
     }
 

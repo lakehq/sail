@@ -41,8 +41,6 @@ tokio = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
-url = { workspace = true }
-glob = { workspace = true }
 object_store = { workspace = true }
 sha1 = { workspace = true }
 twox-hash = { workspace = true }
@@ -53,6 +51,4 @@ base64 = { workspace = true }
 half = { workspace = true }
 crc32fast = { workspace = true }
 num = { workspace = true }
-chumsky = { workspace = true }
-percent-encoding = { workspace = true }
 arrow = { workspace = true }

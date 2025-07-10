@@ -6,14 +6,8 @@ use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
 use datafusion::arrow::datatypes::Int64Type;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
-use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
-use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
-use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
-use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
-use datafusion::datasource::file_format::{format_as_file_type, FileFormatFactory};
-use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::{provider_as_source, MemTable, TableProvider};
+use datafusion::datasource::file_format::format_as_file_type;
+use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_window::row_number::row_number_udwf;
@@ -45,6 +39,7 @@ use rand::{rng, Rng};
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
+use sail_data_source::TableProviderFactory;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
@@ -852,64 +847,21 @@ impl PlanResolver<'_> {
             schema,
             options,
             paths,
-            predicates: _,
+            predicates,
         } = source;
-        if paths.is_empty() {
-            return Err(PlanError::invalid("empty data source paths"));
+        if !predicates.is_empty() {
+            return Err(PlanError::todo("data source predicates"));
         }
-        let urls = self.resolve_listing_urls(paths).await?;
         let Some(format) = format else {
             return Err(PlanError::invalid("missing data source format"));
         };
-        let options: HashMap<String, String> = options.into_iter().collect();
-        // TODO: infer compression type from file extension
-        // TODO: support global configuration to ignore file extension (by setting it to empty)
-        let options = match format.to_lowercase().as_str() {
-            "json" => {
-                let options = self.resolve_json_read_options(options)?;
-                ListingOptions::new(Arc::new(JsonFormat::default().with_options(options)))
-            }
-            "csv" => {
-                let options = self.resolve_csv_read_options(options)?;
-                ListingOptions::new(Arc::new(CsvFormat::default().with_options(options)))
-            }
-            "parquet" => {
-                let options = self.resolve_parquet_read_options(options)?;
-                ListingOptions::new(Arc::new(ParquetFormat::default().with_options(options)))
-            }
-            "arrow" => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(
-                        "Arrow data source read options are not yet supported",
-                    ));
-                }
-                ListingOptions::new(Arc::new(ArrowFormat))
-            }
-            "avro" => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(
-                        "Avro data source read options are not yet supported",
-                    ));
-                }
-                ListingOptions::new(Arc::new(AvroFormat))
-            }
-            other => {
-                return Err(PlanError::unsupported(format!(
-                    "unsupported data source format: {other:?}"
-                )))
-            }
+        let schema = match schema {
+            Some(schema) => Some(self.resolve_schema(schema, state)?),
+            None => None,
         };
-        let options = options.with_session_config_options(&self.ctx.copied_config());
-        let schema = self
-            .resolve_listing_schema(&urls, &options, schema, state)
+        let table_provider = TableProviderFactory::new(self.ctx)
+            .read_table(&format, paths, schema, options)
             .await?;
-        let config = ListingTableConfig::new_with_multi_paths(urls)
-            .with_listing_options(options)
-            .with_schema(Arc::new(schema))
-            .infer_partitions_from_path(&self.ctx.state())
-            .await?;
-        let config = Self::rewrite_listing_partitions(config)?;
-        let table_provider = Arc::new(ListingTable::try_new(config)?);
         let names = state.register_fields(table_provider.schema().fields());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;
         Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
@@ -2959,52 +2911,9 @@ impl PlanResolver<'_> {
                 let Some(source) = source else {
                     return Err(PlanError::invalid("missing source"));
                 };
-                let options: HashMap<String, String> = options.into_iter().collect();
-                let (format_factory, _options): (
-                    Arc<dyn FileFormatFactory>,
-                    Vec<(String, String)>,
-                ) = match source.as_str() {
-                    "json" => {
-                        let (options, json_options_vec) =
-                            self.resolve_json_write_options(options)?;
-                        (
-                            Arc::new(JsonFormatFactory::new_with_options(options)),
-                            json_options_vec,
-                        )
-                    }
-                    "parquet" => {
-                        let (options, parquet_options_vec) =
-                            self.resolve_parquet_write_options(options)?;
-                        (
-                            Arc::new(ParquetFormatFactory::new_with_options(options)),
-                            parquet_options_vec,
-                        )
-                    }
-                    "csv" => {
-                        let (options, csv_options_vec) = self.resolve_csv_write_options(options)?;
-                        (
-                            Arc::new(CsvFormatFactory::new_with_options(options)),
-                            csv_options_vec,
-                        )
-                    }
-                    "arrow" => {
-                        if !options.is_empty() {
-                            return Err(PlanError::unsupported(
-                                "Arrow data source write options are not yet supported",
-                            ));
-                        }
-                        (Arc::new(ArrowFormatFactory), vec![])
-                    }
-                    "avro" => {
-                        if !options.is_empty() {
-                            return Err(PlanError::unsupported(
-                                "Avro data source write options are not yet supported",
-                            ));
-                        }
-                        (Arc::new(AvroFormatFactory), vec![])
-                    }
-                    _ => return Err(PlanError::invalid(format!("unsupported source: {source}"))),
-                };
+                let format_factory = TableProviderFactory::new(self.ctx)
+                    .write_table(&source, options)
+                    .await?;
                 let plan = if sort_columns.is_empty() {
                     plan
                 } else {
@@ -3158,47 +3067,6 @@ impl PlanResolver<'_> {
             Ok(results) as PlanResult<_>
         }
         .await?;
-
-        let options: HashMap<String, String> = options.into_iter().collect();
-        let options: Vec<(String, String)> = match file_format.to_lowercase().as_str() {
-            "json" => {
-                let (_options, json_options_vec) = self.resolve_json_write_options(options)?;
-                json_options_vec
-            }
-            "parquet" => {
-                let (_options, parquet_options_vec) =
-                    self.resolve_parquet_write_options(options)?;
-                parquet_options_vec
-            }
-            "csv" => {
-                let (_options, csv_options_vec) = self.resolve_csv_write_options(options)?;
-                csv_options_vec
-            }
-            "arrow" => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(
-                        "Arrow data source write options are not yet supported",
-                    ));
-                }
-                vec![]
-            }
-            "avro" => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(
-                        "Avro data source write options are not yet supported",
-                    ));
-                }
-                vec![]
-            }
-            other => {
-                if !options.is_empty() {
-                    return Err(PlanError::unsupported(format!(
-                        "{other} data source write options are not supported"
-                    )));
-                }
-                vec![]
-            }
-        };
 
         let command = CatalogCommand::CreateTable {
             table: self.resolve_table_reference(&table)?,
@@ -4276,25 +4144,6 @@ impl PlanResolver<'_> {
                 Ok(data_type)
             })
             .collect::<PlanResult<Vec<_>>>()
-    }
-
-    /// The inferred partition columns are of `Dictionary` types by default, which cannot be
-    /// understood by the Spark client. So we rewrite the type to be `Utf8`.
-    fn rewrite_listing_partitions(
-        mut config: ListingTableConfig,
-    ) -> PlanResult<ListingTableConfig> {
-        let Some(options) = config.options.as_mut() else {
-            return Err(PlanError::internal(
-                "listing options should be present in the config",
-            ));
-        };
-        options
-            .table_partition_cols
-            .iter_mut()
-            .for_each(|(_col, data_type)| {
-                *data_type = adt::DataType::Utf8;
-            });
-        Ok(config)
     }
 }
 
