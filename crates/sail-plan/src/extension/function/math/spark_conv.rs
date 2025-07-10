@@ -1,10 +1,10 @@
+use std::any::Any;
+use std::sync::Arc;
 use arrow::array::{as_string_array, StringArray};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::as_int32_array;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use std::any::Any;
-use std::sync::Arc;
 
 use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
