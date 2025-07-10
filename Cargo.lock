@@ -5477,14 +5477,6 @@ dependencies = [
  "glob",
  "object_store",
  "percent-encoding",
- "async-trait",
- "chumsky",
- "datafusion",
- "datafusion-common",
- "futures",
- "glob",
- "object_store",
- "percent-encoding",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -5494,12 +5486,11 @@ dependencies = [
  "serde_yaml",
  "syn",
  "url",
- "url",
 ]
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",

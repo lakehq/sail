@@ -82,17 +82,6 @@ where
     Ok(Some(value))
 }
 
-pub fn deserialize_optional_i64<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    let value = value
-        .parse()
-        .map_err(|e| Error::custom(format!("invalid i64 value: {e}")))?;
-    Ok(Some(Some(value)))
-}
-
 pub fn deserialize_save_mode<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -102,32 +91,6 @@ where
         "append" | "overwrite" | "error" | "ignore" => Ok(Some(value.to_lowercase())),
         _ => Err(Error::custom(format!(
             "invalid save mode: {value}. Valid values are: append, overwrite, error, ignore"
-        ))),
-    }
-}
-
-pub fn deserialize_log_level<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    match value.to_lowercase().as_str() {
-        "trace" | "debug" | "info" | "warn" | "error" => Ok(Some(value.to_lowercase())),
-        _ => Err(Error::custom(format!(
-            "invalid log level: {value}. Valid values are: trace, debug, info, warn, error"
-        ))),
-    }
-}
-
-pub fn deserialize_isolation_level<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    match value.to_lowercase().as_str() {
-        "serializable" | "writeserializable" => Ok(Some(value.to_lowercase())),
-        _ => Err(Error::custom(format!(
-            "invalid isolation level: {value}. Valid values are: Serializable, WriteSerializable"
         ))),
     }
 }
