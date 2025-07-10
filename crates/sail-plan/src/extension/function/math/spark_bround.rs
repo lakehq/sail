@@ -24,7 +24,7 @@ impl Default for SparkBRound {
 impl SparkBRound {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -43,10 +43,10 @@ impl ScalarUDFImpl for SparkBRound {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 2 {
+        if !(1..=2).contains(&arg_types.len()) {
             return Err(invalid_arg_count_exec_err(
                 "spark_bround",
-                (2, 2),
+                (1, 2),
                 arg_types.len(),
             ));
         }
@@ -68,7 +68,7 @@ impl ScalarUDFImpl for SparkBRound {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let args = match args.len() {
+        let args: Vec<ColumnarValue> = match args.len() {
             1 => vec![
                 args[0].clone(),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(0))),
@@ -82,13 +82,6 @@ impl ScalarUDFImpl for SparkBRound {
                 ))
             }
         };
-        if args.len() != 2 {
-            return Err(invalid_arg_count_exec_err(
-                "spark_bround",
-                (2, 2),
-                args.len(),
-            ));
-        }
         let [x, d] = args.as_slice() else {
             return Err(invalid_arg_count_exec_err(
                 "spark_bround",
@@ -244,6 +237,7 @@ impl ScalarUDFImpl for SparkBRound {
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
+        // FIXME check if need delete coerce
         match types.len() {
             1 => {
                 let x_type: &DataType = &types[0];
