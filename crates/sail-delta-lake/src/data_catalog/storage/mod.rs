@@ -17,17 +17,6 @@ use object_store::ObjectStore;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
-/// A `SchemaProvider` that scans an `ObjectStore` to automatically discover delta tables.
-///
-/// A subfolder relationship is assumed, i.e. given:
-/// authority = s3://host.example.com:3000
-/// path = /data/tpch
-///
-/// A table called "customer" will be registered for the folder:
-/// s3://host.example.com:3000/data/tpch/customer
-///
-/// assuming it contains valid deltalake data, i.e a `_delta_log` folder:
-/// s3://host.example.com:3000/data/tpch/customer/_delta_log/
 #[derive(Debug)]
 pub struct ListingSchemaProvider {
     authority: String,

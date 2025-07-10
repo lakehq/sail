@@ -1,15 +1,3 @@
-//! Module for reading the change datafeed of delta tables
-//!
-//! # Example
-//! ```rust ignore
-//! let table = open_table("../path/to/table")?;
-//! let builder = CdfLoadBuilder::new(table.log_store(), table.snapshot())
-//!     .with_starting_version(3);
-//!
-//! let ctx = SessionContext::new();
-//! let provider = DeltaCdfTableProvider::try_new(builder)?;
-//! let df = ctx.read_table(provider).await?;
-
 use std::sync::Arc;
 use std::time::SystemTime;
 

@@ -1,25 +1,3 @@
-//! Datafusion integration for Delta Table
-//!
-//! Example:
-//!
-//! ```rust
-//! use std::sync::Arc;
-//! use datafusion::execution::context::SessionContext;
-//!
-//! async {
-//!   let mut ctx = SessionContext::new();
-//!   let table = deltalake_core::open_table("./tests/data/simple_table")
-//!       .await
-//!       .unwrap();
-//!   ctx.register_table("demo", Arc::new(table)).unwrap();
-//!
-//!   let batches = ctx
-//!       .sql("SELECT * FROM demo").await.unwrap()
-//!       .collect()
-//!       .await.unwrap();
-//! };
-//! ```
-
 use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};

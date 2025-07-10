@@ -1,8 +1,3 @@
-//! Custom table opening logic for sail-delta-lake
-//!
-//! This module provides functions to open Delta tables with external ObjectStore instances,
-//! bypassing deltalake's internal ObjectStore creation logic.
-
 use std::sync::Arc;
 
 use deltalake::logstore::{default_logstore, LogStoreRef, StorageConfig};
@@ -12,40 +7,6 @@ use url::Url;
 
 use crate::delta_datafusion::{DeltaScanConfig, DeltaTableProvider};
 
-/// Opens a Delta table using an external ObjectStore instance.
-///
-/// This function bypasses deltalake's internal ObjectStore creation logic by directly
-/// injecting the provided ObjectStore into a LogStore. This is useful when you want
-/// to use a custom ObjectStore (e.g., from sail's registry) instead of letting
-/// deltalake create one based on the URL scheme.
-///
-/// # Arguments
-///
-/// * `table_uri` - The URI of the Delta table (e.g., "s3://bucket/path/to/table")
-/// * `object_store` - The ObjectStore instance to use for accessing the table data
-/// * `storage_options` - Additional storage configuration options
-///
-/// # Returns
-///
-/// A `DeltaResult<DeltaTable>` containing the loaded Delta table.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use std::sync::Arc;
-/// use object_store::local::LocalFileSystem;
-/// use sail_delta_lake::open_table_with_object_store;
-///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let object_store = Arc::new(LocalFileSystem::new());
-/// let table = open_table_with_object_store(
-///     "file:///path/to/delta/table",
-///     object_store,
-///     Default::default(),
-/// ).await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn open_table_with_object_store(
     table_uri: impl AsRef<str>,
     object_store: Arc<dyn ObjectStore>,
@@ -66,52 +27,6 @@ pub async fn open_table_with_object_store(
     Ok(table)
 }
 
-/// Creates a new Delta table using an external ObjectStore instance.
-///
-/// This function creates a new Delta table at the specified location using the provided
-/// ObjectStore instance, following the dependency injection pattern. This is useful when
-/// you want to ensure that the table creation uses the same ObjectStore configuration
-/// as the rest of your application.
-///
-/// # Arguments
-///
-/// * `table_uri` - The URI where the Delta table should be created
-/// * `object_store` - The ObjectStore instance to use for creating the table
-/// * `storage_options` - Additional storage configuration options
-///
-/// # Returns
-///
-/// A `DeltaResult<deltalake::DeltaOps>` that can be used to configure and create the table.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use std::sync::Arc;
-/// use object_store::local::LocalFileSystem;
-/// use sail_delta_lake::create_delta_table_with_object_store;
-/// use deltalake::kernel::{StructField, DataType, PrimitiveType};
-/// use deltalake::protocol::SaveMode;
-///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let object_store = Arc::new(LocalFileSystem::new());
-/// let delta_ops = create_delta_table_with_object_store(
-///     "file:///path/to/new/delta/table",
-///     object_store,
-///     Default::default(),
-/// ).await?;
-///
-/// // Configure and create the table
-/// let table = delta_ops
-///     .create()
-///     .with_columns(vec![
-///         StructField::new("id".to_string(), DataType::Primitive(PrimitiveType::Long), false),
-///         StructField::new("name".to_string(), DataType::Primitive(PrimitiveType::String), true),
-///     ])
-///     .with_save_mode(SaveMode::ErrorIfExists)
-///     .await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn create_delta_table_with_object_store(
     table_uri: impl AsRef<str>,
     object_store: Arc<dyn ObjectStore>,
