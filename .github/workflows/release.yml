@@ -94,7 +94,8 @@ jobs:
         env:
           RELEASE_NOTES: ${{ steps.notes.outputs.content }}
         run: |
-          output="/tmp/release-notes.md"
+          mkdir /tmp/release-notes
+          output="/tmp/release-notes/content.md"
           printf '%s' "${RELEASE_NOTES}" > "$output"
           cat "$output" >> "$GITHUB_STEP_SUMMARY"
 
@@ -102,7 +103,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-notes
-          path: /tmp/release-notes.md
+          path: /tmp/release-notes
           retention-days: 1
 
   build-sdist:
@@ -396,18 +397,16 @@ jobs:
       - review
       - release-pypi
     steps:
-      - uses: actions/checkout@v4
-
       - name: Download Release Notes
         uses: actions/download-artifact@v4
         with:
           name: release-notes
-          path: /tmp/release-notes.md
+          path: /tmp/release-notes
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: /tmp/release-notes.md
+          body_path: /tmp/release-notes/content.md
           discussion_category_name: Releases
           draft: true
           prerelease: ${{ needs.setup.outputs.is_pre_release == 'true' }}

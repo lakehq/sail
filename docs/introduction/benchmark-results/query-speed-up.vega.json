@@ -74,7 +74,7 @@
           "width": { "scale": "xscale", "band": 1 },
           "y": { "scale": "yscale", "field": "speedup" },
           "y2": { "scale": "yscale", "value": 0 },
-          "fill": { "value": "#3695BF" }
+          "fill": { "value": "#3762E0" }
         }
       }
     },

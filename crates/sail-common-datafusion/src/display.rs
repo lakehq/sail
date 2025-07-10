@@ -292,7 +292,11 @@ fn make_formatter<'a>(
         DataType::BinaryView => array_format(array.as_binary_view(), options),
         DataType::LargeBinary => array_format(array.as_binary::<i64>(), options),
         DataType::FixedSizeBinary(_) => {
-            let a = array.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+            let a = array.as_any().downcast_ref::<FixedSizeBinaryArray>().ok_or_else(|| {
+                ArrowError::CastError(
+                    "expected FixedSizeBinaryArray in make_formatter".to_string(),
+                )
+            })?;
             array_format(a, options)
         }
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
@@ -302,7 +306,11 @@ fn make_formatter<'a>(
         DataType::List(_) => array_format(as_generic_list_array::<i32>(array), options),
         DataType::LargeList(_) => array_format(as_generic_list_array::<i64>(array), options),
         DataType::FixedSizeList(_, _) => {
-            let a = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+            let a = array.as_any().downcast_ref::<FixedSizeListArray>().ok_or_else(|| {
+                ArrowError::CastError(
+                    "expected FixedSizeListArray in make_formatter".to_string(),
+                )
+            })?;
             array_format(a, options)
         }
         DataType::Struct(_) => array_format(as_struct_array(array), options),
@@ -901,7 +909,12 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
             UnionMode::Dense => self.value_offset(idx),
             UnionMode::Sparse => idx,
         };
-        let (name, field) = s.0[id as usize].as_ref().unwrap();
+        let (name, field) = s.0[id as usize].as_ref().ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Union type id {id} not found in array with {} fields",
+                s.0.len()
+            ))
+        })?;
 
         write!(f, "{{{name}=")?;
         field.write(idx, f)?;
@@ -956,6 +969,7 @@ mod tests {
         assert_eq!(TEST_CONST_OPTIONS.date_format, TimeFormat::Custom("foo"));
     }
 
+    #[allow(clippy::unwrap_used)]
     #[test]
     fn test_map_array_to_string() {
         let keys = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -974,6 +988,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::unwrap_used)]
     fn format_array(array: &dyn Array, fmt: &FormatOptions) -> Vec<String> {
         let fmt = ArrayFormatter::try_new(array, fmt).unwrap();
         (0..array.len()).map(|x| fmt.value(x).to_string()).collect()
@@ -1089,6 +1104,7 @@ mod tests {
         assert_eq!(formatted, &["NULL".to_string(), "NULL".to_string()])
     }
 
+    #[allow(clippy::unwrap_used)]
     #[test]
     fn test_string_run_arry_to_string() {
         let mut builder = StringRunBuilder::<Int32Type>::new();

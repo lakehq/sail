@@ -3,6 +3,9 @@ name = "sail-plan"
 version = { workspace = true }
 edition = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
@@ -17,6 +20,7 @@ datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 datafusion-spark = { workspace = true }
 datafusion-functions-json = { workspace = true }
@@ -33,6 +37,7 @@ futures = { workspace = true }
 comfy-table = { workspace = true }
 html-escape = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 ryu = { workspace = true }
 either = { workspace = true }
 tokio = { workspace = true }
@@ -49,3 +54,4 @@ base64 = { workspace = true }
 half = { workspace = true }
 crc32fast = { workspace = true }
 num = { workspace = true }
+arrow = { workspace = true }

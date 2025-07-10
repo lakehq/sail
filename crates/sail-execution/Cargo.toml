@@ -3,6 +3,9 @@ name = "sail-execution"
 version = { workspace = true }
 edition = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 deltalake = { workspace = true }
 sail-common = { path = "../sail-common" }

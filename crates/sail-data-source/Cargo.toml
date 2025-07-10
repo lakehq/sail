@@ -3,6 +3,9 @@ name = "sail-data-source"
 version = { workspace = true }
 edition = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 async-trait = { workspace = true }
 serde = { workspace = true }
