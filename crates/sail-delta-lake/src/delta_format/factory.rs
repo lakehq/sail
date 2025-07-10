@@ -6,21 +6,24 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_common::{GetExt, Result};
+use sail_common::spec::SaveMode;
 
 #[derive(Debug, Default)]
 pub struct DeltaFormatFactory {
+    mode: SaveMode,
     options: HashMap<String, String>,
 }
 
 impl DeltaFormatFactory {
     pub fn new() -> Self {
         Self {
+            mode: SaveMode::Overwrite, // Default save mode
             options: HashMap::new(),
         }
     }
 
-    pub fn new_with_options(options: HashMap<String, String>) -> Self {
-        Self { options }
+    pub fn new_with_options(mode: SaveMode, options: HashMap<String, String>) -> Self {
+        Self { mode, options }
     }
 }
 
@@ -41,6 +44,7 @@ impl FileFormatFactory for DeltaFormatFactory {
         combined_options.extend(format_options.clone());
 
         Ok(Arc::new(super::format::DeltaFileFormat::new(
+            self.mode.clone(),
             combined_options,
         )))
     }

@@ -21,6 +21,7 @@ use crate::{
 
 #[derive(Debug)]
 pub struct DeltaDataSink {
+    mode: sail_common::spec::SaveMode,
     options: HashMap<String, String>,
     table_paths: Vec<datafusion::datasource::listing::ListingTableUrl>,
     schema: SchemaRef,
@@ -28,11 +29,13 @@ pub struct DeltaDataSink {
 
 impl DeltaDataSink {
     pub fn new(
+        mode: sail_common::spec::SaveMode,
         options: HashMap<String, String>,
         table_paths: Vec<datafusion::datasource::listing::ListingTableUrl>,
         schema: SchemaRef,
     ) -> Self {
         Self {
+            mode,
             options,
             table_paths,
             schema,
@@ -104,18 +107,15 @@ impl DeltaDataSink {
 
     /// Parse save mode from options, maybe there is a better way, see sail-plan/src/resolver/plan.rs
     fn parse_save_mode(&self) -> SaveMode {
-        match self.options.get("save_mode").or(self.options.get("mode")) {
-            Some(mode) => match mode.to_lowercase().as_str() {
-                "append" => SaveMode::Append,
-                "overwrite" => SaveMode::Overwrite,
-                "errorifexists" | "error" => SaveMode::ErrorIfExists,
-                "ignore" => SaveMode::Ignore,
-                _ => {
-                    // dbg!("Unknown save mode '{}', defaulting to Append", mode);
-                    SaveMode::Append
-                }
-            },
-            None => SaveMode::Append,
+        match self.mode {
+            sail_common::spec::SaveMode::Append => SaveMode::Append,
+            sail_common::spec::SaveMode::Overwrite => SaveMode::Overwrite,
+            sail_common::spec::SaveMode::ErrorIfExists => SaveMode::ErrorIfExists,
+            sail_common::spec::SaveMode::Ignore => SaveMode::Ignore,
+            _ => {
+                // dbg!("Unknown save mode, defaulting to ErrorIfExists");
+                SaveMode::ErrorIfExists
+            }
         }
     }
 

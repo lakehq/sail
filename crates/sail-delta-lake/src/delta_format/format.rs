@@ -12,18 +12,20 @@ use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, Result, Statistics};
 use object_store::{ObjectMeta, ObjectStore};
+use sail_common::spec::SaveMode;
 
 use super::sink::DeltaDataSink;
 
 /// Delta Lake file format implementation
 #[derive(Debug, Default)]
 pub struct DeltaFileFormat {
+    mode: SaveMode,
     options: HashMap<String, String>,
 }
 
 impl DeltaFileFormat {
-    pub fn new(options: HashMap<String, String>) -> Self {
-        Self { options }
+    pub fn new(mode: SaveMode, options: HashMap<String, String>) -> Self {
+        Self { mode, options }
     }
 }
 
@@ -81,6 +83,7 @@ impl FileFormat for DeltaFileFormat {
         let options = self.options.clone();
 
         let sink = Arc::new(DeltaDataSink::new(
+            self.mode.clone(),
             options,
             conf.table_paths.clone(),
             conf.output_schema().clone(),

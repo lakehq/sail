@@ -5481,6 +5481,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
+ "sail-common",
  "sail-delta-lake",
  "serde",
  "serde_yaml",

@@ -15,6 +15,7 @@ use datafusion::datasource::listing::{
 use datafusion::prelude::SessionContext;
 use datafusion_common::{internal_err, plan_err, Result};
 use futures::{StreamExt, TryStreamExt};
+use sail_common::spec::SaveMode;
 use sail_delta_lake::delta_datafusion::delta_to_datafusion_error;
 use sail_delta_lake::delta_format::DeltaFormatFactory;
 use sail_delta_lake::{create_delta_table_provider_with_object_store, DeltaScanConfig};
@@ -99,6 +100,7 @@ impl<'a> TableProviderFactory<'a> {
     pub async fn write_table(
         &self,
         source: &str,
+        mode: SaveMode,
         options: Vec<(String, String)>,
     ) -> Result<Arc<dyn FileFormatFactory>> {
         let options: HashMap<String, String> = options.into_iter().collect();
@@ -130,7 +132,7 @@ impl<'a> TableProviderFactory<'a> {
             }
             "delta" => {
                 let delta_options = resolver.resolve_delta_write_options(options)?;
-                Arc::new(DeltaFormatFactory::new_with_options(delta_options))
+                Arc::new(DeltaFormatFactory::new_with_options(mode, delta_options))
             }
             _ => return plan_err!("unsupported source: {source}"),
         };
