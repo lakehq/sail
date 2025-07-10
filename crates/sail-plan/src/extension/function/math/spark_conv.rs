@@ -172,9 +172,9 @@ fn invoke_vectorized(
         }
     };
 
-    if from < 2 || from > 36 || to < 2 || to > 36 {
+    if !(2..=36).contains(&from) || !(2..=36).contains(&to) {
         return Ok(ColumnarValue::Array(Arc::new(StringArray::from_iter(
-            std::iter::repeat::<Option<String>>(None).take(len),
+            std::iter::repeat_n(None::<String>, len),
         ))));
     }
     let result = match num {
@@ -189,7 +189,7 @@ fn invoke_vectorized(
                                 if to == 10 {
                                     n.to_string()
                                 } else {
-                                    format!("{:x}", n)
+                                    format!("{n:x}")
                                 }
                             })
                         })
@@ -206,7 +206,7 @@ fn invoke_vectorized(
                             if to == 10 {
                                 i.to_string()
                             } else {
-                                format!("{:x}", i)
+                                format!("{i:x}")
                             }
                         })
                     })
