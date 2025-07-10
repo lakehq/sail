@@ -5,7 +5,7 @@ use datafusion::arrow::array::{as_primitive_array, Array, Float32Array, Float64A
 use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type, Int64Type};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use num::Integer;
+
 use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
 };
@@ -271,8 +271,8 @@ fn round_half_to_even_f64(value: f64) -> f64 {
     if fraction.abs() != 0.5 {
         return value.round();
     }
-    
-    if (rounded as i64).is_multiple_of(&2){
+
+    if (rounded as i64) % 2 == 0 {
         rounded
     } else if value > 0.0 {
         rounded + 1.0
@@ -289,7 +289,7 @@ fn round_half_to_even_f32(value: f32) -> f32 {
         return value.round();
     }
 
-    if (rounded as i32).is_multiple_of(&2) {
+    if (rounded as i32) % 2 == 0 {
         rounded
     } else if value > 0.0 {
         rounded + 1.0
