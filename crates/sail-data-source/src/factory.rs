@@ -42,51 +42,20 @@ impl<'a> TableProviderFactory<'a> {
             return plan_err!("empty data source paths");
         }
 
-        let options_map: HashMap<String, String> = options.into_iter().collect();
+        let options: HashMap<String, String> = options.into_iter().collect();
 
         // Handle delta format early
-        if matches!(format.to_lowercase().as_str(), "delta" | "deltalake") {
-            let table_uri = match paths.first() {
-                Some(uri) => uri,
-                None => return plan_err!("empty delta table path"),
-            };
-
-            let resolver = DataSourceOptionsResolver::new(self.ctx);
-            let delta_options = resolver.resolve_delta_read_options(options_map)?;
-
-            let enable_parquet_pushdown = delta_options
-                .read_options
-                .as_ref()
-                .and_then(|opts| opts.enable_parquet_pushdown)
-                .unwrap_or(true);
-
-            let url = ListingTableUrl::parse(table_uri)?;
-            let object_store = self.ctx.runtime_env().object_store(&url)?;
-
-            let storage_config = Default::default();
-
-            let scan_config = DeltaScanConfig {
-                enable_parquet_pushdown,
-                ..Default::default()
-            };
-
-            let table_provider = create_delta_table_provider_with_object_store(
-                table_uri,
-                object_store,
-                storage_config,
-                Some(scan_config),
-            )
-            .await
-            .map_err(delta_to_datafusion_error)?;
-
-            return Ok(Arc::new(table_provider));
+        if matches!(format.to_lowercase().as_str(), "delta") {
+            return self
+                .create_delta_provider(paths.first().unwrap(), &options)
+                .await;
         }
 
         let urls = self.resolve_listing_urls(paths).await?;
         // TODO: infer compression type from file extension
         // TODO: support global configuration to ignore file extension (by setting it to empty)
         let resolver = DataSourceOptionsResolver::new(self.ctx);
-        let options = options_map;
+
         let options = match format.to_lowercase().as_str() {
             "json" => {
                 let options = resolver.resolve_json_read_options(options)?;
@@ -161,7 +130,7 @@ impl<'a> TableProviderFactory<'a> {
                 }
                 Arc::new(AvroFormatFactory)
             }
-            "delta" | "deltalake" => {
+            "delta" => {
                 let delta_options = resolver.resolve_delta_write_options(options)?;
                 Arc::new(DeltaFormatFactory::new_with_options(delta_options))
             }
@@ -312,5 +281,39 @@ impl<'a> TableProviderFactory<'a> {
         }
 
         Schema::new_with_metadata(new_fields, schema.metadata().clone())
+    }
+
+    async fn create_delta_provider(
+        &self,
+        table_uri: &str,
+        options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let resolver = DataSourceOptionsResolver::new(self.ctx);
+        let delta_options = resolver.resolve_delta_read_options(options.clone())?;
+
+        let url = ListingTableUrl::parse(table_uri)?;
+        let object_store = self.ctx.runtime_env().object_store(&url)?;
+
+        let storage_config = Default::default();
+
+        let scan_config = DeltaScanConfig {
+            enable_parquet_pushdown: delta_options
+                .read_options
+                .as_ref()
+                .and_then(|opts| opts.enable_parquet_pushdown)
+                .unwrap_or(true),
+            ..Default::default()
+        };
+
+        let table_provider = create_delta_table_provider_with_object_store(
+            table_uri,
+            object_store,
+            storage_config,
+            Some(scan_config),
+        )
+        .await
+        .map_err(delta_to_datafusion_error)?;
+
+        Ok(Arc::new(table_provider))
     }
 }

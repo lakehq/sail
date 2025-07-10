@@ -192,14 +192,3 @@ pub async fn create_delta_table_provider_with_object_store(
     // Create the DeltaTableProvider
     DeltaTableProvider::try_new(snapshot, log_store, config)
 }
-
-/// Convenience function to open a Delta table with default storage options.
-///
-/// This is equivalent to calling `open_table_with_object_store` with an empty
-/// `StorageConfig`.
-pub async fn open_table_with_object_store_simple(
-    table_uri: impl AsRef<str>,
-    object_store: Arc<dyn ObjectStore>,
-) -> DeltaResult<DeltaTable> {
-    open_table_with_object_store(table_uri, object_store, StorageConfig::default()).await
-}
