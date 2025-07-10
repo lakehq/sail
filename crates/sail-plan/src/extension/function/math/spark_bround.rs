@@ -245,7 +245,28 @@ impl ScalarUDFImpl for SparkBRound {
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
         match types.len() {
-            1 => Ok(vec![types[0].clone(), DataType::Int32]),
+            1 => {
+                let x_type: &DataType = &types[0];
+                let valid_x: bool = matches!(
+                    x_type,
+                    DataType::Float32
+                        | DataType::Float64
+                        | DataType::Decimal128(_, _)
+                        | DataType::Decimal256(_, _)
+                        | DataType::Int32
+                        | DataType::Int64
+                );
+
+                if valid_x {
+                    Ok(vec![x_type.clone(), DataType::Int32])
+                } else {
+                    Err(unsupported_data_types_exec_err(
+                        "spark_bround",
+                        "Float32 | Float64 | Decimal128 | Decimal256 | Int32 | Int64",
+                        types,
+                    ))
+                }
+            }
             2 => {
                 let x_type: &DataType = &types[0];
                 let scale_type: &DataType = &types[1];
