@@ -68,6 +68,20 @@ impl ScalarUDFImpl for SparkBRound {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
+        let args = match args.len() {
+            1 => vec![
+                args[0].clone(),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(0))),
+            ],
+            2 => args.to_vec(),
+            _ => {
+                return Err(invalid_arg_count_exec_err(
+                    "spark_bround",
+                    (1, 2),
+                    args.len(),
+                ))
+            }
+        };
         if args.len() != 2 {
             return Err(invalid_arg_count_exec_err(
                 "spark_bround",
@@ -230,36 +244,38 @@ impl ScalarUDFImpl for SparkBRound {
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
-        if types.len() != 2 {
-            return Err(invalid_arg_count_exec_err(
+        match types.len() {
+            1 => Ok(vec![types[0].clone(), DataType::Int32]),
+            2 => {
+                let x_type: &DataType = &types[0];
+                let scale_type: &DataType = &types[1];
+
+                let valid_x: bool = matches!(
+                    x_type,
+                    DataType::Float32
+                        | DataType::Float64
+                        | DataType::Decimal128(_, _)
+                        | DataType::Decimal256(_, _)
+                        | DataType::Int32
+                        | DataType::Int64
+                );
+                let valid_scale: bool = matches!(scale_type, DataType::Int32);
+
+                if valid_x && valid_scale {
+                    Ok(vec![x_type.clone(), scale_type.clone()])
+                } else {
+                    Err(unsupported_data_types_exec_err(
+                        "spark_bround",
+                        "Float32 | Float64 | Decimal128 | Decimal256 | Int32 | Int64, Int32",
+                        types,
+                    ))
+                }
+            }
+            _ => Err(invalid_arg_count_exec_err(
                 "spark_bround",
-                (2, 2),
+                (1, 2),
                 types.len(),
-            ));
-        }
-
-        let x_type: &DataType = &types[0];
-        let scale_type: &DataType = &types[1];
-
-        let valid_x: bool = matches!(
-            x_type,
-            DataType::Float32
-                | DataType::Float64
-                | DataType::Decimal128(_, _)
-                | DataType::Decimal256(_, _)
-                | DataType::Int32
-                | DataType::Int64
-        );
-        let valid_scale: bool = matches!(scale_type, DataType::Int32);
-
-        if valid_x && valid_scale {
-            Ok(vec![x_type.clone(), scale_type.clone()])
-        } else {
-            Err(unsupported_data_types_exec_err(
-                "spark_bround",
-                "Float32 | Float64 | Decimal128 | Decimal256 | Int32 | Int64, Int32",
-                types,
-            ))
+            )),
         }
     }
 }
