@@ -5,7 +5,7 @@ use datafusion::arrow::array::{as_primitive_array, Array, Float32Array, Float64A
 use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type, Int64Type};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-
+use num::Integer;
 use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
 };
@@ -119,7 +119,7 @@ impl ScalarUDFImpl for SparkBRound {
                     .map(|(x_val, scale)| match (x_val, scale) {
                         (Some(x), Some(s)) => {
                             let pow = 10f64.powi(s);
-                            Some((x * pow).round() / pow)
+                            Some(round_half_to_even_f64(x * pow) / pow)
                         }
                         _ => None,
                     })
@@ -136,7 +136,7 @@ impl ScalarUDFImpl for SparkBRound {
                     .map(|(x_val, scale)| match (x_val, scale) {
                         (Some(x), Some(s)) => {
                             let pow = 10f32.powi(s);
-                            Some((x * pow).round() / pow)
+                            Some(round_half_to_even_f32(x * pow) / pow)
                         }
                         _ => None,
                     })
@@ -189,7 +189,7 @@ impl ScalarUDFImpl for SparkBRound {
                     .map(|(x_val, scale)| match (x_val, scale) {
                         (Some(x), Some(s)) => {
                             let pow = 10f32.powf(s as f32);
-                            Some((x * pow).round() / pow)
+                            Some(round_half_to_even_f32(x * pow) / pow)
                         }
                         _ => None,
                     })
@@ -206,7 +206,7 @@ impl ScalarUDFImpl for SparkBRound {
                     .map(|(x_val, scale)| match (x_val, scale) {
                         (Some(x), Some(s)) => {
                             let pow = 10f64.powf(s);
-                            Some((x * pow).round() / pow)
+                            Some(round_half_to_even_f64(x * pow) / pow)
                         }
                         _ => None,
                     })
@@ -261,5 +261,39 @@ impl ScalarUDFImpl for SparkBRound {
                 types,
             ))
         }
+    }
+}
+
+fn round_half_to_even_f64(value: f64) -> f64 {
+    let rounded: f64 = value.trunc();
+    let fraction: f64 = value - rounded;
+
+    if fraction.abs() != 0.5 {
+        return value.round();
+    }
+    
+    if (rounded as i64).is_multiple_of(&2){
+        rounded
+    } else if value > 0.0 {
+        rounded + 1.0
+    } else {
+        rounded - 1.0
+    }
+}
+
+fn round_half_to_even_f32(value: f32) -> f32 {
+    let rounded: f32 = value.trunc();
+    let fraction: f32 = value - rounded;
+
+    if fraction.abs() != 0.5 {
+        return value.round();
+    }
+
+    if (rounded as i32).is_multiple_of(&2) {
+        rounded
+    } else if value > 0.0 {
+        rounded + 1.0
+    } else {
+        rounded - 1.0
     }
 }
