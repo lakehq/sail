@@ -15,6 +15,7 @@ use datafusion::datasource::listing::{
 use datafusion::prelude::SessionContext;
 use datafusion_common::{internal_err, plan_err, Result};
 use futures::{StreamExt, TryStreamExt};
+use sail_delta_lake::delta_datafusion::delta_to_datafusion_error;
 use sail_delta_lake::delta_format::DeltaFormatFactory;
 use sail_delta_lake::{create_delta_table_provider_with_object_store, DeltaScanConfig};
 
@@ -45,9 +46,10 @@ impl<'a> TableProviderFactory<'a> {
 
         // Handle delta format early
         if matches!(format.to_lowercase().as_str(), "delta" | "deltalake") {
-            let table_uri = paths.first().ok_or_else(|| {
-                datafusion_common::DataFusionError::Plan("empty delta table path".to_string())
-            })?;
+            let table_uri = match paths.first() {
+                Some(uri) => uri,
+                None => return plan_err!("empty delta table path"),
+            };
 
             let resolver = DataSourceOptionsResolver::new(self.ctx);
             let delta_options = resolver.resolve_delta_read_options(options_map)?;
@@ -75,7 +77,7 @@ impl<'a> TableProviderFactory<'a> {
                 Some(scan_config),
             )
             .await
-            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+            .map_err(delta_to_datafusion_error)?;
 
             return Ok(Arc::new(table_provider));
         }
