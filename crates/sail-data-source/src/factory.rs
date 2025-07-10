@@ -44,11 +44,9 @@ impl<'a> TableProviderFactory<'a> {
 
         let options: HashMap<String, String> = options.into_iter().collect();
 
-        // Handle delta format early
+        // Handle delta format early, paths vec is guaranteed to be non-empty
         if matches!(format.to_lowercase().as_str(), "delta") {
-            return self
-                .create_delta_provider(paths.first().unwrap(), &options)
-                .await;
+            return self.create_delta_provider(&paths[0], &options).await;
         }
 
         let urls = self.resolve_listing_urls(paths).await?;

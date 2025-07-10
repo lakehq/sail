@@ -189,7 +189,9 @@ fn arrow_schema_from_snapshot(
             // We need stable order between logical and physical schemas, but the order of
             // partitioning columns is not always the same in the json schema and the array
             meta.partition_columns.iter().map(|partition_col| {
-                let f = schema.field(partition_col).unwrap();
+                let f = schema
+                    .field(partition_col)
+                    .expect("Partition column should exist in schema");
                 let field_name = f.name().to_string();
                 let field_type = arrow_type_from_delta_type(f.data_type())?;
                 let field = Field::new(field_name, field_type, f.is_nullable());
@@ -234,7 +236,9 @@ fn arrow_schema_from_struct_type(
             // We need stable order between logical and physical schemas, but the order of
             // partitioning columns is not always the same in the json schema and the array
             partition_columns.iter().map(|partition_col| {
-                let f = schema.field(partition_col).unwrap();
+                let f = schema
+                    .field(partition_col)
+                    .expect("Partition column should exist in schema");
                 let field_name = f.name().to_string();
                 let field_type = arrow_type_from_delta_type(f.data_type())?;
                 let field = Field::new(field_name, field_type, f.is_nullable());
@@ -404,7 +408,7 @@ pub(crate) fn df_logical_schema(
         fields.push(Arc::new(
             input_schema
                 .field_with_name(partition_col)
-                .unwrap()
+                .expect("Partition column should exist in input schema")
                 .to_owned(),
         ));
     }
@@ -798,7 +802,9 @@ impl<'a> DeltaScanBuilder<'a> {
                     .map(|val| {
                         val.as_ref()
                             .map(|v| {
-                                let field = logical_schema.field_with_name(partition_col).unwrap();
+                                let field = logical_schema
+                                    .field_with_name(partition_col)
+                                    .expect("Partition column should exist in logical schema");
                                 to_correct_scalar_value(
                                     &serde_json::Value::String(v.to_string()),
                                     field.data_type(),
@@ -807,7 +813,9 @@ impl<'a> DeltaScanBuilder<'a> {
                                 .unwrap_or(ScalarValue::Null)
                             })
                             .unwrap_or_else(|| {
-                                let field = logical_schema.field_with_name(partition_col).unwrap();
+                                let field = logical_schema
+                                    .field_with_name(partition_col)
+                                    .expect("Partition column should exist in logical schema");
                                 get_null_of_arrow_type(field.data_type())
                                     .unwrap_or(ScalarValue::Null)
                             })
@@ -828,7 +836,9 @@ impl<'a> DeltaScanBuilder<'a> {
         let mut table_partition_cols = table_partition_cols
             .iter()
             .map(|col| {
-                let field = logical_schema.field_with_name(col).unwrap();
+                let field = logical_schema
+                    .field_with_name(col)
+                    .expect("Column should exist in logical schema");
                 let corrected = if config.wrap_partition_values {
                     match field.data_type() {
                         ArrowDataType::Utf8
@@ -937,9 +947,13 @@ fn simplify_expr(
     let props = ExecutionProps::new();
     let simplify_context = SimplifyContext::new(&props).with_schema(df_schema.clone().into());
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
-    let simplified = simplifier.simplify(expr).unwrap();
+    let simplified = simplifier
+        .simplify(expr)
+        .expect("Failed to simplify expression");
 
-    context.create_physical_expr(simplified, df_schema).unwrap()
+    context
+        .create_physical_expr(simplified, df_schema)
+        .expect("Failed to create physical expression")
 }
 
 #[allow(dead_code)]
@@ -1087,13 +1101,15 @@ fn partitioned_file_from_action(
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
     let last_modified = chrono::Utc.from_utc_datetime(
         &chrono::DateTime::from_timestamp(ts_secs, ts_ns as u32)
-            .unwrap()
+            .expect("Failed to create timestamp from seconds and nanoseconds")
             .naive_utc(),
     );
     PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
-            ..action.try_into().unwrap()
+            ..action
+                .try_into()
+                .expect("Failed to convert action to ObjectMeta")
         },
         partition_values,
         extensions: None,
@@ -1113,12 +1129,16 @@ fn parse_date(
                 .map_err(|_| DataFusionError::Execution("Failed to parse date".to_string()))?;
             match field_dt {
                 ArrowDataType::Date32 => Ok(ScalarValue::Date32(Some(
-                    date.signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-                        .num_days() as i32,
+                    date.signed_duration_since(
+                        chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                            .expect("Failed to create epoch date"),
+                    )
+                    .num_days() as i32,
                 ))),
                 ArrowDataType::Date64 => Ok(ScalarValue::Date64(Some(
                     date.signed_duration_since(
-                        chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+                        chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                            .expect("Failed to create epoch date"),
                     )
                     .num_milliseconds(),
                 ))),
@@ -1516,7 +1536,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
             Ok(TreeNodeRecursion::Stop)
         }
     })
-    .unwrap();
+    .expect("Failed to apply expression transformation");
     is_applicable
 }
 

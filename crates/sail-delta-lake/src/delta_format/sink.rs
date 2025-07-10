@@ -93,7 +93,7 @@ impl DeltaDataSink {
     ) -> Result<Arc<dyn object_store::ObjectStore>> {
         let table_path = self.table_path()?;
         let table_url = url::Url::parse(&table_path)
-            .map_err(|e| DataFusionError::Plan(format!("Invalid table URI: {}", e)))?;
+            .map_err(|e| DataFusionError::Plan(format!("Invalid table URI: {e}")))?;
 
         context
             .runtime_env()
@@ -150,6 +150,7 @@ impl DeltaDataSink {
     }
 
     /// Create storage config from options
+    #[allow(dead_code)]
     fn create_storage_config(&self) -> StorageConfig {
         // For now, use default configuration
         // TODO: Parse additional storage options if needed
@@ -239,7 +240,7 @@ impl DataSink for DeltaDataSink {
 
         // Parse the table path URL and extract the correct path for DeltaWriter
         let table_url = url::Url::parse(&table_path)
-            .map_err(|e| DataFusionError::Plan(format!("Invalid table URI: {}", e)))?;
+            .map_err(|e| DataFusionError::Plan(format!("Invalid table URI: {e}")))?;
 
         let writer_path = if table_url.scheme() == "file" {
             // For file:// URLs, extract the local filesystem path
@@ -279,10 +280,8 @@ impl DataSink for DeltaDataSink {
 
         // dbg!(&add_actions);
 
-        if add_actions.is_empty() && table_exists {
-            if save_mode != SaveMode::Overwrite {
-                return Ok(0);
-            }
+        if add_actions.is_empty() && table_exists && save_mode != SaveMode::Overwrite {
+            return Ok(0);
         }
 
         // Prepare actions for commit
@@ -297,7 +296,7 @@ impl DataSink for DeltaDataSink {
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     let current_timestamp = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
-                        .unwrap()
+                        .expect("System time before Unix epoch")
                         .as_millis() as i64;
 
                     let remove_actions: Vec<Action> = existing_files
@@ -354,7 +353,7 @@ impl DataSink for DeltaDataSink {
                 created_time: Some(
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
-                        .unwrap()
+                        .expect("System time before Unix epoch")
                         .as_millis() as i64,
                 ),
             };

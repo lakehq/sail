@@ -430,7 +430,9 @@ impl CdfLoadBuilder {
                 let field_name = f.name();
                 let expr = Arc::new(expressions::Column::new(
                     field_name,
-                    union_schema.index_of(field_name).unwrap(),
+                    union_schema
+                        .index_of(field_name)
+                        .expect("Field not found in union schema"),
                 ));
                 (expr, field_name.to_owned())
             })

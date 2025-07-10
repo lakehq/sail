@@ -69,13 +69,17 @@ pub struct AsyncShareableBuffer {
 
 impl AsyncShareableBuffer {
     pub fn len(&self) -> usize {
-        self.buffer.lock().unwrap().len()
+        self.buffer.lock().expect("Failed to lock buffer").len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn into_inner(self) -> Option<Vec<u8>> {
         Arc::try_unwrap(self.buffer)
             .ok()
-            .map(|lock| lock.into_inner().unwrap())
+            .map(|lock| lock.into_inner().expect("Failed to unwrap mutex"))
     }
 }
 
@@ -85,7 +89,10 @@ impl AsyncWrite for AsyncShareableBuffer {
         _cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        self.buffer.lock().unwrap().extend_from_slice(buf);
+        self.buffer
+            .lock()
+            .expect("Failed to lock buffer")
+            .extend_from_slice(buf);
         std::task::Poll::Ready(Ok(buf.len()))
     }
 
@@ -419,7 +426,7 @@ impl PartitionWriter {
 
         // Get the buffer data
         let buffer_data = {
-            let mut buffer = self.buffer.buffer.lock().unwrap();
+            let mut buffer = self.buffer.buffer.lock().expect("Failed to lock buffer");
             Bytes::from(std::mem::take(&mut *buffer))
         };
 
@@ -434,8 +441,7 @@ impl PartitionWriter {
             .map_err(|e| DeltaTableError::generic(format!("Failed to write file: {e}")))?;
 
         // Create Add action
-        let add_action =
-            self.create_add_action(&relative_path.to_string(), file_size, &metadata)?;
+        let add_action = self.create_add_action(relative_path.as_ref(), file_size, &metadata)?;
         self.files_written.push(add_action);
 
         // Reset for next file
@@ -487,7 +493,7 @@ impl PartitionWriter {
         // Get current timestamp
         let modification_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("System time before Unix epoch")
             .as_millis() as i64;
 
         // Convert partition values to the format expected by Add
@@ -751,8 +757,8 @@ impl WriteBuilder {
         let partition_columns = self.get_partition_columns()?;
 
         // Extract needed values after getting partition columns
-        let dataframe = self.input_dataframe.unwrap();
-        let session_state = self.session_state.unwrap();
+        let dataframe = self.input_dataframe.expect("Input dataframe is required");
+        let session_state = self.session_state.expect("Session state is required");
         let log_store = self.log_store.clone();
         let snapshot = self.snapshot.clone();
         let mode = self.mode;
@@ -859,7 +865,7 @@ impl WriteBuilder {
                         .map_err(|e| WriteError::DeltaWriter { source: e })?;
                     let current_time = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
-                        .unwrap()
+                        .expect("System time before Unix epoch")
                         .as_millis() as i64;
 
                     for file in existing_files {
@@ -940,7 +946,7 @@ impl WriteBuilder {
                 created_time: Some(
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
-                        .unwrap()
+                        .expect("System time before Unix epoch")
                         .as_millis() as i64,
                 ),
             };
@@ -985,7 +991,7 @@ impl WriteBuilder {
                 created_time: Some(
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
-                        .unwrap()
+                        .expect("System time before Unix epoch")
                         .as_millis() as i64,
                 ),
             };

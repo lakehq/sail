@@ -99,7 +99,10 @@ impl FileAction for Remove {
     fn partition_values(&self) -> DeltaResult<&HashMap<String, Option<String>>> {
         // If extended_file_metadata is true, it should be required to have this filled in
         if self.extended_file_metadata.unwrap_or_default() {
-            Ok(self.partition_values.as_ref().unwrap())
+            Ok(self
+                .partition_values
+                .as_ref()
+                .expect("partition_values should be present when extended_file_metadata is true"))
         } else {
             match self.partition_values {
                 Some(ref part_map) => Ok(part_map),
@@ -117,7 +120,10 @@ impl FileAction for Remove {
     fn size(&self) -> DeltaResult<usize> {
         // If extended_file_metadata is true, it should be required to have this filled in
         if self.extended_file_metadata.unwrap_or_default() {
-            Ok(self.size.unwrap() as usize)
+            Ok(self
+                .size
+                .expect("size should be present when extended_file_metadata is true")
+                as usize)
         } else {
             match self.size {
                 Some(size) => Ok(size as usize),
