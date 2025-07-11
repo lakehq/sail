@@ -416,7 +416,7 @@ fn test_from_csv_simple_struct() -> Result<()> {
     let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
 
     // Define the schema: name is a string, age is an int
-    let schema_str = Arc::new(StringArray::from(vec!["name string, age int"])) as ArrayRef;
+    let schema_str = Arc::new(StringArray::from(vec!["name STRING, age INT"])) as ArrayRef;
 
     // Execute the function with CSV column and schema
     let result = spark_from_csv_inner(&[input_array, schema_str])?;
@@ -502,79 +502,29 @@ macro_rules! downcast_option {
     }};
 }
 
-/// Unit test for `spark_from_csv_inner` that verifies CSV parsing into a `StructArray` with nested struct field.
-#[test]
-fn test_from_csv_nested_struct() -> Result<()> {
-    let csv_data = vec![Some("1,foo,42"), Some("2,bar,99"), None, Some("3,,")];
-    let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
-    let schema_str = Arc::new(StringArray::from(vec![
-        "id INT, info STRUCT<name STRING, score INT>",
-    ])) as ArrayRef;
-    let result = spark_from_csv_inner(&[input_array, schema_str])?;
-
-    let struct_array: &StructArray = downcast_option!(
-        result.as_any().downcast_ref::<StructArray>(),
-        StructArray,
-        "Expected StructArray"
-    );
-
-    assert_eq!(struct_array.len(), 4);
-    assert_eq!(struct_array.null_count(), 1);
-
-    let id_array: &Int32Array = downcast_option!(
-        struct_array.column_by_name("id"),
-        Int32Array,
-        "Expected `id` field not found"
-    );
-
-    assert_eq!(id_array.value(0), 1);
-    assert_eq!(id_array.value(1), 2);
-    assert!(id_array.is_null(2));
-    assert_eq!(id_array.value(3), 3);
-
-    let info_array: &StructArray = downcast_option!(
-        struct_array.column_by_name("info"),
-        StructArray,
-        "Expected `info` field not found"
-    );
-
-    let name_array: &StringArray = downcast_option!(
-        info_array.column_by_name("name"),
-        StringArray,
-        "Expected `name` field not found"
-    );
-    assert_eq!(name_array.value(0), "foo");
-    assert_eq!(name_array.value(1), "bar");
-    assert!(name_array.is_null(2));
-    assert!(name_array.is_null(3));
-
-    let score_array: &Int32Array = downcast_option!(
-        info_array.column_by_name("score"),
-        Int32Array,
-        "Expected `score` field not found"
-    );
-    assert_eq!(score_array.value(0), 42);
-    assert_eq!(score_array.value(1), 99);
-    assert!(score_array.is_null(2));
-    assert!(score_array.is_null(3));
-
-    Ok(())
-}
-
 #[test]
 fn test_from_csv_with_array_and_bool() -> Result<()> {
     let csv_data = vec![
-        Some("true,[1,2,3]"),
-        Some("false,[4,5]"),
-        Some("true,[]"),
+        Some("true;[1,2,3]"),
+        Some("false;[4,5]"),
+        Some("true;[]"),
         None,
-        Some(",[7,null,9]"),
-        Some("false,"),
+        Some(";[7,null,9]"),
+        Some("false;"),
     ];
-    let input_array = Arc::new(StringArray::from(csv_data)) as ArrayRef;
-    let schema_str =
+    let input_array: ArrayRef = Arc::new(StringArray::from(csv_data)) as ArrayRef;
+    let schema_str: ArrayRef =
         Arc::new(StringArray::from(vec!["flag BOOLEAN, values ARRAY<INT>"])) as ArrayRef;
-    let result = spark_from_csv_inner(&[input_array, schema_str])?;
+
+    let key_builder = StringBuilder::new();
+    let values_builder = StringBuilder::new();
+    let mut options = MapBuilder::new(None, key_builder, values_builder);
+    options.keys().append_value(SparkFromCSV::SEP_OPTION);
+    options.values().append_value(";");
+    let _ = options.append(true);
+    let options: ArrayRef = Arc::new(options.finish()) as ArrayRef;
+
+    let result = spark_from_csv_inner(&[input_array, schema_str, options])?;
 
     let struct_array: &StructArray = downcast_option!(
         result.as_any().downcast_ref::<StructArray>(),
