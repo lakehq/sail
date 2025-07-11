@@ -80,6 +80,7 @@ use sail_plan::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFlo
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::math::spark_pmod::SparkPmod;
 use sail_plan::extension::function::math::spark_signum::SparkSignum;
+use sail_plan::extension::function::math::spark_try_add::SparkTryAdd;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
@@ -836,6 +837,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
+            "spark_try_add" | "try_add" => Ok(Arc::new(ScalarUDF::from(SparkTryAdd::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -899,6 +901,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkToUtf8>()
             || node.inner().as_any().is::<SparkToLargeUtf8>()
             || node.inner().as_any().is::<SparkToUtf8View>()
+            || node.inner().as_any().is::<SparkTryAdd>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"

@@ -12,6 +12,7 @@ pub mod spark_ceil_floor;
 pub mod spark_hex_unhex;
 pub mod spark_pmod;
 pub mod spark_signum;
+pub mod spark_try_add;
 
 #[inline]
 pub(crate) fn both_are_decimal(left: &DataType, right: &DataType) -> bool {
