@@ -15,6 +15,10 @@ use datafusion::datasource::listing::{
 use datafusion::prelude::SessionContext;
 use datafusion_common::{internal_err, plan_err, Result};
 use futures::{StreamExt, TryStreamExt};
+use sail_common::spec::SaveMode;
+use sail_delta_lake::delta_datafusion::delta_to_datafusion_error;
+use sail_delta_lake::delta_format::DeltaFormatFactory;
+use sail_delta_lake::{create_delta_table_provider_with_object_store, DeltaScanConfig};
 
 use crate::options::DataSourceOptionsResolver;
 use crate::url::{rewrite_directory_url, GlobUrl};
@@ -38,11 +42,19 @@ impl<'a> TableProviderFactory<'a> {
         if paths.is_empty() {
             return plan_err!("empty data source paths");
         }
+
+        let options: HashMap<String, String> = options.into_iter().collect();
+
+        // Handle delta format early, paths vec is guaranteed to be non-empty
+        if matches!(format.to_lowercase().as_str(), "delta") {
+            return self.create_delta_provider(&paths[0], &options).await;
+        }
+
         let urls = self.resolve_listing_urls(paths).await?;
         // TODO: infer compression type from file extension
         // TODO: support global configuration to ignore file extension (by setting it to empty)
         let resolver = DataSourceOptionsResolver::new(self.ctx);
-        let options: HashMap<String, String> = options.into_iter().collect();
+
         let options = match format.to_lowercase().as_str() {
             "json" => {
                 let options = resolver.resolve_json_read_options(options)?;
@@ -88,11 +100,12 @@ impl<'a> TableProviderFactory<'a> {
     pub async fn write_table(
         &self,
         source: &str,
+        mode: SaveMode,
         options: Vec<(String, String)>,
     ) -> Result<Arc<dyn FileFormatFactory>> {
         let options: HashMap<String, String> = options.into_iter().collect();
         let resolver = DataSourceOptionsResolver::new(self.ctx);
-        let format_factory: Arc<dyn FileFormatFactory> = match source.to_lowercase().as_str() {
+        let format_factory: Arc<dyn FileFormatFactory> = match source {
             "json" => {
                 let options = resolver.resolve_json_write_options(options)?;
                 Arc::new(JsonFormatFactory::new_with_options(options))
@@ -116,6 +129,10 @@ impl<'a> TableProviderFactory<'a> {
                     return plan_err!("Avro data source write options are not yet supported");
                 }
                 Arc::new(AvroFormatFactory)
+            }
+            "delta" => {
+                let delta_options = resolver.resolve_delta_write_options(options)?;
+                Arc::new(DeltaFormatFactory::new_with_options(mode, delta_options))
             }
             _ => return plan_err!("unsupported source: {source}"),
         };
@@ -264,5 +281,39 @@ impl<'a> TableProviderFactory<'a> {
         }
 
         Schema::new_with_metadata(new_fields, schema.metadata().clone())
+    }
+
+    async fn create_delta_provider(
+        &self,
+        table_uri: &str,
+        options: &HashMap<String, String>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let resolver = DataSourceOptionsResolver::new(self.ctx);
+        let delta_options = resolver.resolve_delta_read_options(options.clone())?;
+
+        let url = ListingTableUrl::parse(table_uri)?;
+        let object_store = self.ctx.runtime_env().object_store(&url)?;
+
+        let storage_config = Default::default();
+
+        let scan_config = DeltaScanConfig {
+            enable_parquet_pushdown: delta_options
+                .read_options
+                .as_ref()
+                .and_then(|opts| opts.enable_parquet_pushdown)
+                .unwrap_or(true),
+            ..Default::default()
+        };
+
+        let table_provider = create_delta_table_provider_with_object_store(
+            table_uri,
+            object_store,
+            storage_config,
+            Some(scan_config),
+        )
+        .await
+        .map_err(delta_to_datafusion_error)?;
+
+        Ok(Arc::new(table_provider))
     }
 }

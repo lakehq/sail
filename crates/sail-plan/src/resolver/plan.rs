@@ -2913,7 +2913,7 @@ impl PlanResolver<'_> {
                     return Err(PlanError::invalid("missing source"));
                 };
                 let format_factory = TableProviderFactory::new(self.ctx)
-                    .write_table(&source, options)
+                    .write_table(&source, mode, options)
                     .await?;
                 let plan = if sort_columns.is_empty() {
                     plan

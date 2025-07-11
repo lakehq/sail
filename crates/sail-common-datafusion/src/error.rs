@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
+use deltalake::DeltaTableError;
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::{intern, PyErr, PyResult, Python};
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,7 @@ pub enum CommonErrorCause {
     Schema(String),
     Configuration(String),
     Execution(String),
+    DeltaTable(String),
 }
 
 impl CommonErrorCause {
@@ -58,7 +60,7 @@ impl CommonErrorCause {
         }
         seen.insert(ptr);
         if let Some(e) = error.downcast_ref::<ArrowError>() {
-            match e {
+            return match e {
                 ArrowError::NotYetImplemented(x) => Self::NotImplemented(x.clone()),
                 ArrowError::ExternalError(e) => Self::build(e.as_ref(), seen),
                 ArrowError::CastError(x) => Self::ArrowCast(x.clone()),
@@ -81,9 +83,11 @@ impl CommonErrorCause {
                 ArrowError::RunEndIndexOverflowError => {
                     Self::ArrowRunEndIndexOverflow("run-end index overflow".to_string())
                 }
-            }
-        } else if let Some(e) = error.downcast_ref::<DataFusionError>() {
-            match e {
+            };
+        }
+
+        if let Some(e) = error.downcast_ref::<DataFusionError>() {
+            return match e {
                 DataFusionError::ArrowError(e, _) => Self::build(e, seen),
                 DataFusionError::ParquetError(e) => Self::FormatParquet(e.to_string()),
                 DataFusionError::AvroError(e) => Self::FormatAvro(e.to_string()),
@@ -107,23 +111,33 @@ impl CommonErrorCause {
                     Some(e) => Self::build(e, seen),
                 },
                 DataFusionError::Shared(e) => Self::build(e.as_ref(), seen),
-            }
-        } else if let Some(e) = error.downcast_ref::<PyErr>() {
+            };
+        }
+
+        if let Some(e) = error.downcast_ref::<PyErr>() {
             let traceback = Python::with_gil(|py| -> PyResult<Vec<String>> {
                 let traceback = PyModule::import(py, intern!(py, "traceback"))?;
                 let format_exception = traceback.getattr(intern!(py, "format_exception"))?;
                 format_exception.call1((e,))?.extract()
             });
-            Self::Python {
+            return Self::Python {
                 summary: e.to_string(),
                 traceback: traceback.ok(),
-            }
-        } else if let Some(e) = error.downcast_ref::<RemotePythonError>() {
-            Self::Python {
+            };
+        }
+
+        if let Some(e) = error.downcast_ref::<RemotePythonError>() {
+            return Self::Python {
                 summary: e.summary.clone(),
                 traceback: e.traceback.clone(),
-            }
-        } else if let Some(e) = error.source() {
+            };
+        }
+
+        if let Some(e) = error.downcast_ref::<DeltaTableError>() {
+            return Self::DeltaTable(e.to_string());
+        }
+
+        if let Some(e) = error.source() {
             Self::build(e, seen)
         } else {
             Self::Unknown(error.to_string())

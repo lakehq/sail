@@ -6,10 +6,17 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
 use datafusion_common::{plan_err, Result};
 
+use crate::options::internal::{DeltaReadOptions, DeltaWriteOptions};
 use crate::options::{
     load_default_options, load_options, CsvReadOptions, CsvWriteOptions, JsonReadOptions,
     JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
 };
+
+#[derive(Debug, Clone, Default)]
+pub struct TableDeltaLakeOptions {
+    pub read_options: Option<DeltaReadOptions>,
+    pub write_options: Option<DeltaWriteOptions>,
+}
 
 fn char_to_u8(c: char, option: &str) -> Result<u8> {
     if c.is_ascii() {
@@ -274,6 +281,43 @@ fn apply_parquet_write_options(
     Ok(())
 }
 
+fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaLakeOptions) -> Result<()> {
+    if to.read_options.is_none() {
+        to.read_options = Some(DeltaReadOptions {
+            enable_parquet_pushdown: None,
+        });
+    }
+
+    if let Some(ref mut existing) = to.read_options {
+        if from.enable_parquet_pushdown.is_some() {
+            existing.enable_parquet_pushdown = from.enable_parquet_pushdown;
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_delta_write_options(
+    from: DeltaWriteOptions,
+    options_map: &mut HashMap<String, String>,
+) -> Result<()> {
+    if let Some(mode) = from.mode {
+        options_map.insert("mode".to_string(), mode);
+    }
+
+    if let Some(overwrite_schema) = from.overwrite_schema {
+        options_map.insert("overwriteSchema".to_string(), overwrite_schema.to_string());
+    }
+    if let Some(merge_schema) = from.merge_schema {
+        options_map.insert("mergeSchema".to_string(), merge_schema.to_string());
+    }
+    if let Some(partition_by) = from.partition_by {
+        options_map.insert("partitionBy".to_string(), partition_by);
+    }
+
+    Ok(())
+}
+
 pub struct DataSourceOptionsResolver<'a> {
     ctx: &'a SessionContext,
 }
@@ -338,6 +382,27 @@ impl<'a> DataSourceOptionsResolver<'a> {
         apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_write_options(load_options(options)?, &mut parquet_options)?;
         Ok(parquet_options)
+    }
+
+    pub fn resolve_delta_read_options(
+        &self,
+        options: HashMap<String, String>,
+    ) -> Result<TableDeltaLakeOptions> {
+        let mut delta_options = TableDeltaLakeOptions::default();
+        apply_delta_read_options(load_default_options()?, &mut delta_options)?;
+        apply_delta_read_options(load_options(options)?, &mut delta_options)?;
+        Ok(delta_options)
+    }
+
+    pub fn resolve_delta_write_options(
+        &self,
+        options: HashMap<String, String>,
+    ) -> Result<HashMap<String, String>> {
+        let mut final_options = HashMap::new();
+        apply_delta_write_options(load_default_options()?, &mut final_options)?;
+        apply_delta_write_options(load_options(options)?, &mut final_options)?;
+
+        Ok(final_options)
     }
 }
 

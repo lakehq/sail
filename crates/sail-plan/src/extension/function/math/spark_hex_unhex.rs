@@ -1,5 +1,4 @@
 use std::any::Any;
-use std::fmt::Write;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -133,13 +132,11 @@ fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> String {
     let mut s = String::with_capacity(data.as_ref().len() * 2);
     if lower_case {
         for b in data.as_ref() {
-            // Writing to a string never errors, so we can unwrap here.
-            write!(&mut s, "{b:02x}").unwrap();
+            s.push_str(&format!("{b:02x}"));
         }
     } else {
         for b in data.as_ref() {
-            // Writing to a string never errors, so we can unwrap here.
-            write!(&mut s, "{b:02X}").unwrap();
+            s.push_str(&format!("{b:02X}"));
         }
     }
     s
