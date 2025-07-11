@@ -1,0 +1,8 @@
+>>> df = spark.createDataFrame([(25,),(35,)], ["n"])
+>>> df.selectExpr("n", "bround(n, -1) as bround_n").show()
++---+--------+
+|  n|bround_n|
++---+--------+
+| 25|      20|
+| 35|      40|
++---+--------+
