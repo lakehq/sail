@@ -86,7 +86,7 @@ impl<'a> ConfigDefinition<'a> {
     }
 }
 
-impl<'a> Provider for ConfigDefinition<'a> {
+impl Provider for ConfigDefinition<'_> {
     fn metadata(&self) -> Metadata {
         Metadata::named("definition")
     }
