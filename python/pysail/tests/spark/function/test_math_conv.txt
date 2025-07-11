@@ -1,0 +1,7 @@
+>>> df = spark.sql("""SELECT conv('10', 10, 2) as to_binary,conv('10', 10, 8) as to_octal,conv('10', 10, 16) as to_hex""")
+>>> df.show()
++---------+--------+------+
+|to_binary|to_octal|to_hex|
++---------+--------+------+
+|     1010|      12|     A|
++---------+--------+------+

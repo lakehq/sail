@@ -569,7 +569,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bround"
+        "success": "ok"
       }
     },
     {
@@ -591,7 +591,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bround"
+        "success": "ok"
       }
     },
     {
@@ -811,7 +811,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: conv"
+        "success": "ok"
       }
     },
     {
@@ -833,7 +833,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: conv"
+        "success": "ok"
       }
     },
     {
@@ -921,7 +921,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: csc"
+        "success": "ok"
       }
     },
     {
@@ -1801,7 +1801,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: sec"
+        "success": "ok"
       }
     },
     {
