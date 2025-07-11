@@ -5,30 +5,26 @@ use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{DdlStatement, DropFunction, LogicalPlan, ScalarUDF};
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::CatalogManager;
-use crate::extension::logical::CatalogTableFunction;
+use crate::command::CatalogTableFunction;
+use crate::manager::CatalogManager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct FunctionMetadata {
-    pub(crate) name: String,
-    pub(crate) catalog: Option<String>,
-    pub(crate) namespace: Option<Vec<String>>,
-    pub(crate) description: Option<String>,
-    pub(crate) class_name: String,
-    pub(crate) is_temporary: bool,
+pub struct FunctionMetadata {
+    pub name: String,
+    pub catalog: Option<String>,
+    pub namespace: Option<Vec<String>>,
+    pub description: Option<String>,
+    pub class_name: String,
+    pub is_temporary: bool,
 }
 
 impl CatalogManager<'_> {
-    pub(crate) fn register_function(&self, udf: ScalarUDF) -> Result<()> {
+    pub fn register_function(&self, udf: ScalarUDF) -> Result<()> {
         self.ctx.register_udf(udf);
         Ok(())
     }
 
-    pub(crate) fn register_table_function(
-        &self,
-        _name: String,
-        udtf: CatalogTableFunction,
-    ) -> Result<()> {
+    pub fn register_table_function(&self, _name: String, udtf: CatalogTableFunction) -> Result<()> {
         let _function: Arc<dyn TableFunctionImpl> = match udtf {};
         #[allow(unreachable_code)]
         {
@@ -37,7 +33,7 @@ impl CatalogManager<'_> {
         }
     }
 
-    pub(crate) async fn drop_function(
+    pub async fn drop_function(
         &self,
         function: TableReference,
         if_exists: bool,

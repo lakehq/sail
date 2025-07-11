@@ -3,12 +3,12 @@ use std::sync::Arc;
 use datafusion_common::{DFSchema, DFSchemaRef, Result, SchemaReference, TableReference};
 use datafusion_expr::{CreateView, DdlStatement, DropView, LogicalPlan};
 
-use crate::catalog::table::{TableMetadata, TableObject};
-use crate::catalog::CatalogManager;
+use crate::manager::table::{TableMetadata, TableObject};
+use crate::manager::CatalogManager;
 use crate::temp_view::manage_temporary_views;
 
 impl CatalogManager<'_> {
-    pub(crate) async fn list_global_temporary_views(
+    pub async fn list_global_temporary_views(
         &self,
         pattern: Option<&str>,
     ) -> Result<Vec<TableMetadata>> {
@@ -18,7 +18,7 @@ impl CatalogManager<'_> {
                     .into_iter()
                     .map(|(name, plan)| {
                         TableMetadata::from_table_object(TableObject::GlobalTemporaryView {
-                            database_name: self.config.global_temp_database.clone(),
+                            database_name: self.config.global_temporary_database().to_string(),
                             table_name: name,
                             plan,
                         })
@@ -28,10 +28,7 @@ impl CatalogManager<'_> {
         })
     }
 
-    pub(crate) async fn list_temporary_views(
-        &self,
-        pattern: Option<&str>,
-    ) -> Result<Vec<TableMetadata>> {
+    pub async fn list_temporary_views(&self, pattern: Option<&str>) -> Result<Vec<TableMetadata>> {
         manage_temporary_views(self.ctx, false, |views| {
             views.list_views(pattern).map(|views| {
                 views
@@ -47,7 +44,7 @@ impl CatalogManager<'_> {
         })
     }
 
-    pub(crate) async fn list_views(
+    pub async fn list_views(
         &self,
         database: Option<SchemaReference>,
         view_pattern: Option<&str>,
@@ -62,7 +59,7 @@ impl CatalogManager<'_> {
         Ok(output)
     }
 
-    pub(crate) async fn drop_temporary_view(
+    pub async fn drop_temporary_view(
         &self,
         view_name: &str,
         is_global: bool,
@@ -74,7 +71,7 @@ impl CatalogManager<'_> {
         })
     }
 
-    pub(crate) async fn drop_view(&self, view: TableReference, if_exists: bool) -> Result<()> {
+    pub async fn drop_view(&self, view: TableReference, if_exists: bool) -> Result<()> {
         let ddl = LogicalPlan::Ddl(DdlStatement::DropView(DropView {
             name: view,
             if_exists,
@@ -84,7 +81,7 @@ impl CatalogManager<'_> {
         Ok(())
     }
 
-    pub(crate) async fn create_temporary_view(
+    pub async fn create_temporary_view(
         &self,
         input: Arc<LogicalPlan>,
         view_name: &str,
@@ -97,7 +94,7 @@ impl CatalogManager<'_> {
         })
     }
 
-    pub(crate) async fn create_view(
+    pub async fn create_view(
         &self,
         input: Arc<LogicalPlan>,
         view: TableReference,
