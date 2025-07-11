@@ -36,6 +36,8 @@ use datafusion_expr::{
     WindowFrame, WindowFunctionDefinition,
 };
 use rand::{rng, Rng};
+use sail_catalog::command::{CatalogCommand, CatalogTableDefinition};
+use sail_catalog::temp_view::manage_temporary_views;
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
@@ -54,8 +56,8 @@ use crate::extension::function::math::rand_poisson::RandPoisson;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::extension::logical::{
-    CatalogCommand, CatalogCommandNode, CatalogTableDefinition, MapPartitionsNode, RangeNode,
-    ShowStringFormat, ShowStringNode, ShowStringStyle, SortWithinPartitionsNode,
+    CatalogCommandNode, MapPartitionsNode, RangeNode, ShowStringFormat, ShowStringNode,
+    ShowStringStyle, SortWithinPartitionsNode,
 };
 use crate::extension::source::rename::RenameTableProvider;
 use crate::function::{
@@ -70,7 +72,6 @@ use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
 use crate::resolver::PlanResolver;
-use crate::temp_view::manage_temporary_views;
 use crate::utils::ItemTaker;
 
 #[derive(Debug)]

@@ -14,7 +14,6 @@ use crate::error::PlanResult;
 use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
 
-mod catalog;
 pub mod config;
 pub mod error;
 pub mod extension;
@@ -22,7 +21,6 @@ pub mod formatter;
 pub mod function;
 pub mod literal;
 pub mod resolver;
-pub mod temp_view;
 mod utils;
 
 /// Executes a logical plan.
