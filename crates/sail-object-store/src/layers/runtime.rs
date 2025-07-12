@@ -313,6 +313,11 @@ where
         A: Send + 'static,
         F: FnOnce(&A) -> BoxStream<'_, T> + Send + 'static,
     {
+        let buffer_size = std::env::var("SAIL_OBJECT_STORE_STREAM_BUFFER")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1);
+        println!("CHECK HERE Using stream buffer size: {buffer_size}");
         let (tx, rx) = mpsc::channel(1);
         handle.spawn(async move {
             let mut stream = initializer(&args);
