@@ -1,5 +1,5 @@
 use datafusion::arrow::datatypes::DataType;
-use datafusion::functions::expr_fn::nvl;
+use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position_udf;
 use datafusion_common::ScalarValue;
@@ -81,10 +81,17 @@ fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
 }
 
 fn array_contains(array: expr::Expr, element: expr::Expr) -> expr::Expr {
-    nvl(
-        expr_fn::array_has(array, element),
-        lit(ScalarValue::Boolean(Some(false))),
-    )
+    coalesce(vec![
+        expr_fn::array_has(array.clone(), element),
+        expr::Expr::Case(expr::Case {
+            expr: None,
+            when_then_expr: vec![(
+                Box::new(expr::Expr::IsNotNull(Box::new(array))),
+                Box::new(lit(ScalarValue::Boolean(Some(false)))),
+            )],
+            else_expr: None,
+        }),
+    ])
 }
 
 fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
