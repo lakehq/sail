@@ -313,6 +313,8 @@ where
         A: Send + 'static,
         F: FnOnce(&A) -> BoxStream<'_, T> + Send + 'static,
     {
+        // Testing with larger buffer values showed no performance improvement.
+        // Network I/O is the bottleneck, not channel capacity.
         let (tx, rx) = mpsc::channel(1);
         handle.spawn(async move {
             let mut stream = initializer(&args);
