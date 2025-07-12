@@ -6,6 +6,7 @@ use std::task::{Context, Poll};
 
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
+use log::info;
 use object_store::path::Path;
 use object_store::{
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
@@ -317,7 +318,7 @@ where
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(1);
-        println!("CHECK HERE Using stream buffer size: {buffer_size}");
+        info!("CHECK HERE Using stream buffer size: {buffer_size}");
         let (tx, rx) = mpsc::channel(1);
         handle.spawn(async move {
             let mut stream = initializer(&args);
