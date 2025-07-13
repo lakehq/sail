@@ -67,8 +67,26 @@ fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::array_sort(array, sort, nulls))
 }
 
+fn array_append(array: expr::Expr, element: expr::Expr) -> expr::Expr {
+    expr::Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(
+            Box::new(expr::Expr::IsNotNull(Box::new(array.clone()))),
+            Box::new(expr_fn::array_append(array, element)),
+        )],
+        else_expr: None,
+    })
+}
+
 fn array_prepend(array: expr::Expr, element: expr::Expr) -> expr::Expr {
-    expr_fn::array_prepend(element, array)
+    expr::Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(
+            Box::new(expr::Expr::IsNotNull(Box::new(array.clone()))),
+            Box::new(expr_fn::array_prepend(element, array)),
+        )],
+        else_expr: None,
+    })
 }
 
 fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
@@ -106,7 +124,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
 
     vec![
         ("array", F::udf(SparkArray::new())),
-        ("array_append", F::binary(expr_fn::array_append)),
+        ("array_append", F::binary(array_append)),
         ("array_compact", F::unary(array_compact)),
         ("array_contains", F::binary(array_contains)),
         ("array_contains_all", F::binary(array_contains_all)),
