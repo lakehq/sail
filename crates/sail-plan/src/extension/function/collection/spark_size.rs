@@ -47,6 +47,14 @@ impl SparkSize {
             is_legacy_cardinality,
         }
     }
+
+    pub fn is_array_size(&self) -> bool {
+        self.is_array_size
+    }
+
+    pub fn is_legacy_cardinality(&self) -> bool {
+        self.is_legacy_cardinality
+    }
 }
 
 impl ScalarUDFImpl for SparkSize {
