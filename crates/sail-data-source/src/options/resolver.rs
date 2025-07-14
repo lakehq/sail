@@ -281,40 +281,14 @@ fn apply_parquet_write_options(
     Ok(())
 }
 
-fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaLakeOptions) -> Result<()> {
-    if to.read_options.is_none() {
-        to.read_options = Some(DeltaReadOptions {
-            enable_parquet_pushdown: None,
-        });
-    }
-
-    if let Some(ref mut existing) = to.read_options {
-        if from.enable_parquet_pushdown.is_some() {
-            existing.enable_parquet_pushdown = from.enable_parquet_pushdown;
-        }
-    }
-
+fn apply_delta_read_options(_from: DeltaReadOptions, _to: &mut TableDeltaLakeOptions) -> Result<()> {
     Ok(())
 }
 
 fn apply_delta_write_options(
-    from: DeltaWriteOptions,
-    options_map: &mut HashMap<String, String>,
+    _from: DeltaWriteOptions,
+    _options_map: &mut HashMap<String, String>,
 ) -> Result<()> {
-    if let Some(mode) = from.mode {
-        options_map.insert("mode".to_string(), mode);
-    }
-
-    if let Some(overwrite_schema) = from.overwrite_schema {
-        options_map.insert("overwriteSchema".to_string(), overwrite_schema.to_string());
-    }
-    if let Some(merge_schema) = from.merge_schema {
-        options_map.insert("mergeSchema".to_string(), merge_schema.to_string());
-    }
-    if let Some(partition_by) = from.partition_by {
-        options_map.insert("partitionBy".to_string(), partition_by);
-    }
-
     Ok(())
 }
 

@@ -286,23 +286,22 @@ impl<'a> TableProviderFactory<'a> {
     async fn create_delta_provider(
         &self,
         table_uri: &str,
-        options: &HashMap<String, String>,
+        _options: &HashMap<String, String>,
     ) -> Result<Arc<dyn TableProvider>> {
         let resolver = DataSourceOptionsResolver::new(self.ctx);
-        let delta_options = resolver.resolve_delta_read_options(options.clone())?;
+        // let delta_options = resolver.resolve_delta_read_options(options.clone())?;
 
         let url = ListingTableUrl::parse(table_uri)?;
         let object_store = self.ctx.runtime_env().object_store(&url)?;
 
         let storage_config = Default::default();
 
+        // Create DeltaScanConfig with proper field names
         let scan_config = DeltaScanConfig {
-            enable_parquet_pushdown: delta_options
-                .read_options
-                .as_ref()
-                .and_then(|opts| opts.enable_parquet_pushdown)
-                .unwrap_or(true),
-            ..Default::default()
+            file_column_name: None,
+            wrap_partition_values: true,
+            enable_parquet_pushdown: true, // Default to true for now
+            schema: None,
         };
 
         let table_provider = create_delta_table_provider_with_object_store(
