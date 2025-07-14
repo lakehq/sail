@@ -158,7 +158,7 @@ impl ShowStringFormat {
         if num_fields > 0 {
             let width = lines.iter().map(|l| l.len()).max().unwrap_or(0);
             for (i, line) in lines.into_iter().enumerate() {
-                if i % num_fields == 0 {
+                if i.is_multiple_of(num_fields) {
                     table.push(header(i / num_fields, width));
                 }
                 table.push(line);

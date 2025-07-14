@@ -33,7 +33,7 @@ pub(crate) fn parse_spark_data_type(schema: &str) -> SparkResult<spec::DataType>
     {
         match dt {
             spec::DataType::Struct { fields } if fields.is_empty() => {
-                return Err(SparkError::invalid("empty data type"));
+                Err(SparkError::invalid("empty data type"))
             }
             // The SQL parser supports both `struct<name: type, ...>` and `struct<name type, ...>` syntax.
             // Therefore, by wrapping the input with `struct<...>`, we do not need separate logic
