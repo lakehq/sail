@@ -179,15 +179,15 @@ impl PlanResolverState {
         }
     }
 
-    pub fn enter_query_scope(&mut self, schema: DFSchemaRef) -> QueryScope {
+    pub fn enter_query_scope(&mut self, schema: DFSchemaRef) -> QueryScope<'_> {
         QueryScope::new(self, schema)
     }
 
-    pub fn enter_aggregate_scope(&mut self, aggregate_state: AggregateState) -> AggregateScope {
+    pub fn enter_aggregate_scope(&mut self, aggregate_state: AggregateState) -> AggregateScope<'_> {
         AggregateScope::new(self, aggregate_state)
     }
 
-    pub fn enter_cte_scope(&mut self) -> CteScope {
+    pub fn enter_cte_scope(&mut self) -> CteScope<'_> {
         CteScope::new(self)
     }
 
@@ -199,7 +199,7 @@ impl PlanResolverState {
         self.ctes.insert(table_ref, Arc::new(plan));
     }
 
-    pub fn enter_config_scope(&mut self) -> ConfigScope {
+    pub fn enter_config_scope(&mut self) -> ConfigScope<'_> {
         ConfigScope::new(self)
     }
 
