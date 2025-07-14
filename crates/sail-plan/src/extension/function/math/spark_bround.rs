@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::sync::Arc;
-
+use arrow::array::{Int32Array, Int64Array};
 use datafusion::arrow::array::{as_primitive_array, Array, Float32Array, Float64Array};
 use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type, Int64Type};
 use datafusion_common::{Result, ScalarValue};
@@ -55,9 +55,9 @@ impl ScalarUDFImpl for SparkBRound {
             DataType::Float64
             | DataType::Float32
             | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _)
-            | DataType::Int32
-            | DataType::Int64 => Ok(DataType::Float64),
+            | DataType::Decimal256(_, _)=> Ok(DataType::Float64),
+            DataType::Int32 => Ok(DataType::Int32),
+             DataType::Int64 => Ok(DataType::Int64),
             _ => Err(unsupported_data_type_exec_err(
                 "spark_bround",
                 "Float64, Float32, Decimal128, Decimal256, Int32, Int64",
@@ -151,14 +151,14 @@ impl ScalarUDFImpl for SparkBRound {
             (DataType::Int32, DataType::Int32) => {
                 let x = as_primitive_array::<Int32Type>(&x_array);
                 let d = as_primitive_array::<Int32Type>(&d_array);
-                let result: Float64Array = x
+                let result: Int32Array = x
                     .iter()
                     .zip(d.iter())
                     .map(|(x_val, scale)| match (x_val, scale) {
                         (Some(x), Some(s)) => {
                             let x_f64 = x as f64;
                             let pow = 10f64.powi(s);
-                            Some(round_half_to_even_f64(x_f64 * pow) / pow)
+                            Some((round_half_to_even_f64(x_f64 * pow) / pow) as i32)
                         }
                         _ => None,
                     })
@@ -169,48 +169,14 @@ impl ScalarUDFImpl for SparkBRound {
             (DataType::Int64, DataType::Int32) => {
                 let x = as_primitive_array::<Int64Type>(&x_array);
                 let d = as_primitive_array::<Int32Type>(&d_array);
-                let result: Float64Array = x
+                let result: Int64Array = x
                     .iter()
                     .zip(d.iter())
                     .map(|(x_val, scale)| match (x_val, scale) {
                         (Some(x), Some(s)) => {
                             let x_f64 = x as f64;
                             let pow = 10f64.powi(s);
-                            Some(round_half_to_even_f64(x_f64 * pow).round() / pow)
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                Ok(ColumnarValue::Array(Arc::new(result)))
-            }
-
-            (DataType::Float32, DataType::Float64) => {
-                let x = as_primitive_array::<Float32Type>(&x_array);
-                let d = as_primitive_array::<Float64Type>(&d_array);
-                let result: Float32Array = x
-                    .iter()
-                    .zip(d.iter())
-                    .map(|(x_val, scale)| match (x_val, scale) {
-                        (Some(x), Some(s)) => {
-                            let pow = 10f32.powf(s as f32);
-                            Some(round_half_to_even_f32(x * pow) / pow)
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                Ok(ColumnarValue::Array(Arc::new(result)))
-            }
-
-            (DataType::Float64, DataType::Float64) => {
-                let x = as_primitive_array::<Float64Type>(&x_array);
-                let d = as_primitive_array::<Float64Type>(&d_array);
-                let result: Float64Array = x
-                    .iter()
-                    .zip(d.iter())
-                    .map(|(x_val, scale)| match (x_val, scale) {
-                        (Some(x), Some(s)) => {
-                            let pow = 10f64.powf(s);
-                            Some(round_half_to_even_f64(x * pow) / pow)
+                            Some((round_half_to_even_f64(x_f64 * pow).round() / pow).round() as i64)
                         }
                         _ => None,
                     })
@@ -325,7 +291,7 @@ fn round_half_to_even_f32(value: f32) -> f32 {
         rounded - 1.0
     }
 }
-
+//////
 fn round_half_to_even_scaled_f64(scaled: f64) -> f64 {
     if (scaled - scaled.round()).abs() == 0.5 {
         let trunc: f64 = scaled.trunc();
