@@ -51,3 +51,5 @@ half = { workspace = true }
 crc32fast = { workspace = true }
 num = { workspace = true }
 arrow = { workspace = true }
+url = { workspace = true }
+percent-encoding = { workspace = true }
