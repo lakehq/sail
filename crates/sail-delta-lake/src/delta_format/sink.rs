@@ -15,8 +15,8 @@ use futures::StreamExt;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::{
     create_delta_table_with_object_store, open_table_with_object_store, Action, CommitBuilder,
-    CommitProperties, DeltaOperation, Protocol, Remove, SaveMode, StorageConfig,
-    StructType, TableReference, TryIntoKernel, WriterProperties,
+    CommitProperties, DeltaOperation, Protocol, Remove, SaveMode, StorageConfig, StructType,
+    TableReference, TryIntoKernel, WriterProperties,
 };
 
 #[derive(Debug)]

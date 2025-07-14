@@ -288,7 +288,7 @@ impl<'a> TableProviderFactory<'a> {
         table_uri: &str,
         _options: &HashMap<String, String>,
     ) -> Result<Arc<dyn TableProvider>> {
-        let resolver = DataSourceOptionsResolver::new(self.ctx);
+        // let resolver = DataSourceOptionsResolver::new(self.ctx);
         // let delta_options = resolver.resolve_delta_read_options(options.clone())?;
 
         let url = ListingTableUrl::parse(table_uri)?;

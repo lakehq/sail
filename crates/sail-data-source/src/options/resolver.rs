@@ -281,7 +281,10 @@ fn apply_parquet_write_options(
     Ok(())
 }
 
-fn apply_delta_read_options(_from: DeltaReadOptions, _to: &mut TableDeltaLakeOptions) -> Result<()> {
+fn apply_delta_read_options(
+    _from: DeltaReadOptions,
+    _to: &mut TableDeltaLakeOptions,
+) -> Result<()> {
     Ok(())
 }
 

@@ -81,16 +81,3 @@ where
         .map_err(|e| Error::custom(format!("invalid u64 value: {e}")))?;
     Ok(Some(value))
 }
-
-pub fn deserialize_save_mode<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    match value.to_lowercase().as_str() {
-        "append" | "overwrite" | "error" | "ignore" => Ok(Some(value.to_lowercase())),
-        _ => Err(Error::custom(format!(
-            "invalid save mode: {value}. Valid values are: append, overwrite, error, ignore"
-        ))),
-    }
-}
