@@ -38,7 +38,7 @@ pub trait MetadataExt {
 
     fn add_config_key(self, key: String, value: String) -> DeltaResult<Metadata>;
 
-    fn remove_config_key(self, key: &String) -> DeltaResult<Metadata>;
+    fn remove_config_key(self, key: &str) -> DeltaResult<Metadata>;
 }
 
 impl MetadataExt for Metadata {
@@ -114,7 +114,7 @@ impl MetadataExt for Metadata {
         Ok(serde_json::from_value(value)?)
     }
 
-    fn remove_config_key(self, key: &String) -> DeltaResult<Metadata> {
+    fn remove_config_key(self, key: &str) -> DeltaResult<Metadata> {
         let mut config = self.configuration().clone();
         config.remove(key);
         let value = serde_json::json!({
@@ -237,7 +237,7 @@ impl Protocol {
         mut self,
         configuration: &HashMap<String, String>,
     ) -> Protocol {
-        fn parse_bool(value: &String) -> bool {
+        fn parse_bool(value: &str) -> bool {
             value.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v)
         }
 
@@ -559,7 +559,7 @@ impl fmt::Display for TableFeatures {
 impl TryFrom<&TableFeatures> for ReaderFeature {
     type Error = String;
 
-    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
+    fn try_from(_value: &TableFeatures) -> Result<Self, Self::Error> {
         // TODO: Implement proper conversion
         Err("Not implemented".to_string())
     }
@@ -568,7 +568,7 @@ impl TryFrom<&TableFeatures> for ReaderFeature {
 impl TryFrom<&TableFeatures> for WriterFeature {
     type Error = String;
 
-    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
+    fn try_from(_value: &TableFeatures) -> Result<Self, Self::Error> {
         // TODO: Implement proper conversion
         Err("Not implemented".to_string())
     }

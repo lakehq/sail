@@ -129,11 +129,11 @@ impl DataFusionMixins for Snapshot {
 
 impl DataFusionMixins for EagerSnapshot {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_from_struct_type(self.schema(), &self.metadata().partition_columns(), true)
+        arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), true)
     }
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_from_struct_type(self.schema(), &self.metadata().partition_columns(), false)
+        arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), false)
     }
 }
 
