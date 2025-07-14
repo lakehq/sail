@@ -14,6 +14,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use regex::Regex;
 
 use crate::extension::function::functions_nested_utils::*;
 use crate::extension::function::functions_utils::make_scalar_function;
@@ -87,8 +88,7 @@ impl ScalarUDFImpl for SparkFromCSV {
             _ => internal_err!("Expected UTF-8 schema string"),
         }?;
 
-        let sep: String = SparkFromCSV::SEP_DEFAULT.to_string();
-        let schema: Result<DataType> = parse_fields(schema, &sep).map(DataType::Struct);
+        let schema: Result<DataType> = parse_fields(schema).map(DataType::Struct);
         schema.map(|dt| Arc::new(Field::new(self.name(), dt, true)) as FieldRef)
     }
 
@@ -139,7 +139,7 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         SparkFromCSV::SEP_DEFAULT.to_string()
     };
 
-    let fields: Fields = parse_fields(schema_str, SparkFromCSV::SEP_DEFAULT)?;
+    let fields: Fields = parse_fields(schema_str)?;
 
     let mut children_scalars: Vec<Vec<ScalarValue>> =
         vec![Vec::with_capacity(array.len()); fields.len()];
@@ -216,49 +216,60 @@ fn get_sep_from_options(options: &MapArray) -> Result<String> {
 }
 
 /// Parses a schema string like "name STRING, age INT" into Arrow `Fields`
-fn parse_fields(schema: &str, sep: &str) -> Result<Fields> {
-    let schema: Result<Fields> = parse_schema_string(schema, sep);
+fn parse_fields(schema: &str) -> Result<Fields> {
+    let schema: Result<Fields> = parse_schema_string(schema);
     schema.map(|fields| {
         let vec_fields: Vec<Arc<Field>> = fields.iter().cloned().collect();
         Fields::from(vec_fields)
     })
 }
 
-/// Parses a schema definition string into a `Fields` list with duplicate check
-fn parse_schema_string(schema_str: &str, sep: &str) -> Result<Fields> {
-    schema_str
-        .split(sep)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|spec| {
-            let parts: Vec<_> = spec.split_whitespace().collect();
-            if parts.len() != 2 {
-                return exec_err!("Invalid field spec: '{}'", spec);
-            }
+/// Parses a schema definition string into a `Fields` list with correct handling of types with nested delimiters.
+fn parse_schema_string(schema_str: &str) -> Result<Fields> {
+    let trimmed_schema = schema_str.trim();
 
-            let name = parts[0];
-            let type_str = parts[1];
-            let data_type = parse_data_type(type_str)?;
-            Ok((name.to_string(), Field::new(name, data_type, true)))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .try_fold(
-            (HashSet::new(), Vec::new()),
-            |(seen, mut acc), (name, field)| {
-                if seen.contains(&name) {
-                    Err(DataFusionError::Plan(format!(
-                        "Duplicate field name '{name}'"
-                    )))
-                } else {
-                    let mut seen = seen;
-                    seen.insert(name);
-                    acc.push(field);
-                    Ok((seen, acc))
-                }
-            },
-        )
-        .map(|(_, fields)| Fields::from(fields))
+    // Check for STRUCT pattern and remove enclosing tags
+    let schema_content = if trimmed_schema.starts_with("STRUCT<") && trimmed_schema.ends_with('>') {
+        &trimmed_schema[7..trimmed_schema.len() - 1] // Remove "STRUCT<" prefix and ">" suffix
+    } else {
+        trimmed_schema
+    };
+
+    // Allow for optional colons between names and types
+    let field_regex = Regex::new(r"\s*([a-zA-Z_]\w*)\s*:?\s*([a-zA-Z_]+(?:\s*\([^)]*\))?)\s*");
+
+    if let Ok(field_regex) = field_regex {
+        field_regex
+            .captures_iter(schema_content)
+            .map(|cap| {
+                let name = &cap[1];
+                let type_str = &cap[2];
+                let data_type = parse_data_type(type_str)?;
+                Ok((name.to_string(), Field::new(name, data_type, true)))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .try_fold(
+                (HashSet::new(), Vec::new()),
+                |(seen, mut acc), (name, field)| {
+                    if seen.contains(&name) {
+                        Err(DataFusionError::Plan(format!(
+                            "Duplicate field name '{name}'"
+                        )))
+                    } else {
+                        let mut seen = seen;
+                        seen.insert(name);
+                        acc.push(field);
+                        Ok((seen, acc))
+                    }
+                },
+            )
+            .map(|(_, fields)| Fields::from(fields))
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "Invalid schema string '{schema_content}'"
+        )))
+    }
 }
 
 /// Parses a single type string (e.g. "INT", "STRUCT<id INT>") into an Arrow DataType using `sqlparser`
