@@ -135,7 +135,7 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
                     Arc::new(store)
                 }
                 ObjectStoreScheme::Http => {
-                    let url = (&url[..url::Position::BeforePath]).to_string();
+                    let url = url[..url::Position::BeforePath].to_string();
                     let store = LazyObjectStore::new(move || {
                         let url = url.to_string();
                         async move { get_http_object_store(url).await }
@@ -159,40 +159,19 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
 
 // The following implementations are basic for now just to get preliminary functionality.
 pub async fn get_azure_object_store(url: &Url) -> object_store::Result<MicrosoftAzure> {
-    let options: Vec<(String, String)> = std::env::vars()
-        .into_iter()
-        .map(|(k, v)| (k.into(), v.into()))
-        .collect();
-    let builder = options.iter().fold(
-        MicrosoftAzureBuilder::new().with_url(url.to_string()),
-        |builder, (key, value)| match key.parse() {
-            Ok(k) => builder.with_config(k, value),
-            Err(_) => builder,
-        },
-    );
-    builder.build()
+    MicrosoftAzureBuilder::from_env()
+        .with_url(url.to_string())
+        .build()
 }
 
 pub async fn get_gcs_object_store(url: &Url) -> object_store::Result<GoogleCloudStorage> {
-    let options: Vec<(String, String)> = std::env::vars()
-        .into_iter()
-        .map(|(k, v)| (k.into(), v.into()))
-        .collect();
-    let builder = options.iter().fold(
-        GoogleCloudStorageBuilder::new().with_url(url.to_string()),
-        |builder, (key, value)| match key.parse() {
-            Ok(k) => builder.with_config(k, value),
-            Err(_) => builder,
-        },
-    );
-    builder.build()
+    GoogleCloudStorageBuilder::from_env()
+        .with_url(url.to_string())
+        .build()
 }
 
 pub async fn get_http_object_store(url: String) -> object_store::Result<HttpStore> {
-    let options: Vec<(String, String)> = std::env::vars()
-        .into_iter()
-        .map(|(k, v)| (k.into(), v.into()))
-        .collect();
+    let options: Vec<(String, String)> = std::env::vars().collect();
     let builder = options.into_iter().fold(
         HttpBuilder::new().with_url(url),
         |builder, (key, value)| match key.parse() {
