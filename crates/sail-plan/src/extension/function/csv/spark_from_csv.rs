@@ -80,10 +80,10 @@ impl ScalarUDFImpl for SparkFromCSV {
             scalar_arguments, ..
         } = args;
         let default_options = create_default_options();
-        let options = if let Some(Some(ScalarValue::Map(map_array))) =  scalar_arguments.get(2) {
+        let options = if let Some(Some(ScalarValue::Map(map_array))) = scalar_arguments.get(2) {
             map_array.entries()
         } else {
-            &default_options.entries()
+            default_options.entries()
         };
 
         let schema: &String = match scalar_arguments[1] {
@@ -165,8 +165,8 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     for i in 0..array.len() {
         if array.is_null(i) {
-            for col in &mut children_scalars {
-                col.push(ScalarValue::Null);
+            for j in 0..children_scalars.len() {
+                children_scalars[j].push(ScalarValue::try_new_null(fields[j].data_type())?);
             }
             validity.push(false);
         } else {
@@ -181,7 +181,7 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let children_arrays: Vec<ArrayRef> = children_scalars
         .into_iter()
-        .map(ScalarValue::iter_to_array)
+        .map(|arr| ScalarValue::iter_to_array(arr))
         .collect::<Result<_>>()?;
 
     Ok(Arc::new(StructArray::new(
@@ -211,7 +211,13 @@ fn parse_csv_line_to_scalar_values(
     values
         .iter()
         .zip(fields.iter())
-        .map(|(value, field)| ScalarValue::try_from_string(value.to_string(), field.data_type()))
+        .map(|(value, field)| {
+            if value.is_empty() {
+                ScalarValue::try_new_null(field.data_type())
+            } else {
+                ScalarValue::try_from_string(value.to_string(), field.data_type())
+            }
+        })
         .collect()
 }
 
