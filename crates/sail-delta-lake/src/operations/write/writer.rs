@@ -31,6 +31,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use super::WriteError;
+use crate::kernel::models::actions::MetadataExt;
 
 // Default constants
 const DEFAULT_TARGET_FILE_SIZE: usize = 104_857_600; // 100MB
@@ -733,7 +734,7 @@ impl WriteBuilder {
         match (&self.partition_columns, &self.snapshot) {
             (Some(columns), Some(snapshot)) => {
                 // Validate partition columns against existing table
-                let table_partition_cols = snapshot.metadata().partition_columns.clone();
+                let table_partition_cols = snapshot.metadata().partition_columns().clone();
                 if table_partition_cols != *columns {
                     return Err(WriteError::PartitionColumnMismatch {
                         expected: table_partition_cols,
@@ -743,7 +744,7 @@ impl WriteBuilder {
                 Ok(columns.clone())
             }
             (Some(columns), None) => Ok(columns.clone()),
-            (None, Some(snapshot)) => Ok(snapshot.metadata().partition_columns.clone()),
+            (None, Some(snapshot)) => Ok(snapshot.metadata().partition_columns().clone()),
             (None, None) => Ok(vec![]),
         }
     }
@@ -931,25 +932,39 @@ impl WriteBuilder {
                         message: format!("Failed to convert schema: {e}"),
                     })?;
 
-            let metadata = deltalake::kernel::Metadata {
-                id: uuid::Uuid::new_v4().to_string(),
-                name: self.name.clone(),
-                description: self.description.clone(),
-                format: deltalake::kernel::Format::default(),
-                schema_string: serde_json::to_string(&delta_schema).map_err(|e| {
-                    WriteError::SchemaValidation {
-                        message: format!("Failed to serialize schema: {e}"),
-                    }
-                })?,
-                partition_columns: partition_columns.clone(),
-                configuration: self.configuration.clone(),
-                created_time: Some(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("System time before Unix epoch")
-                        .as_millis() as i64,
-                ),
-            };
+            let configuration_map: HashMap<String, String> = self
+                .configuration
+                .clone()
+                .into_iter()
+                .filter_map(|(k, v)| v.map(|val| (k, val)))
+                .collect();
+
+            let mut metadata = crate::kernel::models::actions::new_metadata(
+                &delta_schema,
+                partition_columns.clone(),
+                configuration_map,
+            )
+            .map_err(|e| WriteError::SchemaValidation {
+                message: format!("Failed to create metadata: {e}"),
+            })?;
+
+            // Update metadata with optional fields
+            if let Some(name) = &self.name {
+                metadata =
+                    metadata
+                        .with_name(name.clone())
+                        .map_err(|e| WriteError::SchemaValidation {
+                            message: format!("Failed to set table name: {e}"),
+                        })?;
+            }
+
+            if let Some(description) = &self.description {
+                metadata = metadata
+                    .with_description(description.clone())
+                    .map_err(|e| WriteError::SchemaValidation {
+                        message: format!("Failed to set table description: {e}"),
+                    })?;
+            }
 
             deltalake::protocol::DeltaOperation::Create {
                 mode,
@@ -976,25 +991,39 @@ impl WriteBuilder {
                         message: format!("Failed to convert schema: {e}"),
                     })?;
 
-            let metadata = deltalake::kernel::Metadata {
-                id: uuid::Uuid::new_v4().to_string(),
-                name: self.name.clone(),
-                description: self.description.clone(),
-                format: deltalake::kernel::Format::default(),
-                schema_string: serde_json::to_string(&delta_schema).map_err(|e| {
-                    WriteError::SchemaValidation {
-                        message: format!("Failed to serialize schema: {e}"),
-                    }
-                })?,
-                partition_columns: partition_columns.clone(),
-                configuration: self.configuration.clone(),
-                created_time: Some(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("System time before Unix epoch")
-                        .as_millis() as i64,
-                ),
-            };
+            let configuration_map: HashMap<String, String> = self
+                .configuration
+                .clone()
+                .into_iter()
+                .filter_map(|(k, v)| v.map(|val| (k, val)))
+                .collect();
+
+            let mut metadata = crate::kernel::models::actions::new_metadata(
+                &delta_schema,
+                partition_columns.clone(),
+                configuration_map,
+            )
+            .map_err(|e| WriteError::SchemaValidation {
+                message: format!("Failed to create metadata: {e}"),
+            })?;
+
+            // Update metadata with optional fields
+            if let Some(name) = &self.name {
+                metadata =
+                    metadata
+                        .with_name(name.clone())
+                        .map_err(|e| WriteError::SchemaValidation {
+                            message: format!("Failed to set table name: {e}"),
+                        })?;
+            }
+
+            if let Some(description) = &self.description {
+                metadata = metadata
+                    .with_description(description.clone())
+                    .map_err(|e| WriteError::SchemaValidation {
+                        message: format!("Failed to set table description: {e}"),
+                    })?;
+            }
 
             // Add Protocol and Metadata actions for new tables
             all_actions.insert(0, Action::Protocol(protocol));

@@ -129,11 +129,11 @@ impl DataFusionMixins for Snapshot {
 
 impl DataFusionMixins for EagerSnapshot {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_from_struct_type(self.schema(), &self.metadata().partition_columns, true)
+        arrow_schema_from_struct_type(self.schema(), &self.metadata().partition_columns(), true)
     }
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_from_struct_type(self.schema(), &self.metadata().partition_columns, false)
+        arrow_schema_from_struct_type(self.schema(), &self.metadata().partition_columns(), false)
     }
 }
 
@@ -152,11 +152,11 @@ fn arrow_schema_from_snapshot(
     wrap_partitions: bool,
 ) -> DeltaResult<ArrowSchemaRef> {
     let meta = snapshot.metadata();
-    let schema = meta.schema()?;
+    let schema = snapshot.schema();
 
     let fields = schema
         .fields()
-        .filter(|f| !meta.partition_columns.contains(&f.name().to_string()))
+        .filter(|f| !meta.partition_columns().contains(&f.name().to_string()))
         .map(|f| {
             // Convert StructField to Arrow Field
             let field_name = f.name().to_string();
@@ -166,7 +166,7 @@ fn arrow_schema_from_snapshot(
         .chain(
             // We need stable order between logical and physical schemas, but the order of
             // partitioning columns is not always the same in the json schema and the array
-            meta.partition_columns.iter().map(|partition_col| {
+            meta.partition_columns().iter().map(|partition_col| {
                 let f = schema
                     .field(partition_col)
                     .expect("Partition column should exist in schema");
@@ -373,7 +373,7 @@ pub(crate) fn df_logical_schema(
         Some(schema) => schema,
         None => snapshot.input_schema()?,
     };
-    let table_partition_cols = &snapshot.metadata().partition_columns;
+    let table_partition_cols = &snapshot.metadata().partition_columns();
 
     let mut fields: Vec<Arc<Field>> = input_schema
         .fields()
@@ -769,7 +769,7 @@ impl<'a> DeltaScanBuilder<'a> {
         // TODO we group files together by their partition values. If the table is partitioned
         // we may be able to reduce the number of groups by combining groups with the same partition values
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-        let table_partition_cols = &self.snapshot.metadata().partition_columns;
+        let table_partition_cols = &self.snapshot.metadata().partition_columns();
 
         for action in files {
             let mut partition_values = Vec::new();
@@ -1361,7 +1361,7 @@ impl TableProvider for DeltaTableProvider {
         &self,
         filter: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let partition_cols = self.snapshot.metadata().partition_columns.as_slice();
+        let partition_cols = self.snapshot.metadata().partition_columns().as_slice();
         Ok(get_pushdown_filters(filter, partition_cols))
     }
 
@@ -1536,8 +1536,6 @@ impl TableProviderFactory for DeltaTableFactory {
             ))))
         })?;
 
-        // Get ObjectStore from sail's registry - this is the dependency injection point
-        // The ObjectStore should already be properly configured by sail's DynamicObjectStoreRegistry
         let object_store = ctx
             .runtime_env()
             .object_store_registry
@@ -1548,11 +1546,9 @@ impl TableProviderFactory for DeltaTableFactory {
                 ))))
             })?;
 
-        // Create storage config from options
         let storage_config = if cmd.options.is_empty() {
             deltalake::logstore::StorageConfig::default()
         } else {
-            // Parse options into StorageConfig
             let options_map: std::collections::HashMap<String, String> = cmd
                 .options
                 .iter()

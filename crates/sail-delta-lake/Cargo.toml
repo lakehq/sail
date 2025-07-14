@@ -40,3 +40,4 @@ uuid = { workspace = true }
 parquet = { workspace = true }
 bytes = { workspace = true }
 indexmap = { workspace = true }
+percent-encoding = "2.3.1"

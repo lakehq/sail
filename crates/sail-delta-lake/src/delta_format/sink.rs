@@ -15,7 +15,7 @@ use futures::StreamExt;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::{
     create_delta_table_with_object_store, open_table_with_object_store, Action, CommitBuilder,
-    CommitProperties, DeltaOperation, Format, Metadata, Protocol, Remove, SaveMode, StorageConfig,
+    CommitProperties, DeltaOperation, Protocol, Remove, SaveMode, StorageConfig,
     StructType, TableReference, TryIntoKernel, WriterProperties,
 };
 
@@ -48,41 +48,10 @@ impl DeltaDataSink {
 
     fn extract_storage_config(&self) -> Result<StorageConfig> {
         let mut storage_options = HashMap::new();
-
-        // Extract AWS S3 configuration
-        if let Some(access_key_id) = self.options.get("aws.access_key_id") {
-            storage_options.insert("AWS_ACCESS_KEY_ID".to_string(), access_key_id.clone());
-        }
-        if let Some(secret_access_key) = self.options.get("aws.secret_access_key") {
-            storage_options.insert(
-                "AWS_SECRET_ACCESS_KEY".to_string(),
-                secret_access_key.clone(),
-            );
-        }
-        if let Some(region) = self.options.get("aws.region") {
-            storage_options.insert("AWS_REGION".to_string(), region.clone());
-        }
-        if let Some(endpoint) = self.options.get("aws.endpoint") {
-            storage_options.insert("AWS_ENDPOINT_URL".to_string(), endpoint.clone());
-        }
-
-        // Extract Azure configuration
-        if let Some(account_name) = self.options.get("azure.account_name") {
-            storage_options.insert(
-                "AZURE_STORAGE_ACCOUNT_NAME".to_string(),
-                account_name.clone(),
-            );
-        }
-        if let Some(account_key) = self.options.get("azure.account_key") {
-            storage_options.insert("AZURE_STORAGE_ACCOUNT_KEY".to_string(), account_key.clone());
-        }
-
-        // Extract GCS configuration
-        if let Some(service_account_path) = self.options.get("gcs.service_account_path") {
-            storage_options.insert(
-                "GOOGLE_SERVICE_ACCOUNT".to_string(),
-                service_account_path.clone(),
-            );
+        for (key, value) in &self.options {
+            if key.starts_with("storage.") {
+                storage_options.insert(key.clone(), value.clone());
+            }
         }
 
         StorageConfig::parse_options(storage_options)
@@ -337,26 +306,13 @@ impl DataSink for DeltaDataSink {
                 .try_into_kernel()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            // Create Protocol action with default values
             let protocol = Protocol::default();
-
-            // Create Metadata action
-            let metadata = Metadata {
-                id: uuid::Uuid::new_v4().to_string(),
-                name: None,        // TODO: Handle table name
-                description: None, // TODO: Handle table description
-                format: Format::default(),
-                schema_string: serde_json::to_string(&delta_schema)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                partition_columns: partition_columns.clone(),
-                configuration: HashMap::new(),
-                created_time: Some(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("System time before Unix epoch")
-                        .as_millis() as i64,
-                ),
-            };
+            let metadata = crate::kernel::models::actions::new_metadata(
+                &delta_schema,
+                partition_columns.clone(),
+                HashMap::<String, String>::new(),
+            )
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
             // Insert Protocol and Metadata actions at the beginning
             actions.insert(0, Action::Protocol(protocol.clone()));

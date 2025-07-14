@@ -1,6 +1,7 @@
 pub mod data_catalog;
 pub mod delta_datafusion;
 pub mod delta_format;
+pub mod kernel;
 pub mod operations;
 pub mod table;
 
@@ -14,7 +15,7 @@ pub use deltalake::errors::DeltaTableError;
 pub use deltalake::kernel::transaction::TableReference;
 // Re-export transaction and kernel types
 pub use deltalake::kernel::transaction::{CommitBuilder, CommitProperties};
-pub use deltalake::kernel::{Action, Add, Format, Metadata, Protocol, Remove};
+pub use deltalake::kernel::{Action, Add, Metadata, Protocol, Remove};
 pub use deltalake::logstore::StorageConfig;
 pub use deltalake::parquet::file::properties::WriterProperties;
 pub use deltalake::protocol::DeltaOperation;

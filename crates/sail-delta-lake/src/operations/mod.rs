@@ -4,8 +4,7 @@ use deltalake::{DeltaResult, DeltaTable};
 pub use self::load::LoadBuilder;
 pub use self::write::WriteBuilder;
 
-pub mod add_column;
-mod cast;
+// mod cast;
 // mod cdc;
 // pub mod constraints;
 // pub mod delete;

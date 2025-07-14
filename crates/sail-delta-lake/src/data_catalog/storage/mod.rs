@@ -10,8 +10,7 @@ use datafusion::catalog::SchemaProvider;
 use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
 use deltalake::errors::DeltaResult;
-use deltalake::logstore::{store_for, StorageConfig};
-use deltalake::table::builder::ensure_table_uri;
+use deltalake::logstore::StorageConfig;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
 
@@ -30,9 +29,6 @@ pub struct ListingSchemaProvider {
 
 impl ListingSchemaProvider {
     /// Create a new [`ListingSchemaProvider`] with an injected ObjectStore
-    ///
-    /// This is the preferred constructor that accepts an already-created ObjectStore
-    /// from sail's DynamicObjectStoreRegistry, following the dependency injection pattern.
     pub fn new_with_object_store(
         authority: String,
         store: Arc<dyn ObjectStore>,
@@ -44,27 +40,6 @@ impl ListingSchemaProvider {
             store,
             tables: DashMap::new(),
             storage_options: StorageConfig::parse_options(storage_options)?,
-        })
-    }
-
-    /// Create a new [`ListingSchemaProvider`] (legacy constructor)
-    ///
-    /// This constructor creates its own ObjectStore, which goes against the dependency
-    /// injection pattern. It's kept for backward compatibility but should be avoided
-    /// in favor of `new_with_object_store`.
-    #[deprecated(note = "Use new_with_object_store for better dependency injection")]
-    pub fn try_new(
-        root_uri: impl AsRef<str>,
-        options: Option<HashMap<String, String>>,
-    ) -> DeltaResult<Self> {
-        let uri = ensure_table_uri(root_uri)?;
-        let options = options.unwrap_or_default();
-        let store = store_for(&uri, &options)?;
-        Ok(Self {
-            authority: uri.to_string(),
-            store,
-            tables: DashMap::new(),
-            storage_options: StorageConfig::parse_options(options)?,
         })
     }
 
@@ -127,13 +102,6 @@ impl SchemaProvider for ListingSchemaProvider {
         let Some(location) = self.tables.get(name).map(|t| t.clone()) else {
             return Ok(None);
         };
-
-        // Parse the location to ensure it's a valid URL
-        // let table_url =
-        //     Url::parse(&location).map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        // Use sail-delta-lake's open_table_with_object_store to bypass delta-rs internal ObjectStore creation
-        // This follows the dependency injection pattern by using the injected ObjectStore
         let delta_table = crate::open_table_with_object_store(
             location,
             self.store.clone(),
