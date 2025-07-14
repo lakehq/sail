@@ -1,7 +1,7 @@
 use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
-use deltalake::DeltaTableError;
 use sail_common::error::CommonError;
+use sail_common_datafusion::error::DeltaTableError;
 use sail_python_udf::error::PyUdfError;
 use sail_sql_analyzer::error::SqlError;
 use thiserror::Error;

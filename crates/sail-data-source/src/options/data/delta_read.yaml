@@ -34,7 +34,6 @@
 - key: starting_version
   aliases:
     - startingVersion
-    - cdc.startingVersion # Alias for CDF reads
   description: |
     The starting version for a streaming read or a CDF read. For CDF, this specifies the beginning of the change data range.
   supported: true
@@ -43,7 +42,6 @@
 - key: starting_timestamp
   aliases:
     - startingTimestamp
-    - cdc.startingTimestamp # Alias for CDF reads
   description: |
     The starting timestamp for a streaming read or a CDF read. For CDF, this specifies the beginning of the change data range.
   supported: true

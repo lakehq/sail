@@ -9,11 +9,9 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
-sail-object-store = { path = "../sail-object-store" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-data-source = { path = "../sail-data-source" }
-deltalake = { workspace = true }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
