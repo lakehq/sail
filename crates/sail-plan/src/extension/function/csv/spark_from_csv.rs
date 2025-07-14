@@ -79,16 +79,11 @@ impl ScalarUDFImpl for SparkFromCSV {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let options = scalar_arguments.get(2).and_then(|opt| match opt {
-            Some(ScalarValue::Map(map_array)) => Some(map_array.entries()),
-            _ => None,
-        });
-
-        let Some(options) = options else {
-            return plan_err!(
-                "`{}` function requires a third argument of type MapArray",
-                SparkFromCSV::FROM_CSV_NAME
-            );
+        let default_options = create_default_options();
+        let options = if let Some(Some(ScalarValue::Map(map_array))) =  scalar_arguments.get(2) {
+            map_array.entries()
+        } else {
+            &default_options.entries()
         };
 
         let schema: &String = match scalar_arguments[1] {
@@ -101,7 +96,9 @@ impl ScalarUDFImpl for SparkFromCSV {
         let sep: String =
             get_sep_from_options(options).unwrap_or(SparkFromCSV::SEP_DEFAULT.to_string());
         let schema: Result<DataType> = parse_fields(schema, &sep).map(DataType::Struct);
-        schema.map(|dt| Arc::new(Field::new(self.name(), dt, true)))
+        let result = schema.map(|dt| Arc::new(Field::new(self.name(), dt, true)) as FieldRef);
+        println!("{result:?}");
+        result
     }
 
     /// Executes the function with given arguments and produces the resulting array
@@ -112,15 +109,8 @@ impl ScalarUDFImpl for SparkFromCSV {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => {
-                Ok(vec![
-                    arg_types[0].clone(),
-                    arg_types[1].clone(),
-                    DataType::Map(
-                        Arc::new(Field::new(Self::SEP_OPTION, DataType::Utf8, true)),
-                        false,
-                    ),
-                ])
+            [DataType::Utf8, DataType::Utf8] | [DataType::LargeUtf8, DataType::Utf8] => {
+                Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
             }
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(_, _)] => {
                 Ok(vec![
@@ -137,7 +127,15 @@ impl ScalarUDFImpl for SparkFromCSV {
         }
     }
 }
-
+fn create_default_options() -> Arc<MapArray> {
+    let key_builder = StringBuilder::new();
+    let values_builder = StringBuilder::new();
+    let mut options = MapBuilder::new(None, key_builder, values_builder);
+    options.keys().append_value(SparkFromCSV::SEP_OPTION);
+    options.values().append_value(";");
+    let _ = options.append(true);
+    Arc::new(options.finish())
+}
 /// Core implementation of `from_csv` function logic
 fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
@@ -522,7 +520,7 @@ fn test_from_csv_with_array_and_bool() -> Result<()> {
     options.keys().append_value(SparkFromCSV::SEP_OPTION);
     options.values().append_value(";");
     let _ = options.append(true);
-    let options: ArrayRef = Arc::new(options.finish()) as ArrayRef;
+    let options = Arc::new(options.finish());
 
     let result = spark_from_csv_inner(&[input_array, schema_str, options])?;
 
