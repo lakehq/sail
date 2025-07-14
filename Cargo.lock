@@ -5634,7 +5634,6 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
- "sail-delta-lake",
  "sail-object-store",
  "sail-python-udf",
  "sail-sql-analyzer",
