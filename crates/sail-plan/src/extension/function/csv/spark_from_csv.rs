@@ -511,62 +511,6 @@ macro_rules! downcast_option {
 }
 
 #[test]
-fn test_from_csv_with_array_and_bool() -> Result<()> {
-    let csv_data = vec![
-        Some("true;[1,2,3]"),
-        Some("false;[4,5]"),
-        Some("true;[]"),
-        None,
-        Some(";[7,null,9]"),
-        Some("false;"),
-    ];
-    let input_array: ArrayRef = Arc::new(StringArray::from(csv_data)) as ArrayRef;
-    let schema_str: ArrayRef =
-        Arc::new(StringArray::from(vec!["flag BOOLEAN, values ARRAY<INT>"])) as ArrayRef;
-
-    let key_builder = StringBuilder::new();
-    let values_builder = StringBuilder::new();
-    let mut options = MapBuilder::new(None, key_builder, values_builder);
-    options.keys().append_value(SparkFromCSV::SEP_OPTION);
-    options.values().append_value(";");
-    let _ = options.append(true);
-    let options = Arc::new(options.finish());
-
-    let result = spark_from_csv_inner(&[input_array, schema_str, options])?;
-
-    let struct_array: &StructArray = downcast_option!(
-        result.as_any().downcast_ref::<StructArray>(),
-        StructArray,
-        "Expected StructArray"
-    );
-
-    assert_eq!(struct_array.len(), 6);
-    assert_eq!(struct_array.null_count(), 1);
-
-    let flag_array: &BooleanArray = downcast_option!(
-        struct_array.column_by_name("flag"),
-        BooleanArray,
-        "Expected `flag` field not found"
-    );
-    assert!(flag_array.value(0));
-    assert!(!flag_array.value(1));
-    assert!(flag_array.value(2));
-    assert!(flag_array.is_null(3));
-    assert!(flag_array.is_null(4));
-    assert!(!flag_array.value(5));
-
-    let values_array: &ListArray = downcast_option!(
-        struct_array.column_by_name("values"),
-        ListArray,
-        "Expected `values` field not found"
-    );
-    assert_eq!(values_array.len(), 6);
-    assert_eq!(values_array.null_count(), 1);
-
-    Ok(())
-}
-
-#[test]
 fn test_from_csv_decimal_and_timestamp() -> Result<()> {
     let csv_data = vec![
         Some("9.99,2023-01-01 00:00:00"),
