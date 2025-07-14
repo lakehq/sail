@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::sync::Arc;
+
 use arrow::array::{Int32Array, Int64Array};
 use datafusion::arrow::array::{as_primitive_array, Array, Float32Array, Float64Array};
 use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type, Int64Type};
@@ -55,9 +56,9 @@ impl ScalarUDFImpl for SparkBRound {
             DataType::Float64
             | DataType::Float32
             | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _)=> Ok(DataType::Float64),
+            | DataType::Decimal256(_, _) => Ok(DataType::Float64),
             DataType::Int32 => Ok(DataType::Int32),
-             DataType::Int64 => Ok(DataType::Int64),
+            DataType::Int64 => Ok(DataType::Int64),
             _ => Err(unsupported_data_type_exec_err(
                 "spark_bround",
                 "Float64, Float32, Decimal128, Decimal256, Int32, Int64",
@@ -303,7 +304,6 @@ fn spark_bround_f64(x: f64, scale: i32) -> f64 {
 
     rounded * factor
 }
-
 
 /*
 fn round_half_to_even_scaled_f64(scaled: f64) -> f64 {
