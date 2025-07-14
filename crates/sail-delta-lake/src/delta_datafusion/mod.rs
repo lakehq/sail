@@ -546,6 +546,7 @@ pub struct DeltaScan {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct DeltaScanWire {
     pub table_uri: String,
     pub config: DeltaScanConfig,
