@@ -291,7 +291,21 @@ fn round_half_to_even_f32(value: f32) -> f32 {
         rounded - 1.0
     }
 }
-//////
+fn spark_bround_f64(x: f64, scale: i32) -> f64 {
+    let factor: f64 = 10f64.powi(-scale);
+    let scaled: f64 = x / factor;
+
+    let rounded: f64 = if (scaled - scaled.round()).abs() == 0.5 {
+        round_half_to_even_f64(scaled)
+    } else {
+        scaled.round()
+    };
+
+    rounded * factor
+}
+
+
+/*
 fn round_half_to_even_scaled_f64(scaled: f64) -> f64 {
     if (scaled - scaled.round()).abs() == 0.5 {
         let trunc: f64 = scaled.trunc();
@@ -327,18 +341,6 @@ fn round_half_to_even_i64(value: i64, scale: i32) -> i64 {
     (rounded * factor).round() as i64
 }
 
-fn spark_bround_f64(x: f64, scale: i32) -> f64 {
-    let factor: f64 = 10f64.powi(-scale);
-    let scaled: f64 = x / factor;
-
-    let rounded: f64 = if (scaled - scaled.round()).abs() == 0.5 {
-        round_half_to_even_f64(scaled)
-    } else {
-        scaled.round()
-    };
-
-    rounded * factor
-}
 
 fn spark_bround_f32(x: f32, s: i32) -> f32 {
     let pow: f32 = 10f32.powi(-s);
@@ -447,3 +449,4 @@ mod tests {
         assert_eq!(spark_bround_f64(-2.6, 0), -3.0);
     }
 }
+*/
