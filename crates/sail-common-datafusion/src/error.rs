@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
-pub use deltalake::DeltaTableError;
+use deltalake::DeltaTableError;
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::{intern, PyErr, PyResult, Python};
 use serde::{Deserialize, Serialize};

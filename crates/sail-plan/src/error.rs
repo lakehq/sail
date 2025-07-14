@@ -1,7 +1,6 @@
 use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use sail_common::error::CommonError;
-use sail_common_datafusion::error::DeltaTableError;
 use sail_python_udf::error::PyUdfError;
 use sail_sql_analyzer::error::SqlError;
 use thiserror::Error;
@@ -29,7 +28,7 @@ pub enum PlanError {
     #[error("analysis error: {0}")]
     AnalysisError(String),
     #[error("delta table error: {0}")]
-    DeltaTableError(#[from] DeltaTableError),
+    DeltaTableError(String),
 }
 
 impl PlanError {
