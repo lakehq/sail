@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, StringArray};
+use datafusion::arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{exec_err, plan_err, Result};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
@@ -75,18 +75,21 @@ fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Utf8 => as_string_array(&args[0])?
             .iter()
             .map(|x| x.map(UrlEncode::encode).transpose())
-            .collect::<Result<StringArray>>(),
+            .collect::<Result<StringArray>>()
+            .map(|array| Arc::new(array) as ArrayRef),
         DataType::LargeUtf8 => as_large_string_array(&args[0])?
             .iter()
             .map(|x| x.map(UrlEncode::encode).transpose())
-            .collect::<Result<StringArray>>(),
+            .collect::<Result<LargeStringArray>>()
+            .map(|array| Arc::new(array) as ArrayRef),
         DataType::Utf8View => as_string_view_array(&args[0])?
             .iter()
             .map(|x| x.map(UrlEncode::encode).transpose())
-            .collect::<Result<StringArray>>(),
+            .collect::<Result<StringViewArray>>()
+            .map(|array| Arc::new(array) as ArrayRef),
         other => exec_err!("`url_encode`: Expr must be STRING, got {other:?}"),
     };
-    result.map(|array| Arc::new(array) as ArrayRef)
+    result
 }
 
 #[cfg(test)]
