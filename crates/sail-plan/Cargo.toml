@@ -11,6 +11,7 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
+sail-catalog = { path = "../sail-catalog" }
 sail-data-source = { path = "../sail-data-source" }
 
 datafusion = { workspace = true }
@@ -28,8 +29,6 @@ async-trait = { workspace = true }
 async-recursion = { workspace = true }
 lazy_static = { workspace = true }
 regex = { workspace = true }
-serde = { workspace = true }
-serde_arrow = { workspace = true }
 futures = { workspace = true }
 comfy-table = { workspace = true }
 html-escape = { workspace = true }
@@ -41,8 +40,6 @@ tokio = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
-url = { workspace = true }
-glob = { workspace = true }
 object_store = { workspace = true }
 sha1 = { workspace = true }
 twox-hash = { workspace = true }
@@ -53,6 +50,4 @@ base64 = { workspace = true }
 half = { workspace = true }
 crc32fast = { workspace = true }
 num = { workspace = true }
-chumsky = { workspace = true }
-percent-encoding = { workspace = true }
 arrow = { workspace = true }

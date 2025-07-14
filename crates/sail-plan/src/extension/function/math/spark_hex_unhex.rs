@@ -134,11 +134,13 @@ fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> String {
     if lower_case {
         for b in data.as_ref() {
             // Writing to a string never errors, so we can unwrap here.
+            #[allow(clippy::unwrap_used)]
             write!(&mut s, "{b:02x}").unwrap();
         }
     } else {
         for b in data.as_ref() {
             // Writing to a string never errors, so we can unwrap here.
+            #[allow(clippy::unwrap_used)]
             write!(&mut s, "{b:02X}").unwrap();
         }
     }

@@ -5233,6 +5233,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
+name = "sail-catalog"
+version = "0.3.1"
+dependencies = [
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "lazy_static",
+ "regex",
+ "sail-data-source",
+ "serde",
+ "serde_arrow",
+]
+
+[[package]]
 name = "sail-cli"
 version = "0.3.1"
 dependencies = [
@@ -5289,14 +5303,22 @@ dependencies = [
 name = "sail-data-source"
 version = "0.3.1"
 dependencies = [
+ "async-trait",
+ "chumsky",
+ "datafusion",
+ "datafusion-common",
+ "futures",
+ "glob",
+ "object_store",
+ "percent-encoding",
  "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
- "sail-common",
  "serde",
  "serde_yaml",
  "syn",
+ "url",
 ]
 
 [[package]]
@@ -5385,7 +5407,6 @@ dependencies = [
  "cbc",
  "chrono",
  "chrono-tz",
- "chumsky",
  "comfy-table",
  "crc32fast",
  "datafusion",
@@ -5398,32 +5419,28 @@ dependencies = [
  "datafusion-spark",
  "either",
  "futures",
- "glob",
  "half",
  "html-escape",
  "lazy_static",
  "num",
  "object_store",
- "percent-encoding",
  "rand 0.9.1",
  "rand_chacha 0.9.0",
  "rand_distr",
  "regex",
  "ryu",
+ "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
  "sail-python-udf",
  "sail-sql-analyzer",
- "serde",
- "serde_arrow",
  "sha1",
  "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
  "tonic 0.12.3",
  "twox-hash",
- "url",
 ]
 
 [[package]]
@@ -5491,6 +5508,7 @@ dependencies = [
  "prost-build",
  "quote",
  "regex",
+ "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
  "sail-execution",

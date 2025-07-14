@@ -587,7 +587,7 @@ fn decode(bytes: &[u8], char_set: &str) -> Result<String> {
         }
         "UTF-16BE" => {
             // 'UTF-16BE': Sixteen-bit UCS Transformation Format, big-endian byte order.
-            if bytes.len() % 2 != 0 {
+            if !bytes.len().is_multiple_of(2) {
                 exec_err!("Spark `decode` function: Invalid UTF-16BE byte sequence: {bytes:?}")
             } else {
                 let u16_words: Vec<u16> = bytes
@@ -600,7 +600,7 @@ fn decode(bytes: &[u8], char_set: &str) -> Result<String> {
         }
         "UTF-16LE" => {
             // 'UTF-16LE': Sixteen-bit UCS Transformation Format, little-endian byte order.
-            if bytes.len() % 2 != 0 {
+            if !bytes.len().is_multiple_of(2) {
                 exec_err!("Spark `decode` function: Invalid UTF-16LE byte sequence: {bytes:?}")
             } else {
                 let u16_words: Vec<u16> = bytes
@@ -622,7 +622,7 @@ fn decode(bytes: &[u8], char_set: &str) -> Result<String> {
                     _ => (true, bytes), // Default to BE if no BOM
                 };
 
-                if content.len() % 2 != 0 {
+                if !content.len().is_multiple_of(2) {
                     exec_err!("Spark `decode` function: Invalid UTF-16 byte sequence: {bytes:?}")
                 } else {
                     let u16_words: Vec<u16> = content

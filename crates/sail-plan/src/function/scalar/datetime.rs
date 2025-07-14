@@ -209,7 +209,7 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
         let format = to_chrono_fmt(format)?;
         Ok(expr_fn::to_date(vec![expr, format]))
     } else {
-        return Err(PlanError::invalid("to_date requires 1 or 2 arguments"));
+        Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
     }
 }
 
@@ -237,9 +237,9 @@ fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
             args: vec![expr, format],
         }))
     } else {
-        return Err(PlanError::invalid(
+        Err(PlanError::invalid(
             "unix_timestamp requires 1 or 2 arguments",
-        ));
+        ))
     }
 }
 
@@ -260,7 +260,7 @@ fn to_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         let format = to_chrono_fmt(format)?;
         Ok(expr_fn::to_timestamp_micros(vec![expr, format]))
     } else {
-        return Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"));
+        Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"))
     }
 }
 
@@ -278,9 +278,9 @@ fn try_to_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
             args: vec![expr, format],
         }))
     } else {
-        return Err(PlanError::invalid(
+        Err(PlanError::invalid(
             "try_to_timestamp requires 1 or 2 arguments",
-        ));
+        ))
     }
 }
 

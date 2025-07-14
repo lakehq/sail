@@ -2,15 +2,15 @@ use datafusion_common::{exec_err, DFSchema, DFSchemaRef, Result, SchemaReference
 use datafusion_expr::{CreateCatalogSchema, DdlStatement, DropCatalogSchema, LogicalPlan};
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::utils::match_pattern;
-use crate::catalog::CatalogManager;
+use crate::manager::utils::match_pattern;
+use crate::manager::CatalogManager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct DatabaseMetadata {
-    pub(crate) name: String,
-    pub(crate) catalog: Option<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) location_uri: Option<String>,
+pub struct DatabaseMetadata {
+    pub name: String,
+    pub catalog: Option<String>,
+    pub description: Option<String>,
+    pub location_uri: Option<String>,
 }
 
 impl DatabaseMetadata {
@@ -25,13 +25,13 @@ impl DatabaseMetadata {
 }
 
 impl CatalogManager<'_> {
-    pub(crate) fn default_database(&self) -> Result<String> {
+    pub fn default_database(&self) -> Result<String> {
         let state = self.ctx.state_ref();
         let state = state.read();
         Ok(state.config().options().catalog.default_schema.clone())
     }
 
-    pub(crate) fn set_default_database(&self, database_name: String) -> Result<()> {
+    pub fn set_default_database(&self, database_name: String) -> Result<()> {
         // TODO: Race condition if catalog or database is deleted.
         let database = SchemaReference::Bare {
             schema: database_name.clone().into(),
@@ -46,10 +46,7 @@ impl CatalogManager<'_> {
         Ok(())
     }
 
-    pub(crate) fn get_database(
-        &self,
-        database: SchemaReference,
-    ) -> Result<Option<DatabaseMetadata>> {
+    pub fn get_database(&self, database: SchemaReference) -> Result<Option<DatabaseMetadata>> {
         let (catalog_name, database_name) = self.resolve_database_reference(Some(database))?;
         let Some(catalog_provider) = self.ctx.catalog(catalog_name.as_ref()) else {
             return Ok(None);
@@ -63,7 +60,7 @@ impl CatalogManager<'_> {
         )))
     }
 
-    pub(crate) fn list_databases(
+    pub fn list_databases(
         &self,
         catalog: Option<String>,
         database_pattern: Option<&str>,
@@ -80,7 +77,7 @@ impl CatalogManager<'_> {
             .collect())
     }
 
-    pub(crate) async fn create_database(
+    pub async fn create_database(
         &self,
         database: SchemaReference,
         if_not_exists: bool,
@@ -108,7 +105,7 @@ impl CatalogManager<'_> {
         Ok(())
     }
 
-    pub(crate) async fn drop_database(
+    pub async fn drop_database(
         &self,
         database: SchemaReference,
         if_exists: bool,
