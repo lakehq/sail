@@ -5,7 +5,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, internal_err, plan_datafusion_err, plan_err, ScalarValue};
+use datafusion_common::{exec_err, internal_err, plan_err, ScalarValue};
 use datafusion_expr::sqlparser::ast::{ArrayElemTypeDef, DataType as SQLType};
 use datafusion_expr::sqlparser::dialect::GenericDialect;
 use datafusion_expr::sqlparser::parser::{Parser, ParserOptions};
@@ -42,6 +42,7 @@ impl Default for SparkFromCSV {
 impl SparkFromCSV {
     pub const FROM_CSV_NAME: &'static str = "from_csv";
     pub const SEP_OPTION: &'static str = "sep";
+    pub const DELIMITER_OPTION: &'static str = "delimiter";
     pub const SEP_DEFAULT: &'static str = ",";
 
     /// Constructor for the UDF
@@ -79,13 +80,6 @@ impl ScalarUDFImpl for SparkFromCSV {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let default_options = create_default_options();
-        let options = if let Some(Some(ScalarValue::Map(map_array))) = scalar_arguments.get(2) {
-            map_array.entries()
-        } else {
-            default_options.entries()
-        };
-
         let schema: &String = match scalar_arguments[1] {
             Some(ScalarValue::Utf8(Some(schema)))
             | Some(ScalarValue::LargeUtf8(Some(schema)))
@@ -93,12 +87,9 @@ impl ScalarUDFImpl for SparkFromCSV {
             _ => internal_err!("Expected UTF-8 schema string"),
         }?;
 
-        let sep: String =
-            get_sep_from_options(options).unwrap_or(SparkFromCSV::SEP_DEFAULT.to_string());
+        let sep: String = SparkFromCSV::SEP_DEFAULT.to_string();
         let schema: Result<DataType> = parse_fields(schema, &sep).map(DataType::Struct);
-        let result = schema.map(|dt| Arc::new(Field::new(self.name(), dt, true)) as FieldRef);
-        println!("{result:?}");
-        result
+        schema.map(|dt| Arc::new(Field::new(self.name(), dt, true)) as FieldRef)
     }
 
     /// Executes the function with given arguments and produces the resulting array
@@ -127,15 +118,7 @@ impl ScalarUDFImpl for SparkFromCSV {
         }
     }
 }
-fn create_default_options() -> Arc<MapArray> {
-    let key_builder = StringBuilder::new();
-    let values_builder = StringBuilder::new();
-    let mut options = MapBuilder::new(None, key_builder, values_builder);
-    options.keys().append_value(SparkFromCSV::SEP_OPTION);
-    options.values().append_value(";");
-    let _ = options.append(true);
-    Arc::new(options.finish())
-}
+
 /// Core implementation of `from_csv` function logic
 fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
@@ -151,13 +134,12 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let sep = if args.len() == 3 {
         let options: &MapArray = downcast_arg!(&args[2], MapArray);
-        let options: &StructArray = options.entries();
         get_sep_from_options(options).unwrap_or(SparkFromCSV::SEP_DEFAULT.to_string())
     } else {
         SparkFromCSV::SEP_DEFAULT.to_string()
     };
 
-    let fields: Fields = parse_fields(schema_str, &sep)?;
+    let fields: Fields = parse_fields(schema_str, SparkFromCSV::SEP_DEFAULT)?;
 
     let mut children_scalars: Vec<Vec<ScalarValue>> =
         vec![Vec::with_capacity(array.len()); fields.len()];
@@ -222,29 +204,14 @@ fn parse_csv_line_to_scalar_values(
 }
 
 /// Extracts the separator string ("sep") from a struct options array
-fn get_sep_from_options(options: &StructArray) -> Result<String> {
-    let sep_column = options.column_by_name("sep").ok_or_else(|| {
-        plan_datafusion_err!(
-            "Missing '{}' option in `{}` options",
-            SparkFromCSV::SEP_OPTION,
-            SparkFromCSV::FROM_CSV_NAME
-        )
-    })?;
+fn get_sep_from_options(options: &MapArray) -> Result<String> {
+    let sep_column: Option<String> = find_key_value(options, SparkFromCSV::SEP_OPTION);
+    let delimiter_column: Option<String> = find_key_value(options, SparkFromCSV::DELIMITER_OPTION);
 
-    let default_sep = Arc::new(StringArray::from(vec![
-        SparkFromCSV::SEP_DEFAULT.to_string()
-    ]));
+    let sep: String = sep_column
+        .or(delimiter_column)
+        .unwrap_or(SparkFromCSV::SEP_DEFAULT.to_string());
 
-    let sep_array = match sep_column.as_any().downcast_ref::<StringArray>() {
-        Some(sep_array) => sep_array,
-        None => default_sep.as_ref(),
-    };
-
-    if sep_array.is_empty() || sep_array.is_null(0) {
-        return plan_err!("'{}' option cannot be null", SparkFromCSV::SEP_OPTION);
-    }
-
-    let sep = sep_array.value(0).to_string(); // Convert to owned String
     Ok(sep)
 }
 
@@ -403,6 +370,32 @@ fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
         _ => Err(DataFusionError::Plan(format!(
             "Unsupported SQL type: {sql_type:?}"
         ))),
+    }
+}
+
+/// Helper function to get the index of a key in a `StructArray` that matches specific options.
+fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
+    options
+        .entries()
+        .column_by_name("key")
+        .and_then(|x| x.as_any().downcast_ref::<StringArray>())
+        .and_then(|x| {
+            x.iter()
+                .enumerate()
+                .find(|(_, x)| x.as_ref().is_some_and(|x| *x == search_key))
+        })
+        .map(|(i, _)| i)
+}
+
+fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
+    if let Some(index) = find_key_index(options, search_key) {
+        options
+            .entries()
+            .column_by_name("value")
+            .and_then(|x| x.as_any().downcast_ref::<StringArray>())
+            .map(|values| values.value(index).to_string())
+    } else {
+        None
     }
 }
 
