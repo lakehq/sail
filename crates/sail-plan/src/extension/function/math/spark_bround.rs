@@ -124,10 +124,7 @@ impl ScalarUDFImpl for SparkBRound {
                     .iter()
                     .zip(d.iter())
                     .map(|(x_val, scale)| match (x_val, scale) {
-                        (Some(x), Some(s)) => {
-                            let pow = 10f64.powi(s);
-                            Some(round_half_to_even_f64(x * pow) / pow)
-                        }
+                        (Some(x), Some(s)) => Some(spark_bround_f64(x, s)),
                         _ => None,
                     })
                     .collect();
@@ -161,7 +158,7 @@ impl ScalarUDFImpl for SparkBRound {
                         (Some(x), Some(s)) => {
                             let x_f64 = x as f64;
                             let pow = 10f64.powi(s);
-                            Some((x_f64 * pow).round() / pow)
+                            Some(round_half_to_even_f64(x_f64 * pow) / pow)
                         }
                         _ => None,
                     })
@@ -179,7 +176,7 @@ impl ScalarUDFImpl for SparkBRound {
                         (Some(x), Some(s)) => {
                             let x_f64 = x as f64;
                             let pow = 10f64.powi(s);
-                            Some((x_f64 * pow).round() / pow)
+                            Some(round_half_to_even_f64(x_f64 * pow).round() / pow)
                         }
                         _ => None,
                     })
@@ -326,5 +323,161 @@ fn round_half_to_even_f32(value: f32) -> f32 {
         rounded + 1.0
     } else {
         rounded - 1.0
+    }
+}
+
+fn round_half_to_even_scaled_f64(scaled: f64) -> f64 {
+    if (scaled - scaled.round()).abs() == 0.5 {
+        let trunc: f64 = scaled.trunc();
+        if (trunc as i64) % 2 == 0 {
+            trunc
+        } else if scaled > 0.0 {
+            trunc + 1.0
+        } else {
+            trunc - 1.0
+        }
+    } else {
+        scaled.round()
+    }
+}
+
+fn round_half_to_even_i32(value: i32, scale: i32) -> i32 {
+    let factor: f64 = 10f64.powi(-scale);
+    let x_f64: f64 = value as f64;
+    let scaled: f64 = x_f64 / factor;
+
+    let rounded: f64 = round_half_to_even_scaled_f64(scaled);
+
+    (rounded * factor).round() as i32
+}
+
+fn round_half_to_even_i64(value: i64, scale: i32) -> i64 {
+    let factor: f64 = 10f64.powi(-scale);
+    let x_f64: f64 = value as f64;
+    let scaled: f64 = x_f64 / factor;
+
+    let rounded: f64 = round_half_to_even_scaled_f64(scaled);
+
+    (rounded * factor).round() as i64
+}
+
+fn spark_bround_f64(x: f64, scale: i32) -> f64 {
+    let factor: f64 = 10f64.powi(-scale);
+    let scaled: f64 = x / factor;
+
+    let rounded: f64 = if (scaled - scaled.round()).abs() == 0.5 {
+        round_half_to_even_f64(scaled)
+    } else {
+        scaled.round()
+    };
+
+    rounded * factor
+}
+
+fn spark_bround_f32(x: f32, s: i32) -> f32 {
+    let pow: f32 = 10f32.powi(-s);
+    let scaled: f32 = x / pow;
+
+    let rounded: f32 = if (scaled - scaled.round()).abs() == 0.5 {
+        round_half_to_even_f32(scaled)
+    } else {
+        scaled.round()
+    };
+
+    rounded * pow
+}
+
+fn spark_bround_i32(x: i32, scale: i32) -> i32 {
+    let x_f64: f64 = x as f64;
+    let factor: f64 = 10f64.powi(-scale);
+    let scaled: f64 = x_f64 / factor;
+
+    let rounded: f64 = round_half_to_even_scaled_f64(scaled);
+
+    (rounded * factor).round() as i32
+}
+
+fn spark_bround_i64(x: i64, scale: i32) -> i64 {
+    let x_f64: f64 = x as f64;
+    let factor: f64 = 10f64.powi(-scale);
+    let scaled: f64 = x_f64 / factor;
+
+    let rounded: f64 = round_half_to_even_scaled_f64(scaled);
+
+    (rounded * factor).round() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_bround_i32() {
+        assert_eq!(spark_bround_i32(15, -1), 20);
+        assert_eq!(spark_bround_i32(25, -1), 20);
+        assert_eq!(spark_bround_i32(35, -1), 40);
+        assert_eq!(spark_bround_i32(-25, -1), -20);
+        assert_eq!(spark_bround_i32(-35, -1), -40);
+
+        assert_eq!(spark_bround_i32(15, 0), 15);
+        assert_eq!(spark_bround_i32(25, 0), 25);
+        assert_eq!(spark_bround_i32(35, 0), 35);
+    }
+
+    #[test]
+    fn test_bround_i64() {
+        assert_eq!(spark_bround_i64(25, -1), 20);
+        assert_eq!(spark_bround_i64(35, -1), 40);
+        assert_eq!(spark_bround_i64(-25, -1), -20);
+        assert_eq!(spark_bround_i64(-35, -1), -40);
+    }
+
+    #[test]
+    fn test_example() {
+        assert_eq!(spark_bround_i64(25, -1), 20);
+        assert_eq!(spark_bround_i64(35, -1), 40);
+        assert_eq!(spark_bround_i32(25, -1), 20);
+        assert_eq!(spark_bround_i32(35, -1), 40);
+    }
+
+    #[test]
+    fn test_bround_f64_positive_scale() {
+        // FIXME precision
+        assert_eq!(spark_bround_f64(1.25, 1), 1.2000000000000002);
+        assert_eq!(spark_bround_f64(1.35, 1), 1.4000000000000001);
+    }
+
+    #[test]
+    fn test_bround_f64_zero_scale() {
+        assert_eq!(spark_bround_f64(2.5, 0), 2.0);
+        assert_eq!(spark_bround_f64(3.5, 0), 4.0);
+        assert_eq!(spark_bround_f64(-2.5, 0), -2.0);
+        assert_eq!(spark_bround_f64(-3.5, 0), -4.0);
+    }
+
+    #[test]
+    fn test_bround_f64_negative_scale() {
+        assert_eq!(spark_bround_f64(25.0, -1), 20.0);
+        assert_eq!(spark_bround_f64(35.0, -1), 40.0);
+        assert_eq!(spark_bround_f64(-25.0, -1), -20.0);
+        assert_eq!(spark_bround_f64(-35.0, -1), -40.0);
+    }
+
+    #[test]
+    fn test_bround_f32_behavior() {
+        assert_eq!(spark_bround_f32(2.5, 0), 2.0);
+        assert_eq!(spark_bround_f32(3.5, 0), 4.0);
+
+        assert_eq!(spark_bround_f32(25.0, -1), 20.0);
+        assert_eq!(spark_bround_f32(35.0, -1), 40.0);
+        assert_eq!(spark_bround_f32(-25.0, -1), -20.0);
+        assert_eq!(spark_bround_f32(-35.0, -1), -40.0);
+    }
+
+    #[test]
+    fn test_bround_no_tie() {
+        assert_eq!(spark_bround_f64(2.4, 0), 2.0);
+        assert_eq!(spark_bround_f64(2.6, 0), 3.0);
+        assert_eq!(spark_bround_f64(-2.4, 0), -2.0);
+        assert_eq!(spark_bround_f64(-2.6, 0), -3.0);
     }
 }
