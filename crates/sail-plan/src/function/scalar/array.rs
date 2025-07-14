@@ -1,7 +1,7 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
-use datafusion::functions_nested::position::array_position_udf;
+use datafusion::functions_nested::position::array_position as datafusion_array_position;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, BinaryExpr, Operator};
 use datafusion_functions_nested::string::ArrayToString;
@@ -101,6 +101,35 @@ fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     )
 }
 
+fn array_position(array: expr::Expr, element: expr::Expr) -> expr::Expr {
+    coalesce(vec![
+        datafusion_array_position(
+            expr::Expr::Case(expr::Case {
+                expr: None,
+                when_then_expr: vec![(
+                    Box::new(expr::Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(expr_fn::cardinality(array.clone())),
+                        op: Operator::Gt,
+                        right: Box::new(lit(ScalarValue::UInt64(Some(0)))),
+                    })),
+                    Box::new(array.clone()),
+                )],
+                else_expr: None, // datafusion panics if from_index > array_len
+            }), // So if the inner array_len == 0, search in NULL array instead
+            element,
+            lit(ScalarValue::Int32(Some(1))),
+        ),
+        expr::Expr::Case(expr::Case {
+            expr: None,
+            when_then_expr: vec![(
+                Box::new(expr::Expr::IsNotNull(Box::new(array.clone()))),
+                Box::new(lit(ScalarValue::Int32(Some(0)))),
+            )], // if Array is not NULL, but elem not found, need to return 0
+            else_expr: None, // On NULL array still return NULL
+        }),
+    ])
+}
+
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -117,7 +146,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_join", F::udf(ArrayToString::new())),
         ("array_max", F::udf(ArrayMax::new())),
         ("array_min", F::udf(ArrayMin::new())),
-        ("array_position", F::scalar_udf(array_position_udf)),
+        ("array_position", F::binary(array_position)),
         ("array_prepend", F::binary(array_prepend)),
         ("array_remove", F::binary(expr_fn::array_remove_all)),
         ("array_repeat", F::binary(array_repeat)),
