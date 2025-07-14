@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::ScalarValue;
+use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
 use half::f16;
 use sail_common::impl_dyn_object_traits;
 use sail_common::object::DynObject;
@@ -19,16 +19,15 @@ use sail_common_datafusion::formatter::{
 };
 
 use crate::config::PlanConfig;
-use crate::error::{PlanError, PlanResult};
 use crate::utils::ItemTaker;
 
 /// Utilities to format various data structures in the plan specification.
 pub trait PlanFormatter: DynObject + Debug + Send + Sync {
     /// Returns a human-readable simple string for the data type.
-    fn data_type_to_simple_string(&self, data_type: &DataType) -> PlanResult<String>;
+    fn data_type_to_simple_string(&self, data_type: &DataType) -> Result<String>;
 
     /// Returns a human-readable string for the literal.
-    fn literal_to_string(&self, literal: &ScalarValue, config: &PlanConfig) -> PlanResult<String>;
+    fn literal_to_string(&self, literal: &ScalarValue, config: &PlanConfig) -> Result<String>;
 
     /// Returns a human-readable string for the function call.
     fn function_to_string(
@@ -36,7 +35,7 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
         name: &str,
         arguments: Vec<&str>,
         is_distinct: bool,
-    ) -> PlanResult<String>;
+    ) -> Result<String>;
 }
 
 impl_dyn_object_traits!(PlanFormatter);
@@ -56,7 +55,7 @@ impl DefaultPlanFormatter {
 }
 
 impl PlanFormatter for DefaultPlanFormatter {
-    fn data_type_to_simple_string(&self, data_type: &DataType) -> PlanResult<String> {
+    fn data_type_to_simple_string(&self, data_type: &DataType) -> Result<String> {
         match data_type {
             DataType::Null => Ok("void".to_string()),
             DataType::Binary
@@ -117,19 +116,15 @@ impl PlanFormatter for DefaultPlanFormatter {
                             self.data_type_to_simple_string(field.data_type())?
                         ))
                     })
-                    .collect::<PlanResult<Vec<String>>>()?;
+                    .collect::<Result<Vec<String>>>()?;
                 Ok(format!("struct<{}>", fields.join(",")))
             }
             DataType::Map(field, _keys_sorted) => {
                 let DataType::Struct(fields) = field.data_type() else {
-                    return Err(PlanError::invalid(
-                        "expected a struct field for map data type",
-                    ));
+                    return plan_err!("expected a struct field for map data type");
                 };
                 let [key_field, value_field] = fields.as_ref() else {
-                    return Err(PlanError::invalid(
-                        "expected a struct field with two fields for map data type",
-                    ));
+                    return plan_err!("expected a struct field with two fields for map data type");
                 };
                 Ok(format!(
                     "map<{},{}>",
@@ -147,21 +142,19 @@ impl PlanFormatter for DefaultPlanFormatter {
                 self.data_type_to_simple_string(value_type)?
             )),
             DataType::RunEndEncoded(_, _) => {
-                Err(PlanError::unsupported(format!("data type: {data_type:?}")))
+                not_impl_err!("data type: {data_type:?}")
             }
         }
     }
 
-    fn literal_to_string(&self, literal: &ScalarValue, config: &PlanConfig) -> PlanResult<String> {
-        let literal_list_to_string = |name: &str,
-                                      values: Option<&dyn Array>|
-         -> PlanResult<String> {
+    fn literal_to_string(&self, literal: &ScalarValue, config: &PlanConfig) -> Result<String> {
+        let literal_list_to_string = |name: &str, values: Option<&dyn Array>| -> Result<String> {
             let Some(values) = values else {
                 return Ok("NULL".to_string());
             };
             let values = (0..values.len())
                 .map(|i| self.literal_to_string(&ScalarValue::try_from_array(values, i)?, config))
-                .collect::<PlanResult<Vec<String>>>()?;
+                .collect::<Result<Vec<String>>>()?;
             Ok(format!("{name}({})", values.join(", ")))
         };
 
@@ -371,9 +364,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                     .zip(values.columns())
                     .map(|(field, array)| {
                         if array.len() != 1 {
-                            return Err(PlanError::invalid(
-                                "expected struct literal with one value",
-                            ));
+                            return plan_err!("expected struct literal with one value");
                         }
                         let value = ScalarValue::try_from_array(array, 0)?;
                         Ok(format!(
@@ -382,7 +373,7 @@ impl PlanFormatter for DefaultPlanFormatter {
                             field.name()
                         ))
                     })
-                    .collect::<PlanResult<Vec<String>>>()?;
+                    .collect::<Result<Vec<String>>>()?;
                 Ok(format!("struct({})", fields.join(", ")))
             }
             ScalarValue::Union(value, _union_fields, _union_mode) => match value {
@@ -413,9 +404,7 @@ impl PlanFormatter for DefaultPlanFormatter {
             ScalarValue::Map(array) => match array.iter().collect::<Vec<_>>().one()? {
                 Some(value) => {
                     let [keys, values] = value.columns() else {
-                        return Err(PlanError::invalid(
-                            "expected map literal with keys and values",
-                        ));
+                        return plan_err!("expected map literal with keys and values");
                     };
                     let k = literal_list_to_string("array", Some(keys))?;
                     let v = literal_list_to_string("array", Some(values))?;
@@ -431,7 +420,7 @@ impl PlanFormatter for DefaultPlanFormatter {
         name: &str,
         arguments: Vec<&str>,
         is_distinct: bool,
-    ) -> PlanResult<String> {
+    ) -> Result<String> {
         match name.to_lowercase().as_str() {
             "!" | "~" => Ok(format!("({name} {})", arguments.one()?)),
             "+" | "-" => {
@@ -617,6 +606,7 @@ mod tests {
     use datafusion_common::arrow::array::ArrayRef;
 
     use super::*;
+    use crate::error::PlanResult;
 
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {

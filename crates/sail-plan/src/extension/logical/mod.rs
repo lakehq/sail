@@ -5,9 +5,7 @@ mod schema_pivot;
 mod show_string;
 mod sort;
 
-pub(crate) use catalog::{
-    CatalogCommand, CatalogCommandNode, CatalogTableDefinition, CatalogTableFunction,
-};
+pub(crate) use catalog::CatalogCommandNode;
 pub(crate) use map_partitions::MapPartitionsNode;
 pub use range::Range;
 pub(crate) use range::RangeNode;

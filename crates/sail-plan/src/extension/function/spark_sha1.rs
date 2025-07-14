@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::fmt::Write;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -76,7 +77,8 @@ fn spark_sha1_digest(value: &[u8]) -> String {
     let result = Sha1::digest(value);
     let mut s = String::with_capacity(result.len() * 2);
     for b in result.as_slice() {
-        s.push_str(&format!("{b:02x}"));
+        #[allow(clippy::unwrap_used)]
+        write!(&mut s, "{b:02x}").unwrap();
     }
     s
 }

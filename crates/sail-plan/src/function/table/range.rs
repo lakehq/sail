@@ -32,7 +32,7 @@ impl TableProvider for RangeTableProvider {
         TableType::Base
     }
 
-    fn get_logical_plan(&self) -> Option<Cow<LogicalPlan>> {
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
         Some(Cow::Owned(LogicalPlan::Extension(
             logical_plan::Extension {
                 node: self.node.clone(),

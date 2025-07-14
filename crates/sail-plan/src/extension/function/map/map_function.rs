@@ -30,7 +30,7 @@ where
 }
 
 fn to_map_array(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() % 2 != 0 {
+    if !args.len().is_multiple_of(2) {
         return exec_err!("map requires an even number of arguments");
     }
     let num_entries = args.len() / 2;
@@ -108,7 +108,7 @@ impl ScalarUDFImpl for MapFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() % 2 != 0 {
+        if !arg_types.len().is_multiple_of(2) {
             return exec_err!("map requires an even number of arguments");
         }
         let key_type = arg_types.first().unwrap_or(&DataType::Null);
