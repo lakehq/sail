@@ -5407,6 +5407,7 @@ dependencies = [
 name = "sail-common-datafusion"
 version = "0.3.1"
 dependencies = [
+ "async-trait",
  "chrono",
  "datafusion",
  "datafusion-common",
@@ -5438,7 +5439,7 @@ dependencies = [
  "quote",
  "regex",
  "sail-common",
- "sail-delta-lake",
+ "sail-common-datafusion",
  "serde",
  "serde_yaml",
  "syn",

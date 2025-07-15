@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{exec_err, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference};
 use datafusion_expr::{DdlStatement, DropTable, LogicalPlan, TableType};
-use sail_data_source::TableProviderFactory;
+use sail_data_source::{TableFormatRegistry, TableProviderFactory};
 use serde::{Deserialize, Serialize};
 
 use crate::command::CatalogTableDefinition;
@@ -140,7 +140,7 @@ impl CatalogManager<'_> {
                 false => exec_err!("table already exists: {table}"),
             };
         }
-        let factory = TableProviderFactory::new(self.ctx);
+                let factory = TableProviderFactory::new(self.ctx, Arc::new(TableFormatRegistry::new()));
         // TODO: This only registers the table for read and we need to support write as well.
         let table_provider = factory
             .read_table(
