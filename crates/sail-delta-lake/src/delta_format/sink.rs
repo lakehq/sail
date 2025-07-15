@@ -91,6 +91,8 @@ impl DeltaDataSink {
         }
     }
 
+    // TODO: The following parsing methods does not make sense, we should find a better way to handle spec::Write.
+    // Maybe datafusion has handled it already.
     /// Parse partition columns from options
     fn parse_partition_columns(&self) -> Vec<String> {
         self.options

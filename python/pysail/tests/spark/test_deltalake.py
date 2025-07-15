@@ -189,7 +189,6 @@ class TestDeltaLake:
                 result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False
             )
 
-    @pytest.mark.skip(reason="Temporarily skipped")
     def test_delta_partition_by(self, spark):
         """Test Delta Lake partitioning functionality"""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -316,7 +315,6 @@ class TestDeltaLake:
             expected_v1 = [Row(id=1, value="v0"), Row(id=2, value="v1")]
             assert v1_df.collect() == expected_v1
 
-    @pytest.mark.skip(reason="Temporarily skipped")
     @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake error handling")
     def test_delta_error_handling(self, spark):
         """Test Delta Lake error handling"""
