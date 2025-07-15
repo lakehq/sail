@@ -18,11 +18,9 @@ pub async fn open_table_with_object_store(
     let location = Url::parse(table_uri_str)
         .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri_str.to_string()))?;
 
-    // Create a LogStore using the provided ObjectStore
     let log_store =
         create_logstore_with_object_store(object_store.clone(), location.clone(), storage_options)?;
 
-    // Create and load the Delta table
     let mut table = DeltaTable::new(log_store, Default::default());
     table.load().await?;
 
@@ -38,21 +36,13 @@ pub async fn create_delta_table_with_object_store(
     let location = Url::parse(table_uri_str)
         .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri_str.to_string()))?;
 
-    // Create a LogStore using the provided ObjectStore
     let log_store =
         create_logstore_with_object_store(object_store, location.clone(), storage_options)?;
 
-    // Create DeltaOps with the injected LogStore
-    // This bypasses delta-rs's internal ObjectStore creation
     let table = DeltaTable::new(log_store, Default::default());
     Ok(deltalake::DeltaOps::from(table))
 }
 
-/// Creates a LogStore using an external ObjectStore instance.
-///
-/// This function creates both a prefixed store (for table operations) and uses the same
-/// store as the root store. The prefixed store points to the table root, while the root
-/// store is used for broader object store operations.
 fn create_logstore_with_object_store(
     object_store: Arc<dyn ObjectStore>,
     location: Url,
@@ -60,10 +50,9 @@ fn create_logstore_with_object_store(
 ) -> DeltaResult<LogStoreRef> {
     let prefixed_store = storage_config.decorate_store(Arc::clone(&object_store), &location)?;
 
-    // Create the default LogStore with our custom ObjectStore
     let log_store = default_logstore(
         Arc::new(prefixed_store),
-        object_store, // root_store
+        object_store,
         &location,
         &storage_config,
     );
@@ -71,21 +60,6 @@ fn create_logstore_with_object_store(
     Ok(log_store)
 }
 
-/// Creates a DeltaTableProvider using an external ObjectStore instance.
-///
-/// This function is similar to `open_table_with_object_store` but returns a
-/// `DeltaTableProvider` that can be used directly with DataFusion.
-///
-/// # Arguments
-///
-/// * `table_uri` - The URI of the Delta table
-/// * `object_store` - The ObjectStore instance to use
-/// * `storage_options` - Additional storage configuration options
-/// * `scan_config` - Configuration for the Delta scan operations
-///
-/// # Returns
-///
-/// A `DeltaResult<DeltaTableProvider>` that can be used with DataFusion.
 pub async fn create_delta_table_provider_with_object_store(
     table_uri: impl AsRef<str>,
     object_store: Arc<dyn ObjectStore>,
@@ -96,7 +70,6 @@ pub async fn create_delta_table_provider_with_object_store(
     let location = Url::parse(table_uri_str)
         .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri_str.to_string()))?;
 
-    // Create a LogStore using the provided ObjectStore
     let log_store = create_logstore_with_object_store(object_store, location, storage_options)?;
 
     // Load the table state
@@ -106,24 +79,9 @@ pub async fn create_delta_table_provider_with_object_store(
     let snapshot = table.snapshot()?.clone();
     let config = scan_config.unwrap_or_default();
 
-    // Create the DeltaTableProvider
     DeltaTableProvider::try_new(snapshot, log_store, config)
 }
 
-/// Creates a Delta table provider using SessionContext to get the object store.
-///
-/// This function contains the complete logic for creating a Delta table provider,
-/// including parsing the table URI, getting the object store, and configuring the scan.
-///
-/// # Arguments
-///
-/// * `ctx` - The DataFusion SessionContext
-/// * `table_uri` - The URI of the Delta table
-/// * `options` - Additional options for the Delta table (currently unused)
-///
-/// # Returns
-///
-/// A `Result<Arc<dyn TableProvider>>` that can be used with DataFusion.
 pub async fn create_delta_provider(
     ctx: &datafusion::prelude::SessionContext,
     table_uri: &str,

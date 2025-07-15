@@ -4,8 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
-// use arrow_select::concat::concat_batches;
-// use arrow_select::filter::filter_record_batch;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone};
 use datafusion::arrow::array::types::UInt16Type;
@@ -46,9 +44,6 @@ use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder,
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
 };
-use datafusion::sql::planner::ParserOptions;
-// use datafusion_proto::logical_plan::LogicalExtensionCodec;
-// use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use deltalake::errors::{DeltaResult, DeltaTableError};
 use deltalake::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot};
 use deltalake::logstore::LogStoreRef;
@@ -64,7 +59,6 @@ use crate::operations::WriteBuilder;
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod cdf;
-pub use cdf::scan::DeltaCdfTableProvider;
 
 mod schema_adapter;
 
@@ -1201,14 +1195,6 @@ pub(crate) fn to_correct_scalar_value(
     }
 }
 
-#[allow(dead_code)]
-pub(crate) async fn execute_plan_to_batch(
-    _state: &SessionState,
-    _plan: Arc<dyn ExecutionPlan>,
-) -> DeltaResult<datafusion::arrow::record_batch::RecordBatch> {
-    unimplemented!();
-}
-
 /// Responsible for checking batches of data conform to table's invariants, constraints and nullability.
 #[allow(dead_code)]
 #[derive(Clone, Default)]
@@ -1645,24 +1631,6 @@ pub async fn find_files(
     _predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
     unimplemented!();
-}
-
-/// A wrapper for sql_parser's ParserOptions to capture sane default table defaults
-#[allow(dead_code)]
-pub struct DeltaParserOptions {
-    inner: ParserOptions,
-}
-
-impl Default for DeltaParserOptions {
-    fn default() -> Self {
-        unimplemented!();
-    }
-}
-
-impl From<DeltaParserOptions> for ParserOptions {
-    fn from(_value: DeltaParserOptions) -> Self {
-        unimplemented!();
-    }
 }
 
 /// A wrapper for Deltafusion's SessionConfig to capture sane default table defaults

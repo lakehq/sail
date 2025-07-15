@@ -10,14 +10,17 @@ use datafusion::datasource::sink::DataSink;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
 use datafusion_common::{DataFusionError, Result};
+use delta_kernel::engine::arrow_conversion::TryIntoKernel;
+use delta_kernel::schema::StructType;
+use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
+use deltalake::kernel::{Action, Protocol, Remove};
+use deltalake::logstore::StorageConfig;
+use deltalake::parquet::file::properties::WriterProperties;
+use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::StreamExt;
 
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
-use crate::{
-    create_delta_table_with_object_store, open_table_with_object_store, Action, CommitBuilder,
-    CommitProperties, DeltaOperation, Protocol, Remove, SaveMode, StorageConfig, StructType,
-    TableReference, TryIntoKernel, WriterProperties,
-};
+use crate::{create_delta_table_with_object_store, open_table_with_object_store};
 
 #[derive(Debug)]
 pub struct DeltaDataSink {
@@ -165,8 +168,6 @@ impl DataSink for DeltaDataSink {
         let object_store = self.get_object_store(context)?;
         let save_mode = self.parse_save_mode();
 
-        // dbg!("Starting write_all with save_mode: {:?}", &save_mode);
-
         let (table, table_exists) = match open_table_with_object_store(
             &table_path,
             object_store.clone(),
@@ -174,12 +175,8 @@ impl DataSink for DeltaDataSink {
         )
         .await
         {
-            Ok(table) => {
-                // dbg!("Table exists, using existing table");
-                (table, true)
-            }
+            Ok(table) => (table, true),
             Err(e) => {
-                // dbg!("Table does not exist, will create during commit");
                 if save_mode != SaveMode::Overwrite && save_mode != SaveMode::Append {
                     return Err(DataFusionError::External(Box::new(e)));
                 }
@@ -212,17 +209,10 @@ impl DataSink for DeltaDataSink {
             .map_err(|e| DataFusionError::Plan(format!("Invalid table URI: {e}")))?;
 
         let writer_path = if table_url.scheme() == "file" {
-            // For file:// URLs, extract the local filesystem path
             let filesystem_path = table_url.path();
-            // dbg!(
-            //     "Converting file URL to filesystem path: {} -> {}",
-            //     &table_path,
-            //     filesystem_path
-            // );
             object_store::path::Path::from(filesystem_path)
         } else {
             // For other schemes (s3://, etc.), use the full URL as-is
-            // dbg!("Using full URL for non-file scheme: {}", &table_path);
             object_store::path::Path::from(table_path.as_str())
         };
 
@@ -233,7 +223,6 @@ impl DataSink for DeltaDataSink {
         while let Some(batch_result) = data.next().await {
             let batch = batch_result?;
             total_rows += batch.num_rows() as u64;
-            // dbg!("Writing batch with {} rows", batch.num_rows());
             writer
                 .write(&batch)
                 .await
@@ -245,9 +234,6 @@ impl DataSink for DeltaDataSink {
             .close()
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        // dbg!("Writer closed, got {} add actions", add_actions.len());
-
-        // dbg!(&add_actions);
 
         if add_actions.is_empty() && table_exists && save_mode != SaveMode::Overwrite {
             return Ok(0);
@@ -318,7 +304,6 @@ impl DataSink for DeltaDataSink {
             actions.insert(0, Action::Protocol(protocol.clone()));
             actions.insert(1, Action::Metadata(metadata.clone()));
 
-            // For new tables, use Create operation
             DeltaOperation::Create {
                 mode: SaveMode::ErrorIfExists, // Required for Create operation
                 location: table_path.clone(),
@@ -331,39 +316,14 @@ impl DataSink for DeltaDataSink {
             return Ok(total_rows);
         }
 
-        // dbg!("Committing transaction with {} actions", actions.len());
-
-        // Debug: Print actions
-        // if !table_exists {
-        //     dbg!("Creating new table with Protocol and Metadata actions");
-        //     for (i, action) in actions.iter().enumerate() {
-        //         match action {
-        //             Action::Protocol(_) => {
-        //                 dbg!("Action {}: Protocol", i);
-        //             }
-        //             Action::Metadata(_) => {
-        //                 dbg!("Action {}: Metadata", i);
-        //             }
-        //             Action::Add(_) => {
-        //                 dbg!("Action {}: Add", i);
-        //             }
-        //             _ => {
-        //                 dbg!("Action {}: Other", i);
-        //             }
-        //         }
-        //     }
-        // }
-
         // Commit transaction
         let snapshot = if table_exists {
-            // dbg!(&table.state); // Check table state before snapshot
             Some(
                 table
                     .snapshot()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?,
             )
         } else {
-            // dbg!("Table does not exist, no snapshot available");
             None
         };
 
@@ -376,8 +336,6 @@ impl DataSink for DeltaDataSink {
             )
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        // dbg!("Transaction committed successfully");
         Ok(total_rows)
     }
 }
