@@ -1,3 +1,4 @@
+mod async_utils;
 pub mod writer;
 
 use datafusion_common::DataFusionError;

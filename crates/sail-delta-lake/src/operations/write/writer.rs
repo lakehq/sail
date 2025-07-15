@@ -26,10 +26,10 @@ use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
-use tokio::io::AsyncWrite;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use super::async_utils::AsyncShareableBuffer;
 use super::WriteError;
 use crate::kernel::models::actions::MetadataExt;
 
@@ -59,56 +59,6 @@ impl PartitionsExt for IndexMap<String, Scalar> {
             })
             .collect::<Vec<_>>()
             .join("/")
-    }
-}
-
-/// An in-memory buffer that implements AsyncWrite for use with AsyncArrowWriter
-#[derive(Debug, Default, Clone)]
-pub struct AsyncShareableBuffer {
-    buffer: Arc<std::sync::Mutex<Vec<u8>>>,
-}
-
-impl AsyncShareableBuffer {
-    pub fn len(&self) -> usize {
-        self.buffer.lock().expect("Failed to lock buffer").len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn into_inner(self) -> Option<Vec<u8>> {
-        Arc::try_unwrap(self.buffer)
-            .ok()
-            .map(|lock| lock.into_inner().expect("Failed to unwrap mutex"))
-    }
-}
-
-impl AsyncWrite for AsyncShareableBuffer {
-    fn poll_write(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        self.buffer
-            .lock()
-            .expect("Failed to lock buffer")
-            .extend_from_slice(buf);
-        std::task::Poll::Ready(Ok(buf.len()))
-    }
-
-    fn poll_flush(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        std::task::Poll::Ready(Ok(()))
-    }
-
-    fn poll_shutdown(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        std::task::Poll::Ready(Ok(()))
     }
 }
 
@@ -207,7 +157,6 @@ impl DeltaWriter {
     ) -> Result<(), DeltaTableError> {
         let partition_key = partition_values.hive_partition_path();
 
-        // Remove partition columns from the record batch
         let record_batch =
             record_batch_without_partitions(&record_batch, &self.config.partition_columns)?;
 
@@ -225,7 +174,7 @@ impl DeltaWriter {
                     self.config.write_batch_size,
                 );
 
-                let mut writer = PartitionWriter::new(
+                let mut writer = PartitionWriter::try_with_config(
                     self.object_store.clone(),
                     config,
                     self.config.num_indexed_cols,
@@ -316,32 +265,22 @@ impl PartitionWriterConfig {
     }
 }
 
-/// Writer for individual partitions
 pub struct PartitionWriter {
-    /// Object store for writing files
     object_store: Arc<dyn ObjectStore>,
-    /// Writer configuration
-    config: PartitionWriterConfig,
-    /// Unique writer ID
     writer_id: Uuid,
-    /// In-memory buffer
-    buffer: AsyncShareableBuffer,
-    /// Arrow writer for Parquet format
+    config: PartitionWriterConfig,
+    buffer: Option<AsyncShareableBuffer>,
     arrow_writer: Option<AsyncArrowWriter<AsyncShareableBuffer>>,
-    /// Counter for file parts
     part_counter: usize,
-    /// List of files written
     files_written: Vec<Add>,
-    /// Number of indexed columns for statistics
     #[allow(dead_code)]
     num_indexed_cols: i32,
     #[allow(dead_code)]
-    /// Specific columns to collect stats from
     stats_columns: Option<Vec<String>>,
 }
 
 impl PartitionWriter {
-    pub fn new(
+    pub fn try_with_config(
         object_store: Arc<dyn ObjectStore>,
         config: PartitionWriterConfig,
         num_indexed_cols: i32,
@@ -357,9 +296,9 @@ impl PartitionWriter {
 
         Ok(Self {
             object_store,
-            config,
             writer_id: Uuid::new_v4(),
-            buffer,
+            config,
+            buffer: Some(buffer),
             arrow_writer: Some(arrow_writer),
             part_counter: 0,
             files_written: Vec::new(),
@@ -368,9 +307,7 @@ impl PartitionWriter {
         })
     }
 
-    /// Write a record batch to the buffer
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        // Validate schema
         if batch.schema() != self.config.file_schema {
             return Err(DeltaTableError::generic(format!(
                 "Schema mismatch: expected {:?}, got {:?}",
@@ -379,13 +316,11 @@ impl PartitionWriter {
             )));
         }
 
-        // Write batch in chunks
         let max_offset = batch.num_rows();
         for offset in (0..max_offset).step_by(self.config.write_batch_size) {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             let slice = batch.slice(offset, length);
-
-            if let Some(ref mut writer) = self.arrow_writer {
+            if let Some(writer) = self.arrow_writer.as_mut() {
                 writer
                     .write(&slice)
                     .await
@@ -393,7 +328,11 @@ impl PartitionWriter {
             }
 
             // Check if we need to flush
-            let buffer_size = self.buffer.len();
+            let buffer_size = if let Some(buffer) = self.buffer.as_ref() {
+                buffer.len().await
+            } else {
+                0
+            };
             if buffer_size >= self.config.target_file_size {
                 self.flush_writer().await?;
             }
@@ -404,31 +343,29 @@ impl PartitionWriter {
 
     /// Flush the current writer and create a new file
     async fn flush_writer(&mut self) -> Result<(), DeltaTableError> {
-        // Take the writer to get ownership
         let writer = self
             .arrow_writer
             .take()
             .ok_or_else(|| DeltaTableError::generic("Arrow writer not available".to_string()))?;
+        let buffer = self
+            .buffer
+            .take()
+            .ok_or_else(|| DeltaTableError::generic("Buffer not available".to_string()))?;
 
-        // Close the current writer
         let metadata = writer
             .close()
             .await
             .map_err(|e| DeltaTableError::generic(format!("Failed to close arrow writer: {e}")))?;
 
-        // dbg!(&metadata); // Debug: Check if metadata contains the expected row count
-
         // Skip empty files
         if metadata.num_rows == 0 {
-            // Recreate the writer for next use
             self.reset_writer()?;
             return Ok(());
         }
 
-        // Get the buffer data
-        let buffer_data = {
-            let mut buffer = self.buffer.buffer.lock().expect("Failed to lock buffer");
-            Bytes::from(std::mem::take(&mut *buffer))
+        let buffer_data = match buffer.into_inner().await {
+            Some(buffer) => Bytes::from(buffer),
+            None => return Ok(()), // Nothing to write
         };
 
         // Generate file path, returning both relative and full paths
@@ -445,7 +382,6 @@ impl PartitionWriter {
         let add_action = self.create_add_action(relative_path.as_ref(), file_size, &metadata)?;
         self.files_written.push(add_action);
 
-        // Reset for next file
         self.reset_writer()?;
 
         Ok(())
@@ -531,21 +467,20 @@ impl PartitionWriter {
 
     /// Reset the writer for the next file
     fn reset_writer(&mut self) -> Result<(), DeltaTableError> {
-        self.buffer = AsyncShareableBuffer::default();
+        let buffer = AsyncShareableBuffer::default();
         let arrow_writer = AsyncArrowWriter::try_new(
-            self.buffer.clone(),
+            buffer.clone(),
             self.config.file_schema.clone(),
             Some(self.config.writer_properties.clone()),
         )
         .map_err(|e| DeltaTableError::generic(format!("Failed to create new arrow writer: {e}")))?;
-
+        self.buffer = Some(buffer);
         self.arrow_writer = Some(arrow_writer);
         Ok(())
     }
 
     /// Close the writer and return all Add actions
     pub async fn close(mut self) -> Result<Vec<Add>, DeltaTableError> {
-        // Flush any remaining data
         self.flush_writer().await?;
         Ok(self.files_written)
     }
@@ -898,9 +833,7 @@ impl WriteBuilder {
                     }
                 }
             }
-            SaveMode::Append => {
-                // Default behavior - just append new files
-            }
+            SaveMode::Append => {}
             SaveMode::Ignore => {
                 // If table exists, do nothing
                 if snapshot.is_some() {
