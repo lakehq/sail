@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -7,8 +6,7 @@ use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatF
 use datafusion::datasource::file_format::FileFormatFactory;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion_common::Result;
-
-use sail_common_datafusion::datasource::{SourceInfo, SinkInfo, TableFormat, TableWriter};
+use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableWriter};
 
 use crate::options::DataSourceOptionsResolver;
 
@@ -32,9 +30,7 @@ impl TableFormat for ParquetTableFormat {
         let schema = match info.schema {
             // ignore empty schema
             Some(x) if !x.fields().is_empty() => Arc::new(x.into()),
-            _ => {
-                crate::listing::resolve_listing_schema(info.ctx, &urls, &listing_options).await?
-            }
+            _ => crate::listing::resolve_listing_schema(info.ctx, &urls, &listing_options).await?,
         };
 
         let config = ListingTableConfig::new_with_multi_paths(urls)

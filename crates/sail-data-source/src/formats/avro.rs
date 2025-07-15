@@ -6,7 +6,6 @@ use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
 use datafusion::datasource::file_format::FileFormatFactory;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion_common::Result;
-
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableWriter};
 
 #[derive(Debug, Default)]
@@ -19,16 +18,14 @@ impl TableFormat for AvroTableFormat {
     }
 
     async fn create_provider(&self, info: SourceInfo<'_>) -> Result<Arc<dyn TableProvider>> {
-        let listing_options = ListingOptions::new(Arc::new(AvroFormat::default()));
+        let listing_options = ListingOptions::new(Arc::new(AvroFormat));
 
         let urls = crate::url::resolve_listing_urls(info.ctx, info.paths).await?;
 
         let schema = match info.schema {
             // ignore empty schema
             Some(x) if !x.fields().is_empty() => Arc::new(x.into()),
-            _ => {
-                crate::listing::resolve_listing_schema(info.ctx, &urls, &listing_options).await?
-            }
+            _ => crate::listing::resolve_listing_schema(info.ctx, &urls, &listing_options).await?,
         };
 
         let config = ListingTableConfig::new_with_multi_paths(urls)

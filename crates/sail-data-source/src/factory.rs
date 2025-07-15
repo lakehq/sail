@@ -6,7 +6,6 @@ use datafusion::catalog::TableProvider;
 use datafusion::datasource::file_format::FileFormatFactory;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{plan_err, DFSchema, Result};
-
 use sail_common::spec::SaveMode;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo};
 
@@ -36,13 +35,14 @@ impl<'a> TableProviderFactory<'a> {
         let options: HashMap<String, String> = options.into_iter().collect();
 
         let format_provider = self.registry.get_format(format)?;
-        
+
         // FIXME: or try?
         let info = SourceInfo {
             ctx: self.ctx,
             paths,
             schema: schema
-                .map(|s| DFSchema::from_unqualified_fields(s.fields, s.metadata).unwrap()),
+                .map(|s| DFSchema::from_unqualified_fields(s.fields, s.metadata))
+                .transpose()?,
             options,
         };
 

@@ -860,9 +860,10 @@ impl PlanResolver<'_> {
             Some(schema) => Some(self.resolve_schema(schema, state)?),
             None => None,
         };
-                let table_provider = TableProviderFactory::new(self.ctx, Arc::new(TableFormatRegistry::new()))
-            .read_table(&format, paths, schema, options)
-            .await?;
+        let table_provider =
+            TableProviderFactory::new(self.ctx, Arc::new(TableFormatRegistry::new()))
+                .read_table(&format, paths, schema, options)
+                .await?;
         let names = state.register_fields(table_provider.schema().fields());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;
         Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
@@ -2912,8 +2913,9 @@ impl PlanResolver<'_> {
                 let Some(source) = source else {
                     return Err(PlanError::invalid("missing source"));
                 };
-                                let format_factory = TableProviderFactory::new(self.ctx, Arc::new(TableFormatRegistry::new()))
-                    .write_table(&source, mode, options)?;
+                let format_factory =
+                    TableProviderFactory::new(self.ctx, Arc::new(TableFormatRegistry::new()))
+                        .write_table(&source, mode, options)?;
                 let plan = if sort_columns.is_empty() {
                     plan
                 } else {

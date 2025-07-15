@@ -140,7 +140,7 @@ impl CatalogManager<'_> {
                 false => exec_err!("table already exists: {table}"),
             };
         }
-                let factory = TableProviderFactory::new(self.ctx, Arc::new(TableFormatRegistry::new()));
+        let factory = TableProviderFactory::new(self.ctx, Arc::new(TableFormatRegistry::new()));
         // TODO: This only registers the table for read and we need to support write as well.
         let table_provider = factory
             .read_table(
