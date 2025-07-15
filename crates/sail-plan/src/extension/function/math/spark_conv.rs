@@ -1,14 +1,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{as_string_array, StringArray};
+use arrow::array::{as_primitive_array, ArrayRef, StringArray};
+use arrow::datatypes::Int32Type;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::cast::as_int32_array;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::cast::as_generic_string_array;
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::extension::function::error_utils::{
-    invalid_arg_count_exec_err, unsupported_data_types_exec_err,
+    invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
 };
 
 #[derive(Debug)]
@@ -63,18 +64,19 @@ impl ScalarUDFImpl for SparkConv {
             return invoke_vectorized(num, from_base, to_base);
         }
 
-        let num_str: Option<String> = match num {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))) => Some(s.clone()),
-            ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => Some(s.to_string()),
-            ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s))) => Some(s.clone()),
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(i))) => Some(i.to_string()),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(i))) => Some(i.to_string()),
-            _ => None,
+        let num_str = match num {
+            ColumnarValue::Scalar(scalar) => scalar.to_string(),
+            _ => {
+                return Err(unsupported_data_type_exec_err(
+                    "spark_conv",
+                    "Scalar String or Int",
+                    &num.data_type(),
+                ))
+            }
         };
 
-        match (num_str, from_base, to_base) {
+        match (from_base, to_base) {
             (
-                Some(num_str),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(from))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(to))),
             ) => {
@@ -137,7 +139,7 @@ fn invoke_vectorized(
     from_base: &ColumnarValue,
     to_base: &ColumnarValue,
 ) -> Result<ColumnarValue> {
-    let from = match from_base {
+    let from: i32 = match from_base {
         ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => *v,
         _ => {
             return Err(unsupported_data_types_exec_err(
@@ -148,7 +150,7 @@ fn invoke_vectorized(
         }
     };
 
-    let to = match to_base {
+    let to: i32 = match to_base {
         ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => *v,
         _ => {
             return Err(unsupported_data_types_exec_err(
@@ -159,61 +161,62 @@ fn invoke_vectorized(
         }
     };
 
-    let len = match num {
-        ColumnarValue::Array(array) => array.len(),
+    let array: &ArrayRef = match num {
+        ColumnarValue::Array(array) => array,
         _ => {
-            return Err(datafusion_common::DataFusionError::Execution(
-                "Expected array input for spark_conv".to_string(),
-            ));
+            return exec_err!("Expected array input for `num` in spark_conv");
         }
     };
+
+    let len: usize = array.len();
 
     if !(2..=36).contains(&from) || !(2..=36).contains(&to) {
         return Ok(ColumnarValue::Array(Arc::new(StringArray::from_iter(
             std::iter::repeat_n(None::<String>, len),
         ))));
     }
-    let result = match num {
-        ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Utf8 => {
-                let string_array = as_string_array(array);
-                string_array
-                    .iter()
-                    .map(|opt_s| {
-                        opt_s.and_then(|s| {
-                            i64::from_str_radix(s, from as u32)
-                                .ok()
-                                .map(|n| to_radix_string(n, to as u32))
-                        })
+    let result: StringArray = match array.data_type() {
+        DataType::Utf8 => {
+            let strings = as_generic_string_array::<i32>(array)?;
+            strings
+                .iter()
+                .map(|opt| {
+                    opt.and_then(|s| {
+                        i64::from_str_radix(s, from as u32)
+                            .ok()
+                            .map(|n| to_radix_string(n, to as u32))
                     })
-                    .collect::<StringArray>()
-            }
-
-            DataType::Int32 => {
-                let int_array = as_int32_array(array)?;
-                int_array
-                    .iter()
-                    .map(|opt_i| opt_i.map(|i| to_radix_string(i as i64, to as u32)))
-                    .collect::<StringArray>()
-            }
-
-            _ => {
-                return Err(unsupported_data_types_exec_err(
-                    "spark_conv",
-                    "(Utf8 | Int32, Int32, Int32)",
-                    &[
-                        array.data_type().clone(),
-                        from_base.data_type(),
-                        to_base.data_type(),
-                    ],
-                ));
-            }
-        },
+                })
+                .collect()
+        }
+        DataType::LargeUtf8 => {
+            let strings = as_generic_string_array::<i64>(array)?;
+            strings
+                .iter()
+                .map(|opt| {
+                    opt.and_then(|s| {
+                        i64::from_str_radix(s, from as u32)
+                            .ok()
+                            .map(|n| to_radix_string(n, to as u32))
+                    })
+                })
+                .collect()
+        }
+        DataType::Int32 => {
+            let ints = as_primitive_array::<Int32Type>(array);
+            ints.iter()
+                .map(|opt| opt.map(|v| to_radix_string(v as i64, to as u32)))
+                .collect()
+        }
         _ => {
             return Err(unsupported_data_types_exec_err(
                 "spark_conv",
-                "(Utf8 | Int32, Int32, Int32)",
-                &[num.data_type(), from_base.data_type(), to_base.data_type()],
+                "(Utf8 | LargeUtf8 | Int32, Int32, Int32)",
+                &[
+                    array.data_type().clone(),
+                    from_base.data_type(),
+                    to_base.data_type(),
+                ],
             ));
         }
     };
