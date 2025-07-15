@@ -83,11 +83,7 @@ impl ScalarUDFImpl for SparkConv {
                 }
                 match i64::from_str_radix(&num_str, *from as u32) {
                     Ok(n) => {
-                        let result = if *to == 10 {
-                            format!("{n}")
-                        } else {
-                            format!("{n:x}")
-                        };
+                        let result = to_radix_string(n, *to as u32);
                         Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
                     }
                     Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
@@ -185,13 +181,9 @@ fn invoke_vectorized(
                     .iter()
                     .map(|opt_s| {
                         opt_s.and_then(|s| {
-                            i64::from_str_radix(s, from as u32).ok().map(|n| {
-                                if to == 10 {
-                                    n.to_string()
-                                } else {
-                                    format!("{n:x}")
-                                }
-                            })
+                            i64::from_str_radix(s, from as u32)
+                                .ok()
+                                .map(|n| to_radix_string(n, to as u32))
                         })
                     })
                     .collect::<StringArray>()
@@ -201,15 +193,7 @@ fn invoke_vectorized(
                 let int_array = as_int32_array(array)?;
                 int_array
                     .iter()
-                    .map(|opt_i| {
-                        opt_i.map(|i| {
-                            if to == 10 {
-                                i.to_string()
-                            } else {
-                                format!("{i:x}")
-                            }
-                        })
-                    })
+                    .map(|opt_i| opt_i.map(|i| to_radix_string(i as i64, to as u32)))
                     .collect::<StringArray>()
             }
 
@@ -235,4 +219,65 @@ fn invoke_vectorized(
     };
 
     Ok(ColumnarValue::Array(Arc::new(result)))
+}
+
+fn to_radix_string(mut n: i64, radix: u32) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+
+    let negative: bool = n < 0;
+    n = n.abs();
+
+    let mut digits: Vec<char> = vec![];
+    let radix: i64 = radix as i64;
+
+    loop {
+        let rem: u8 = (n % radix) as u8;
+        digits.push(
+            std::char::from_digit(rem as u32, 36)
+                .map(|c| c.to_ascii_uppercase())
+                .unwrap_or('?'),
+        );
+        n /= radix;
+        if n == 0 {
+            break;
+        }
+    }
+
+    if negative {
+        digits.push('-');
+    }
+
+    digits.iter().rev().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_to_radix_string_basic_cases() {
+        assert_eq!(to_radix_string(10, 2), "1010");
+        assert_eq!(to_radix_string(10, 8), "12");
+        assert_eq!(to_radix_string(10, 10), "10");
+        assert_eq!(to_radix_string(10, 16), "A");
+        assert_eq!(to_radix_string(255, 16), "FF");
+        assert_eq!(to_radix_string(31, 16), "1F");
+        assert_eq!(to_radix_string(36, 36), "10");
+    }
+
+    #[test]
+    fn test_to_radix_string_negative_values() {
+        assert_eq!(to_radix_string(-10, 2), "-1010");
+        assert_eq!(to_radix_string(-10, 8), "-12");
+        assert_eq!(to_radix_string(-10, 10), "-10");
+        assert_eq!(to_radix_string(-10, 16), "-A");
+    }
+
+    #[test]
+    fn test_to_radix_string_zero() {
+        assert_eq!(to_radix_string(0, 2), "0");
+        assert_eq!(to_radix_string(0, 10), "0");
+        assert_eq!(to_radix_string(0, 36), "0");
+    }
 }
