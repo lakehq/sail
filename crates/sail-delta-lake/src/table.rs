@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::delta_datafusion::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
 
-pub async fn open_table_with_object_store(
+pub(crate) async fn open_table_with_object_store(
     table_uri: impl AsRef<str>,
     object_store: Arc<dyn ObjectStore>,
     storage_options: StorageConfig,
@@ -27,7 +27,7 @@ pub async fn open_table_with_object_store(
     Ok(table)
 }
 
-pub async fn create_delta_table_with_object_store(
+pub(crate) async fn create_delta_table_with_object_store(
     table_uri: impl AsRef<str>,
     object_store: Arc<dyn ObjectStore>,
     storage_options: StorageConfig,
@@ -60,7 +60,7 @@ fn create_logstore_with_object_store(
     Ok(log_store)
 }
 
-pub async fn create_delta_table_provider_with_object_store(
+pub(crate) async fn create_delta_table_provider_with_object_store(
     table_uri: impl AsRef<str>,
     object_store: Arc<dyn ObjectStore>,
     storage_options: StorageConfig,

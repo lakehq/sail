@@ -55,6 +55,7 @@ use url::Url;
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::operations::WriteBuilder;
+use crate::table::open_table_with_object_store;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -1545,12 +1546,9 @@ impl TableProviderFactory for DeltaTableFactory {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?
         };
 
-        // Use sail-delta-lake's open_table_with_object_store to bypass delta-rs internal ObjectStore creation
-        // This follows the dependency injection pattern by using the ObjectStore from sail's registry
-        let delta_table =
-            crate::open_table_with_object_store(&cmd.location, object_store, storage_config)
-                .await
-                .map_err(delta_to_datafusion_error)?;
+        let delta_table = open_table_with_object_store(&cmd.location, object_store, storage_config)
+            .await
+            .map_err(delta_to_datafusion_error)?;
 
         let config = DeltaScanConfig::default();
         let provider = DeltaTableProvider::try_new(

@@ -20,7 +20,7 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::StreamExt;
 
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
-use crate::{create_delta_table_with_object_store, open_table_with_object_store};
+use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
 #[derive(Debug)]
 pub struct DeltaDataSink {
