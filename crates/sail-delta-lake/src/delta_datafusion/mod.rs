@@ -13,7 +13,7 @@ use datafusion::arrow::datatypes::{
     SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use datafusion::catalog::memory::DataSourceExec;
-use datafusion::catalog::{Session, TableProviderFactory};
+use datafusion::catalog::Session;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::Statistics;
@@ -32,7 +32,6 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::execution_props::ExecutionProps;
-use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
@@ -55,7 +54,6 @@ use url::Url;
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::operations::WriteBuilder;
-use crate::table::open_table_with_object_store;
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -1507,66 +1505,6 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
     })
     .expect("Failed to apply expression transformation");
     is_applicable
-}
-
-/// Responsible for creating deltatables
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct DeltaTableFactory {}
-
-#[async_trait]
-impl TableProviderFactory for DeltaTableFactory {
-    async fn create(
-        &self,
-        ctx: &dyn Session,
-        cmd: &CreateExternalTable,
-    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        // Parse the location URL
-        let location_url = url::Url::parse(&cmd.location).map_err(|e| {
-            DataFusionError::External(Box::new(DeltaTableError::InvalidTableLocation(format!(
-                "Invalid table location URL: {e}"
-            ))))
-        })?;
-
-        let object_store = ctx
-            .runtime_env()
-            .object_store_registry
-            .get_store(&location_url)
-            .map_err(|e| {
-                DataFusionError::External(Box::new(DeltaTableError::Generic(format!(
-                    "Failed to get object store from sail's registry: {e}"
-                ))))
-            })?;
-
-        let storage_config = if cmd.options.is_empty() {
-            deltalake::logstore::StorageConfig::default()
-        } else {
-            let options_map: std::collections::HashMap<String, String> = cmd
-                .options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            deltalake::logstore::StorageConfig::parse_options(options_map)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-        };
-
-        let delta_table = open_table_with_object_store(&cmd.location, object_store, storage_config)
-            .await
-            .map_err(delta_to_datafusion_error)?;
-
-        let config = DeltaScanConfig::default();
-        let provider = DeltaTableProvider::try_new(
-            delta_table
-                .snapshot()
-                .map_err(delta_to_datafusion_error)?
-                .clone(),
-            delta_table.log_store(),
-            config,
-        )
-        .map_err(delta_to_datafusion_error)?;
-
-        Ok(Arc::new(provider))
-    }
 }
 
 #[allow(dead_code)]
