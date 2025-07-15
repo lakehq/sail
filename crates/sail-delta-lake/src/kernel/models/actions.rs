@@ -27,6 +27,7 @@ pub fn new_metadata(
     Ok(serde_json::from_value(value)?)
 }
 
+#[allow(dead_code)]
 pub trait MetadataExt {
     fn with_table_id(self, table_id: String) -> DeltaResult<Metadata>;
 
@@ -175,6 +176,7 @@ impl Default for Protocol {
     }
 }
 
+#[allow(dead_code)]
 impl Protocol {
     /// Create a new protocol action
     pub fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
@@ -595,6 +597,7 @@ impl TableFeatures {
 
 ///Storage type of deletion vector
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum StorageType {
     /// Stored at relative path derived from a UUID.
     #[serde(rename = "u")]
@@ -646,7 +649,7 @@ impl Display for StorageType {
 
 #[derive(PartialEq, Serialize, Deserialize, Debug, Clone, Eq)]
 #[serde(rename_all = "camelCase")]
-/// Defines a deletion vector
+#[allow(dead_code)]
 pub struct DeletionVectorDescriptor {
     /// A single character to indicate how to access the DV. Legal options are: ['u', 'i', 'p'].
     pub storage_type: StorageType,
@@ -681,6 +684,7 @@ pub struct DeletionVectorDescriptor {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 /// Defines an add action
 pub struct Add {
     /// A relative path to a data file from the root of the table or an absolute path to a file
@@ -731,6 +735,7 @@ pub struct Add {
 /// Represents a tombstone (deleted file) in the Delta log.
 #[derive(PartialEq, Serialize, Deserialize, Debug, Clone, Eq, Default)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct Remove {
     /// A relative path to a data file from the root of the table or an absolute path to a file
     /// that should be added to the table. The path is a URI as specified by
@@ -782,6 +787,7 @@ pub struct Remove {
 /// Delta AddCDCFile action that describes a parquet CDC data file.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct AddCDCFile {
     /// A relative path, from the root of the table, or an
     /// absolute path to a CDC file
@@ -804,6 +810,7 @@ pub struct AddCDCFile {
 
 /// Action used by streaming systems to track progress using application-specific versions to
 /// enable idempotency.
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Transaction {
@@ -818,6 +825,7 @@ pub struct Transaction {
     pub last_updated: Option<i64>,
 }
 
+#[allow(dead_code)]
 impl Transaction {
     /// Create a new application transactions. See [`Txn`] for details.
     pub fn new(app_id: impl ToString, version: i64) -> Self {
@@ -843,6 +851,7 @@ impl Transaction {
 /// allow us to be more permissive in commit conflict resolution.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct CommitInfo {
     /// Timestamp in millis when the commit was created
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -892,6 +901,7 @@ pub struct CommitInfo {
 /// The domain metadata action contains a configuration (string) for a named metadata domain
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct DomainMetadata {
     /// Identifier for this domain (system or user-provided)
     pub domain: String,
@@ -904,6 +914,7 @@ pub struct DomainMetadata {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[allow(dead_code)]
 /// This action is only allowed in checkpoints following V2 spec. It describes the details about the checkpoint.
 pub struct CheckpointMetadata {
     /// The flavor of the V2 checkpoint. Allowed values: "flat".
@@ -918,6 +929,7 @@ pub struct CheckpointMetadata {
 /// This action is only allowed in checkpoints following V2 spec.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct Sidecar {
     /// The name of the sidecar file (not a path).
     /// The file must reside in the _delta_log/_sidecars directory.
@@ -993,6 +1005,7 @@ impl FromStr for IsolationLevel {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) mod serde_path {
     use std::str::Utf8Error;
 

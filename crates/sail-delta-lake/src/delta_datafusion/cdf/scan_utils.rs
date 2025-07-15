@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::delta_datafusion::cdf::{CdcDataSpec, FileAction, CHANGE_TYPE_COL};
 use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
 
+#[allow(dead_code)]
 pub fn map_action_to_scalar<F: FileAction>(
     action: &F,
     part: &str,
@@ -38,6 +39,7 @@ pub fn map_action_to_scalar<F: FileAction>(
         .unwrap_or(ScalarValue::Null))
 }
 
+#[allow(dead_code)]
 pub fn create_spec_partition_values<F: FileAction>(
     spec: &CdcDataSpec<F>,
     action_type: Option<&ScalarValue>,
@@ -51,6 +53,7 @@ pub fn create_spec_partition_values<F: FileAction>(
     spec_partition_values
 }
 
+#[allow(dead_code)]
 pub fn create_partition_values<F: FileAction>(
     schema: SchemaRef,
     specs: Vec<CdcDataSpec<F>>,
@@ -92,6 +95,7 @@ pub fn create_partition_values<F: FileAction>(
     Ok(file_groups)
 }
 
+#[allow(dead_code)]
 pub fn create_cdc_schema(mut schema_fields: Vec<Arc<Field>>, include_type: bool) -> SchemaRef {
     if include_type {
         schema_fields.push(Field::new(CHANGE_TYPE_COL, DataType::Utf8, true).into());

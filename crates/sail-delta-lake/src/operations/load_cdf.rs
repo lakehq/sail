@@ -45,6 +45,7 @@ pub struct CdfLoadBuilder {
     allow_out_of_range: bool,
 }
 
+#[allow(dead_code)]
 impl CdfLoadBuilder {
     /// Create a new [`LoadBuilder`]
     pub fn new(log_store: LogStoreRef, snapshot: DeltaTableState) -> Self {

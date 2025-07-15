@@ -21,6 +21,7 @@ use super::ADD_PARTITION_SCHEMA;
 use crate::delta_datafusion::{delta_to_datafusion_error, DataFusionMixins};
 use crate::operations::load_cdf::CdfLoadBuilder;
 
+#[allow(dead_code)]
 fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&SessionState> {
     session
         .as_any()
@@ -28,12 +29,14 @@ fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&Sessio
         .ok_or_else(|| exec_datafusion_err!("Failed to downcast Session to SessionState"))
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct DeltaCdfTableProvider {
     cdf_builder: CdfLoadBuilder,
     schema: SchemaRef,
 }
 
+#[allow(dead_code)]
 impl DeltaCdfTableProvider {
     /// Build a DeltaCDFTableProvider
     pub fn try_new(cdf_builder: CdfLoadBuilder) -> DeltaResult<Self> {

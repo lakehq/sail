@@ -427,6 +427,7 @@ impl Default for DeltaScanConfigBuilder {
     }
 }
 
+#[allow(dead_code)]
 impl DeltaScanConfigBuilder {
     /// Construct a new instance of `DeltaScanConfigBuilder`
     pub fn new() -> Self {
@@ -1207,6 +1208,7 @@ pub struct DeltaDataChecker {
     ctx: SessionContext,
 }
 
+#[allow(dead_code)]
 impl DeltaDataChecker {
     /// Create a new DeltaDataChecker with no invariants or constraints
     pub fn empty() -> Self {
@@ -1294,6 +1296,7 @@ impl DeltaTableProvider {
     }
 
     /// Define which files to consider while building a scan, for advanced usecases
+    #[allow(dead_code)]
     pub fn with_files(mut self, files: Vec<Add>) -> DeltaTableProvider {
         self.files = Some(files);
         self
@@ -1508,6 +1511,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
 
 /// Responsible for creating deltatables
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct DeltaTableFactory {}
 
 #[async_trait]
@@ -1584,6 +1588,7 @@ impl TreeNodeVisitor<'_> for FindFilesExprProperties {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq)]
+#[allow(dead_code)]
 /// Representing the result of the [find_files] function.
 pub struct FindFiles {
     /// A list of `Add` objects that match the given predicate
@@ -1622,6 +1627,7 @@ pub(crate) async fn scan_memory_table(
 }
 
 /// Finds files in a snapshot that match the provided predicate.
+#[allow(dead_code)]
 pub async fn find_files(
     _snapshot: &DeltaTableState,
     _log_store: LogStoreRef,

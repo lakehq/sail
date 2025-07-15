@@ -12,12 +12,16 @@ pub mod scan;
 mod scan_utils;
 
 /// Change type column name
+#[allow(dead_code)]
 pub const CHANGE_TYPE_COL: &str = "_change_type";
 /// Commit version column name
+#[allow(dead_code)]
 pub const COMMIT_VERSION_COL: &str = "_commit_version";
 /// Commit Timestamp column name
+#[allow(dead_code)]
 pub const COMMIT_TIMESTAMP_COL: &str = "_commit_timestamp";
 
+#[allow(dead_code)]
 pub(crate) static CDC_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| {
     vec![
         Field::new(COMMIT_VERSION_COL, DataType::Int64, true),
@@ -28,6 +32,8 @@ pub(crate) static CDC_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| 
         ),
     ]
 });
+
+#[allow(dead_code)]
 pub(crate) static ADD_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| {
     vec![
         Field::new(CHANGE_TYPE_COL, DataType::Utf8, true),
@@ -40,6 +46,7 @@ pub(crate) static ADD_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| 
     ]
 });
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct CdcDataSpec<F: FileAction> {
     version: i64,
@@ -47,6 +54,7 @@ pub(crate) struct CdcDataSpec<F: FileAction> {
     actions: Vec<F>,
 }
 
+#[allow(dead_code)]
 impl<F: FileAction> CdcDataSpec<F> {
     pub fn new(version: i64, timestamp: i64, actions: Vec<F>) -> Self {
         Self {
@@ -58,6 +66,7 @@ impl<F: FileAction> CdcDataSpec<F> {
 }
 
 /// This trait defines a generic set of operations used by CDF Reader
+#[allow(dead_code)]
 pub trait FileAction {
     /// Adds partition values
     fn partition_values(&self) -> DeltaResult<&HashMap<String, Option<String>>>;
