@@ -5440,6 +5440,7 @@ dependencies = [
  "regex",
  "sail-common",
  "sail-common-datafusion",
+ "sail-delta-lake",
  "serde",
  "serde_yaml",
  "syn",

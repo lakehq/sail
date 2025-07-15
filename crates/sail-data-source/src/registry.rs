@@ -7,6 +7,7 @@ use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::{TableFormat, TableWriter};
 
 use crate::formats::csv::CsvTableFormat;
+use crate::formats::delta::DeltaTableFormat;
 use crate::formats::json::JsonTableFormat;
 use crate::formats::parquet::ParquetTableFormat;
 
@@ -31,6 +32,10 @@ impl TableFormatRegistry {
         let json = Arc::new(JsonTableFormat::default());
         registry.register_format(json.clone());
         registry.register_writer(json);
+
+        let delta = Arc::new(DeltaTableFormat::default());
+        registry.register_format(delta.clone());
+        registry.register_writer(delta);
 
         registry
     }

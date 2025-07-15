@@ -36,7 +36,8 @@ impl<'a> TableProviderFactory<'a> {
         let options: HashMap<String, String> = options.into_iter().collect();
 
         let format_provider = self.registry.get_format(format)?;
-
+        
+        // FIXME: or try?
         let info = SourceInfo {
             ctx: self.ctx,
             paths,

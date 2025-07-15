@@ -20,6 +20,7 @@ regex = { workspace = true }
 percent-encoding = { workspace = true }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-delta-lake = { path = "../sail-delta-lake" }
 
 [build-dependencies]
 serde = { workspace = true }
