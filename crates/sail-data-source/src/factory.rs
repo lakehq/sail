@@ -16,9 +16,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{internal_err, plan_err, Result};
 use futures::{StreamExt, TryStreamExt};
 use sail_common::spec::SaveMode;
-use sail_delta_lake::delta_datafusion::delta_to_datafusion_error;
+use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_format::DeltaFormatFactory;
-use sail_delta_lake::{create_delta_table_provider_with_object_store, DeltaScanConfig};
 
 use crate::options::DataSourceOptionsResolver;
 use crate::url::{rewrite_directory_url, GlobUrl};
@@ -47,7 +46,7 @@ impl<'a> TableProviderFactory<'a> {
 
         // Handle delta format early, paths vec is guaranteed to be non-empty
         if matches!(format.to_lowercase().as_str(), "delta") {
-            return self.create_delta_provider(&paths[0], &options).await;
+            return create_delta_provider(self.ctx, &paths[0], &options).await;
         }
 
         let urls = self.resolve_listing_urls(paths).await?;
@@ -281,38 +280,5 @@ impl<'a> TableProviderFactory<'a> {
         }
 
         Schema::new_with_metadata(new_fields, schema.metadata().clone())
-    }
-
-    async fn create_delta_provider(
-        &self,
-        table_uri: &str,
-        _options: &HashMap<String, String>,
-    ) -> Result<Arc<dyn TableProvider>> {
-        // let resolver = DataSourceOptionsResolver::new(self.ctx);
-        // let delta_options = resolver.resolve_delta_read_options(options.clone())?;
-
-        let url = ListingTableUrl::parse(table_uri)?;
-        let object_store = self.ctx.runtime_env().object_store(&url)?;
-
-        let storage_config = Default::default();
-
-        // Create DeltaScanConfig with proper field names
-        let scan_config = DeltaScanConfig {
-            file_column_name: None,
-            wrap_partition_values: true,
-            enable_parquet_pushdown: true, // Default to true for now
-            schema: None,
-        };
-
-        let table_provider = create_delta_table_provider_with_object_store(
-            table_uri,
-            object_store,
-            storage_config,
-            Some(scan_config),
-        )
-        .await
-        .map_err(delta_to_datafusion_error)?;
-
-        Ok(Arc::new(table_provider))
     }
 }
