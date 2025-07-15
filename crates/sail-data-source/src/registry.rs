@@ -6,6 +6,8 @@ use datafusion_common::{DataFusionError, Result};
 
 use sail_common_datafusion::datasource::{TableFormat, TableWriter};
 
+use crate::formats::arrow::ArrowTableFormat;
+use crate::formats::avro::AvroTableFormat;
 use crate::formats::csv::CsvTableFormat;
 use crate::formats::delta::DeltaTableFormat;
 use crate::formats::json::JsonTableFormat;
@@ -36,6 +38,14 @@ impl TableFormatRegistry {
         let delta = Arc::new(DeltaTableFormat::default());
         registry.register_format(delta.clone());
         registry.register_writer(delta);
+
+        let arrow = Arc::new(ArrowTableFormat::default());
+        registry.register_format(arrow.clone());
+        registry.register_writer(arrow);
+
+        let avro = Arc::new(AvroTableFormat::default());
+        registry.register_format(avro.clone());
+        registry.register_writer(avro);
 
         registry
     }
