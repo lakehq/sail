@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::extension::function::functions_utils::make_scalar_function;
 use datafusion::arrow::array::{
     Array, ArrayRef, GenericStringBuilder, LargeStringArray, StringArray, StringArrayType,
 };
@@ -11,8 +10,9 @@ use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
-
 use url::Url;
+
+use crate::extension::function::functions_utils::make_scalar_function;
 
 #[derive(Debug)]
 pub struct ParseUrl {
@@ -414,7 +414,6 @@ where
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::StringArray;
-
     use datafusion_common::Result;
 
     use super::*;
