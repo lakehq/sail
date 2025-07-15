@@ -1,4 +1,3 @@
-pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
 use deltalake::{DeltaResult, DeltaTable};
 
 pub use self::load::LoadBuilder;
@@ -9,7 +8,7 @@ pub use self::write::WriteBuilder;
 // pub mod constraints;
 // pub mod delete;
 pub mod load;
-pub mod load_cdf;
+// pub mod load_cdf;
 // pub mod merge;
 // pub mod optimize;
 // pub mod update;

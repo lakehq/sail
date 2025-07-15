@@ -6,8 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone};
-use datafusion::arrow::array::types::UInt16Type;
-use datafusion::arrow::array::{RecordBatch, StringArray, TypedDictionaryArray, UInt64Array};
+use datafusion::arrow::array::{RecordBatch, UInt64Array};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
@@ -17,7 +16,7 @@ use datafusion::catalog::Session;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::Statistics;
-use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{
     Column, DFSchema, DataFusionError, Result as DataFusionResult, ToDFSchema,
 };
@@ -29,7 +28,7 @@ use datafusion::datasource::physical_plan::{
     FileSource, ParquetSource,
 };
 use datafusion::datasource::{TableProvider, TableType};
-use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
+use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -44,10 +43,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
 };
 use deltalake::errors::{DeltaResult, DeltaTableError};
-use deltalake::kernel::{Add, DataCheck, EagerSnapshot, Invariant, Snapshot};
+use deltalake::kernel::{Add, EagerSnapshot, Snapshot};
 use deltalake::logstore::LogStoreRef;
 use deltalake::table::state::DeltaTableState;
-use deltalake::table::{Constraint, GeneratedColumn};
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -57,7 +55,7 @@ use crate::operations::WriteBuilder;
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
-pub mod cdf;
+// pub mod cdf;
 
 mod schema_adapter;
 
@@ -321,14 +319,6 @@ pub(crate) fn files_matching_predicate<'a>(
     Ok(Box::new(filtered))
 }
 
-#[allow(dead_code)]
-pub(crate) fn get_path_column<'a>(
-    _batch: &'a RecordBatch,
-    _path_column: &str,
-) -> DeltaResult<TypedDictionaryArray<'a, UInt16Type, StringArray>> {
-    unimplemented!();
-}
-
 // Extension trait to add datafusion_table_statistics method to DeltaTableState
 trait DeltaTableStateExt {
     fn datafusion_table_statistics(&self) -> Option<Statistics>;
@@ -413,7 +403,6 @@ impl Default for DeltaScanConfigBuilder {
     }
 }
 
-#[allow(dead_code)]
 impl DeltaScanConfigBuilder {
     /// Construct a new instance of `DeltaScanConfigBuilder`
     pub fn new() -> Self {
@@ -422,6 +411,7 @@ impl DeltaScanConfigBuilder {
 
     /// Indicate that a column containing a records file path is included.
     /// Column name is generated and can be determined once this Config is built
+    #[allow(dead_code)]
     pub fn with_file_column(mut self, include: bool) -> Self {
         self.include_file_column = include;
         self.file_column_name = None;
@@ -429,6 +419,7 @@ impl DeltaScanConfigBuilder {
     }
 
     /// Indicate that a column containing a records file path is included and column name is user defined.
+    #[allow(dead_code)]
     pub fn with_file_column_name<S: ToString>(mut self, name: &S) -> Self {
         self.file_column_name = Some(name.to_string());
         self.include_file_column = true;
@@ -436,6 +427,7 @@ impl DeltaScanConfigBuilder {
     }
 
     /// Whether to wrap partition values in a dictionary encoding
+    #[allow(dead_code)]
     pub fn wrap_partition_values(mut self, wrap: bool) -> Self {
         self.wrap_partition_values = Some(wrap);
         self
@@ -443,12 +435,14 @@ impl DeltaScanConfigBuilder {
 
     /// Allow pushdown of the scan filter
     /// When disabled the filter will only be used for pruning files
+    #[allow(dead_code)]
     pub fn with_parquet_pushdown(mut self, pushdown: bool) -> Self {
         self.enable_parquet_pushdown = pushdown;
         self
     }
 
     /// Use the provided [SchemaRef] for the [DeltaScan]
+    #[allow(dead_code)]
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = Some(schema);
         self
@@ -527,13 +521,13 @@ pub struct DeltaScan {
     metrics: ExecutionPlanMetricsSet,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
-struct DeltaScanWire {
-    pub table_uri: String,
-    pub config: DeltaScanConfig,
-    pub logical_schema: Arc<ArrowSchema>,
-}
+// TODO: Wire related logic
+// #[derive(Debug, Serialize, Deserialize)]
+// struct DeltaScanWire {
+//     pub table_uri: String,
+//     pub config: DeltaScanConfig,
+//     pub logical_schema: Arc<ArrowSchema>,
+// }
 
 impl DisplayAs for DeltaScan {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
@@ -1183,77 +1177,16 @@ pub(crate) fn to_correct_scalar_value(
     }
 }
 
-/// Responsible for checking batches of data conform to table's invariants, constraints and nullability.
-#[allow(dead_code)]
-#[derive(Clone, Default)]
-pub struct DeltaDataChecker {
-    constraints: Vec<Constraint>,
-    invariants: Vec<Invariant>,
-    generated_columns: Vec<GeneratedColumn>,
-    non_nullable_columns: Vec<String>,
-    ctx: SessionContext,
-}
-
-#[allow(dead_code)]
-impl DeltaDataChecker {
-    /// Create a new DeltaDataChecker with no invariants or constraints
-    pub fn empty() -> Self {
-        unimplemented!();
-    }
-
-    /// Create a new DeltaDataChecker with a specified set of invariants
-    pub fn new_with_invariants(_invariants: Vec<Invariant>) -> Self {
-        unimplemented!();
-    }
-
-    /// Create a new DeltaDataChecker with a specified set of constraints
-    pub fn new_with_constraints(_constraints: Vec<Constraint>) -> Self {
-        unimplemented!();
-    }
-
-    /// Create a new DeltaDataChecker with a specified set of generated columns
-    pub fn new_with_generated_columns(_generated_columns: Vec<GeneratedColumn>) -> Self {
-        unimplemented!();
-    }
-
-    /// Specify the Datafusion context
-    pub fn with_session_context(self, _context: SessionContext) -> Self {
-        unimplemented!();
-    }
-
-    /// Add the specified set of constraints to the current DeltaDataChecker's constraints
-    pub fn with_extra_constraints(self, _constraints: Vec<Constraint>) -> Self {
-        unimplemented!();
-    }
-
-    /// Create a new DeltaDataChecker
-    pub fn new(_snapshot: &DeltaTableState) -> Self {
-        unimplemented!();
-    }
-
-    /// Check that a record batch conforms to table's invariants.
-    ///
-    /// If it does not, it will return [DeltaTableError::InvalidData] with a list
-    /// of values that violated each invariant.
-    pub async fn check_batch(&self, _record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        unimplemented!();
-    }
-
-    /// Return true if all the nullability checks are valid
-    #[allow(dead_code)]
-    fn check_nullability(&self, _record_batch: &RecordBatch) -> Result<bool, DeltaTableError> {
-        unimplemented!();
-    }
-
-    #[allow(dead_code)]
-    async fn enforce_checks<C: DataCheck>(
-        &self,
-        _record_batch: &RecordBatch,
-        _checks: &[C],
-    ) -> Result<(), DeltaTableError> {
-        unimplemented!();
-    }
-}
+// TODO: implement DeltaDataChecker
+// #[derive(Clone, Default)]
+// pub struct DeltaDataChecker {
+//     constraints: Vec<Constraint>,
+//     invariants: Vec<Invariant>,
+//     generated_columns: Vec<GeneratedColumn>,
+//     non_nullable_columns: Vec<String>,
+//     ctx: SessionContext,
+// }
+// impl DeltaDataChecker {}
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
 #[derive(Debug)]
@@ -1495,145 +1428,14 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
     is_applicable
 }
 
-#[allow(dead_code)]
-pub(crate) struct FindFilesExprProperties {
-    pub partition_columns: Vec<String>,
-    pub partition_only: bool,
-    pub result: DeltaResult<()>,
-}
+// TODO: implement FindFiles related logic
+// pub(crate) struct FindFilesExprProperties {
+//     pub partition_columns: Vec<String>,
+//     pub partition_only: bool,
+//     pub result: DeltaResult<()>,
+// }
 
-/// Ensure only expressions that make sense are accepted, check for
-/// non-deterministic functions, and determine if the expression only contains
-/// partition columns
-impl TreeNodeVisitor<'_> for FindFilesExprProperties {
-    type Node = Expr;
-
-    fn f_down(&mut self, _expr: &Self::Node) -> datafusion::common::Result<TreeNodeRecursion> {
-        unimplemented!();
-    }
-}
-
-#[derive(Debug, Hash, Eq, PartialEq)]
-#[allow(dead_code)]
-/// Representing the result of the [find_files] function.
-pub struct FindFiles {
-    /// A list of `Add` objects that match the given predicate
-    pub candidates: Vec<Add>,
-    /// Was a physical read to the datastore required to determine the candidates
-    pub partition_scan: bool,
-}
-
-#[allow(dead_code)]
-fn join_batches_with_add_actions(
-    _batches: Vec<RecordBatch>,
-    _actions: HashMap<String, Add>,
-    _path_column: &str,
-    _dict_array: bool,
-) -> DeltaResult<Vec<Add>> {
-    unimplemented!();
-}
-
-/// Determine which files contain a record that satisfies the predicate
-#[allow(dead_code)]
-pub(crate) async fn find_files_scan(
-    _snapshot: &DeltaTableState,
-    _log_store: LogStoreRef,
-    _state: &SessionState,
-    _expression: Expr,
-) -> DeltaResult<Vec<Add>> {
-    unimplemented!();
-}
-
-#[allow(dead_code)]
-pub(crate) async fn scan_memory_table(
-    _snapshot: &DeltaTableState,
-    _predicate: &Expr,
-) -> DeltaResult<Vec<Add>> {
-    unimplemented!();
-}
-
-/// Finds files in a snapshot that match the provided predicate.
-#[allow(dead_code)]
-pub async fn find_files(
-    _snapshot: &DeltaTableState,
-    _log_store: LogStoreRef,
-    _state: &SessionState,
-    _predicate: Option<Expr>,
-) -> DeltaResult<FindFiles> {
-    unimplemented!();
-}
-
-/// A wrapper for Deltafusion's SessionConfig to capture sane default table defaults
-#[allow(dead_code)]
-pub struct DeltaSessionConfig {
-    inner: SessionConfig,
-}
-
-impl Default for DeltaSessionConfig {
-    fn default() -> Self {
-        unimplemented!();
-    }
-}
-
-impl From<DeltaSessionConfig> for SessionConfig {
-    fn from(_value: DeltaSessionConfig) -> Self {
-        unimplemented!();
-    }
-}
-
-/// A wrapper for Deltafusion's SessionContext to capture sane default table defaults
-#[allow(dead_code)]
-pub struct DeltaSessionContext {
-    inner: SessionContext,
-}
-
-impl Default for DeltaSessionContext {
-    fn default() -> Self {
-        unimplemented!();
-    }
-}
-
-impl From<DeltaSessionContext> for SessionContext {
-    fn from(_value: DeltaSessionContext) -> Self {
-        unimplemented!();
-    }
-}
-
-/// A wrapper for Deltafusion's Column to preserve case-sensitivity during string conversion
-#[allow(dead_code)]
-pub struct DeltaColumn {
-    inner: Column,
-}
-
-impl From<&str> for DeltaColumn {
-    fn from(_c: &str) -> Self {
-        unimplemented!();
-    }
-}
-
-/// Create a column, cloning the string
-impl From<&String> for DeltaColumn {
-    fn from(_c: &String) -> Self {
-        unimplemented!();
-    }
-}
-
-/// Create a column, reusing the existing string
-impl From<String> for DeltaColumn {
-    fn from(_c: String) -> Self {
-        unimplemented!();
-    }
-}
-
-impl From<DeltaColumn> for Column {
-    fn from(_value: DeltaColumn) -> Self {
-        unimplemented!();
-    }
-}
-
-/// Create a column, resuing the existing datafusion column
-impl From<Column> for DeltaColumn {
-    fn from(_c: Column) -> Self {
-        unimplemented!();
-    }
-}
+// TODO: implement DeltaColumn (maybe not needed?)
+// pub struct DeltaColumn {
+//     inner: Column,
+// }
