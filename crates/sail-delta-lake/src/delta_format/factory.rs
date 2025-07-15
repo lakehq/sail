@@ -17,7 +17,7 @@ pub struct DeltaFormatFactory {
 impl DeltaFormatFactory {
     pub fn new() -> Self {
         Self {
-            mode: SaveMode::Overwrite, // Default save mode
+            mode: SaveMode::ErrorIfExists, // Default save mode
             options: HashMap::new(),
         }
     }

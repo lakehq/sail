@@ -232,7 +232,6 @@ class TestDeltaLake:
 
             assert_frame_equal(filtered_df.toPandas(), expected_filtered, check_dtype=False)
 
-    @pytest.mark.skip(reason="Temporarily skipped")
     def test_delta_with_different_data_types(self, spark):
         """Test Delta Lake support for different data types"""
         with tempfile.TemporaryDirectory() as tmpdir:
