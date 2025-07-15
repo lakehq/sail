@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/load_cdf.rs>
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Field, Schema};

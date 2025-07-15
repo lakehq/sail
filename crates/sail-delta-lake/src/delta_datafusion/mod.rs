@@ -54,7 +54,7 @@ use url::Url;
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::operations::WriteBuilder;
-
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod cdf;
@@ -83,13 +83,6 @@ pub fn datafusion_to_delta_error(err: DataFusionError) -> DeltaTableError {
     }
 }
 
-// Use explicit conversion functions instead
-
-/// Generate a unique enough url to identify the store in datafusion.
-/// The DF object store registry only cares about the scheme and the host of the url for
-/// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
-/// host we convert the location from this `LogStore` to a valid name, combining the
-/// original scheme, host and path with invalid characters replaced.
 fn create_object_store_url(location: &Url) -> ObjectStoreUrl {
     use object_store::path::DELIMITER;
     ObjectStoreUrl::parse(format!(
@@ -151,39 +144,34 @@ fn arrow_schema_from_snapshot(
         .fields()
         .filter(|f| !meta.partition_columns().contains(&f.name().to_string()))
         .map(|f| {
-            // Convert StructField to Arrow Field
             let field_name = f.name().to_string();
             let field_type = arrow_type_from_delta_type(f.data_type())?;
             Ok(Field::new(field_name, field_type, f.is_nullable()))
         })
-        .chain(
-            // We need stable order between logical and physical schemas, but the order of
-            // partitioning columns is not always the same in the json schema and the array
-            meta.partition_columns().iter().map(|partition_col| {
-                let f = schema
-                    .field(partition_col)
-                    .expect("Partition column should exist in schema");
-                let field_name = f.name().to_string();
-                let field_type = arrow_type_from_delta_type(f.data_type())?;
-                let field = Field::new(field_name, field_type, f.is_nullable());
-                let corrected = if wrap_partitions {
-                    match field.data_type() {
-                        // Only dictionary-encode types that may be large
-                        // https://github.com/apache/arrow-datafusion/pull/5545
-                        ArrowDataType::Utf8
-                        | ArrowDataType::LargeUtf8
-                        | ArrowDataType::Binary
-                        | ArrowDataType::LargeBinary => {
-                            wrap_partition_type_in_dict(field.data_type().clone())
-                        }
-                        _ => field.data_type().clone(),
+        .chain(meta.partition_columns().iter().map(|partition_col| {
+            let f = schema
+                .field(partition_col)
+                .expect("Partition column should exist in schema");
+            let field_name = f.name().to_string();
+            let field_type = arrow_type_from_delta_type(f.data_type())?;
+            let field = Field::new(field_name, field_type, f.is_nullable());
+            let corrected = if wrap_partitions {
+                match field.data_type() {
+                    // Only dictionary-encode types that may be large
+                    // https://github.com/apache/arrow-datafusion/pull/5545
+                    ArrowDataType::Utf8
+                    | ArrowDataType::LargeUtf8
+                    | ArrowDataType::Binary
+                    | ArrowDataType::LargeBinary => {
+                        wrap_partition_type_in_dict(field.data_type().clone())
                     }
-                } else {
-                    field.data_type().clone()
-                };
-                Ok(field.with_data_type(corrected))
-            }),
-        )
+                    _ => field.data_type().clone(),
+                }
+            } else {
+                field.data_type().clone()
+            };
+            Ok(field.with_data_type(corrected))
+        }))
         .collect::<Result<Vec<Field>, DeltaTableError>>()?;
 
     Ok(Arc::new(ArrowSchema::new(fields)))

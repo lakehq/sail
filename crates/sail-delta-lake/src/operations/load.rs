@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/load.rs>
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;

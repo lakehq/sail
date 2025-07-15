@@ -33,7 +33,7 @@ use super::async_utils::AsyncShareableBuffer;
 use super::WriteError;
 use crate::kernel::models::actions::MetadataExt;
 
-// Default constants
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 const DEFAULT_TARGET_FILE_SIZE: usize = 104_857_600; // 100MB
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
 

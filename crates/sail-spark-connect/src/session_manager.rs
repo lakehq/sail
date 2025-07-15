@@ -173,7 +173,6 @@ impl SessionManager {
             .with_optimizer_rules(default_optimizer_rules())
             .with_query_planner(new_query_planner())
             .build();
-
         let context = SessionContext::new_with_state(state);
 
         // TODO: This is a temp workaround to deregister all built-in functions that we define.

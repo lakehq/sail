@@ -18,7 +18,6 @@ sail-delta-lake = { path = "../sail-delta-lake" }
 sail-object-store = { path = "../sail-object-store" }
 sail-catalog = { path = "../sail-catalog" }
 
-
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }

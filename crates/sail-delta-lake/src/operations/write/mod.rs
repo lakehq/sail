@@ -5,6 +5,8 @@ use datafusion_common::DataFusionError;
 use deltalake::errors::DeltaTableError;
 pub use writer::WriteBuilder;
 
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/mod.rs>
+
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum WriteError {
     #[allow(dead_code)]

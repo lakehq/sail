@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/kernel/models/actions.rs>
 pub use delta_kernel::actions::Metadata;
 use delta_kernel::schema::{DataType, StructField};
 use delta_kernel::table_features::{ReaderFeature, WriterFeature};

@@ -94,7 +94,7 @@ impl FileFormat for DeltaFileFormat {
 
     fn file_source(&self) -> Arc<dyn FileSource> {
         // TODO: implement Delta Lake's FileSource
-        // return a placeholder, this method is usually not called for write operations
+        // return a placeholder, this method could not be called for write operations
         unimplemented!("Delta Lake file source not implemented for write operations")
     }
 }
