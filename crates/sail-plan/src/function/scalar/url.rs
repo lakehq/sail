@@ -1,7 +1,7 @@
-use crate::{
-    extension::function::url::{parse_url::ParseUrl, url_decode::UrlDecode, url_encode::UrlEncode},
-    function::common::ScalarFunction,
-};
+use crate::extension::function::url::parse_url::ParseUrl;
+use crate::extension::function::url::url_decode::UrlDecode;
+use crate::extension::function::url::url_encode::UrlEncode;
+use crate::function::common::ScalarFunction;
 
 pub(super) fn list_built_in_url_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;

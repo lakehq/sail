@@ -6,9 +6,9 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::{exec_err, plan_err, Result};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use url::form_urlencoded::byte_serialize;
 
 use crate::extension::function::functions_utils::make_scalar_function;
-use url::form_urlencoded::byte_serialize;
 
 #[derive(Debug)]
 pub struct UrlEncode {
@@ -95,7 +95,6 @@ fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::StringArray;
-
     use datafusion_common::Result;
 
     use super::*;
