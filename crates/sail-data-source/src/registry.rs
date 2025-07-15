@@ -21,15 +21,15 @@ impl TableFormatRegistry {
     pub fn new() -> Self {
         let mut registry = Self::default();
 
-        let parquet = Arc::new(ParquetTableFormat);
+        let parquet = Arc::new(ParquetTableFormat::default());
         registry.register_format(parquet.clone());
         registry.register_writer(parquet);
 
-        let csv = Arc::new(CsvTableFormat);
+        let csv = Arc::new(CsvTableFormat::default());
         registry.register_format(csv.clone());
         registry.register_writer(csv);
 
-        let json = Arc::new(JsonTableFormat);
+        let json = Arc::new(JsonTableFormat::default());
         registry.register_format(json.clone());
         registry.register_writer(json);
 
@@ -37,11 +37,11 @@ impl TableFormatRegistry {
         registry.register_format(delta.clone());
         registry.register_writer(delta);
 
-        let arrow = Arc::new(ArrowTableFormat);
+        let arrow = Arc::new(ArrowTableFormat::default());
         registry.register_format(arrow.clone());
         registry.register_writer(arrow);
 
-        let avro = Arc::new(AvroTableFormat);
+        let avro = Arc::new(AvroTableFormat::default());
         registry.register_format(avro.clone());
         registry.register_writer(avro);
 
