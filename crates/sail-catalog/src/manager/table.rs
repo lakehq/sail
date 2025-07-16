@@ -4,8 +4,8 @@ use std::sync::Arc;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{exec_err, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference};
 use datafusion_expr::{DdlStatement, DropTable, LogicalPlan, TableType};
-use sail_data_source::default_registry;
 use sail_common_datafusion::datasource::SourceInfo;
+use sail_data_source::default_registry;
 use serde::{Deserialize, Serialize};
 
 use crate::command::CatalogTableDefinition;
