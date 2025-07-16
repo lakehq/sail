@@ -1,3 +1,4 @@
+>>> df = spark.range(1)
 >>> df.select(csc(lit(math.radians(90)))).show()
 +-----------------------+
 |CSC(1.5707963267948966)|
