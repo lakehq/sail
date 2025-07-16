@@ -2,9 +2,12 @@ use core::any::type_name;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use chrono::prelude::*;
+use chrono::ParseError;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::logical_expr::sqlparser::tokenizer::Token;
 use datafusion_common::{exec_err, internal_err, plan_err, ScalarValue};
 use datafusion_expr::sqlparser::ast::{ArrayElemTypeDef, DataType as SQLType};
 use datafusion_expr::sqlparser::dialect::GenericDialect;
@@ -14,7 +17,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
-use regex::Regex;
+use regex::{Error, Regex};
 
 use crate::extension::function::functions_nested_utils::*;
 use crate::extension::function::functions_utils::make_scalar_function;
@@ -34,6 +37,57 @@ pub struct SparkFromCSV {
     signature: Signature,
 }
 
+#[derive(Debug)]
+struct SparkFromCSVOptions {
+    sep: String,
+    timestamp_format: String,
+}
+
+impl SparkFromCSVOptions {
+    pub const SEP_OPTION: &'static str = "sep";
+    pub const DELIMITER_OPTION: &'static str = "delimiter";
+    pub const SEP_DEFAULT: &'static str = ",";
+    pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
+
+    // ISO 8601. // This format is the Rust chrono crate format equivalent of the Scala/Java Spark format
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%d %H:%M:%S";
+
+    fn from_map(map: &MapArray) -> Self {
+        let sep = find_key_value(map, Self::SEP_OPTION)
+            .or(find_key_value(map, Self::DELIMITER_OPTION))
+            .unwrap_or(Self::SEP_DEFAULT.to_string());
+
+        let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
+            .as_deref()
+            .map(Self::convert_format)
+            .unwrap_or(Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
+
+        Self {
+            sep,
+            timestamp_format,
+        }
+    }
+
+    fn convert_format(fmt: &str) -> String {
+        fmt.replace("yyyy", "%Y")
+            .replace("MM", "%m")
+            .replace("dd", "%d")
+            .replace("HH", "%H")
+            .replace("mm", "%M")
+            .replace("ss", "%S")
+    }
+}
+
+impl Default for SparkFromCSVOptions {
+    /// Default options for `from_csv` function
+    fn default() -> Self {
+        Self {
+            sep: Self::SEP_DEFAULT.to_string(),
+            timestamp_format: Self::TIMESTAMP_FORMAT_DEFAULT.to_string(),
+        }
+    }
+}
+
 impl Default for SparkFromCSV {
     fn default() -> Self {
         Self::new()
@@ -42,9 +96,6 @@ impl Default for SparkFromCSV {
 
 impl SparkFromCSV {
     pub const FROM_CSV_NAME: &'static str = "from_csv";
-    pub const SEP_OPTION: &'static str = "sep";
-    pub const DELIMITER_OPTION: &'static str = "delimiter";
-    pub const SEP_DEFAULT: &'static str = ",";
 
     /// Constructor for the UDF
     pub fn new() -> Self {
@@ -132,11 +183,10 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let array: &StringArray = downcast_arg!(&args[0], StringArray);
     let schema_str: &str = downcast_arg!(&args[1], StringArray).value(0);
 
-    let sep = if args.len() == 3 {
-        let options: &MapArray = downcast_arg!(&args[2], MapArray);
-        get_sep_from_options(options).unwrap_or(SparkFromCSV::SEP_DEFAULT.to_string())
+    let options: SparkFromCSVOptions = if let Some(options) = args.get(2) {
+        SparkFromCSVOptions::from_map(downcast_arg!(options, MapArray))
     } else {
-        SparkFromCSV::SEP_DEFAULT.to_string()
+        SparkFromCSVOptions::default()
     };
 
     let fields: Fields = parse_fields(schema_str)?;
@@ -152,8 +202,9 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
             validity.push(false);
         } else {
-            let line = array.value(i);
-            let values = parse_csv_line_to_scalar_values(line, &sep, &fields)?;
+            let line: &str = array.value(i);
+            let values: Vec<ScalarValue> =
+                parse_csv_line_to_scalar_values(line, &options, &fields)?;
             for (j, value) in values.into_iter().enumerate() {
                 children_scalars[j].push(value);
             }
@@ -176,10 +227,10 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Parses a CSV line into a vector of `ScalarValue`s, according to the given field types
 fn parse_csv_line_to_scalar_values(
     line: &str,
-    sep: &str,
+    options: &SparkFromCSVOptions,
     fields: &Fields,
 ) -> Result<Vec<ScalarValue>> {
-    let values: Vec<&str> = line.split(sep).map(|s| s.trim()).collect();
+    let values: Vec<&str> = line.split(&options.sep).map(|s| s.trim()).collect();
 
     if values.len() != fields.len() {
         return exec_err!(
@@ -197,22 +248,34 @@ fn parse_csv_line_to_scalar_values(
             if value.is_empty() {
                 ScalarValue::try_new_null(field.data_type())
             } else {
-                ScalarValue::try_from_string(value.to_string(), field.data_type())
+                match field.data_type() {
+                    DataType::Timestamp(_, _) => {
+                        parse_timestamp(field.data_type(), value, options)
+                    }
+                    _ => ScalarValue::try_from_string(value.to_string(), field.data_type()),
+                }
             }
         })
         .collect()
 }
 
-/// Extracts the separator string ("sep") from a struct options array
-fn get_sep_from_options(options: &MapArray) -> Result<String> {
-    let sep_column: Option<String> = find_key_value(options, SparkFromCSV::SEP_OPTION);
-    let delimiter_column: Option<String> = find_key_value(options, SparkFromCSV::DELIMITER_OPTION);
-
-    let sep: String = sep_column
-        .or(delimiter_column)
-        .unwrap_or(SparkFromCSV::SEP_DEFAULT.to_string());
-
-    Ok(sep)
+fn parse_timestamp(
+    data_type: &DataType,
+    value: &str,
+    options: &SparkFromCSVOptions,
+) -> Result<ScalarValue> {
+    let format: &String = &options.timestamp_format;
+    let datetime: std::result::Result<String, ParseError> = if let Ok(datetime) =
+        NaiveDateTime::parse_from_str(value, format).map(|datetime| format!("{datetime}"))
+    {
+        Ok(datetime)
+    } else {
+        NaiveDate::parse_from_str(value, format).map(|date| format!("{date}"))
+    };
+    match datetime {
+        Ok(datetime) => ScalarValue::try_from_string(datetime, data_type),
+        Err(e) => exec_err!("Failed to parse timestamp: {}", e),
+    }
 }
 
 /// Parses a schema string like "name STRING, age INT" into Arrow `Fields`
@@ -226,17 +289,19 @@ fn parse_fields(schema: &str) -> Result<Fields> {
 
 /// Parses a schema definition string into a `Fields` list with correct handling of types with nested delimiters.
 fn parse_schema_string(schema_str: &str) -> Result<Fields> {
-    let trimmed_schema = schema_str.trim();
+    let trimmed_schema: &str = schema_str.trim();
 
     // Check for STRUCT pattern and remove enclosing tags
-    let schema_content = if trimmed_schema.starts_with("STRUCT<") && trimmed_schema.ends_with('>') {
-        &trimmed_schema[7..trimmed_schema.len() - 1] // Remove "STRUCT<" prefix and ">" suffix
-    } else {
-        trimmed_schema
-    };
+    let schema_content: &str =
+        if trimmed_schema.starts_with("STRUCT<") && trimmed_schema.ends_with('>') {
+            &trimmed_schema[7..trimmed_schema.len() - 1] // Remove "STRUCT<" prefix and ">" suffix
+        } else {
+            trimmed_schema
+        };
 
     // Allow for optional colons between names and types
-    let field_regex = Regex::new(r"\s*([a-zA-Z_]\w*)\s*:?\s*([a-zA-Z_]+(?:\s*\([^)]*\))?)\s*");
+    let field_regex: std::result::Result<Regex, Error> =
+        Regex::new(r"\s*([a-zA-Z_]\w*)\s*:?\s*([a-zA-Z_]+(?:\s*\([^)]*\))?)\s*");
 
     if let Ok(field_regex) = field_regex {
         field_regex
@@ -274,17 +339,17 @@ fn parse_schema_string(schema_str: &str) -> Result<Fields> {
 
 /// Parses a single type string (e.g. "INT", "STRUCT<id INT>") into an Arrow DataType using `sqlparser`
 pub fn parse_data_type(raw: &str) -> Result<DataType> {
-    let dialect = GenericDialect {};
-    let mut tokenizer = Tokenizer::new(&dialect, raw);
-    let tokens = tokenizer
+    let dialect: GenericDialect = GenericDialect {};
+    let mut tokenizer: Tokenizer = Tokenizer::new(&dialect, raw);
+    let tokens: Vec<Token> = tokenizer
         .tokenize()
         .map_err(|e| DataFusionError::Plan(format!("Tokenization error: {e}")))?;
 
-    let mut parser = Parser::new(&dialect)
+    let mut parser: Parser = Parser::new(&dialect)
         .with_options(ParserOptions::default())
         .with_tokens(tokens);
 
-    let sql_type = parser
+    let sql_type: datafusion::logical_expr::sqlparser::ast::DataType = parser
         .parse_data_type()
         .map_err(|e| DataFusionError::Plan(format!("Failed to parse SQL type '{raw}': {e}")))?;
 
@@ -398,6 +463,7 @@ fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
+/// Extracts a given key's value from a struct options array
 fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
     if let Some(index) = find_key_index(options, search_key) {
         options
