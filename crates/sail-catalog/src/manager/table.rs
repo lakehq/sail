@@ -142,15 +142,16 @@ impl CatalogManager<'_> {
             };
         }
 
-        let format_provider = default_registry().get_format(&file_format)?;
-        let options: std::collections::HashMap<String, String> = options.into_iter().collect();
-        let info = SourceInfo {
-            ctx: self.ctx,
-            paths: vec![location],
-            schema: Some(schema.inner().as_ref().clone()),
-            options,
-        };
-        let table_provider = format_provider.create_provider(info).await?;
+        // TODO: This only registers the table for read and we need to support write as well.
+        let table_provider = default_registry()
+            .get_format(&file_format)?
+            .create_provider(SourceInfo {
+                ctx: self.ctx,
+                paths: vec![location],
+                schema: Some(schema.inner().as_ref().clone()),
+                options: options.into_iter().collect(),
+            })
+            .await?;
         self.ctx.register_table(table, table_provider)?;
         Ok(())
     }

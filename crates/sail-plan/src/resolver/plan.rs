@@ -861,15 +861,15 @@ impl PlanResolver<'_> {
             Some(schema) => Some(self.resolve_schema(schema, state)?),
             None => None,
         };
-        let format_provider = default_registry().get_format(&format)?;
-        let options: HashMap<String, String> = options.into_iter().collect();
-        let info = SourceInfo {
-            ctx: self.ctx,
-            paths,
-            schema,
-            options,
-        };
-        let table_provider = format_provider.create_provider(info).await?;
+        let table_provider = default_registry()
+            .get_format(&format)?
+            .create_provider(SourceInfo {
+                ctx: self.ctx,
+                paths,
+                schema,
+                options: options.into_iter().collect(),
+            })
+            .await?;
         let names = state.register_fields(table_provider.schema().fields());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;
         Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
@@ -2919,13 +2919,13 @@ impl PlanResolver<'_> {
                 let Some(source) = source else {
                     return Err(PlanError::invalid("missing source"));
                 };
-                let format_provider = default_registry().get_format(&source)?;
-                let options: HashMap<String, String> = options.into_iter().collect();
-                let info = SinkInfo {
-                    ctx: self.ctx,
-                    options,
-                };
-                let format_factory = format_provider.create_writer(info)?;
+                let format_factory =
+                    default_registry()
+                        .get_format(&source)?
+                        .create_writer(SinkInfo {
+                            ctx: self.ctx,
+                            options: options.into_iter().collect(),
+                        })?;
                 let plan = if sort_columns.is_empty() {
                     plan
                 } else {
