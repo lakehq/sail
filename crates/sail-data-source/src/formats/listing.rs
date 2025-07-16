@@ -25,7 +25,11 @@ pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
         ctx: &SessionContext,
         options: HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>>;
-    fn create_format_factory(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>>;
+    fn create_format_factory(
+        &self,
+        ctx: &SessionContext,
+        options: HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormatFactory>>;
 }
 
 #[derive(Debug)]
@@ -79,7 +83,8 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
     }
 
     fn create_writer(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
-        self.format_def.create_format_factory(info)
+        let SinkInfo { ctx, options } = info;
+        self.format_def.create_format_factory(ctx, options)
     }
 }
 
@@ -102,7 +107,11 @@ impl ListingFormat for ArrowListingFormat {
         Ok(Arc::new(ArrowFormat))
     }
 
-    fn create_format_factory(&self, _info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
+    fn create_format_factory(
+        &self,
+        _ctx: &SessionContext,
+        _options: HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormatFactory>> {
         Ok(Arc::new(ArrowFormatFactory::new()))
     }
 }
@@ -126,7 +135,11 @@ impl ListingFormat for AvroListingFormat {
         Ok(Arc::new(AvroFormat))
     }
 
-    fn create_format_factory(&self, _info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
+    fn create_format_factory(
+        &self,
+        _ctx: &SessionContext,
+        _options: HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormatFactory>> {
         Ok(Arc::new(AvroFormatFactory::new()))
     }
 }
@@ -152,8 +165,11 @@ impl ListingFormat for CsvListingFormat {
         Ok(Arc::new(CsvFormat::default().with_options(options)))
     }
 
-    fn create_format_factory(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
-        let SinkInfo { ctx, options, .. } = info;
+    fn create_format_factory(
+        &self,
+        ctx: &SessionContext,
+        options: HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormatFactory>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_csv_write_options(options)?;
         Ok(Arc::new(CsvFormatFactory::new_with_options(options)))
@@ -181,8 +197,11 @@ impl ListingFormat for JsonListingFormat {
         Ok(Arc::new(JsonFormat::default().with_options(options)))
     }
 
-    fn create_format_factory(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
-        let SinkInfo { ctx, options, .. } = info;
+    fn create_format_factory(
+        &self,
+        ctx: &SessionContext,
+        options: HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormatFactory>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_json_write_options(options)?;
         Ok(Arc::new(JsonFormatFactory::new_with_options(options)))
@@ -210,8 +229,11 @@ impl ListingFormat for ParquetListingFormat {
         Ok(Arc::new(ParquetFormat::default().with_options(options)))
     }
 
-    fn create_format_factory(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
-        let SinkInfo { ctx, options, .. } = info;
+    fn create_format_factory(
+        &self,
+        ctx: &SessionContext,
+        options: HashMap<String, String>,
+    ) -> Result<Arc<dyn FileFormatFactory>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_parquet_write_options(options)?;
         Ok(Arc::new(ParquetFormatFactory::new_with_options(options)))
