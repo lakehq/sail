@@ -5183,6 +5183,7 @@ dependencies = [
  "datafusion-expr",
  "lazy_static",
  "regex",
+ "sail-common-datafusion",
  "sail-data-source",
  "serde",
  "serde_arrow",

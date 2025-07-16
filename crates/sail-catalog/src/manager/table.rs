@@ -4,7 +4,8 @@ use std::sync::Arc;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{exec_err, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference};
 use datafusion_expr::{DdlStatement, DropTable, LogicalPlan, TableType};
-use sail_data_source::TableProviderFactory;
+use sail_data_source::default_registry;
+use sail_common_datafusion::datasource::SourceInfo;
 use serde::{Deserialize, Serialize};
 
 use crate::command::CatalogTableDefinition;
@@ -140,16 +141,16 @@ impl CatalogManager<'_> {
                 false => exec_err!("table already exists: {table}"),
             };
         }
-        let factory = TableProviderFactory::new(self.ctx);
-        // TODO: This only registers the table for read and we need to support write as well.
-        let table_provider = factory
-            .read_table(
-                &file_format,
-                vec![location],
-                Some(schema.inner().as_ref().clone()),
-                options,
-            )
-            .await?;
+
+        let format_provider = default_registry().get_format(&file_format)?;
+        let options: std::collections::HashMap<String, String> = options.into_iter().collect();
+        let info = SourceInfo {
+            ctx: self.ctx,
+            paths: vec![location],
+            schema: Some(schema.inner().as_ref().clone()),
+            options,
+        };
+        let table_provider = format_provider.create_provider(info).await?;
         self.ctx.register_table(table, table_provider)?;
         Ok(())
     }

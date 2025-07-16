@@ -13,12 +13,12 @@ static DEFAULT_REGISTRY: Lazy<Arc<TableFormatRegistry>> =
     Lazy::new(|| Arc::new(TableFormatRegistry::new()));
 
 /// Returns the default, shared `TableFormatRegistry`.
-pub(crate) fn default_registry() -> Arc<TableFormatRegistry> {
+pub fn default_registry() -> Arc<TableFormatRegistry> {
     DEFAULT_REGISTRY.clone()
 }
 
 #[derive(Default)]
-pub(crate) struct TableFormatRegistry {
+pub struct TableFormatRegistry {
     formats: HashMap<String, Arc<dyn TableFormat>>,
 }
 
