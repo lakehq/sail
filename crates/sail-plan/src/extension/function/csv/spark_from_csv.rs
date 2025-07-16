@@ -291,9 +291,7 @@ fn parse_csv_line_to_scalar_values(
                 ScalarValue::try_new_null(field.data_type())
             } else {
                 match field.data_type() {
-                    DataType::Timestamp(_, _) => {
-                        parse_timestamp(field.data_type(), value, options)
-                    }
+                    DataType::Timestamp(_, _) => parse_timestamp(field.data_type(), value, options),
                     _ => ScalarValue::try_from_string(value.to_string(), field.data_type()),
                 }
             }
