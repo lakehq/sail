@@ -8,3 +8,6 @@ too-many-arguments-threshold = 8
 #  https://github.com/hyperium/tonic/issues/2253
 #  https://github.com/apache/datafusion/issues/16061
 large-error-threshold = 264
+disallowed-types = [
+    { path = "datafusion_expr::DdlStatement", reason = ""}
+]

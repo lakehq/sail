@@ -1,50 +1,58 @@
 use std::sync::Arc;
 
 use datafusion::catalog::TableFunctionImpl;
-use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
-use datafusion_expr::{DdlStatement, DropFunction, LogicalPlan, ScalarUDF};
-use serde::{Deserialize, Serialize};
+use datafusion::prelude::SessionContext;
+use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::ScalarUDF;
 
 use crate::command::CatalogTableFunction;
+use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionMetadata {
-    pub name: String,
-    pub catalog: Option<String>,
-    pub namespace: Option<Vec<String>>,
-    pub description: Option<String>,
-    pub class_name: String,
-    pub is_temporary: bool,
-}
-
-impl CatalogManager<'_> {
-    pub fn register_function(&self, udf: ScalarUDF) -> Result<()> {
-        self.ctx.register_udf(udf);
+impl CatalogManager {
+    pub fn register_function(&self, ctx: &SessionContext, udf: ScalarUDF) -> CatalogResult<()> {
+        ctx.register_udf(udf);
         Ok(())
     }
 
-    pub fn register_table_function(&self, _name: String, udtf: CatalogTableFunction) -> Result<()> {
+    pub fn register_table_function(
+        &self,
+        _ctx: &SessionContext,
+        _name: String,
+        udtf: CatalogTableFunction,
+    ) -> CatalogResult<()> {
         let _function: Arc<dyn TableFunctionImpl> = match udtf {};
         #[allow(unreachable_code)]
         {
-            self.ctx.register_udtf(_name.as_str(), _function);
+            _ctx.register_udtf(_name.as_str(), _function);
             Ok(())
         }
     }
 
-    pub async fn drop_function(
+    pub async fn deregister_function<T: AsRef<str>>(
         &self,
-        function: TableReference,
+        ctx: &SessionContext,
+        function: &[T],
         if_exists: bool,
         _is_temporary: bool,
-    ) -> Result<()> {
-        let ddl = LogicalPlan::Ddl(DdlStatement::DropFunction(DropFunction {
-            name: function.to_string(),
-            if_exists,
-            schema: DFSchemaRef::new(DFSchema::empty()),
-        }));
-        self.ctx.execute_logical_plan(ddl).await?;
+    ) -> CatalogResult<()> {
+        let [name] = function else {
+            return Err(CatalogError::NotSupported(
+                "qualified function name".to_string(),
+            ));
+        };
+        let found = ctx
+            .state_ref()
+            .write()
+            .deregister_udf(name.as_ref())
+            .map_err(|e| CatalogError::Internal(e.to_string()))?
+            .is_some();
+        if !found && !if_exists {
+            return Err(CatalogError::NotFound(format!(
+                "function: {}",
+                name.as_ref()
+            )));
+        }
         Ok(())
     }
 }

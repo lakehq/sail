@@ -1,114 +1,177 @@
 use std::sync::Arc;
 
-use datafusion_common::{DFSchema, DFSchemaRef, Result, SchemaReference, TableReference};
-use datafusion_expr::{CreateView, DdlStatement, DropView, LogicalPlan};
+use datafusion_expr::LogicalPlan;
 
-use crate::manager::table::{TableMetadata, TableObject};
+use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
-use crate::temp_view::manage_temporary_views;
+use crate::provider::{CreateViewOptions, DeleteViewOptions, TableKind, TableMetadata};
+use crate::temp_view::GLOBAL_TEMPORARY_VIEW_MANAGER;
+use crate::utils::match_pattern;
 
-impl CatalogManager<'_> {
+impl CatalogManager {
     pub async fn list_global_temporary_views(
         &self,
         pattern: Option<&str>,
-    ) -> Result<Vec<TableMetadata>> {
-        manage_temporary_views(self.ctx, true, |views| {
-            views.list_views(pattern).map(|views| {
-                views
-                    .into_iter()
-                    .map(|(name, plan)| {
-                        TableMetadata::from_table_object(TableObject::GlobalTemporaryView {
-                            database_name: self.config.global_temporary_database().to_string(),
-                            table_name: name,
-                            plan,
-                        })
-                    })
-                    .collect()
+    ) -> CatalogResult<Vec<TableMetadata>> {
+        let state = self.state()?;
+        let views = GLOBAL_TEMPORARY_VIEW_MANAGER
+            .list_views(pattern)?
+            .into_iter()
+            .map(|(name, plan)| TableMetadata {
+                name,
+                kind: TableKind::GlobalTemporaryView {
+                    namespace: state.global_temporary_database.clone().into(),
+                    plan,
+                },
             })
-        })
+            .collect();
+        Ok(views)
     }
 
-    pub async fn list_temporary_views(&self, pattern: Option<&str>) -> Result<Vec<TableMetadata>> {
-        manage_temporary_views(self.ctx, false, |views| {
-            views.list_views(pattern).map(|views| {
-                views
-                    .into_iter()
-                    .map(|(name, plan)| {
-                        TableMetadata::from_table_object(TableObject::TemporaryView {
-                            table_name: name,
-                            plan,
-                        })
-                    })
-                    .collect()
-            })
-        })
-    }
-
-    pub async fn list_views(
+    pub async fn list_temporary_views(
         &self,
-        database: Option<SchemaReference>,
-        view_pattern: Option<&str>,
-    ) -> Result<Vec<TableMetadata>> {
-        // See `list_tables()` for how the (global) temporary views are handled.
-        let mut output = if self.is_global_temporary_view_database(&database) {
-            self.list_global_temporary_views(view_pattern).await?
+        pattern: Option<&str>,
+    ) -> CatalogResult<Vec<TableMetadata>> {
+        let views = self
+            .temporary_views
+            .list_views(pattern)?
+            .into_iter()
+            .map(|(name, plan)| TableMetadata {
+                name,
+                kind: TableKind::TemporaryView { plan },
+            })
+            .collect();
+        Ok(views)
+    }
+
+    pub async fn list_views<T: AsRef<str>>(
+        &self,
+        database: &[T],
+        pattern: Option<&str>,
+    ) -> CatalogResult<Vec<TableMetadata>> {
+        let (catalog, namespace) = self.resolve_database_reference(database)?;
+        let provider = self.get_catalog(&catalog)?;
+        Ok(provider
+            .list_views(&namespace)
+            .await?
+            .into_iter()
+            .filter(|x| match_pattern(&x.name, pattern))
+            .collect())
+    }
+
+    pub async fn list_views_and_temporary_views<T: AsRef<str>>(
+        &self,
+        database: &[T],
+        pattern: Option<&str>,
+    ) -> CatalogResult<Vec<TableMetadata>> {
+        // See `list_tables_and_temporary_views()` for how the (global) temporary views are handled.
+        let mut output = if self.is_global_temporary_view_database(database)? {
+            self.list_global_temporary_views(pattern).await?
         } else {
             vec![]
         };
-        output.extend(self.list_temporary_views(view_pattern).await?);
+        output.extend(self.list_temporary_views(pattern).await?);
         Ok(output)
     }
 
-    pub async fn drop_temporary_view(
+    pub async fn delete_global_temporary_view(
         &self,
-        view_name: &str,
-        is_global: bool,
+        view: &str,
         if_exists: bool,
-    ) -> Result<()> {
-        manage_temporary_views(self.ctx, is_global, |views| {
-            views.remove_view(view_name, if_exists)?;
-            Ok(())
-        })
+    ) -> CatalogResult<()> {
+        GLOBAL_TEMPORARY_VIEW_MANAGER.remove_view(view, if_exists)
     }
 
-    pub async fn drop_view(&self, view: TableReference, if_exists: bool) -> Result<()> {
-        let ddl = LogicalPlan::Ddl(DdlStatement::DropView(DropView {
-            name: view,
-            if_exists,
-            schema: DFSchemaRef::new(DFSchema::empty()),
-        }));
-        self.ctx.execute_logical_plan(ddl).await?;
-        Ok(())
+    pub async fn delete_temporary_view(&self, view: &str, if_exists: bool) -> CatalogResult<()> {
+        self.temporary_views.remove_view(view, if_exists)
+    }
+
+    pub async fn delete_maybe_temporary_view<T: AsRef<str>>(
+        &self,
+        view: &[T],
+        options: DeleteViewOptions,
+    ) -> CatalogResult<()> {
+        if let [name] = view {
+            match self.temporary_views.remove_view(name.as_ref(), false) {
+                Ok(_) => return Ok(()),
+                Err(CatalogError::NotFound(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if let [x @ .., name] = view {
+            if self.is_global_temporary_view_database(x)? {
+                match GLOBAL_TEMPORARY_VIEW_MANAGER.remove_view(name.as_ref(), false) {
+                    Ok(_) => return Ok(()),
+                    Err(CatalogError::NotFound(_)) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        self.delete_view(view, options).await
+    }
+
+    pub async fn delete_view<T: AsRef<str>>(
+        &self,
+        view: &[T],
+        options: DeleteViewOptions,
+    ) -> CatalogResult<()> {
+        let (catalog, namespace, view) = self.resolve_object_reference(view)?;
+        let provider = self.get_catalog(&catalog)?;
+        provider.delete_view(&namespace, &view, options).await
+    }
+
+    pub async fn create_global_temporary_view(
+        &self,
+        input: Arc<LogicalPlan>,
+        view: &str,
+        replace: bool,
+    ) -> CatalogResult<()> {
+        GLOBAL_TEMPORARY_VIEW_MANAGER.add_view(view.to_string(), input.clone(), replace)
     }
 
     pub async fn create_temporary_view(
         &self,
         input: Arc<LogicalPlan>,
-        view_name: &str,
-        is_global: bool,
+        view: &str,
         replace: bool,
-    ) -> Result<()> {
-        manage_temporary_views(self.ctx, is_global, |views| {
-            views.add_view(view_name.to_string(), input, replace)?;
-            Ok(())
+    ) -> CatalogResult<()> {
+        self.temporary_views
+            .add_view(view.to_string(), input.clone(), replace)
+    }
+
+    pub async fn get_global_temporary_view(&self, view: &str) -> CatalogResult<TableMetadata> {
+        let plan = GLOBAL_TEMPORARY_VIEW_MANAGER.get_view(view)?;
+        let state = self.state()?;
+        Ok(TableMetadata {
+            name: view.to_string(),
+            kind: TableKind::GlobalTemporaryView {
+                namespace: state.global_temporary_database.clone().into(),
+                plan,
+            },
         })
     }
 
-    pub async fn create_view(
+    pub async fn get_temporary_view(&self, view: &str) -> CatalogResult<TableMetadata> {
+        let plan = self.temporary_views.get_view(view)?;
+        Ok(TableMetadata {
+            name: view.to_string(),
+            kind: TableKind::TemporaryView { plan },
+        })
+    }
+
+    pub async fn create_view<T: AsRef<str>>(
         &self,
-        input: Arc<LogicalPlan>,
-        view: TableReference,
-        replace: bool,
-        definition: Option<String>,
-    ) -> Result<()> {
-        let ddl = LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
-            name: view,
-            input,
-            or_replace: replace,
-            definition,
-            temporary: false,
-        }));
-        self.ctx.execute_logical_plan(ddl).await?;
-        Ok(())
+        view: &[T],
+        options: CreateViewOptions,
+    ) -> CatalogResult<()> {
+        let (catalog, namespace, view) = self.resolve_object_reference(view)?;
+        let provider = self.get_catalog(&catalog)?;
+        provider.create_view(&namespace, &view, options).await
+    }
+
+    pub async fn get_view<T: AsRef<str>>(&self, view: &[T]) -> CatalogResult<TableMetadata> {
+        let (catalog, namespace, view) = self.resolve_object_reference(view)?;
+        let provider = self.get_catalog(&catalog)?;
+        provider.get_view(&namespace, &view).await
     }
 }

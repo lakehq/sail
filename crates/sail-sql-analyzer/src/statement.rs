@@ -1,6 +1,5 @@
 use either::Either;
 use sail_common::spec;
-use sail_common::spec::TableFileFormat;
 use sail_sql_parser::ast::expression::{BooleanLiteral, Expr};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
 use sail_sql_parser::ast::keywords::{Cascade, Global, Overwrite, Restrict, Temp, Temporary};
@@ -41,7 +40,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 Either::Right(x) => from_ast_string(x)?,
             };
             let node = spec::CommandNode::SetCurrentCatalog {
-                catalog_name: name.into(),
+                catalog: name.into(),
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -50,12 +49,8 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             database: _,
             name,
         } => {
-            let ObjectName(name) = name;
-            if !name.tail.is_empty() {
-                return Err(SqlError::unsupported("qualified name for USE DATABASE"));
-            }
             let node = spec::CommandNode::SetCurrentDatabase {
-                database_name: name.head.value.into(),
+                database: from_ast_object_name(name)?,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -113,24 +108,13 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             from,
             like,
         } => {
-            let catalog = from
-                .map(|(_, name)| {
-                    let mut names: Vec<String> = from_ast_object_name(name)?.into();
-                    match (names.pop(), names.is_empty()) {
-                        (Some(name), true) => Ok(name.into()),
-                        _ => Err(SqlError::invalid(
-                            "expected a single identifier for catalog name in SHOW DATABASES",
-                        )),
-                    }
-                })
+            let qualifier = from
+                .map(|(_, name)| from_ast_object_name(name))
                 .transpose()?;
-            let database_pattern = like
+            let pattern = like
                 .map(|(_, pattern)| from_ast_string(pattern))
                 .transpose()?;
-            let node = spec::CommandNode::ListDatabases {
-                catalog,
-                database_pattern,
-            };
+            let node = spec::CommandNode::ListDatabases { qualifier, pattern };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::CreateTable {
@@ -233,13 +217,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let database = from
                 .map(|(_, name)| from_ast_object_name(name))
                 .transpose()?;
-            let table_pattern = like
+            let pattern = like
                 .map(|(_, pattern)| from_ast_string(pattern))
                 .transpose()?;
-            let node = spec::CommandNode::ListTables {
-                database,
-                table_pattern,
-            };
+            let node = spec::CommandNode::ListTables { database, pattern };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::ShowCreateTable { .. } => Err(SqlError::todo("SHOW CREATE TABLE")),
@@ -249,10 +230,26 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             table: (_, table),
             database,
         } => {
-            if database.is_some() {
-                return Err(SqlError::todo("SHOW COLUMNS with database"));
-            }
             let table = from_ast_object_name(table)?;
+            let table = if let Some((_, database)) = database {
+                let mut table: Vec<String> = table.into();
+                let table = match (table.pop(), table.is_empty()) {
+                    (None, _) => {
+                        return Err(SqlError::invalid("SHOW COLUMNS with no table name"));
+                    }
+                    (Some(_), false) => {
+                        return Err(SqlError::todo(
+                            "SHOW COLUMNS for qualified table name with conflicting database name",
+                        ));
+                    }
+                    (Some(name), true) => name,
+                };
+                let mut database: Vec<String> = from_ast_object_name(database)?.into();
+                database.push(table);
+                database.into()
+            } else {
+                table
+            };
             let node = spec::CommandNode::ListColumns { table };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -283,16 +280,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             let query = from_ast_query(query)?;
             let name = from_ast_object_name(name)?;
-            let kind = match global_temporary {
-                Some((
-                    Some(Global { .. }),
-                    Either::Left(Temp { .. }) | Either::Right(Temporary { .. }),
-                )) => spec::ViewKind::GlobalTemporary,
-                Some((None, Either::Left(Temp { .. }) | Either::Right(Temporary { .. }))) => {
-                    spec::ViewKind::Temporary
-                }
-                None => spec::ViewKind::Default,
-            };
             let CreateViewClauses {
                 comment: _,
                 properties,
@@ -300,15 +287,40 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             if properties.is_some() {
                 return Err(SqlError::todo("TBLPROPERTIES in CREATE VIEW"));
             }
-            let node = spec::CommandNode::CreateView {
-                view: name,
-                definition: spec::ViewDefinition {
-                    input: Box::new(query),
-                    columns,
-                    replace: or_replace.is_some(),
-                    kind,
-                    definition: None,
+            let temporary_view_name = |name: spec::ObjectName| {
+                let mut name: Vec<String> = name.into();
+                match (name.pop(), name.is_empty()) {
+                    (Some(x), true) => Ok(spec::Identifier::from(x)),
+                    _ => Err(SqlError::invalid(
+                        "expected a single identifier for temporary view name",
+                    )),
+                }
+            };
+            let node = match global_temporary {
+                Some((
+                    Some(Global { .. }),
+                    Either::Left(Temp { .. }) | Either::Right(Temporary { .. }),
+                )) => spec::CommandNode::CreateTemporaryView {
+                    view: temporary_view_name(name)?,
+                    is_global: true,
+                    definition: spec::TemporaryViewDefinition {
+                        input: Box::new(query),
+                        columns,
+                        replace: or_replace.is_some(),
+                    },
                 },
+                Some((None, Either::Left(Temp { .. }) | Either::Right(Temporary { .. }))) => {
+                    spec::CommandNode::CreateTemporaryView {
+                        view: temporary_view_name(name)?,
+                        is_global: false,
+                        definition: spec::TemporaryViewDefinition {
+                            input: Box::new(query),
+                            columns,
+                            replace: or_replace.is_some(),
+                        },
+                    }
+                }
+                None => return Err(SqlError::todo("CREATE VIEW")),
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -333,7 +345,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         } => {
             let node = spec::CommandNode::DropView {
                 view: from_ast_object_name(name)?,
-                kind: None,
                 if_exists: if_exists.is_some(),
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
@@ -347,13 +358,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let database = from
                 .map(|(_, name)| from_ast_object_name(name))
                 .transpose()?;
-            let view_pattern = like
+            let pattern = like
                 .map(|(_, pattern)| from_ast_string(pattern))
                 .transpose()?;
-            let node = spec::CommandNode::ListViews {
-                database,
-                view_pattern,
-            };
+            let node = spec::CommandNode::ListViews { database, pattern };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::RefreshFunction {
@@ -414,7 +422,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         .unwrap_or_default();
                     (
                         path.map(from_ast_string).transpose()?,
-                        Some(TableFileFormat::General {
+                        Some(spec::TableFileFormat::General {
                             format: format.value,
                         }),
                         None,
@@ -954,7 +962,6 @@ fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::Tab
         file_sort_order: vec![],
         if_not_exists,
         or_replace,
-        unbounded: false, // TODO: support unbounded tables
         options: options
             .into_iter()
             .flatten()

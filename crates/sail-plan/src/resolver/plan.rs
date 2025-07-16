@@ -36,8 +36,9 @@ use datafusion_expr::{
     WindowFrame, WindowFunctionDefinition,
 };
 use rand::{rng, Rng};
-use sail_catalog::command::{CatalogCommand, CatalogTableDefinition};
-use sail_catalog::temp_view::manage_temporary_views;
+use sail_catalog::command::{
+    CatalogCommand, CatalogDatabaseDefinition, CatalogTableDefinition, CatalogViewDefinition,
+};
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
@@ -461,95 +462,91 @@ impl PlanResolver<'_> {
             CommandNode::CurrentDatabase => {
                 self.resolve_catalog_command(CatalogCommand::CurrentDatabase)
             }
-            CommandNode::SetCurrentDatabase { database_name } => {
+            CommandNode::SetCurrentDatabase { database } => {
                 self.resolve_catalog_command(CatalogCommand::SetCurrentDatabase {
-                    database_name: database_name.into(),
+                    database: database.into(),
                 })
             }
-            CommandNode::ListDatabases {
-                catalog,
-                database_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListDatabases {
-                catalog: catalog.map(|x| x.into()),
-                database_pattern,
-            }),
-            CommandNode::ListTables {
-                database,
-                table_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListTables {
-                database: database
-                    .map(|db| self.resolve_schema_reference(&db))
-                    .transpose()?,
-                table_pattern,
-            }),
-            CommandNode::ListViews {
-                database,
-                view_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListViews {
-                database: database
-                    .map(|db| self.resolve_schema_reference(&db))
-                    .transpose()?,
-                view_pattern,
-            }),
-            CommandNode::ListFunctions {
-                database,
-                function_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListFunctions {
-                database: database
-                    .map(|db| self.resolve_schema_reference(&db))
-                    .transpose()?,
-                function_pattern,
-            }),
+            CommandNode::ListDatabases { qualifier, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListDatabases {
+                    qualifier: qualifier.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ListTables { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListTables {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ListViews { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListViews {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ListFunctions { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListFunctions {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
             CommandNode::ListColumns { table } => {
                 self.resolve_catalog_command(CatalogCommand::ListColumns {
-                    table: self.resolve_table_reference(&table)?,
+                    table: table.into(),
                 })
             }
             CommandNode::GetDatabase { database } => {
                 self.resolve_catalog_command(CatalogCommand::GetDatabase {
-                    database: self.resolve_schema_reference(&database)?,
+                    database: database.into(),
                 })
             }
             CommandNode::GetTable { table } => {
                 self.resolve_catalog_command(CatalogCommand::GetTable {
-                    table: self.resolve_table_reference(&table)?,
+                    table: table.into(),
                 })
             }
             CommandNode::GetFunction { function } => {
                 self.resolve_catalog_command(CatalogCommand::GetFunction {
-                    function: self.resolve_table_reference(&function)?,
+                    function: function.into(),
                 })
             }
             CommandNode::DatabaseExists { database } => {
                 self.resolve_catalog_command(CatalogCommand::DatabaseExists {
-                    database: self.resolve_schema_reference(&database)?,
+                    database: database.into(),
                 })
             }
             CommandNode::TableExists { table } => {
                 self.resolve_catalog_command(CatalogCommand::TableExists {
-                    table: self.resolve_table_reference(&table)?,
+                    table: table.into(),
                 })
             }
             CommandNode::FunctionExists { function } => {
                 self.resolve_catalog_command(CatalogCommand::FunctionExists {
-                    function: self.resolve_table_reference(&function)?,
+                    function: function.into(),
                 })
             }
             CommandNode::CreateTable { table, definition } => {
                 self.resolve_catalog_create_table(table, definition, state)
                     .await
             }
-            CommandNode::DropView {
+            CommandNode::DropView { view, if_exists } => {
+                self.resolve_catalog_drop_view(view, if_exists).await
+            }
+            CommandNode::DropTemporaryView {
                 view,
-                kind,
+                is_global,
                 if_exists,
-            } => self.resolve_catalog_drop_view(view, kind, if_exists).await,
+            } => {
+                self.resolve_catalog_drop_temporary_view(view, is_global, if_exists)
+                    .await
+            }
             CommandNode::DropDatabase {
                 database,
                 if_exists,
                 cascade,
             } => self.resolve_catalog_command(CatalogCommand::DropDatabase {
-                database: self.resolve_schema_reference(&database)?,
+                database: database.into(),
                 if_exists,
                 cascade,
             }),
@@ -558,7 +555,7 @@ impl PlanResolver<'_> {
                 if_exists,
                 is_temporary,
             } => self.resolve_catalog_command(CatalogCommand::DropFunction {
-                function: self.resolve_table_reference(&function)?,
+                function: function.into(),
                 if_exists,
                 is_temporary,
             }),
@@ -567,7 +564,7 @@ impl PlanResolver<'_> {
                 if_exists,
                 purge,
             } => self.resolve_catalog_command(CatalogCommand::DropTable {
-                table: self.resolve_table_reference(&table)?,
+                table: table.into(),
                 if_exists,
                 purge,
             }),
@@ -583,13 +580,13 @@ impl PlanResolver<'_> {
             CommandNode::CurrentCatalog => {
                 self.resolve_catalog_command(CatalogCommand::CurrentCatalog)
             }
-            CommandNode::SetCurrentCatalog { catalog_name } => {
+            CommandNode::SetCurrentCatalog { catalog } => {
                 self.resolve_catalog_command(CatalogCommand::SetCurrentCatalog {
-                    catalog_name: catalog_name.into(),
+                    catalog: catalog.into(),
                 })
             }
-            CommandNode::ListCatalogs { catalog_pattern } => {
-                self.resolve_catalog_command(CatalogCommand::ListCatalogs { catalog_pattern })
+            CommandNode::ListCatalogs { pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListCatalogs { pattern })
             }
             CommandNode::CreateCatalog { .. } => Err(PlanError::todo("create catalog")),
             CommandNode::CreateDatabase {
@@ -607,6 +604,14 @@ impl PlanResolver<'_> {
             }
             CommandNode::CreateView { view, definition } => {
                 self.resolve_catalog_create_view(view, definition, state)
+                    .await
+            }
+            CommandNode::CreateTemporaryView {
+                view,
+                is_global,
+                definition,
+            } => {
+                self.resolve_catalog_create_temporary_view(view, is_global, definition, state)
                     .await
             }
             CommandNode::Write(write) => self.resolve_command_write(write, state).await,
@@ -701,30 +706,8 @@ impl PlanResolver<'_> {
             return Ok(cte.clone());
         }
 
-        let view = match &table_reference {
-            TableReference::Bare { table } => {
-                let view = manage_temporary_views(self.ctx, false, |views| {
-                    views.get_view(table.as_ref())
-                })?;
-                view.map(|x| x.as_ref().clone())
-            }
-            TableReference::Partial { schema, table } => {
-                if schema.as_ref() == self.config.global_temp_database {
-                    let view = manage_temporary_views(self.ctx, true, |views| {
-                        views.get_view(table.as_ref())
-                    })?;
-                    let view = view.ok_or_else(|| {
-                        PlanError::AnalysisError(format!(
-                            "global temporary view not found: {table}"
-                        ))
-                    })?;
-                    Some(view.as_ref().clone())
-                } else {
-                    None
-                }
-            }
-            TableReference::Full { .. } => None,
-        };
+        // TODO: read table or view
+        let view: Option<LogicalPlan> = None;
         if let Some(view) = view {
             let names = state.register_fields(view.schema().inner().fields());
             return Ok(rename_logical_plan(view, &names)?);
@@ -2997,7 +2980,6 @@ impl PlanResolver<'_> {
             file_sort_order,
             if_not_exists,
             or_replace,
-            unbounded,
             options,
             query,
             definition,
@@ -3050,10 +3032,8 @@ impl PlanResolver<'_> {
                     ));
                 }
             }
-        } else if unbounded {
-            self.config.default_unbounded_table_file_format.clone()
         } else {
-            self.config.default_bounded_table_file_format.clone()
+            self.config.default_table_file_format.clone()
         };
         let table_partition_cols: Vec<String> =
             table_partition_cols.into_iter().map(String::from).collect();
@@ -3070,9 +3050,9 @@ impl PlanResolver<'_> {
         .await?;
 
         let command = CatalogCommand::CreateTable {
-            table: self.resolve_table_reference(&table)?,
+            table: table.into(),
             definition: CatalogTableDefinition {
-                schema,
+                schema: schema.inner().clone(),
                 comment,
                 column_defaults,
                 constraints,
@@ -3082,7 +3062,6 @@ impl PlanResolver<'_> {
                 file_sort_order,
                 if_not_exists,
                 or_replace,
-                unbounded,
                 options,
                 definition,
             },
@@ -3103,68 +3082,39 @@ impl PlanResolver<'_> {
         } = definition;
         let properties = properties.into_iter().collect::<Vec<_>>();
         let command = CatalogCommand::CreateDatabase {
-            database: self.resolve_schema_reference(&database)?,
-            if_not_exists,
-            comment,
-            location,
-            properties,
+            database: database.into(),
+            definition: CatalogDatabaseDefinition {
+                if_not_exists,
+                comment,
+                location,
+                properties,
+            },
         };
         self.resolve_catalog_command(command)
-    }
-
-    fn resolve_view_name(view: TableReference) -> PlanResult<String> {
-        match view {
-            TableReference::Bare { table } => Ok(table.as_ref().to_string()),
-            TableReference::Partial { .. } | TableReference::Full { .. } => {
-                Err(PlanError::invalid("qualified view name"))
-            }
-        }
     }
 
     async fn resolve_catalog_drop_view(
         &self,
         view: spec::ObjectName,
-        kind: Option<spec::ViewKind>,
         if_exists: bool,
     ) -> PlanResult<LogicalPlan> {
-        use spec::ViewKind;
-
-        let view = self.resolve_table_reference(&view)?;
-        let (kind, view) = match kind {
-            None => match view {
-                TableReference::Bare { ref table } => {
-                    let temporary = manage_temporary_views(self.ctx, false, |views| {
-                        Ok(views.get_view(table)?.is_some())
-                    })?;
-                    if temporary {
-                        (ViewKind::Temporary, view)
-                    } else {
-                        (ViewKind::Default, view)
-                    }
-                }
-                TableReference::Partial { schema, table } => {
-                    if schema.as_ref() == self.config.global_temp_database {
-                        (ViewKind::GlobalTemporary, TableReference::bare(table))
-                    } else {
-                        (ViewKind::Default, TableReference::partial(schema, table))
-                    }
-                }
-                TableReference::Full { .. } => (ViewKind::Default, view),
-            },
-            Some(x) => (x, view),
+        let command = CatalogCommand::DropView {
+            view: view.into(),
+            if_exists,
         };
-        let command = match kind {
-            ViewKind::Default => CatalogCommand::DropView { view, if_exists },
-            ViewKind::Temporary => CatalogCommand::DropTemporaryView {
-                view_name: Self::resolve_view_name(view)?,
-                is_global: false,
-                if_exists,
-            },
-            ViewKind::GlobalTemporary => CatalogCommand::DropTemporaryView {
-                view_name: Self::resolve_view_name(view)?,
-                is_global: true,
-                if_exists,
-            },
+        self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_catalog_drop_temporary_view(
+        &self,
+        view: spec::Identifier,
+        is_global: bool,
+        if_exists: bool,
+    ) -> PlanResult<LogicalPlan> {
+        let command = CatalogCommand::DropTemporaryView {
+            view: view.into(),
+            is_global,
+            if_exists,
         };
         self.resolve_catalog_command(command)
     }
@@ -3175,47 +3125,72 @@ impl PlanResolver<'_> {
         definition: spec::ViewDefinition,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use spec::ViewKind;
-
         let spec::ViewDefinition {
             input,
             columns,
-            kind,
             replace,
             definition,
         } = definition;
         let input = self.resolve_query_plan(*input, state).await?;
+        let schema = if let Some(columns) = columns {
+            if columns.len() != input.schema().fields().len() {
+                return Err(PlanError::invalid(format!(
+                    "number of column names ({}) does not match number of columns ({})",
+                    columns.len(),
+                    input.schema().fields().len()
+                )));
+            }
+            let fields: Vec<_> = input
+                .schema()
+                .fields()
+                .iter()
+                .zip(columns.into_iter())
+                .map(|(f, name)| Arc::new(f.as_ref().clone().with_name(name)))
+                .collect();
+            Arc::new(adt::Schema::new(fields))
+        } else {
+            input.schema().inner().clone()
+        };
+        let command = CatalogCommand::CreateView {
+            view: view.into(),
+            definition: CatalogViewDefinition {
+                definition,
+                schema,
+                replace,
+            },
+        };
+        self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_catalog_create_temporary_view(
+        &self,
+        view: spec::Identifier,
+        is_global: bool,
+        definition: spec::TemporaryViewDefinition,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::TemporaryViewDefinition {
+            input,
+            columns,
+            replace,
+        } = definition;
+        let input = self.resolve_query_plan(*input, state).await?;
         let input = LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
             Arc::new(input),
-            self.resolve_table_reference(&view)?,
+            TableReference::Bare {
+                table: String::from(view.clone()).into(),
+            },
         )?);
         let fields = match columns {
             Some(columns) => columns.into_iter().map(String::from).collect(),
             None => Self::get_field_names(input.schema(), state)?,
         };
         let input = rename_logical_plan(input, &fields)?;
-        let view = self.resolve_table_reference(&view)?;
-        let command = match kind {
-            ViewKind::Default => CatalogCommand::CreateView {
-                input: Arc::new(input),
-                view,
-                replace,
-                definition,
-            },
-            ViewKind::Temporary => CatalogCommand::CreateTemporaryView {
-                input: Arc::new(input),
-                view_name: Self::resolve_view_name(view)?,
-                is_global: false,
-                replace,
-                definition,
-            },
-            ViewKind::GlobalTemporary => CatalogCommand::CreateTemporaryView {
-                input: Arc::new(input),
-                view_name: Self::resolve_view_name(view)?,
-                is_global: true,
-                replace,
-                definition,
-            },
+        let command = CatalogCommand::CreateTemporaryView {
+            view: view.into(),
+            input: Arc::new(input),
+            is_global,
+            replace,
         };
         self.resolve_catalog_command(command)
     }

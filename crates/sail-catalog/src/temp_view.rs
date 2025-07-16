@@ -1,12 +1,11 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use datafusion::prelude::SessionContext;
-use datafusion_common::{internal_datafusion_err, plan_err, Result};
 use datafusion_expr::LogicalPlan;
 use lazy_static::lazy_static;
 
-use crate::manager::utils::match_pattern;
+use crate::error::{CatalogError, CatalogResult};
+use crate::utils::match_pattern;
 
 lazy_static! {
     pub(crate) static ref GLOBAL_TEMPORARY_VIEW_MANAGER: TemporaryViewManager =
@@ -31,65 +30,60 @@ impl TemporaryViewManager {
         }
     }
 
-    pub fn add_view(&self, name: String, plan: Arc<LogicalPlan>, replace: bool) -> Result<()> {
-        let mut views = self
-            .views
+    fn read(&self) -> CatalogResult<RwLockReadGuard<'_, HashMap<String, Arc<LogicalPlan>>>> {
+        self.views
+            .read()
+            .map_err(|e| CatalogError::Internal(e.to_string()))
+    }
+
+    fn write(&self) -> CatalogResult<RwLockWriteGuard<'_, HashMap<String, Arc<LogicalPlan>>>> {
+        self.views
             .write()
-            .map_err(|e| internal_datafusion_err!("{e}"))?;
+            .map_err(|e| CatalogError::Internal(e.to_string()))
+    }
+
+    pub fn add_view(
+        &self,
+        name: String,
+        plan: Arc<LogicalPlan>,
+        replace: bool,
+    ) -> CatalogResult<()> {
+        let mut views = self.write()?;
         if views.contains_key(&name) && !replace {
-            return plan_err!("view already exists: {name}");
+            return Err(CatalogError::AlreadyExists(format!(
+                "temporary view: {name}"
+            )));
         }
         views.insert(name, plan);
         Ok(())
     }
 
-    pub fn remove_view(&self, name: &str, if_exists: bool) -> Result<()> {
-        let mut views = self
-            .views
-            .write()
-            .map_err(|e| internal_datafusion_err!("{e}"))?;
+    pub fn remove_view(&self, name: &str, if_exists: bool) -> CatalogResult<()> {
+        let mut views = self.write()?;
         if !views.contains_key(name) && !if_exists {
-            return plan_err!("view not found: {name}");
+            return Err(CatalogError::NotFound(format!("temporary view: {name}")));
         }
         views.remove(name);
         Ok(())
     }
 
-    pub fn get_view(&self, name: &str) -> Result<Option<Arc<LogicalPlan>>> {
-        let views = self
-            .views
-            .read()
-            .map_err(|e| internal_datafusion_err!("{e}"))?;
-        Ok(views.get(name).map(Arc::clone))
+    pub fn get_view(&self, name: &str) -> CatalogResult<Arc<LogicalPlan>> {
+        let views = self.read()?;
+        let view = views
+            .get(name)
+            .ok_or_else(|| CatalogError::NotFound(format!("temporary view: {name}")))?;
+        Ok(Arc::clone(view))
     }
 
-    pub fn list_views(&self, pattern: Option<&str>) -> Result<Vec<(String, Arc<LogicalPlan>)>> {
-        let views = self
-            .views
-            .read()
-            .map_err(|e| internal_datafusion_err!("{e}"))?;
+    pub fn list_views(
+        &self,
+        pattern: Option<&str>,
+    ) -> CatalogResult<Vec<(String, Arc<LogicalPlan>)>> {
+        let views = self.read()?;
         Ok(views
             .iter()
             .filter(|(name, _)| match_pattern(name.as_str(), pattern))
             .map(|(name, plan)| (name.clone(), Arc::clone(plan)))
             .collect())
-    }
-}
-
-pub fn manage_temporary_views<T>(
-    ctx: &SessionContext,
-    is_global: bool,
-    f: impl FnOnce(&TemporaryViewManager) -> Result<T>,
-) -> Result<T> {
-    if is_global {
-        f(&GLOBAL_TEMPORARY_VIEW_MANAGER)
-    } else {
-        let views = ctx
-            .state_ref()
-            .read()
-            .config()
-            .get_extension::<TemporaryViewManager>()
-            .ok_or_else(|| internal_datafusion_err!("temporary view manager not found"))?;
-        f(views.as_ref())
     }
 }

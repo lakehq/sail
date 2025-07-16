@@ -4,6 +4,7 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, ExprSchemable, Operator, ScalarUDF};
 use sail_catalog::manager::CatalogManager;
+use sail_catalog::utils::quote_namespace_if_needed;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::raise_error::RaiseError;
@@ -49,20 +50,30 @@ fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn current_catalog(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     input.arguments.zero()?;
-    let catalog_manager = CatalogManager::new(
-        input.function_context.session_context,
-        input.function_context.plan_config.clone(),
-    );
-    Ok(lit(catalog_manager.default_catalog()?))
+    let catalog_manager = input
+        .function_context
+        .session_context
+        .state_ref()
+        .read()
+        .config()
+        .get_extension::<CatalogManager>()
+        .ok_or_else(|| PlanError::internal("missing catalog manager"))?;
+    Ok(lit(catalog_manager.default_catalog()?.to_string()))
 }
 
 fn current_database(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     input.arguments.zero()?;
-    let catalog_manager = CatalogManager::new(
-        input.function_context.session_context,
-        input.function_context.plan_config.clone(),
-    );
-    Ok(lit(catalog_manager.default_database()?))
+    let catalog_manager = input
+        .function_context
+        .session_context
+        .state_ref()
+        .read()
+        .config()
+        .get_extension::<CatalogManager>()
+        .ok_or_else(|| PlanError::internal("missing catalog manager"))?;
+    Ok(lit(quote_namespace_if_needed(
+        &catalog_manager.default_database()?,
+    )))
 }
 
 fn current_user(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

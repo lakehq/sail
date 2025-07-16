@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef};
-use datafusion_common::{Column, DFSchemaRef, SchemaReference, TableReference};
+use datafusion_common::{Column, DFSchemaRef, TableReference};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
@@ -10,23 +10,6 @@ use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(super) fn resolve_schema_reference(
-        &self,
-        name: &spec::ObjectName,
-    ) -> PlanResult<SchemaReference> {
-        let names = name.parts();
-        match names {
-            [a] => Ok(SchemaReference::Bare {
-                schema: Arc::from(a.as_ref()),
-            }),
-            [a, b] => Ok(SchemaReference::Full {
-                catalog: Arc::from(a.as_ref()),
-                schema: Arc::from(b.as_ref()),
-            }),
-            _ => Err(PlanError::invalid(format!("schema reference: {names:?}"))),
-        }
-    }
-
     pub(super) fn resolve_table_reference(
         &self,
         name: &spec::ObjectName,

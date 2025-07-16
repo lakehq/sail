@@ -5236,14 +5236,17 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 name = "sail-catalog"
 version = "0.3.1"
 dependencies = [
+ "async-trait",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
  "lazy_static",
  "regex",
+ "sail-common",
  "sail-data-source",
  "serde",
  "serde_arrow",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -5435,6 +5438,7 @@ dependencies = [
  "sail-data-source",
  "sail-python-udf",
  "sail-sql-analyzer",
+ "serde",
  "sha1",
  "thiserror 2.0.12",
  "tokio",

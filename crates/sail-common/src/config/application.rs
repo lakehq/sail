@@ -18,6 +18,7 @@ pub struct AppConfig {
     pub execution: ExecutionConfig,
     pub kubernetes: KubernetesConfig,
     pub parquet: ParquetConfig,
+    pub catalog: CatalogConfig,
     pub spark: SparkConfig,
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
@@ -211,6 +212,25 @@ pub struct ParquetConfig {
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogConfig {
+    pub default_catalog: String,
+    pub default_database: Vec<String>,
+    pub global_temporary_database: Vec<String>,
+    pub list: Vec<CatalogKind>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CatalogKind {
+    Memory {
+        name: String,
+        initial_database: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]

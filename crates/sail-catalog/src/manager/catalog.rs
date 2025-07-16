@@ -1,47 +1,35 @@
-use datafusion_common::Result;
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-use crate::manager::utils::match_pattern;
+use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
+use crate::provider::CatalogProvider;
+use crate::utils::match_pattern;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CatalogMetadata {
-    pub name: String,
-    pub description: Option<String>,
-}
-
-impl CatalogMetadata {
-    pub fn new(name: String) -> Self {
-        Self {
-            name,
-            description: None, // Spark code sets all descriptions to None
-        }
-    }
-}
-
-impl CatalogManager<'_> {
-    pub fn default_catalog(&self) -> Result<String> {
-        let state = self.ctx.state_ref();
-        let state = state.read();
-        Ok(state.config().options().catalog.default_catalog.clone())
+impl CatalogManager {
+    pub fn default_catalog(&self) -> CatalogResult<Arc<str>> {
+        Ok(self.state()?.default_catalog.clone())
     }
 
-    pub fn set_default_catalog(&self, catalog_name: String) -> Result<()> {
-        let state = self.ctx.state_ref();
-        let mut state = state.write();
-        state.config_mut().options_mut().catalog.default_catalog = catalog_name;
+    pub fn set_default_catalog(&self, catalog: impl Into<Arc<str>>) -> CatalogResult<()> {
+        self.state()?.default_catalog = catalog.into();
         Ok(())
     }
 
-    pub fn list_catalogs(&self, catalog_pattern: Option<&str>) -> Result<Vec<CatalogMetadata>> {
-        let state = self.ctx.state_ref();
-        let state = state.read();
-        Ok(state
-            .catalog_list()
-            .catalog_names()
-            .into_iter()
-            .filter(|name| match_pattern(name.as_str(), catalog_pattern))
-            .map(CatalogMetadata::new)
+    pub fn get_catalog(&self, catalog: &str) -> CatalogResult<Arc<dyn CatalogProvider>> {
+        let state = self.state()?;
+        let Some(provider) = state.catalogs.get(catalog) else {
+            return Err(CatalogError::NotFound(format!("catalog: {catalog}")));
+        };
+        Ok(Arc::clone(provider))
+    }
+
+    pub fn list_catalogs(&self, pattern: Option<&str>) -> CatalogResult<Vec<Arc<str>>> {
+        Ok(self
+            .state()?
+            .catalogs
+            .keys()
+            .filter(|name| match_pattern(name.as_ref(), pattern))
+            .cloned()
             .collect::<Vec<_>>())
     }
 }

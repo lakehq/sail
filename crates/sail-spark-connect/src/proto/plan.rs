@@ -1221,14 +1221,14 @@ impl TryFrom<Catalog> for spec::CommandNode {
             CatType::SetCurrentDatabase(x) => {
                 let sc::SetCurrentDatabase { db_name } = x;
                 Ok(spec::CommandNode::SetCurrentDatabase {
-                    database_name: db_name.into(),
+                    database: from_ast_object_name(parse_object_name(&db_name)?)?,
                 })
             }
             CatType::ListDatabases(x) => {
                 let sc::ListDatabases { pattern } = x;
                 Ok(spec::CommandNode::ListDatabases {
-                    catalog: None,
-                    database_pattern: pattern,
+                    qualifier: None,
+                    pattern,
                 })
             }
             CatType::ListTables(x) => {
@@ -1237,7 +1237,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     database: db_name
                         .map(|x| from_ast_object_name(parse_object_name(x.as_str())?))
                         .transpose()?,
-                    table_pattern: pattern,
+                    pattern,
                 })
             }
             CatType::ListFunctions(x) => {
@@ -1246,7 +1246,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     database: db_name
                         .map(|x| from_ast_object_name(parse_object_name(x.as_str())?))
                         .transpose()?,
-                    function_pattern: pattern,
+                    pattern,
                 })
             }
             CatType::ListColumns(x) => {
@@ -1351,7 +1351,6 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         file_sort_order: vec![],
                         if_not_exists: false,
                         or_replace: false,
-                        unbounded: false,
                         options: options.into_iter().collect(),
                         query: None,
                         definition: None,
@@ -1384,7 +1383,6 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         file_sort_order: vec![],
                         if_not_exists: false,
                         or_replace: false,
-                        unbounded: false,
                         options: options.into_iter().collect(),
                         query: None,
                         definition: None,
@@ -1393,17 +1391,17 @@ impl TryFrom<Catalog> for spec::CommandNode {
             }
             CatType::DropTempView(x) => {
                 let sc::DropTempView { view_name } = x;
-                Ok(spec::CommandNode::DropView {
-                    view: from_ast_object_name(parse_object_name(view_name.as_str())?)?,
-                    kind: Some(spec::ViewKind::Temporary),
+                Ok(spec::CommandNode::DropTemporaryView {
+                    view: view_name.into(),
+                    is_global: false,
                     if_exists: false,
                 })
             }
             CatType::DropGlobalTempView(x) => {
                 let sc::DropGlobalTempView { view_name } = x;
-                Ok(spec::CommandNode::DropView {
-                    view: from_ast_object_name(parse_object_name(view_name.as_str())?)?,
-                    kind: Some(spec::ViewKind::GlobalTemporary),
+                Ok(spec::CommandNode::DropTemporaryView {
+                    view: view_name.into(),
+                    is_global: true,
                     if_exists: true,
                 })
             }
@@ -1461,14 +1459,12 @@ impl TryFrom<Catalog> for spec::CommandNode {
             CatType::SetCurrentCatalog(x) => {
                 let sc::SetCurrentCatalog { catalog_name } = x;
                 Ok(spec::CommandNode::SetCurrentCatalog {
-                    catalog_name: catalog_name.into(),
+                    catalog: catalog_name.into(),
                 })
             }
             CatType::ListCatalogs(x) => {
                 let sc::ListCatalogs { pattern } = x;
-                Ok(spec::CommandNode::ListCatalogs {
-                    catalog_pattern: pattern,
-                })
+                Ok(spec::CommandNode::ListCatalogs { pattern })
             }
         }
     }
@@ -1649,20 +1645,13 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
             replace,
         } = command;
         let input = input.required("input relation")?.try_into()?;
-        let view = from_ast_object_name(parse_object_name(name.as_str())?)?;
-        let kind = if is_global {
-            spec::ViewKind::GlobalTemporary
-        } else {
-            spec::ViewKind::Temporary
-        };
-        Ok(spec::CommandNode::CreateView {
-            view,
-            definition: spec::ViewDefinition {
+        Ok(spec::CommandNode::CreateTemporaryView {
+            view: name.into(),
+            is_global,
+            definition: spec::TemporaryViewDefinition {
                 input: Box::new(input),
                 columns: None,
-                kind,
                 replace,
-                definition: None,
             },
         })
     }
