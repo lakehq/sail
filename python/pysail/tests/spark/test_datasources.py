@@ -1,7 +1,6 @@
 import glob
 
 import pytest
-from pyspark.sql import SparkSession
 from pyspark.sql.types import (
     IntegerType,
     StringType,
@@ -9,8 +8,10 @@ from pyspark.sql.types import (
     StructType,
 )
 
+
 def safe_sort_key(row):
     return tuple((v is not None, v) for v in row)
+
 
 @pytest.fixture
 def sample_df(spark):
@@ -25,9 +26,7 @@ def sample_df(spark):
 
 
 class TestParquetDataSource:
-
     def test_read_write_basic(self, spark, sample_df, tmp_path):
-
         path = str(tmp_path / "parquet_basic")
         sample_df.write.parquet(path, mode="overwrite")
         read_df = spark.read.parquet(path)
@@ -36,10 +35,9 @@ class TestParquetDataSource:
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
     def test_parquet_write_options(self, spark, sample_df, tmp_path):
-
         path = str(tmp_path / "parquet_write_options")
         (
-            sample_df.write.option("compression", "gzip(4)") # pyspark supports gzip keyword.
+            sample_df.write.option("compression", "gzip(4)")  # pyspark supports gzip keyword.
             .option("writerVersion", "1.0")
             .parquet(path, mode="overwrite")
         )
@@ -48,26 +46,19 @@ class TestParquetDataSource:
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
     def test_parquet_read_options(self, spark, sample_df, tmp_path):
-
         path = str(tmp_path / "parquet_read_options")
         sample_df.write.parquet(path, mode="overwrite")
-        read_df = (
-            spark.read.option("binaryAsString", "false")
-            .option("pruning", "true")
-            .parquet(path)
-        )
+        read_df = spark.read.option("binaryAsString", "false").option("pruning", "true").parquet(path)
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
 class TestCsvDataSource:
-
     def test_read_write_basic(self, spark, sample_df, tmp_path):
         path = str(tmp_path / "csv_basic")
         sample_df.write.csv(path, header=True, mode="overwrite")
         read_df = (
-            spark.read
-            .option("header", True)
+            spark.read.option("header", True)
             # .option("inferSchema", True)
             .csv(path)
         )
@@ -92,12 +83,11 @@ class TestCsvDataSource:
             with open(file) as f:
                 content += f.read()
         assert "col1;col2" in content
-        assert 'a;1' in content
-        assert 'NULL;4' in content
+        assert "a;1" in content
+        assert "NULL;4" in content
 
         read_df = (
-            spark.read
-            .option("delimiter", ";")
+            spark.read.option("delimiter", ";")
             .option("nullValue", "NULL")
             .option("header", True)
             # .option("inferSchema", True)
@@ -123,15 +113,14 @@ class TestCsvDataSource:
             # .option("inferSchema", "true")
             .csv(str(path))
         )
-        EXPECTED_ROW_COUNT = 2
-        EXPECTED_COL2_VALUE = 10
-        assert read_df.count() == EXPECTED_ROW_COUNT
+        expected_row_count = 2
+        expected_col2_value = 10
+        assert read_df.count() == expected_row_count
         assert read_df.columns == ["col1", "col2"]
-        assert read_df.collect()[0].col2 == EXPECTED_COL2_VALUE
+        assert read_df.collect()[0].col2 == expected_col2_value
 
 
 class TestJsonDataSource:
-
     def test_read_write_basic(self, spark, sample_df, tmp_path):
         """Test basic JSON read/write."""
         path = str(tmp_path / "json_basic")
@@ -139,8 +128,7 @@ class TestJsonDataSource:
         read_df = (
             spark.read
             # .option("multi_line", False)
-            .json(path)
-            .select("col1", "col2")
+            .json(path).select("col1", "col2")
         )
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
@@ -156,8 +144,7 @@ class TestJsonDataSource:
         read_df = (
             spark.read
             # .option("multi_line", False)
-            .json(path)
-            .select("col1", "col2")
+            .json(path).select("col1", "col2")
         )
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
@@ -165,10 +152,6 @@ class TestJsonDataSource:
     def test_json_read_options(self, spark, sample_df, tmp_path):
         path = str(tmp_path / "json_read_options")
         sample_df.write.json(path, mode="overwrite")
-        read_df = (
-            spark.read.option("schemaInferMaxRecords", 1)
-            .json(path)
-            .select("col1", "col2")
-        )
+        read_df = spark.read.option("schemaInferMaxRecords", 1).json(path).select("col1", "col2")
         assert read_df.count() == sample_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
