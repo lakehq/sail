@@ -6,7 +6,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion_common::Result;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableWriter};
+use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 
 /// A trait for defining the specifics of a listing table format.
 pub trait ListingFormat: Debug + Send + Sync + 'static {
@@ -56,12 +56,6 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .await?;
         let config = crate::listing::rewrite_listing_partitions(config)?;
         Ok(Arc::new(ListingTable::try_new(config)?))
-    }
-}
-
-impl<T: ListingFormat> TableWriter for ListingTableFormat<T> {
-    fn name(&self) -> &str {
-        self.format_def.name()
     }
 
     fn create_writer(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {

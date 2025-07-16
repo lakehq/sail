@@ -56,7 +56,7 @@ impl<'a> TableProviderFactory<'a> {
         options: Vec<(String, String)>,
     ) -> Result<Arc<dyn FileFormatFactory>> {
         let options: HashMap<String, String> = options.into_iter().collect();
-        let writer = self.registry.get_writer(source)?;
+        let format = self.registry.get_format(source)?;
 
         let info = SinkInfo {
             ctx: self.ctx,
@@ -64,6 +64,6 @@ impl<'a> TableProviderFactory<'a> {
             options,
         };
 
-        writer.create_writer(info)
+        format.create_writer(info)
     }
 }

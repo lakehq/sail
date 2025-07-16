@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::file_format::FileFormatFactory;
 use datafusion_common::{plan_err, Result};
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableWriter};
+use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_format::DeltaFormatFactory;
 
@@ -24,12 +24,6 @@ impl TableFormat for DeltaTableFormat {
         let table_uri = &info.paths[0];
         // TODO: schema is ignored for now
         create_delta_provider(info.ctx, table_uri, &info.options).await
-    }
-}
-
-impl TableWriter for DeltaTableFormat {
-    fn name(&self) -> &str {
-        "delta"
     }
 
     fn create_writer(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
