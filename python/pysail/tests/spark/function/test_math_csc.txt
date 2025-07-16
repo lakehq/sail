@@ -1,36 +1,46 @@
 >>> from pyspark.sql import functions as sf
 >>> import math
 
+>>> spark.sql("SELECT csc(radians(90)) AS csc").show()
++---+
+|csc|
++---+
+|1.0|
++---+
+
 >>> df = spark.range(1)
->>> df.select(sf.csc(sf.lit(math.radians(90)))).show()
-+-----------------------+
-|CSC(1.5707963267948966)|
-+-----------------------+
-|                    1.0|
-+-----------------------+
->>> df.select(sf.csc(sf.lit(90))).show()
+>>> df.select(sf.csc(sf.lit(math.radians(90))).alias("csc")).show()
++---+
+|csc|
++---+
+|1.0|
++---+
+
+>>> df.select(sf.csc(sf.lit(90)).alias("csc")).show()
 +------------------+
-|           CSC(90)|
-+------------------+
-|1.1185724071637084|
-+------------------+
->>> df.select(sf.csc(sf.lit(90.0))).show()
-+------------------+
-|         CSC(90.0)|
+|               csc|
 +------------------+
 |1.1185724071637084|
 +------------------+
->>> df.select(sf.csc(sf.lit(-90.0))).show()
+
+>>> df.select(sf.csc(sf.lit(90.0)).alias("csc")).show()
++------------------+
+|               csc|
++------------------+
+|1.1185724071637084|
++------------------+
+
+>>> df.select(sf.csc(sf.lit(-90.0)).alias("csc")).show()
 +-------------------+
-|         CSC(-90.0)|
+|                csc|
 +-------------------+
 |-1.1185724071637084|
 +-------------------+
 
->>> df.select(sf.csc(sf.lit(0))).show()
-+------+
-|CSC(0)|
-+------+
-|   inf|
-+------+
+>>> df.select(sf.csc(sf.lit(0)).alias("csc")).show()
++---+
+|csc|
++---+
+|inf|
++---+
 >>> # Infinity in pyspark
