@@ -5,11 +5,11 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::file_format::FileFormatFactory;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{plan_err, DFSchema, Result};
+use datafusion_common::{plan_err, Result};
 use sail_common::spec::SaveMode;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo};
 
-use crate::registry::TableFormatRegistry;
+use crate::registry::{default_registry, TableFormatRegistry};
 
 pub struct TableProviderFactory<'a> {
     ctx: &'a SessionContext,
@@ -17,8 +17,11 @@ pub struct TableProviderFactory<'a> {
 }
 
 impl<'a> TableProviderFactory<'a> {
-    pub fn new(ctx: &'a SessionContext, registry: Arc<TableFormatRegistry>) -> Self {
-        TableProviderFactory { ctx, registry }
+    pub fn new(ctx: &'a SessionContext) -> Self {
+        TableProviderFactory {
+            ctx,
+            registry: default_registry(),
+        }
     }
 
     pub async fn read_table(
@@ -40,9 +43,7 @@ impl<'a> TableProviderFactory<'a> {
         let info = SourceInfo {
             ctx: self.ctx,
             paths,
-            schema: schema
-                .map(|s| DFSchema::from_unqualified_fields(s.fields, s.metadata))
-                .transpose()?,
+            schema,
             options,
         };
 

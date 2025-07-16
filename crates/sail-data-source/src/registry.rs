@@ -2,14 +2,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, Result};
+use once_cell::sync::Lazy;
 use sail_common_datafusion::datasource::TableFormat;
 
-use crate::formats::arrow::ArrowTableFormat;
-use crate::formats::avro::AvroTableFormat;
-use crate::formats::csv::CsvTableFormat;
 use crate::formats::delta::DeltaTableFormat;
-use crate::formats::json::JsonTableFormat;
-use crate::formats::parquet::ParquetTableFormat;
+use crate::formats::{
+    ArrowTableFormat, AvroTableFormat, CsvTableFormat, JsonTableFormat, ParquetTableFormat,
+};
+
+static DEFAULT_REGISTRY: Lazy<Arc<TableFormatRegistry>> =
+    Lazy::new(|| Arc::new(TableFormatRegistry::new()));
+
+/// Returns the default, shared `TableFormatRegistry`.
+pub fn default_registry() -> Arc<TableFormatRegistry> {
+    DEFAULT_REGISTRY.clone()
+}
 
 #[derive(Default)]
 pub struct TableFormatRegistry {
@@ -17,15 +24,18 @@ pub struct TableFormatRegistry {
 }
 
 impl TableFormatRegistry {
+    /// Creates a new registry with all default formats.
+    ///
+    /// Note: In most cases, `default_registry()` should be used to get a shared
+    /// instance.
     pub fn new() -> Self {
         let mut registry = Self::default();
-
-        registry.register_format(Arc::new(ParquetTableFormat::default()));
-        registry.register_format(Arc::new(CsvTableFormat::default()));
-        registry.register_format(Arc::new(JsonTableFormat::default()));
-        registry.register_format(Arc::new(DeltaTableFormat));
         registry.register_format(Arc::new(ArrowTableFormat::default()));
         registry.register_format(Arc::new(AvroTableFormat::default()));
+        registry.register_format(Arc::new(CsvTableFormat::default()));
+        registry.register_format(Arc::new(DeltaTableFormat));
+        registry.register_format(Arc::new(JsonTableFormat::default()));
+        registry.register_format(Arc::new(ParquetTableFormat::default()));
 
         registry
     }

@@ -21,6 +21,7 @@ percent-encoding = { workspace = true }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-delta-lake = { path = "../sail-delta-lake" }
+once_cell = "1.21.3"
 
 [build-dependencies]
 serde = { workspace = true }

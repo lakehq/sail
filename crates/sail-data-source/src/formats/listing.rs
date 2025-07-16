@@ -3,10 +3,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
+use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
+use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
+use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
+use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
+use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
 use datafusion::datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+
+use crate::options::DataSourceOptionsResolver;
 
 /// A trait for defining the specifics of a listing table format.
 pub trait ListingFormat: Debug + Send + Sync + 'static {
@@ -45,7 +52,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         let urls = crate::url::resolve_listing_urls(info.ctx, info.paths).await?;
 
         let schema = match info.schema {
-            Some(x) if !x.fields().is_empty() => Arc::new(x.into()),
+            Some(x) if !x.fields().is_empty() => Arc::new(x),
             _ => crate::listing::resolve_listing_schema(info.ctx, &urls, &listing_options).await?,
         };
 
@@ -60,5 +67,117 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
 
     fn create_writer(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
         self.format_def.create_format_factory(&info)
+    }
+}
+
+// Arrow
+pub type ArrowTableFormat = ListingTableFormat<ArrowListingFormat>;
+
+#[derive(Debug, Default)]
+pub struct ArrowListingFormat;
+
+impl ListingFormat for ArrowListingFormat {
+    fn name(&self) -> &'static str {
+        "arrow"
+    }
+
+    fn create_format(&self, _info: &SourceInfo<'_>) -> Result<Arc<dyn FileFormat>> {
+        Ok(Arc::new(ArrowFormat))
+    }
+
+    fn create_format_factory(&self, _info: &SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
+        Ok(Arc::new(ArrowFormatFactory::new()))
+    }
+}
+
+// Avro
+pub type AvroTableFormat = ListingTableFormat<AvroListingFormat>;
+
+#[derive(Debug, Default)]
+pub struct AvroListingFormat;
+
+impl ListingFormat for AvroListingFormat {
+    fn name(&self) -> &'static str {
+        "avro"
+    }
+
+    fn create_format(&self, _info: &SourceInfo<'_>) -> Result<Arc<dyn FileFormat>> {
+        Ok(Arc::new(AvroFormat))
+    }
+
+    fn create_format_factory(&self, _info: &SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
+        Ok(Arc::new(AvroFormatFactory::new()))
+    }
+}
+
+// Csv
+pub type CsvTableFormat = ListingTableFormat<CsvListingFormat>;
+
+#[derive(Debug, Default)]
+pub struct CsvListingFormat;
+
+impl ListingFormat for CsvListingFormat {
+    fn name(&self) -> &'static str {
+        "csv"
+    }
+
+    fn create_format(&self, info: &SourceInfo<'_>) -> Result<Arc<dyn FileFormat>> {
+        let resolver = DataSourceOptionsResolver::new(info.ctx);
+        let options = resolver.resolve_csv_read_options(info.options.clone())?;
+        Ok(Arc::new(CsvFormat::default().with_options(options)))
+    }
+
+    fn create_format_factory(&self, info: &SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
+        let resolver = DataSourceOptionsResolver::new(info.ctx);
+        let options = resolver.resolve_csv_write_options(info.options.clone())?;
+        Ok(Arc::new(CsvFormatFactory::new_with_options(options)))
+    }
+}
+
+// Json
+pub type JsonTableFormat = ListingTableFormat<JsonListingFormat>;
+
+#[derive(Debug, Default)]
+pub struct JsonListingFormat;
+
+impl ListingFormat for JsonListingFormat {
+    fn name(&self) -> &'static str {
+        "json"
+    }
+
+    fn create_format(&self, info: &SourceInfo<'_>) -> Result<Arc<dyn FileFormat>> {
+        let resolver = DataSourceOptionsResolver::new(info.ctx);
+        let options = resolver.resolve_json_read_options(info.options.clone())?;
+        Ok(Arc::new(JsonFormat::default().with_options(options)))
+    }
+
+    fn create_format_factory(&self, info: &SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
+        let resolver = DataSourceOptionsResolver::new(info.ctx);
+        let options = resolver.resolve_json_write_options(info.options.clone())?;
+        Ok(Arc::new(JsonFormatFactory::new_with_options(options)))
+    }
+}
+
+// Parquet
+pub type ParquetTableFormat = ListingTableFormat<ParquetListingFormat>;
+
+#[derive(Debug, Default)]
+pub struct ParquetListingFormat;
+
+impl ListingFormat for ParquetListingFormat {
+    fn name(&self) -> &'static str {
+        "parquet"
+    }
+
+    fn create_format(&self, info: &SourceInfo<'_>) -> Result<Arc<dyn FileFormat>> {
+        let resolver = DataSourceOptionsResolver::new(info.ctx);
+        let options = resolver.resolve_parquet_read_options(info.options.clone())?;
+        Ok(Arc::new(ParquetFormat::default().with_options(options)))
+    }
+
+    fn create_format_factory(&self, info: &SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
+        let resolver = DataSourceOptionsResolver::new(info.ctx);
+        let options = resolver.resolve_parquet_write_options(info.options.clone())?;
+        Ok(Arc::new(ParquetFormatFactory::new_with_options(options)))
     }
 }

@@ -340,3 +340,268 @@ impl<'a> DataSourceOptionsResolver<'a> {
         Ok(parquet_options)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::parsers::CompressionTypeVariant;
+
+    use super::*;
+
+    fn build_options(options: &[(&str, &str)]) -> HashMap<String, String> {
+        options
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn test_resolve_json_read_options() -> Result<()> {
+        let ctx = SessionContext::default();
+        let resolver = DataSourceOptionsResolver::new(&ctx);
+
+        let options = build_options(&[
+            ("schema_infer_max_records", "100"),
+            ("compression", "bzip2"),
+        ]);
+        let options = resolver.resolve_json_read_options(options)?;
+        assert_eq!(options.schema_infer_max_rec, Some(100));
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_json_write_options() -> Result<()> {
+        let ctx = SessionContext::default();
+        let resolver = DataSourceOptionsResolver::new(&ctx);
+
+        let options = build_options(&[("compression", "bzip2")]);
+        let options = resolver.resolve_json_write_options(options)?;
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_csv_read_options() -> Result<()> {
+        let ctx = SessionContext::default();
+        let resolver = DataSourceOptionsResolver::new(&ctx);
+
+        let options = build_options(&[
+            ("delimiter", "!"),
+            ("quote", "("),
+            ("escape", "*"),
+            ("comment", "^"),
+            ("header", "true"),
+            ("null_value", "MEOW"),
+            ("line_sep", "@"),
+            ("schema_infer_max_records", "100"),
+            ("multi_line", "true"),
+            ("compression", "bzip2"),
+        ]);
+        let options = resolver.resolve_csv_read_options(options)?;
+        assert_eq!(options.delimiter, b'!');
+        assert_eq!(options.quote, b'(');
+        assert_eq!(options.escape, Some(b'*'));
+        assert_eq!(options.comment, Some(b'^'));
+        assert_eq!(options.has_header, Some(true));
+        assert_eq!(options.null_value, None); // This is for the writer
+        assert_eq!(options.null_regex, Some("MEOW".to_string())); // null_value
+        assert_eq!(options.terminator, Some(b'@')); // line_sep
+        assert_eq!(options.schema_infer_max_rec, Some(100));
+        assert_eq!(options.newlines_in_values, Some(true)); // multi_line
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
+
+        let options = build_options(&[
+            ("delimiter", "!"),
+            ("quote", "("),
+            ("escape", "*"),
+            ("comment", "^"),
+            ("header", "true"),
+            ("null_value", "MEOW"),
+            ("null_regex", "MEOW"),
+            ("line_sep", "@"),
+            ("schema_infer_max_records", "100"),
+            ("multi_line", "true"),
+            ("compression", "bzip2"),
+        ]);
+        // null_value and null_regex cannot both be set
+        let result = resolver.resolve_csv_read_options(options);
+        assert!(result.is_err());
+
+        let options = build_options(&[
+            ("delimiter", "!"),
+            ("quote", "("),
+            ("escape", "*"),
+            ("comment", "^"),
+            ("header", "true"),
+            ("null_regex", "MEOW"),
+            ("line_sep", "@"),
+            ("schema_infer_max_records", "100"),
+            ("multi_line", "true"),
+            ("compression", "bzip2"),
+        ]);
+        let options = resolver.resolve_csv_read_options(options)?;
+        assert_eq!(options.null_value, None); // This is for the writer
+        assert_eq!(options.null_regex, Some("MEOW".to_string())); // null_regex
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_csv_write_options() -> Result<()> {
+        let ctx = SessionContext::default();
+        let resolver = DataSourceOptionsResolver::new(&ctx);
+
+        let options = build_options(&[
+            ("delimiter", "!"),
+            ("quote", "("),
+            ("escape", "*"),
+            ("escape_quotes", "true"),
+            ("header", "true"),
+            ("null_value", "MEOW"),
+            ("compression", "bzip2"),
+        ]);
+        let options = resolver.resolve_csv_write_options(options)?;
+        assert_eq!(options.delimiter, b'!');
+        assert_eq!(options.quote, b'(');
+        assert_eq!(options.escape, Some(b'*'));
+        assert_eq!(options.double_quote, Some(true)); // escape_quotes
+        assert_eq!(options.has_header, Some(true));
+        assert_eq!(options.null_value, Some("MEOW".to_string()));
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_read_options() -> Result<()> {
+        let ctx = SessionContext::default();
+        let resolver = DataSourceOptionsResolver::new(&ctx);
+
+        let options = build_options(&[
+            ("enable_page_index", "true"),
+            ("pruning", "true"),
+            ("skip_metadata", "false"),
+            ("metadata_size_hint", "1024"),
+            ("pushdown_filters", "true"),
+            ("reorder_filters", "false"),
+            ("schema_force_view_types", "true"),
+            ("binary_as_string", "true"),
+            ("coerce_int96", "ms"),
+            ("bloom_filter_on_read", "true"),
+        ]);
+        let options = resolver.resolve_parquet_read_options(options)?;
+        assert!(options.global.enable_page_index);
+        assert!(options.global.pruning);
+        assert!(!options.global.skip_metadata);
+        assert_eq!(options.global.metadata_size_hint, Some(1024));
+        assert!(options.global.pushdown_filters);
+        assert!(!options.global.reorder_filters);
+        assert!(options.global.schema_force_view_types);
+        assert!(options.global.binary_as_string);
+        assert_eq!(options.global.coerce_int96, Some("ms".to_string()));
+        assert!(options.global.bloom_filter_on_read);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_read_options_with_global_default() -> Result<()> {
+        let ctx = SessionContext::default();
+        let resolver = DataSourceOptionsResolver::new(&ctx);
+
+        let state = ctx.state_ref();
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .metadata_size_hint = Some(123);
+        let options = build_options(&[]);
+        let options = resolver.resolve_parquet_read_options(options)?;
+        assert_eq!(options.global.metadata_size_hint, Some(123));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_write_options() -> Result<()> {
+        let ctx = SessionContext::default();
+        let resolver = DataSourceOptionsResolver::new(&ctx);
+
+        let options = build_options(&[
+            ("data_page_size_limit", "1024"),
+            ("write_batch_size", "1000"),
+            ("writer_version", "2.0"),
+            ("skip_arrow_metadata", "true"),
+            ("compression", "snappy"),
+            ("dictionary_enabled", "true"),
+            ("dictionary_page_size_limit", "2048"),
+            ("statistics_enabled", "chunk"),
+            ("max_row_group_size", "5000"),
+            ("column_index_truncate_length", "100"),
+            ("statistics_truncate_length", "200"),
+            ("data_page_row_count_limit", "10000"),
+            ("encoding", "delta_binary_packed"),
+            ("bloom_filter_on_write", "true"),
+            ("bloom_filter_fpp", "0.01"),
+            ("bloom_filter_ndv", "1000"),
+            ("allow_single_file_parallelism", "false"),
+            ("maximum_parallel_row_group_writers", "4"),
+            ("maximum_buffered_record_batches_per_stream", "10"),
+        ]);
+        let options = resolver.resolve_parquet_write_options(options)?;
+        assert_eq!(options.global.data_pagesize_limit, 1024);
+        assert_eq!(options.global.write_batch_size, 1000);
+        assert_eq!(options.global.writer_version, "2.0");
+        assert!(options.global.skip_arrow_metadata);
+        assert_eq!(options.global.compression, Some("snappy".to_string()));
+        assert_eq!(options.global.dictionary_enabled, Some(true));
+        assert_eq!(options.global.dictionary_page_size_limit, 2048);
+        assert_eq!(options.global.statistics_enabled, Some("chunk".to_string()));
+        assert_eq!(options.global.max_row_group_size, 5000);
+        assert_eq!(options.global.column_index_truncate_length, Some(100));
+        assert_eq!(options.global.statistics_truncate_length, Some(200));
+        assert_eq!(options.global.data_page_row_count_limit, 10000);
+        assert_eq!(
+            options.global.encoding,
+            Some("delta_binary_packed".to_string())
+        );
+        assert!(options.global.bloom_filter_on_write);
+        assert_eq!(options.global.bloom_filter_fpp, Some(0.01));
+        assert_eq!(options.global.bloom_filter_ndv, Some(1000));
+        assert!(!options.global.allow_single_file_parallelism);
+        assert_eq!(options.global.maximum_parallel_row_group_writers, 4);
+        assert_eq!(
+            options.global.maximum_buffered_record_batches_per_stream,
+            10
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_write_options_with_global_default() -> Result<()> {
+        let ctx = SessionContext::default();
+        let resolver = DataSourceOptionsResolver::new(&ctx);
+
+        let state = ctx.state_ref();
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .max_row_group_size = 1234;
+        let options = build_options(&[]);
+        let options = resolver.resolve_parquet_read_options(options)?;
+        assert_eq!(options.global.max_row_group_size, 1234);
+
+        Ok(())
+    }
+}

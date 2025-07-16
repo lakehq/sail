@@ -2,17 +2,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::file_format::FileFormatFactory;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::Result;
 use sail_common::spec::SaveMode;
 
 /// Information required to create a data source.
 pub struct SourceInfo<'a> {
     pub ctx: &'a SessionContext,
     pub paths: Vec<String>,
-    pub schema: Option<DFSchema>,
+    pub schema: Option<Schema>,
     pub options: HashMap<String, String>,
 }
 
