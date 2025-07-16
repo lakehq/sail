@@ -18,18 +18,24 @@ impl TableFormat for DeltaTableFormat {
     }
 
     async fn create_provider(&self, info: SourceInfo<'_>) -> Result<Arc<dyn TableProvider>> {
-        if info.paths.len() != 1 {
+        let SourceInfo {
+            ctx,
+            paths,
+            options,
+            ..
+        } = info;
+        if paths.len() != 1 {
             return plan_err!("Must provide a single path for a Delta table");
         }
-        let table_uri = &info.paths[0];
+        let table_uri = &paths[0];
         // TODO: schema is ignored for now
-        create_delta_provider(info.ctx, table_uri, &info.options).await
+        create_delta_provider(ctx, table_uri, &options).await
     }
 
     fn create_writer(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
+        let SinkInfo { mode, options, .. } = info;
         Ok(Arc::new(DeltaFormatFactory::new_with_options(
-            info.mode,
-            info.options,
+            mode, options,
         )))
     }
 }

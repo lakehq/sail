@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use sail_common_datafusion::datasource::TableFormat;
 
 use crate::formats::delta::DeltaTableFormat;
-use crate::formats::{
+use crate::formats::listing::{
     ArrowTableFormat, AvroTableFormat, CsvTableFormat, JsonTableFormat, ParquetTableFormat,
 };
 
@@ -14,12 +14,12 @@ static DEFAULT_REGISTRY: Lazy<Arc<TableFormatRegistry>> =
     Lazy::new(|| Arc::new(TableFormatRegistry::new()));
 
 /// Returns the default, shared `TableFormatRegistry`.
-pub fn default_registry() -> Arc<TableFormatRegistry> {
+pub(crate) fn default_registry() -> Arc<TableFormatRegistry> {
     DEFAULT_REGISTRY.clone()
 }
 
 #[derive(Default)]
-pub struct TableFormatRegistry {
+pub(crate) struct TableFormatRegistry {
     formats: HashMap<String, Arc<dyn TableFormat>>,
 }
 
