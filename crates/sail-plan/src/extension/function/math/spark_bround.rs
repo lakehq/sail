@@ -292,6 +292,7 @@ fn round_half_to_even_f32(value: f32) -> f32 {
         rounded - 1.0
     }
 }
+
 fn spark_bround_f64(x: f64, scale: i32) -> f64 {
     let factor: f64 = 10f64.powi(scale);
     let shifted: f64 = x * factor;
@@ -304,7 +305,6 @@ fn spark_bround_f64(x: f64, scale: i32) -> f64 {
 
     rounded / factor
 }
-
 
 #[cfg(test)]
 mod tests {
