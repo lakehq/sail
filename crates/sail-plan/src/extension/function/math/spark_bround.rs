@@ -312,7 +312,6 @@ mod tests {
 
     #[test]
     fn test_bround_f64_positive_scale() {
-        // FIXME precision
         assert_eq!(spark_bround_f64(1.25, 1), 1.2);
         assert_eq!(spark_bround_f64(1.35, 1), 1.4);
     }
