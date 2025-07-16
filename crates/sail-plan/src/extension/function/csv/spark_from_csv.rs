@@ -37,6 +37,8 @@ pub struct SparkFromCSV {
     signature: Signature,
 }
 
+/// Configuration options for the `from_csv` function.
+/// These include the CSV field separator and timestamp format string.
 #[derive(Debug)]
 struct SparkFromCSVOptions {
     sep: String,
@@ -52,6 +54,7 @@ impl SparkFromCSVOptions {
     // ISO 8601. // This format is the Rust chrono crate format equivalent of the Scala/Java Spark format
     pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%d %H:%M:%S";
 
+    /// Build `SparkFromCSVOptions` from a DataFusion `MapArray` of key-value pairs.
     fn from_map(map: &MapArray) -> Self {
         let sep = find_key_value(map, Self::SEP_OPTION)
             .or(find_key_value(map, Self::DELIMITER_OPTION))
@@ -68,6 +71,8 @@ impl SparkFromCSVOptions {
         }
     }
 
+    /// Converts a Spark/Java-style timestamp format string (e.g., "yyyy-MM-dd")
+    /// into a format compatible with the `chrono` crate (e.g., "%Y-%m-%d").
     fn convert_format(fmt: &str) -> String {
         fmt.replace("yyyy", "%Y")
             .replace("MM", "%m")
@@ -79,7 +84,7 @@ impl SparkFromCSVOptions {
 }
 
 impl Default for SparkFromCSVOptions {
-    /// Default options for `from_csv` function
+    /// Returns the default parsing options (comma separator, ISO timestamp format).
     fn default() -> Self {
         Self {
             sep: Self::SEP_DEFAULT.to_string(),
@@ -170,7 +175,27 @@ impl ScalarUDFImpl for SparkFromCSV {
     }
 }
 
-/// Core implementation of `from_csv` function logic
+/// Core implementation of the `from_csv` function logic.
+///
+/// This function processes an array of CSV lines, using a specified schema string,
+/// and converts them into a `StructArray` of scalar values. It supports custom parsing options
+/// including custom field delimiters and timestamp formats. It expects at least two arguments:
+/// an array of CSV strings and a schema string. Optionally, a map of parsing options can be provided.
+///
+/// # Parameters
+/// - `args`: An array of input arrays, where:
+///   - `args[0]` is a `StringArray` containing the CSV data lines.
+///   - `args[1]` is a `StringArray` containing the schema definition.
+///   - `args[2]` (optional) is a `MapArray` of options like delimiters, timestamp formats, etc.
+///
+/// # Returns
+/// A `Result` containing a `StructArray` which stores parsed CSV values per specified schema.
+///
+/// # Errors
+/// This function returns an error if:
+/// - The number of arguments is incorrect (not 2 or 3).
+/// - Schema parsing fails due to errors in the schema string.
+/// - CSV line parsing fails, such as when field count mismatches or data type conversion errors occur.
 fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!(
@@ -224,7 +249,24 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     )))
 }
 
-/// Parses a CSV line into a vector of `ScalarValue`s, according to the given field types
+/// Parses a single CSV line into a collection of `ScalarValue`s based on field types.
+///
+/// This function takes a CSV line and splits it according to the specified separator,
+/// then converts each value into a `ScalarValue` guided by the provided field data types.
+/// It can handle different types of CSV fields, including timestamps with specific formatting.
+///
+/// # Parameters
+/// - `line`: The string representation of a single CSV line to be parsed.
+/// - `options`: `SparkFromCSVOptions` detailing parsing settings such as separator and timestamp format.
+/// - `fields`: The `Fields` that define the structural and type constraints for each parsed column.
+///
+/// # Returns
+/// A `Result` containing a `Vec<ScalarValue>` after successful parsing of the CSV line.
+///
+/// # Errors
+/// Returns an error if:
+/// - The number of values in the line does not match the number of fields indicated by the schema.
+/// - The string values cannot be converted into the types specified by the schema due to format issues.
 fn parse_csv_line_to_scalar_values(
     line: &str,
     options: &SparkFromCSVOptions,
@@ -259,6 +301,28 @@ fn parse_csv_line_to_scalar_values(
         .collect()
 }
 
+/// Parses a timestamp from a string value using a specified format.
+///
+/// This function attempts to parse the input string `value` into a timestamp,
+/// using the format specified in `options`. If the input contains both date
+/// and time, `NaiveDateTime::parse_from_str` is used. If the input contains
+/// only a date, `NaiveDate::parse_from_str` is used instead.
+///
+/// # Parameters
+/// - `data_type`: The data type of the timestamp, used to ensure proper conversion.
+///
+/// - `value`: The string representation of the date or datetime to be parsed.
+///
+/// - `options`: An instance of `SparkFromCSVOptions` that contains the format
+///   to use when parsing the timestamp.
+///
+/// # Returns
+/// A `ScalarValue` representing the parsed timestamp, or an error message if
+/// parsing fails due to incompatible formats or input.
+///
+/// # Errors
+/// Returns an error if the input `value` doesn't match the expected `format`,
+/// or if parsing the date/time fails.
 fn parse_timestamp(
     data_type: &DataType,
     value: &str,
@@ -278,7 +342,25 @@ fn parse_timestamp(
     }
 }
 
-/// Parses a schema string like "name STRING, age INT" into Arrow `Fields`
+/// Parses a schema string into Arrow `Fields`.
+///
+/// This function takes a schema definition as a string and converts it into a
+/// `Fields` structure, which represents a collection of `Field` items. Each `Field`
+/// has a name and a `DataType`, providing a detailed schema that can be used in datasets.
+///
+/// # Parameters
+/// - `schema`: A string representing the schema, which uses a format like
+///   "name STRING, age INT". This string defines the names and types of fields
+///   in a database or data structure.
+///
+/// # Returns
+/// A `Result` containing `Fields`, which are essentially a list of `Field`
+/// items. Each `Field` describes a single attribute, including its name
+/// and data type.
+///
+/// # Errors
+/// Returns an error if the schema string is invalid, such as if it contains
+/// duplicate field names or uses an unsupported field type syntax.
 fn parse_fields(schema: &str) -> Result<Fields> {
     let schema: Result<Fields> = parse_schema_string(schema);
     schema.map(|fields| {
@@ -287,7 +369,27 @@ fn parse_fields(schema: &str) -> Result<Fields> {
     })
 }
 
-/// Parses a schema definition string into a `Fields` list with correct handling of types with nested delimiters.
+/// Parses a schema definition string into Arrow `Fields` with support for complex types.
+///
+/// This function interprets a schema string and converts it into `Fields`,
+/// handling both standard field types and complex structures like `STRUCT<...>`.
+/// It uses regular expressions to identify field names and types, and it processes
+/// optional colons that may appear in type definitions.
+///
+/// # Parameters
+/// - `schema_str`: A string representing the schema definition, which may include
+///   structures as `STRUCT<field1 TYPE, field2 TYPE>` or simple field declarations
+///   like `name STRING, age INT`.
+///
+/// # Returns
+/// A `Result` containing the parsed `Fields`. The `Fields` are a collection
+/// of `Field` items, each detailing a single attribute with a name and a data type.
+///
+/// # Errors
+/// The function returns an error if:
+/// - The regex for field parsing fails to compile.
+/// - The schema contains duplicate field names.
+/// - An unsupported type or incorrectly formatted string is encountered.
 fn parse_schema_string(schema_str: &str) -> Result<Fields> {
     let trimmed_schema: &str = schema_str.trim();
 
@@ -337,7 +439,25 @@ fn parse_schema_string(schema_str: &str) -> Result<Fields> {
     }
 }
 
-/// Parses a single type string (e.g. "INT", "STRUCT<id INT>") into an Arrow DataType using `sqlparser`
+/// Parses a raw SQL type string into an Arrow `DataType`.
+///
+/// This function utilizes the DataFusion SQL parser to interpret a string
+/// representing a SQL data type. It translates the input into an Arrow `DataType`
+/// which can be used to define the schema of data within Arrow-based processing.
+///
+/// # Parameters
+/// - `raw`: A string representing the SQL type, such as "INT", "VARCHAR(255)",
+///   or "STRUCT<field: INT, other_field: STRING>".
+///
+/// # Returns
+/// A `Result` containing the Arrow `DataType` that corresponds to the SQL type
+/// specified in the input string.
+///
+/// # Errors
+/// This function returns an error if:
+/// - Tokenizing the string fails, indicating a syntax issue in the provided SQL.
+/// - Parsing fails, suggesting that the SQL type is not recognized or improperly formatted.
+/// - Conversion to an Arrow `DataType` fails because the SQL type is unsupported.
 pub fn parse_data_type(raw: &str) -> Result<DataType> {
     let dialect: GenericDialect = GenericDialect {};
     let mut tokenizer: Tokenizer = Tokenizer::new(&dialect, raw);
@@ -356,7 +476,26 @@ pub fn parse_data_type(raw: &str) -> Result<DataType> {
     convert_sql_type(&sql_type)
 }
 
-/// Converts a parsed `sqlparser::ast::DataType` into an Arrow `DataType`
+/// Converts a `sqlparser::ast::DataType` into an Arrow `DataType`.
+///
+/// This function processes various SQL data types as defined in the
+/// `sqlparser` library and translates them into corresponding Arrow `DataType`
+/// variants for further processing within Arrow-based applications.
+///
+/// # Parameters
+/// - `sql_type`: The `SQLType` from `sqlparser`, which represents a parsed
+///   SQL data type such as `INT`, `VARCHAR`, `STRUCT`, etc.
+///
+/// # Returns
+/// A `Result` containing the corresponding Arrow `DataType`. Arrow `DataType`
+/// variants include structures that can represent integers, floats, strings,
+/// timestamps, arrays, and more sophisticated types like `Struct` and `Array`.
+///
+/// # Errors
+/// Returns an error if:
+/// - The SQL type contains unsupported or unknown types.
+/// - A required detail for a type, such as the inner type for an array, is missing.
+/// - There's a syntax issue or missing information in the definition of complex types.
 fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
     match sql_type {
         SQLType::Int(_) | SQLType::Integer(_) | SQLType::Int4(_) => Ok(DataType::Int32),
@@ -449,7 +588,11 @@ fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
     }
 }
 
-/// Helper function to get the index of a key in a `StructArray` that matches specific options.
+/// Finds the index of a specified key in a `MapArray`.
+///
+/// This helper function locates the index of a given key within a `MapArray`,
+/// where the keys are stored in a "key" column. It is useful for quickly identifying
+/// the position of an option or setting within structured options data.
 fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
     options
         .entries()
@@ -463,7 +606,11 @@ fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
-/// Extracts a given key's value from a struct options array
+/// Retrieves the value associated with a specified key from a `MapArray`.
+///
+/// This function extracts the string value assigned to a given key within a `MapArray`,
+/// leveraging the index found by `find_key_index`. It searches for the key in the "key"
+/// column and returns the corresponding value from the "value" column if found.
 fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
     if let Some(index) = find_key_index(options, search_key) {
         options
