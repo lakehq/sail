@@ -1,30 +1,31 @@
+>>> from pyspark.sql import functions as sf
 >>> df = spark.range(1)
->>> df.select(csc(lit(math.radians(90)))).show()
+>>> df.select(sf.csc(lit(math.radians(90)))).show()
 +-----------------------+
 |CSC(1.5707963267948966)|
 +-----------------------+
 |                    1.0|
 +-----------------------+
->>> df.select(csc(lit(90))).show()
+>>> df.select(sf.csc(lit(90))).show()
 +------------------+
 |           CSC(90)|
 +------------------+
 |1.1185724071637084|
 +------------------+
->>> df.select(csc(lit(90.0))).show()
+>>> df.select(sf.csc(lit(90.0))).show()
 +------------------+
 |         CSC(90.0)|
 +------------------+
 |1.1185724071637084|
 +------------------+
->>> df.select(csc(lit(-90.0))).show()
+>>> df.select(sf.csc(lit(-90.0))).show()
 +-------------------+
 |         CSC(-90.0)|
 +-------------------+
 |-1.1185724071637084|
 +-------------------+
 
->>> df.select(csc(lit(0))).show()
+>>> df.select(sf.csc(lit(0))).show()
 +------+
 |CSC(0)|
 +------+
