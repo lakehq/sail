@@ -6,7 +6,7 @@ use datafusion_common::{internal_datafusion_err, plan_err, Result};
 use datafusion_expr::LogicalPlan;
 use lazy_static::lazy_static;
 
-use crate::catalog::utils::match_pattern;
+use crate::manager::utils::match_pattern;
 
 lazy_static! {
     pub(crate) static ref GLOBAL_TEMPORARY_VIEW_MANAGER: TemporaryViewManager =
@@ -31,12 +31,7 @@ impl TemporaryViewManager {
         }
     }
 
-    pub(crate) fn add_view(
-        &self,
-        name: String,
-        plan: Arc<LogicalPlan>,
-        replace: bool,
-    ) -> Result<()> {
+    pub fn add_view(&self, name: String, plan: Arc<LogicalPlan>, replace: bool) -> Result<()> {
         let mut views = self
             .views
             .write()
@@ -48,7 +43,7 @@ impl TemporaryViewManager {
         Ok(())
     }
 
-    pub(crate) fn remove_view(&self, name: &str, if_exists: bool) -> Result<()> {
+    pub fn remove_view(&self, name: &str, if_exists: bool) -> Result<()> {
         let mut views = self
             .views
             .write()
@@ -60,7 +55,7 @@ impl TemporaryViewManager {
         Ok(())
     }
 
-    pub(crate) fn get_view(&self, name: &str) -> Result<Option<Arc<LogicalPlan>>> {
+    pub fn get_view(&self, name: &str) -> Result<Option<Arc<LogicalPlan>>> {
         let views = self
             .views
             .read()
@@ -68,10 +63,7 @@ impl TemporaryViewManager {
         Ok(views.get(name).map(Arc::clone))
     }
 
-    pub(crate) fn list_views(
-        &self,
-        pattern: Option<&str>,
-    ) -> Result<Vec<(String, Arc<LogicalPlan>)>> {
+    pub fn list_views(&self, pattern: Option<&str>) -> Result<Vec<(String, Arc<LogicalPlan>)>> {
         let views = self
             .views
             .read()
@@ -84,7 +76,7 @@ impl TemporaryViewManager {
     }
 }
 
-pub(crate) fn manage_temporary_views<T>(
+pub fn manage_temporary_views<T>(
     ctx: &SessionContext,
     is_global: bool,
     f: impl FnOnce(&TemporaryViewManager) -> Result<T>,

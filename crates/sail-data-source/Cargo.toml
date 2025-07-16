@@ -7,9 +7,17 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
-sail-common = { path = "../sail-common" }
-
+async-trait = { workspace = true }
 serde = { workspace = true }
+futures = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+object_store = { workspace = true }
+chumsky = { workspace = true }
+glob = { workspace = true }
+url = { workspace = true }
+regex = { workspace = true }
+percent-encoding = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

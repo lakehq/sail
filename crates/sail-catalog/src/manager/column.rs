@@ -1,18 +1,17 @@
-use datafusion_common::{exec_datafusion_err, exec_err, Result, TableReference};
+use datafusion_common::{exec_err, Result, TableReference};
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::table::TableObject;
-use crate::catalog::CatalogManager;
-use crate::error::PlanResult;
+use crate::manager::table::TableObject;
+use crate::manager::CatalogManager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct TableColumnMetadata {
-    pub(crate) name: String,
-    pub(crate) description: Option<String>,
-    pub(crate) data_type: String,
-    pub(crate) nullable: bool,
-    pub(crate) is_partition: bool,
-    pub(crate) is_bucket: bool,
+pub struct TableColumnMetadata {
+    pub name: String,
+    pub description: Option<String>,
+    pub data_type: String,
+    pub nullable: bool,
+    pub is_partition: bool,
+    pub is_bucket: bool,
 }
 
 impl TableColumnMetadata {
@@ -29,7 +28,7 @@ impl TableColumnMetadata {
 }
 
 impl CatalogManager<'_> {
-    pub(crate) async fn list_table_columns(
+    pub async fn list_table_columns(
         &self,
         table: TableReference,
     ) -> Result<Vec<TableColumnMetadata>> {
@@ -42,18 +41,14 @@ impl CatalogManager<'_> {
         schema
             .fields()
             .iter()
-            .map(|column| -> PlanResult<_> {
-                let data_type = self
-                    .config
-                    .plan_formatter
-                    .data_type_to_simple_string(column.data_type())?;
+            .map(|column| {
+                let data_type = self.config.data_type_to_simple_string(column.data_type())?;
                 Ok(TableColumnMetadata::new(
                     column.name().clone(),
                     data_type,
                     column.is_nullable(),
                 ))
             })
-            .collect::<PlanResult<Vec<_>>>()
-            .map_err(|e| exec_datafusion_err!("{e}"))
+            .collect()
     }
 }

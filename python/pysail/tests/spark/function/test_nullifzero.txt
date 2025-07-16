@@ -1,0 +1,97 @@
+>>> spark.sql("SELECT nullifzero(0), typeof(nullifzero(0))").show()
++-------------+---------------------+
+|nullifzero(0)|typeof(nullifzero(0))|
++-------------+---------------------+
+|         NULL|                  int|
++-------------+---------------------+
+
+>>> spark.sql("SELECT nullifzero(2), typeof(nullifzero(2))").show()
++-------------+---------------------+
+|nullifzero(2)|typeof(nullifzero(2))|
++-------------+---------------------+
+|            2|                  int|
++-------------+---------------------+
+
+>>> spark.sql("SELECT nullifzero(CAST(0 AS TINYINT)), typeof(nullifzero(CAST(0 AS TINYINT)))").show()
++------------------------------+--------------------------------------+
+|nullifzero(CAST(0 AS TINYINT))|typeof(nullifzero(CAST(0 AS TINYINT)))|
++------------------------------+--------------------------------------+
+|                          NULL|                               tinyint|
++------------------------------+--------------------------------------+
+
+>>> spark.sql("SELECT nullifzero(CAST(2 AS TINYINT)), typeof(nullifzero(CAST(2 AS TINYINT)))").show()
++------------------------------+--------------------------------------+
+|nullifzero(CAST(2 AS TINYINT))|typeof(nullifzero(CAST(2 AS TINYINT)))|
++------------------------------+--------------------------------------+
+|                             2|                               tinyint|
++------------------------------+--------------------------------------+
+
+>>> spark.sql("SELECT nullifzero(CAST(0 AS SMALLINT)), typeof(nullifzero(CAST(0 AS SMALLINT)))").show()
++-------------------------------+---------------------------------------+
+|nullifzero(CAST(0 AS SMALLINT))|typeof(nullifzero(CAST(0 AS SMALLINT)))|
++-------------------------------+---------------------------------------+
+|                           NULL|                               smallint|
++-------------------------------+---------------------------------------+
+
+>>> spark.sql("SELECT nullifzero(CAST(0 AS BIGINT)), typeof(nullifzero(CAST(0 AS BIGINT)))").show()
++-----------------------------+-------------------------------------+
+|nullifzero(CAST(0 AS BIGINT))|typeof(nullifzero(CAST(0 AS BIGINT)))|
++-----------------------------+-------------------------------------+
+|                         NULL|                               bigint|
++-----------------------------+-------------------------------------+
+
+>>> spark.sql("SELECT nullifzero(CAST(0.0 AS FLOAT)), typeof(nullifzero(CAST(0.0 AS FLOAT)))").show()
++------------------------------+--------------------------------------+
+|nullifzero(CAST(0.0 AS FLOAT))|typeof(nullifzero(CAST(0.0 AS FLOAT)))|
++------------------------------+--------------------------------------+
+|                          NULL|                                 float|
++------------------------------+--------------------------------------+
+
+>>> spark.sql("SELECT nullifzero(CAST(1.5 AS FLOAT)), typeof(nullifzero(CAST(1.5 AS FLOAT)))").show()
++------------------------------+--------------------------------------+
+|nullifzero(CAST(1.5 AS FLOAT))|typeof(nullifzero(CAST(1.5 AS FLOAT)))|
++------------------------------+--------------------------------------+
+|                           1.5|                                 float|
++------------------------------+--------------------------------------+
+
+>>> spark.sql("SELECT nullifzero(CAST(0.0 AS DOUBLE)), typeof(nullifzero(CAST(0.0 AS DOUBLE)))").show()
++-------------------------------+---------------------------------------+
+|nullifzero(CAST(0.0 AS DOUBLE))|typeof(nullifzero(CAST(0.0 AS DOUBLE)))|
++-------------------------------+---------------------------------------+
+|                           NULL|                                 double|
++-------------------------------+---------------------------------------+
+
+>>> spark.sql("SELECT nullifzero(CAST(2.5 AS DOUBLE)), typeof(nullifzero(CAST(2.5 AS DOUBLE)))").show()
++-------------------------------+---------------------------------------+
+|nullifzero(CAST(2.5 AS DOUBLE))|typeof(nullifzero(CAST(2.5 AS DOUBLE)))|
++-------------------------------+---------------------------------------+
+|                            2.5|                                 double|
++-------------------------------+---------------------------------------+
+
+>>> spark.sql("SELECT nullifzero(CAST(0.00 AS DECIMAL(10,2))), typeof(nullifzero(CAST(0.00 AS DECIMAL(10,2))))").show()
++---------------------------------------+-----------------------------------------------+
+|nullifzero(CAST(0.00 AS DECIMAL(10,2)))|typeof(nullifzero(CAST(0.00 AS DECIMAL(10,2))))|
++---------------------------------------+-----------------------------------------------+
+|                                   NULL|                                  decimal(10,2)|
++---------------------------------------+-----------------------------------------------+
+
+>>> spark.sql("SELECT nullifzero(CAST(5.25 AS DECIMAL(10,2))), typeof(nullifzero(CAST(5.25 AS DECIMAL(10,2))))").show()
++---------------------------------------+-----------------------------------------------+
+|nullifzero(CAST(5.25 AS DECIMAL(10,2)))|typeof(nullifzero(CAST(5.25 AS DECIMAL(10,2))))|
++---------------------------------------+-----------------------------------------------+
+|                                   5.25|                                  decimal(10,2)|
++---------------------------------------+-----------------------------------------------+
+
+>>> spark.sql("SELECT nullifzero(-1), typeof(nullifzero(-1))").show()
++-----------------+-------------------------+
+|nullifzero((- 1))|typeof(nullifzero((- 1)))|
++-----------------+-------------------------+
+|               -1|                      int|
++-----------------+-------------------------+
+
+>>> spark.sql("SELECT nullifzero(NULL), typeof(nullifzero(NULL))").show()
++----------------+------------------------+
+|nullifzero(NULL)|typeof(nullifzero(NULL))|
++----------------+------------------------+
+|            NULL|                     int|
++----------------+------------------------+

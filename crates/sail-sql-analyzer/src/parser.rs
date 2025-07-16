@@ -95,7 +95,7 @@ pub fn parse_date(s: &str) -> SqlResult<DateValue> {
     parse_simple!(s, create_date_parser)
 }
 
-pub fn parse_timestamp(s: &str) -> SqlResult<TimestampValue> {
+pub fn parse_timestamp(s: &str) -> SqlResult<TimestampValue<'_>> {
     parse_simple!(s, create_timestamp_parser)
 }
 

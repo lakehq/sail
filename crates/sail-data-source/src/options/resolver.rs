@@ -2,26 +2,24 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::prelude::SessionContext;
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
-use sail_data_source::options::{
+use datafusion_common::{plan_err, Result};
+
+use crate::options::{
     load_default_options, load_options, CsvReadOptions, CsvWriteOptions, JsonReadOptions,
     JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
 };
 
-use crate::error::{PlanError, PlanResult};
-use crate::resolver::PlanResolver;
-
-fn char_to_u8(c: char, option: &str) -> PlanResult<u8> {
+fn char_to_u8(c: char, option: &str) -> Result<u8> {
     if c.is_ascii() {
         Ok(c as u8)
     } else {
-        Err(PlanError::invalid(format!(
-            "invalid {option} character '{c}': must be an ASCII character"
-        )))
+        plan_err!("invalid {option} character '{c}': must be an ASCII character")
     }
 }
 
-fn apply_json_read_options(from: JsonReadOptions, to: &mut JsonOptions) -> PlanResult<()> {
+fn apply_json_read_options(from: JsonReadOptions, to: &mut JsonOptions) -> Result<()> {
     let JsonReadOptions {
         schema_infer_max_records,
         compression,
@@ -35,7 +33,7 @@ fn apply_json_read_options(from: JsonReadOptions, to: &mut JsonOptions) -> PlanR
     Ok(())
 }
 
-fn apply_json_write_options(from: JsonWriteOptions, to: &mut JsonOptions) -> PlanResult<()> {
+fn apply_json_write_options(from: JsonWriteOptions, to: &mut JsonOptions) -> Result<()> {
     let JsonWriteOptions { compression } = from;
     if let Some(compression) = compression {
         to.compression = FileCompressionType::from_str(&compression)?.into();
@@ -43,7 +41,7 @@ fn apply_json_write_options(from: JsonWriteOptions, to: &mut JsonOptions) -> Pla
     Ok(())
 }
 
-fn apply_csv_read_options(from: CsvReadOptions, to: &mut CsvOptions) -> PlanResult<()> {
+fn apply_csv_read_options(from: CsvReadOptions, to: &mut CsvOptions) -> Result<()> {
     let CsvReadOptions {
         delimiter,
         quote,
@@ -61,9 +59,7 @@ fn apply_csv_read_options(from: CsvReadOptions, to: &mut CsvOptions) -> PlanResu
         (Some(null_value), Some(null_regex))
             if !null_value.is_empty() && !null_regex.is_empty() =>
         {
-            return Err(PlanError::invalid(
-                "CSV `null_value` and `null_regex` cannot be both set",
-            ));
+            return plan_err!("CSV `null_value` and `null_regex` cannot be both set");
         }
         (Some(null_value), _) if !null_value.is_empty() => {
             // Convert null value to regex by escaping special characters
@@ -108,7 +104,7 @@ fn apply_csv_read_options(from: CsvReadOptions, to: &mut CsvOptions) -> PlanResu
     Ok(())
 }
 
-fn apply_csv_write_options(from: CsvWriteOptions, to: &mut CsvOptions) -> PlanResult<()> {
+fn apply_csv_write_options(from: CsvWriteOptions, to: &mut CsvOptions) -> Result<()> {
     let CsvWriteOptions {
         delimiter,
         quote,
@@ -147,7 +143,7 @@ fn apply_csv_write_options(from: CsvWriteOptions, to: &mut CsvOptions) -> PlanRe
 fn apply_parquet_read_options(
     from: ParquetReadOptions,
     to: &mut TableParquetOptions,
-) -> PlanResult<()> {
+) -> Result<()> {
     let ParquetReadOptions {
         enable_page_index,
         pruning,
@@ -196,7 +192,7 @@ fn apply_parquet_read_options(
 fn apply_parquet_write_options(
     from: ParquetWriteOptions,
     to: &mut TableParquetOptions,
-) -> PlanResult<()> {
+) -> Result<()> {
     let ParquetWriteOptions {
         data_page_size_limit,
         write_batch_size,
@@ -278,213 +274,81 @@ fn apply_parquet_write_options(
     Ok(())
 }
 
-impl PlanResolver<'_> {
-    pub(crate) fn resolve_json_read_options(
+pub struct DataSourceOptionsResolver<'a> {
+    ctx: &'a SessionContext,
+}
+
+impl<'a> DataSourceOptionsResolver<'a> {
+    pub fn new(ctx: &'a SessionContext) -> Self {
+        Self { ctx }
+    }
+
+    pub fn resolve_json_read_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<JsonOptions> {
+    ) -> Result<JsonOptions> {
         let mut json_options = self.ctx.copied_table_options().json;
         apply_json_read_options(load_default_options()?, &mut json_options)?;
         apply_json_read_options(load_options(options)?, &mut json_options)?;
         Ok(json_options)
     }
 
-    pub(crate) fn resolve_json_write_options(
+    pub fn resolve_json_write_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<(JsonOptions, Vec<(String, String)>)> {
+    ) -> Result<JsonOptions> {
         let mut json_options = self.ctx.copied_table_options().json;
         apply_json_write_options(load_default_options()?, &mut json_options)?;
         apply_json_write_options(load_options(options)?, &mut json_options)?;
-        let json_options_vec: Vec<(String, String)> = vec![(
-            "format.compression".to_string(),
-            json_options.compression.to_string(),
-        )];
-        Ok((json_options, json_options_vec))
+        Ok(json_options)
     }
 
-    pub(crate) fn resolve_csv_read_options(
-        &self,
-        options: HashMap<String, String>,
-    ) -> PlanResult<CsvOptions> {
+    pub fn resolve_csv_read_options(&self, options: HashMap<String, String>) -> Result<CsvOptions> {
         let mut csv_options = self.ctx.copied_table_options().csv;
         apply_csv_read_options(load_default_options()?, &mut csv_options)?;
         apply_csv_read_options(load_options(options)?, &mut csv_options)?;
         Ok(csv_options)
     }
 
-    pub(crate) fn resolve_csv_write_options(
+    pub fn resolve_csv_write_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<(CsvOptions, Vec<(String, String)>)> {
+    ) -> Result<CsvOptions> {
         let mut csv_options = self.ctx.copied_table_options().csv;
         apply_csv_write_options(load_default_options()?, &mut csv_options)?;
         apply_csv_write_options(load_options(options)?, &mut csv_options)?;
-
-        let mut csv_options_vec: Vec<(String, String)> = vec![];
-        csv_options_vec.push((
-            "format.delimiter".to_string(),
-            (csv_options.delimiter as char).to_string(),
-        ));
-        csv_options_vec.push((
-            "format.quote".to_string(),
-            (csv_options.quote as char).to_string(),
-        ));
-        if let Some(escape) = &csv_options.escape {
-            csv_options_vec.push(("format.escape".to_string(), (*escape as char).to_string()));
-        }
-        if let Some(double_quote) = &csv_options.double_quote {
-            csv_options_vec.push(("format.double_quote".to_string(), double_quote.to_string()));
-        }
-        if let Some(has_header) = &csv_options.has_header {
-            csv_options_vec.push(("format.has_header".to_string(), has_header.to_string()));
-        }
-        if let Some(null_value) = &csv_options.null_value {
-            csv_options_vec.push(("format.null_value".to_string(), null_value.to_string()));
-        }
-        csv_options_vec.push((
-            "format.compression".to_string(),
-            csv_options.compression.to_string(),
-        ));
-
-        Ok((csv_options, csv_options_vec))
+        Ok(csv_options)
     }
 
-    pub(crate) fn resolve_parquet_read_options(
+    pub fn resolve_parquet_read_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<TableParquetOptions> {
+    ) -> Result<TableParquetOptions> {
         let mut parquet_options = self.ctx.copied_table_options().parquet;
         apply_parquet_read_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_read_options(load_options(options)?, &mut parquet_options)?;
         Ok(parquet_options)
     }
 
-    pub(crate) fn resolve_parquet_write_options(
+    pub fn resolve_parquet_write_options(
         &self,
         options: HashMap<String, String>,
-    ) -> PlanResult<(TableParquetOptions, Vec<(String, String)>)> {
+    ) -> Result<TableParquetOptions> {
         let mut parquet_options = self.ctx.copied_table_options().parquet;
         apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_write_options(load_options(options)?, &mut parquet_options)?;
-
-        let mut parquet_options_map: HashMap<String, String> = HashMap::new();
-        parquet_options_map.insert(
-            "format.data_pagesize_limit".to_owned(),
-            parquet_options.global.data_pagesize_limit.to_string(),
-        );
-        parquet_options_map.insert(
-            "format.write_batch_size".to_owned(),
-            parquet_options.global.write_batch_size.to_string(),
-        );
-        parquet_options_map.insert(
-            "format.writer_version".to_owned(),
-            parquet_options.global.writer_version.to_string(),
-        );
-        parquet_options_map.insert(
-            "format.skip_arrow_metadata".to_owned(),
-            parquet_options.global.skip_arrow_metadata.to_string(),
-        );
-        if let Some(compression) = &parquet_options.global.compression {
-            parquet_options_map.insert("format.compression".to_owned(), compression.to_string());
-        }
-        if let Some(dictionary_enabled) = &parquet_options.global.dictionary_enabled {
-            parquet_options_map.insert(
-                "format.dictionary_enabled".to_owned(),
-                dictionary_enabled.to_string(),
-            );
-        }
-        parquet_options_map.insert(
-            "format.dictionary_page_size_limit".to_owned(),
-            parquet_options
-                .global
-                .dictionary_page_size_limit
-                .to_string(),
-        );
-        if let Some(statistics_enabled) = &parquet_options.global.statistics_enabled {
-            parquet_options_map.insert(
-                "format.statistics_enabled".to_owned(),
-                statistics_enabled.to_string(),
-            );
-        }
-        parquet_options_map.insert(
-            "format.max_row_group_size".to_owned(),
-            parquet_options.global.max_row_group_size.to_string(),
-        );
-        if let Some(column_index_truncate_length) =
-            &parquet_options.global.column_index_truncate_length
-        {
-            parquet_options_map.insert(
-                "format.column_index_truncate_length".to_owned(),
-                column_index_truncate_length.to_string(),
-            );
-        }
-        if let Some(statistics_truncate_length) = &parquet_options.global.statistics_truncate_length
-        {
-            parquet_options_map.insert(
-                "format.statistics_truncate_length".to_owned(),
-                statistics_truncate_length.to_string(),
-            );
-        }
-        parquet_options_map.insert(
-            "format.data_page_row_count_limit".to_owned(),
-            parquet_options.global.data_page_row_count_limit.to_string(),
-        );
-        if let Some(encoding) = &parquet_options.global.encoding {
-            parquet_options_map.insert("format.encoding".to_owned(), encoding.to_string());
-        }
-        parquet_options_map.insert(
-            "format.bloom_filter_on_write".to_owned(),
-            parquet_options.global.bloom_filter_on_write.to_string(),
-        );
-        if let Some(bloom_filter_fpp) = &parquet_options.global.bloom_filter_fpp {
-            parquet_options_map.insert(
-                "format.bloom_filter_fpp".to_owned(),
-                bloom_filter_fpp.to_string(),
-            );
-        }
-        if let Some(bloom_filter_ndv) = &parquet_options.global.bloom_filter_ndv {
-            parquet_options_map.insert(
-                "format.bloom_filter_ndv".to_owned(),
-                bloom_filter_ndv.to_string(),
-            );
-        }
-        parquet_options_map.insert(
-            "format.allow_single_file_parallelism".to_owned(),
-            parquet_options
-                .global
-                .allow_single_file_parallelism
-                .to_string(),
-        );
-        parquet_options_map.insert(
-            "format.maximum_parallel_row_group_writers".to_owned(),
-            parquet_options
-                .global
-                .maximum_parallel_row_group_writers
-                .to_string(),
-        );
-        parquet_options_map.insert(
-            "format.maximum_buffered_record_batches_per_stream".to_owned(),
-            parquet_options
-                .global
-                .maximum_buffered_record_batches_per_stream
-                .to_string(),
-        );
-
-        Ok((parquet_options, parquet_options_map.into_iter().collect()))
+        Ok(parquet_options)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
 
     use super::*;
-    use crate::config::PlanConfig;
 
     fn build_options(options: &[(&str, &str)]) -> HashMap<String, String> {
         options
@@ -494,9 +358,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_json_read_options() -> PlanResult<()> {
+    fn test_resolve_json_read_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[
             ("schema_infer_max_records", "100"),
@@ -510,21 +374,21 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_json_write_options() -> PlanResult<()> {
+    fn test_resolve_json_write_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[("compression", "bzip2")]);
-        let (options, _json_options_vec) = resolver.resolve_json_write_options(options)?;
+        let options = resolver.resolve_json_write_options(options)?;
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         Ok(())
     }
 
     #[test]
-    fn test_resolve_csv_read_options() -> PlanResult<()> {
+    fn test_resolve_csv_read_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[
             ("delimiter", "!"),
@@ -588,9 +452,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_csv_write_options() -> PlanResult<()> {
+    fn test_resolve_csv_write_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[
             ("delimiter", "!"),
@@ -601,7 +465,7 @@ mod tests {
             ("null_value", "MEOW"),
             ("compression", "bzip2"),
         ]);
-        let (options, _csv_options_vec) = resolver.resolve_csv_write_options(options)?;
+        let options = resolver.resolve_csv_write_options(options)?;
         assert_eq!(options.delimiter, b'!');
         assert_eq!(options.quote, b'(');
         assert_eq!(options.escape, Some(b'*'));
@@ -614,9 +478,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parquet_read_options() -> PlanResult<()> {
+    fn test_resolve_parquet_read_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[
             ("enable_page_index", "true"),
@@ -646,9 +510,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parquet_read_options_with_global_default() -> PlanResult<()> {
+    fn test_resolve_parquet_read_options_with_global_default() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let state = ctx.state_ref();
         state
@@ -666,9 +530,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parquet_write_options() -> PlanResult<()> {
+    fn test_resolve_parquet_write_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let options = build_options(&[
             ("data_page_size_limit", "1024"),
@@ -691,7 +555,7 @@ mod tests {
             ("maximum_parallel_row_group_writers", "4"),
             ("maximum_buffered_record_batches_per_stream", "10"),
         ]);
-        let (options, _parquet_options_vec) = resolver.resolve_parquet_write_options(options)?;
+        let options = resolver.resolve_parquet_write_options(options)?;
         assert_eq!(options.global.data_pagesize_limit, 1024);
         assert_eq!(options.global.write_batch_size, 1000);
         assert_eq!(options.global.writer_version, "2.0");
@@ -722,9 +586,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_parquet_write_options_with_global_default() -> PlanResult<()> {
+    fn test_resolve_parquet_write_options_with_global_default() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let resolver = DataSourceOptionsResolver::new(&ctx);
 
         let state = ctx.state_ref();
         state
