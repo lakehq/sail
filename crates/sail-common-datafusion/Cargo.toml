@@ -20,4 +20,5 @@ futures = { workspace = true }
 serde = { workspace = true }
 pyo3 = { workspace = true }
 async-trait = { workspace = true }
+
 deltalake = { workspace = true }

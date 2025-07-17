@@ -23,7 +23,6 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 once_cell = { workspace = true }
 
-
 [build-dependencies]
 serde = { workspace = true }
 serde_yaml = { workspace = true }
