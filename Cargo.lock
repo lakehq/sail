@@ -2308,7 +2308,7 @@ dependencies = [
 [[package]]
 name = "deltalake"
 version = "0.27.0"
-source = "git+https://github.com/lakehq/delta-rs.git?rev=3607c31#3607c314cbdd2ad06c6ee0677b92a29f695c71f3"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=3607c31#3607c314cbdd2ad06c6ee0677b92a29f695c71f3"
 dependencies = [
  "delta_kernel",
  "deltalake-core",
@@ -2317,7 +2317,7 @@ dependencies = [
 [[package]]
 name = "deltalake-core"
 version = "0.27.0"
-source = "git+https://github.com/lakehq/delta-rs.git?rev=3607c31#3607c314cbdd2ad06c6ee0677b92a29f695c71f3"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=3607c31#3607c314cbdd2ad06c6ee0677b92a29f695c71f3"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -2369,7 +2369,7 @@ dependencies = [
 [[package]]
 name = "deltalake-derive"
 version = "0.27.0"
-source = "git+https://github.com/lakehq/delta-rs.git?rev=3607c31#3607c314cbdd2ad06c6ee0677b92a29f695c71f3"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=3607c31#3607c314cbdd2ad06c6ee0677b92a29f695c71f3"
 dependencies = [
  "convert_case",
  "itertools 0.14.0",
@@ -5491,7 +5491,6 @@ dependencies = [
  "datafusion-functions-json",
  "datafusion-proto",
  "datafusion-spark",
- "deltalake",
  "futures",
  "k8s-openapi",
  "kube",

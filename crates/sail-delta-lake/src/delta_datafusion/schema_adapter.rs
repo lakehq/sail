@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 use std::sync::Arc;
-
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/schema_adapter.rs>
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::common::DataFusionError;

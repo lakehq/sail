@@ -1,63 +1,13 @@
-use deltalake::{DeltaResult, DeltaTable};
-
-pub use self::load::LoadBuilder;
-pub use self::write::WriteBuilder;
 
 // mod cast;
 // mod cdc;
 // pub mod constraints;
 // pub mod delete;
-pub mod load;
 // pub mod load_cdf;
 // pub mod merge;
 // pub mod optimize;
 // pub mod update;
-pub mod write;
-
-pub struct SailDeltaOps(pub DeltaTable);
-
-impl SailDeltaOps {
-    /// Create a new SailDeltaOps from a DeltaTable
-    pub fn new(table: DeltaTable) -> Self {
-        Self(table)
-    }
-
-    /// Load data from the Delta table
-    pub fn load(self) -> DeltaResult<LoadBuilder> {
-        let snapshot = self.0.snapshot()?;
-        Ok(LoadBuilder::new(self.0.log_store(), snapshot.clone()))
-    }
-
-    /// Write data to the Delta table
-    pub fn write(self) -> WriteBuilder {
-        let snapshot = self.0.snapshot().ok().cloned();
-        WriteBuilder::new(self.0.log_store(), snapshot)
-    }
-}
-
-impl From<deltalake::operations::DeltaOps> for SailDeltaOps {
-    fn from(ops: deltalake::operations::DeltaOps) -> Self {
-        Self(ops.0)
-    }
-}
-
-impl From<DeltaTable> for SailDeltaOps {
-    fn from(table: DeltaTable) -> Self {
-        Self(table)
-    }
-}
-
-impl From<SailDeltaOps> for DeltaTable {
-    fn from(ops: SailDeltaOps) -> Self {
-        ops.0
-    }
-}
-
-impl AsRef<DeltaTable> for SailDeltaOps {
-    fn as_ref(&self) -> &DeltaTable {
-        &self.0
-    }
-}
+pub(crate) mod write;
 
 // Future operations to be implemented:
 // use self::optimize::OptimizeBuilder;

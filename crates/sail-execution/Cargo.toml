@@ -7,7 +7,6 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
-deltalake = { workspace = true }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-server = { path = "../sail-server" }
