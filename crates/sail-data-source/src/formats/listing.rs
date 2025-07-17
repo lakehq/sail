@@ -17,6 +17,8 @@ use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 
 use crate::options::DataSourceOptionsResolver;
 
+// TODO: infer compression type from file extension
+// TODO: support global configuration to ignore file extension (by setting it to empty)
 /// A trait for defining the specifics of a listing table format.
 pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
     fn name(&self) -> &'static str;
@@ -65,7 +67,6 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
 
         let file_format = self.format_def.create_format(ctx, options)?;
         let listing_options = ListingOptions::new(file_format);
-
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
 
         let schema = match schema {
