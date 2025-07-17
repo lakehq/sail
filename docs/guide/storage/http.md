@@ -5,7 +5,9 @@ rank: 7
 
 # HTTP/HTTPS Storage
 
-Sail supports both reading from and writing to HTTP/HTTPS servers through WebDAV (Web Distributed Authoring and Versioning). While basic read operations work with any HTTP server, write operations require WebDAV support on the server side.
+Sail provides an object store implementation for generic HTTP servers following RFC 2518, commonly known as WebDAV (Web Distributed Authoring and Versioning).
+
+Basic GET support will work out of the box with most HTTP servers, even those that don't explicitly support RFC 2518. Other operations such as list, delete, copy, put, etc. will likely require server-side configuration. A list of HTTP servers with support can be found [here](https://wiki.archlinux.org/title/WebDAV#Server).
 
 ## URL Format
 
@@ -20,11 +22,11 @@ https://example.com/path/to/file
 
 ### Supported Operations
 
-- **Read**: :white_check_mark: Works with any HTTP server
-- **Write**: :white_check_mark: Requires WebDAV-enabled server
-- **Delete**: :white_check_mark: Requires WebDAV-enabled server
-- **List**: :white_check_mark: Requires WebDAV-enabled server
-- **Copy**: :white_check_mark: Requires WebDAV-enabled server
+- **Read (GET)**: :white_check_mark: Works out of the box with most HTTP servers
+- **Write (PUT)**: :white_check_mark: Likely requires server-side configuration
+- **Delete**: :white_check_mark: Likely requires server-side configuration
+- **List**: :white_check_mark: Likely requires server-side configuration
+- **Copy**: :white_check_mark: Likely requires server-side configuration
 - **Multipart uploads**: :x: Not currently supported
 
 ### Supported Formats
@@ -120,15 +122,9 @@ result = dfs[0].union(*dfs[1:])
 df = spark.read.parquet("https://cdn.example.com/datasets/transactions.parquet")
 ```
 
-## Writing Data (WebDAV Required)
+## Writing Data
 
-To write data via HTTP, your server must support WebDAV. Many web servers can be configured to support WebDAV:
-
-- Apache with mod_dav
-- Nginx with nginx-dav-ext-module
-- IIS with WebDAV module
-- Nextcloud, ownCloud
-- And [many others](https://wiki.archlinux.org/title/WebDAV#Server)
+To write data and perform other operations beyond basic reads, your server will likely require WebDAV configuration. A list of HTTP servers with WebDAV support can be found [here](https://wiki.archlinux.org/title/WebDAV#Server).
 
 ### Writing Examples
 
