@@ -707,8 +707,6 @@ impl WriteBuilder {
             .await
             .map_err(|e| WriteError::PhysicalPlan { source: e })?;
 
-        // dbg!("Physical plan inside WriteBuilder: {:?}", &execution_plan);
-
         // Get table path before moving log_store into tasks
         let table_path = Path::from(log_store.root_uri());
 
@@ -749,25 +747,13 @@ impl WriteBuilder {
                     .execute(partition_id, task_ctx)
                     .map_err(|e| WriteError::PhysicalPlan { source: e })?;
 
-                // dbg!("Starting to process stream for partition {}", partition_id);
-
-                // let mut batch_count = 0;
-
                 while let Some(batch_result) = stream.next().await {
-                    // batch_count += 1;
-                    // dbg!(batch_count);
                     let batch = batch_result.map_err(|e| WriteError::PhysicalPlan { source: e })?;
                     writer
                         .write(&batch)
                         .await
                         .map_err(|e| WriteError::DeltaWriter { source: e })?;
                 }
-
-                // dbg!(
-                //     "Finished processing stream for partition {}. Total batches: {}",
-                //     partition_id,
-                //     batch_count
-                // );
 
                 let add_actions = writer
                     .close()
@@ -964,8 +950,6 @@ impl WriteBuilder {
 
             DeltaTable::new(log_store.clone(), Default::default())
         };
-
-        // dbg!(&all_actions);
 
         // Commit the transaction
         if !all_actions.is_empty() {

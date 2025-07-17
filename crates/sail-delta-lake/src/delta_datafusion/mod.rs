@@ -873,8 +873,6 @@ impl<'a> DeltaScanBuilder<'a> {
                 .with_table_partition_cols(table_partition_cols)
                 .build();
 
-        // dbg!(&file_scan_config);
-
         let metrics = ExecutionPlanMetricsSet::new();
         MetricBuilder::new(&metrics)
             .global_counter("files_scanned")
