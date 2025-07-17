@@ -87,10 +87,10 @@ pub async fn create_delta_provider(
     table_uri: &str,
     options: &std::collections::HashMap<String, String>,
 ) -> Result<std::sync::Arc<dyn datafusion::catalog::TableProvider>> {
-    // TODO: Parse options using DataSourceOptionsResolver when needed
+    // TODO: Parse options when needed
     // let resolver = DataSourceOptionsResolver::new(ctx);
     // let delta_options = resolver.resolve_delta_read_options(options.clone())?;
-    let _ = options; // Suppress unused variable warning
+    let _ = options;
 
     let url = ListingTableUrl::parse(table_uri)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
