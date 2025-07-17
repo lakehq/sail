@@ -35,7 +35,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_csv"
+        "success": "ok"
       }
     },
     {
@@ -67,7 +67,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_csv"
+        "success": "ok"
       }
     },
     {

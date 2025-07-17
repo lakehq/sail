@@ -106,7 +106,8 @@ impl From<CommonErrorCause> for TaskStreamError {
             | CommonErrorCause::Plan(x)
             | CommonErrorCause::Schema(x)
             | CommonErrorCause::Configuration(x)
-            | CommonErrorCause::Execution(x) => Self::Unknown(x),
+            | CommonErrorCause::Execution(x)
+            | CommonErrorCause::DeltaTable(x) => Self::Unknown(x),
             CommonErrorCause::Python { summary, traceback } => {
                 Self::External(Arc::new(RemotePythonError { summary, traceback }))
             }

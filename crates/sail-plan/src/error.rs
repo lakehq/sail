@@ -27,6 +27,8 @@ pub enum PlanError {
     InternalError(String),
     #[error("analysis error: {0}")]
     AnalysisError(String),
+    #[error("delta table error: {0}")]
+    DeltaTableError(String),
 }
 
 impl PlanError {

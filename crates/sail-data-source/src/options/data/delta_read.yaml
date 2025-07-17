@@ -1,0 +1,186 @@
+# Options for reading from a Delta Lake table.
+# References:
+#   - [1] https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/DeltaOptions.scala
+#   - [2] https://docs.delta.io/latest/delta-batch.html#query-an-older-snapshot-of-a-table-time-travel
+#   - [3] https://docs.delta.io/latest/delta-change-data-feed.html#read-changes-in-batch-queries
+
+- key: version_as_of
+  aliases:
+    - versionAsOf
+  description: |
+    Query an older snapshot of a table based on a version number.
+  supported: false
+  rust_type: String
+
+- key: timestamp_as_of
+  aliases:
+    - timestampAsOf
+  description: |
+    Query an older snapshot of a table based on a timestamp.
+    The timestamp can be a string in the format 'yyyy-MM-dd HH:mm:ss.SSS'.
+  supported: false
+  rust_type: String
+
+- key: read_change_feed
+  aliases:
+    - readChangeFeed
+  description: |
+    Enable reading the change data feed (CDF) from the Delta table.
+  default: "false"
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: starting_version
+  aliases:
+    - startingVersion
+  description: |
+    The starting version for a streaming read or a CDF read. For CDF, this specifies the beginning of the change data range.
+  supported: false
+  rust_type: String
+
+- key: starting_timestamp
+  aliases:
+    - startingTimestamp
+  description: |
+    The starting timestamp for a streaming read or a CDF read. For CDF, this specifies the beginning of the change data range.
+  supported: false
+  rust_type: String
+
+- key: ending_version
+  aliases:
+    - endingVersion
+  description: |
+    The ending version for a CDF read. This specifies the end of the change data range (inclusive).
+  supported: false
+  rust_type: String
+
+- key: ending_timestamp
+  aliases:
+    - endingTimestamp
+  description: |
+    The ending timestamp for a CDF read. This specifies the end of the change data range (inclusive).
+  supported: false
+  rust_type: String
+
+- key: max_files_per_trigger
+  aliases:
+    - maxFilesPerTrigger
+  description: |
+    (Streaming) How many new files to be considered in every micro-batch.
+  default: "1000"
+  supported: false
+  rust_type: i64
+
+- key: max_bytes_per_trigger
+  aliases:
+    - maxBytesPerTrigger
+  description: |
+    (Streaming) How much data gets processed in each micro-batch.
+    This option sets a "soft max", meaning that a batch processes approximately this amount of data.
+  supported: false
+  rust_type: String
+
+- key: ignore_deletes
+  aliases:
+    - ignoreDeletes
+  description: |
+    (Streaming) Ignore transactions that delete data.
+  default: "false"
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: ignore_changes
+  aliases:
+    - ignoreChanges
+  description: |
+    (Streaming) Re-process updates if files had to be rewritten in the source table.
+    Unchanged rows may still be emitted. Deletes are not propagated downstream.
+    This option subsumes `ignoreDeletes`.
+  default: "false"
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: ignore_file_deletion
+  aliases:
+    - ignoreFileDeletion
+  description: |
+    (Streaming) Ignore transactions that delete files at partition boundaries. This option is deprecated and has been replaced by ignoreDeletes.
+  default: "false"
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: fail_on_data_loss
+  aliases:
+    - failOnDataLoss
+  description: |
+    (Streaming) Whether to fail the stream if it detects that data has been lost (e.g. files were deleted from the middle of the log).
+  default: "true"
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: skip_change_commits
+  aliases:
+    - skipChangeCommits
+  description: |
+    (Streaming) Whether to skip commits that are only rearranging data, i.e. have the `dataChange` property set to `false`.
+  default: "false"
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: exclude_regex
+  aliases:
+    - excludeRegex
+  description: |
+    (Streaming) Regex to exclude files from being considered by the streaming source.
+  supported: false
+  rust_type: String
+
+- key: schema_tracking_location
+  aliases:
+    - schemaTrackingLocation
+    - schemaLocation
+  description: |
+    (Streaming) The path to the location where the schema of the streaming source should be tracked. This is required for streams reading from Delta tables with column mapping and schema changes.
+  supported: false
+  rust_type: String
+
+- key: streaming_source_tracking_id
+  aliases:
+    - streamingSourceTrackingId
+  description: |
+    (Streaming) An option to instruct DeltaSource to pick a customized subdirectory for schema log in case of rare conflicts.
+  supported: false
+  rust_type: String
+
+- key: allow_source_column_rename
+  aliases:
+    - allowSourceColumnRename
+  description: |
+    (Streaming) Option to allow a stream to continue if a source column is renamed.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: allow_source_column_drop
+  aliases:
+    - allowSourceColumnDrop
+  description: |
+    (Streaming) Option to allow a stream to continue if a source column is dropped.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: allow_source_column_type_change
+  aliases:
+    - allowSourceColumnTypeChange
+  description: |
+    (Streaming) Option to allow a stream to continue if the data type of a source column is changed.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
