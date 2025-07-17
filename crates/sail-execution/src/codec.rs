@@ -876,6 +876,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkArray>()
             || node.inner().as_any().is::<SparkConcat>()
             || node.inner().as_any().is::<SparkHex>()
+            || node.inner().as_any().is::<SparkFromCSV>()
             || node.inner().as_any().is::<SparkUnHex>()
             || node.inner().as_any().is::<SparkMurmur3Hash>()
             || node.inner().as_any().is::<SparkReverse>()
