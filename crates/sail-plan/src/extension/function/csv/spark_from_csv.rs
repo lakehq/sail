@@ -137,15 +137,23 @@ impl ScalarUDFImpl for SparkFromCSV {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let schema: &String = match scalar_arguments[1] {
-            Some(ScalarValue::Utf8(Some(schema)))
-            | Some(ScalarValue::LargeUtf8(Some(schema)))
-            | Some(ScalarValue::Utf8View(Some(schema))) => Ok(schema),
-            _ => internal_err!("Expected UTF-8 schema string"),
-        }?;
+        let schema: &String = if let Some(schema) = scalar_arguments.get(1) {
+            match schema {
+                Some(ScalarValue::Utf8(Some(schema)))
+                | Some(ScalarValue::LargeUtf8(Some(schema)))
+                | Some(ScalarValue::Utf8View(Some(schema))) => Ok(schema),
+                _ => internal_err!("Expected UTF-8 schema string"),
+            }?
+        } else {
+            return plan_err!(
+                "`{}` function requires 2 or 3 arguments, got {}",
+                Self::FROM_CSV_NAME,
+                scalar_arguments.len()
+            );
+        };
 
-        let schema: Result<DataType> = parse_fields(schema).map(DataType::Struct);
-        schema.map(|dt| Arc::new(Field::new(self.name(), dt, true)) as FieldRef)
+        let dt: DataType = DataType::Struct(parse_fields(schema)?);
+        Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     /// Executes the function with given arguments and produces the resulting array
@@ -206,7 +214,15 @@ fn spark_from_csv_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     let array: &StringArray = downcast_arg!(&args[0], StringArray);
-    let schema_str: &str = downcast_arg!(&args[1], StringArray).value(0);
+    let schema_str: &StringArray = downcast_arg!(&args[1], StringArray);
+    let schema_str: &str = if schema_str.is_empty() {
+        return exec_err!(
+            "`{}` function requires a schema string, got an empty string",
+            SparkFromCSV::FROM_CSV_NAME
+        );
+    } else {
+        schema_str.value(0)
+    };
 
     let options: SparkFromCSVOptions = if let Some(options) = args.get(2) {
         SparkFromCSVOptions::from_map(downcast_arg!(options, MapArray))
