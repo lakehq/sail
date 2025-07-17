@@ -42,8 +42,12 @@ env \
   AWS_ENDPOINT="http://localhost:19000" \
   AWS_VIRTUAL_HOSTED_STYLE_REQUEST="false" \
   AWS_ALLOW_HTTP="true" \
+  AZURE_STORAGE_ACCOUNT_NAME="devstoreaccount1" \
+  AZURE_STORAGE_ACCOUNT_KEY="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==" \
+  AZURE_STORAGE_ENDPOINT="http://localhost:10000/devstoreaccount1" \
+  AZURE_STORAGE_USE_EMULATOR="true" \
   HADOOP_USER_NAME="sail" \
-  scripts/spark-tests/run-server.sh
+  hatch run scripts/spark-tests/run-server.sh
 ```
 
 ## Testing the Object Store

@@ -19,21 +19,16 @@ services:
       retries: 6
 
   azurite:
-    container_name: azurite
     image: mcr.microsoft.com/azure-storage/azurite:latest
-    command: ["azurite-blob", "--blobHost", "0.0.0.0"]
+    command: ["azurite", "--skipApiVersionCheck", "--blobHost", "0.0.0.0", "--queueHost", "0.0.0.0", "--tableHost", "0.0.0.0"]
+    environment:
+      AZURITE_ACCOUNTS: "devstoreaccount1:Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
     volumes:
       - azurite-data:/data
     ports:
-      - "10000:10000"
-      - "10001:10001"
-      - "10002:10002"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:10000/sail"]
-      interval: 10s
-      timeout: 10s
-      retries: 6
-      start_period: 30s
+      - "10000:10000"  # Blob service
+      - "10001:10001"  # Queue service
+      - "11000:11000"  # Table service
 
   hdfs:
     build:
@@ -41,16 +36,13 @@ services:
       dockerfile: Dockerfile
       args:
         HADOOP_USER_NAME: root
-
     ports:
       - "9870:9870"
       - "127.0.0.1:9000:9000"
       - "9864:9864"
       - "9866:9866"
-
     healthcheck:
-      test:
-        ["CMD", "/opt/hadoop/bin/hdfs", "-test", "-e", "/user/root/test.json"]
+      test: ["CMD", "/opt/hadoop/bin/hdfs", "-test", "-e", "/user/root/test.json"]
       start_period: 60s
       interval: 60s
       timeout: 60s
@@ -60,3 +52,4 @@ volumes:
   minio-data:
     driver: local
   azurite-data:
+    driver: local
