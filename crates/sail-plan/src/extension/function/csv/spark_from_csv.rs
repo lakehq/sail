@@ -558,9 +558,9 @@ fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
         SQLType::Boolean | SQLType::Bool => Ok(DataType::Boolean),
 
         SQLType::Date | SQLType::Date32 => Ok(DataType::Date32),
-        SQLType::Timestamp(_, _) | SQLType::Datetime(_) | SQLType::Datetime64(_, _) => {
-            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
-        }
+        SQLType::Timestamp(_, _) | SQLType::Datetime(_) | SQLType::Datetime64(_, _) => Ok(
+            DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("UTC"))),
+        ),
 
         SQLType::Array(inner) => {
             let inner_type = match inner {
