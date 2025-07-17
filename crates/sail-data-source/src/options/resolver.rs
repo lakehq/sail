@@ -7,8 +7,9 @@ use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
 use datafusion_common::{plan_err, Result};
 
 use crate::options::{
-    load_default_options, load_options, CsvReadOptions, CsvWriteOptions, JsonReadOptions,
-    JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
+    load_default_options, load_options, CsvReadOptions, CsvWriteOptions, DeltaReadOptions,
+    DeltaWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
+    TableDeltaOptions,
 };
 
 fn char_to_u8(c: char, option: &str) -> Result<u8> {
@@ -274,6 +275,16 @@ fn apply_parquet_write_options(
     Ok(())
 }
 
+fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) -> Result<()> {
+    let _ = (from, to);
+    Ok(())
+}
+
+fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions) -> Result<()> {
+    let _ = (from, to);
+    Ok(())
+}
+
 pub struct DataSourceOptionsResolver<'a> {
     ctx: &'a SessionContext,
 }
@@ -338,6 +349,26 @@ impl<'a> DataSourceOptionsResolver<'a> {
         apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_write_options(load_options(options)?, &mut parquet_options)?;
         Ok(parquet_options)
+    }
+
+    pub fn resolve_delta_read_options(
+        &self,
+        options: HashMap<String, String>,
+    ) -> Result<TableDeltaOptions> {
+        let mut delta_options = TableDeltaOptions::default();
+        apply_delta_read_options(load_default_options()?, &mut delta_options)?;
+        apply_delta_read_options(load_options(options)?, &mut delta_options)?;
+        Ok(delta_options)
+    }
+
+    pub fn resolve_delta_write_options(
+        &self,
+        options: HashMap<String, String>,
+    ) -> Result<TableDeltaOptions> {
+        let mut delta_options = TableDeltaOptions::default();
+        apply_delta_write_options(load_default_options()?, &mut delta_options)?;
+        apply_delta_write_options(load_options(options)?, &mut delta_options)?;
+        Ok(delta_options)
     }
 }
 

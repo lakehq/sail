@@ -40,8 +40,9 @@ use sail_catalog::command::{CatalogCommand, CatalogTableDefinition};
 use sail_catalog::temp_view::manage_temporary_views;
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
+use sail_common_datafusion::datasource::{SinkInfo, SourceInfo};
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
-use sail_data_source::TableProviderFactory;
+use sail_data_source::default_registry;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
@@ -860,8 +861,14 @@ impl PlanResolver<'_> {
             Some(schema) => Some(self.resolve_schema(schema, state)?),
             None => None,
         };
-        let table_provider = TableProviderFactory::new(self.ctx)
-            .read_table(&format, paths, schema, options)
+        let table_provider = default_registry()
+            .get_format(&format)?
+            .create_provider(SourceInfo {
+                ctx: self.ctx,
+                paths,
+                schema,
+                options: options.into_iter().collect(),
+            })
             .await?;
         let names = state.register_fields(table_provider.schema().fields());
         let table_provider = RenameTableProvider::try_new(table_provider, names)?;
@@ -2912,9 +2919,14 @@ impl PlanResolver<'_> {
                 let Some(source) = source else {
                     return Err(PlanError::invalid("missing source"));
                 };
-                let format_factory = TableProviderFactory::new(self.ctx)
-                    .write_table(&source, options)
-                    .await?;
+                let format_factory =
+                    default_registry()
+                        .get_format(&source)?
+                        .create_writer(SinkInfo {
+                            ctx: self.ctx,
+                            mode: mode.clone(),
+                            options: options.into_iter().collect(),
+                        })?;
                 let plan = if sort_columns.is_empty() {
                     plan
                 } else {

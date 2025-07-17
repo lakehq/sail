@@ -44,6 +44,7 @@ message ExtendedScalarUdf {
     TimestampNowUdf timestamp_now = 11;
     SparkTimestampUdf spark_timestamp = 12;
     SparkFromUtcTimestampUdf spark_from_utc_timestamp = 13;
+    SparkSizeUdf spark_size = 14;
   }
 }
 
@@ -126,6 +127,11 @@ message SparkTimestampUdf {
 
 message SparkFromUtcTimestampUdf {
   string time_unit = 1;
+}
+
+message SparkSizeUdf {
+  bool is_array_size = 1;
+  bool is_legacy_cardinality = 2;
 }
 
 message StandardUdaf {}

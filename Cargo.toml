@@ -33,6 +33,7 @@ async-trait = "0.1.88"
 async-recursion = "1.1.1"
 async-stream = "0.3.6"
 lazy_static = "1.5.0"
+once_cell = "1.21.3"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 # TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
@@ -95,6 +96,7 @@ reqwest = "0.12.22"
 percent-encoding = "2.3.1"
 rustls = "0.23.29"
 dashmap = "6.1.0"
+itertools = "0.14.0"
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -116,6 +118,7 @@ datafusion = { version = "48.0.1", features = ["serde", "avro"] }
 datafusion-common = { version = "48.0.1", features = ["object_store", "avro"] }
 datafusion-expr = { version = "48.0.1" }
 datafusion-expr-common = { version = "48.0.1" }
+datafusion-execution = { version = "48.0.1" }
 datafusion-proto = { version = "48.0.1" }
 datafusion-functions = { version = "48.0.1" }
 datafusion-functions-nested = { version = "48.0.1" }
@@ -134,6 +137,13 @@ serde_arrow = { version = "0.13.4", features = ["arrow-55"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.2", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.14.2"
+
+# Lakehouse
+deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "3607c31", default-features = false, features = ["rustls"] }
+delta_kernel = { version = "0.13.0", features = ["arrow-55", "internal-api", "default-engine"] }
+parquet = { version = "55.2.0" }
+bytes = "1.9.0"
+indexmap = "2.10.0"
 
 ######
 # This is the end of the manually managed dependencies.
