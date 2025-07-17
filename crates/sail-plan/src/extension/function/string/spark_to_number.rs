@@ -3,16 +3,19 @@ use crate::extension::function::functions_utils::make_scalar_function;
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::DataType;
 use core::any::type_name;
-use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
-};
-use std::any::Any;
-
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, DataFusionError, Result,
+    ScalarValue,
+};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
 use datafusion_expr_common::signature::Volatility;
 use regex::Regex;
+use std::any::Any;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct SparkToNumber {
@@ -51,14 +54,24 @@ impl ScalarUDFImpl for SparkToNumber {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
-        Ok(DataType::Decimal256(38, 9)) // TODO: use precision and scale from arg_types
+    /// The base return type is unknown until arguments are provided
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // We cannot know the final DataType result without knowing the format input args
+        Ok(DataType::Struct(Fields::empty()))
     }
 
-    fn invoke_with_args(
-        &self,
-        args: ScalarFunctionArgs,
-    ) -> datafusion_common::Result<ColumnarValue> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let ReturnFieldArgs {
+            scalar_arguments, ..
+        } = args;
+        let values = scalar_arguments.iter().find_map(|value| *value); // TODO: Fix here
+        let format: &str = downcast_arg!(&scalar_arguments[1], StringArray).value(0); // TODO: Fix here
+        let (precision, scale) = get_precision_and_scale(values, format);
+        let return_type = DataType::Decimal256(precision, scale);
+        Ok(Arc::new(Field::new(self.name(), return_type, true)))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(spark_to_number_inner, vec![])(&args)
     }
@@ -74,27 +87,24 @@ pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
     let values = downcast_arg!(&args[0], StringArray);
     let format: &str = downcast_arg!(&args[1], StringArray).value(0);
-    let (precision, scale) = if let Some(Some(first)) = values.iter().find(|value| value.is_some())
-    {
-        let parsed = ParsedNumber::try_from(first, format)?;
-        (parsed.precision, parsed.scale)
-    } else {
-        (38, 9)
-    };
+    let (precision, scale) = get_precision_and_scale(values, format);
 
-    let array = values
+    let scalars: Result<Vec<ScalarValue>> = values
         .iter()
         .map(|value| match value {
-            Some(value) => match ParsedNumber::try_from(value, format) {
-                Ok(parsed) => {
+            None => Ok(ScalarValue::Decimal256(None, precision, scale)),
+            Some(value) => ParsedNumber::try_from(value, format)
+                .map(|parsed| {
                     ScalarValue::Decimal256(Some(parsed.value), parsed.precision, parsed.scale)
-                }
-                Err(e) => return exec_err!("{}", e),
-            },
-            None => ScalarValue::Decimal256(None, precision, scale),
+                })
+                .map_err(|e| exec_datafusion_err!("{}", e)),
         })
-        .collect::<ArrayRef>();
-    Ok(array)
+        .collect::<Result<Vec<ScalarValue>>>();
+
+    let scalar_values = scalars?;
+    let decimal_array = ScalarValue::iter_to_array(scalar_values)?;
+
+    Ok(decimal_array)
 }
 
 pub struct ParsedNumber {
@@ -158,6 +168,15 @@ pub fn parse_number(value: &str, format: &str) -> Result<ParsedNumber> {
         precision,
         scale,
     })
+}
+
+pub fn get_precision_and_scale(values: &StringArray, format: &str) -> (u8, i8) {
+    let first = values.iter().find_map(|value| value);
+    match first {
+        None => (38, 9),
+        Some(value) => ParsedNumber::try_from(value, format)
+            .map_or((38, 9), |parsed| (parsed.precision, parsed.scale)),
+    }
 }
 
 /// Parse a number from a format string
