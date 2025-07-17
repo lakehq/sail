@@ -1,7 +1,7 @@
-pub mod formats;
-pub mod listing;
+mod formats;
+mod listing;
 pub mod options;
-pub mod registry;
-pub mod url;
+mod registry;
+mod url;
 
 pub use registry::default_registry;
