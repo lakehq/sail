@@ -7,7 +7,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::datasource::file_format::FileFormatFactory;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
-// use sail_common::spec::SaveMode;
+use sail_common::spec::SaveMode;
 
 /// Information required to create a data source.
 pub struct SourceInfo<'a> {
@@ -20,7 +20,7 @@ pub struct SourceInfo<'a> {
 /// Information required to create a data writer.
 pub struct SinkInfo<'a> {
     pub ctx: &'a SessionContext,
-    // pub mode: SaveMode,
+    pub mode: SaveMode,
     pub options: HashMap<String, String>,
 }
 

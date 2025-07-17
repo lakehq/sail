@@ -84,7 +84,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
     }
 
     fn create_writer(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
-        let SinkInfo { ctx, options } = info;
+        let SinkInfo { ctx, options, .. } = info;
         self.format_def.create_format_factory(ctx, options)
     }
 }
