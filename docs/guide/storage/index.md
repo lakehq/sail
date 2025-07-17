@@ -13,18 +13,19 @@ You can also use the `CREATE TABLE` SQL statement to create a table that refers 
 
 Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) storage features for reading and writing data. There are also features that are planned in our roadmap (:construction:).
 
-| Storage                             | Read Support       | Write Support      | Notes                              |
-| ----------------------------------- | ------------------ | ------------------ | ---------------------------------- |
-| [File Systems](./fs)                | :white_check_mark: | :white_check_mark: | Local file system access           |
-| [Memory](./memory)                  | :white_check_mark: | :white_check_mark: | In-memory storage for testing      |
-| [AWS S3](./s3)                      | :white_check_mark: | :white_check_mark: | Also supports S3-compatible stores |
-| [Cloudflare R2](./s3#cloudflare-r2) | :white_check_mark: | :white_check_mark: | Uses S3-compatible API             |
-| [Azure Storage](./azure)            | :white_check_mark: | :white_check_mark: | Blob Storage and ADLS Gen2         |
-| [Google Cloud Storage](./gcs)       | :white_check_mark: | :white_check_mark: | GCS buckets                        |
-| [HTTP/HTTPS](./http)                | :white_check_mark: | :white_check_mark: | Generic HTTP server implementation |
-| [HDFS](./hdfs)                      | :white_check_mark: | :white_check_mark: | Hadoop Distributed File System     |
-| [Hugging Face](./hf)                | :white_check_mark: | :x:                | Access to Hugging Face datasets    |
-| JDBC                                | :x:                | :x:                | Database connectivity (planned)    |
+| Storage                                   | Read Support       | Write Support      |
+| ----------------------------------------- | ------------------ | ------------------ |
+| [File Systems](./fs)                      | :white_check_mark: | :white_check_mark: |
+| [Memory](./memory)                        | :white_check_mark: | :white_check_mark: |
+| [AWS S3](./s3)                            | :white_check_mark: | :white_check_mark: |
+| [Cloudflare R2](./s3#cloudflare-r2)       | :white_check_mark: | :white_check_mark: |
+| [Azure Data Lake Storage (ADLS)](./azure) | :white_check_mark: | :white_check_mark: |
+| [Azure Blob Storage](./azure)             | :white_check_mark: | :white_check_mark: |
+| [Google Cloud Storage](./gcs)             | :white_check_mark: | :white_check_mark: |
+| [HTTP/HTTPS](./http)                      | :white_check_mark: | :white_check_mark: |
+| [HDFS](./hdfs)                            | :white_check_mark: | :white_check_mark: |
+| [Hugging Face](./hf)                      | :white_check_mark: | :x:                |
+| JDBC                                      | :x:                | :x:                |
 
 ## Supported URL Formats
 
