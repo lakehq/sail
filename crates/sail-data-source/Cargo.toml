@@ -18,10 +18,10 @@ glob = { workspace = true }
 url = { workspace = true }
 regex = { workspace = true }
 percent-encoding = { workspace = true }
-once_cell = { workspace = true }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
-
+sail-delta-lake = { path = "../sail-delta-lake" }
+once_cell = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

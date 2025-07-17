@@ -2924,6 +2924,7 @@ impl PlanResolver<'_> {
                         .get_format(&source)?
                         .create_writer(SinkInfo {
                             ctx: self.ctx,
+                            mode: mode.clone(),
                             options: options.into_iter().collect(),
                         })?;
                 let plan = if sort_columns.is_empty() {

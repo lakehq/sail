@@ -5,6 +5,7 @@ use datafusion_common::{DataFusionError, Result};
 use once_cell::sync::Lazy;
 use sail_common_datafusion::datasource::TableFormat;
 
+use crate::formats::delta::DeltaTableFormat;
 use crate::formats::listing::{
     ArrowTableFormat, AvroTableFormat, CsvTableFormat, JsonTableFormat, ParquetTableFormat,
 };
@@ -32,6 +33,7 @@ impl TableFormatRegistry {
         registry.register_format(Arc::new(ArrowTableFormat::default()));
         registry.register_format(Arc::new(AvroTableFormat::default()));
         registry.register_format(Arc::new(CsvTableFormat::default()));
+        registry.register_format(Arc::new(DeltaTableFormat));
         registry.register_format(Arc::new(JsonTableFormat::default()));
         registry.register_format(Arc::new(ParquetTableFormat::default()));
 

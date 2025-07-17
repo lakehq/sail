@@ -1,0 +1,108 @@
+# Options for writing to a Delta Lake table.
+# References:
+#   - [1] https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/DeltaOptions.scala
+#   - [2] https://docs.delta.io/latest/delta-batch.html#deltadataframewrites
+
+- key: replace_where
+  aliases:
+    - replaceWhere
+  description: |
+    Condition for overwriting a specific subset of data. This is used in conjunction with the `overwrite` save mode.
+  supported: false
+  rust_type: String
+
+- key: user_metadata
+  aliases:
+    - userMetadata
+  description: |
+    User-defined metadata to be stored in the commit info.
+  supported: false
+  rust_type: String
+
+- key: optimize_write
+  aliases:
+    - optimizeWrite
+  description: |
+    Whether to optimize the write by breaking skew and coalescing data into chunkier files.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: merge_schema
+  aliases:
+    - mergeSchema
+  description: |
+    If `true`, allows automatic schema merging during an `append` or `overwrite` operation. The default behavior depends on session configuration `spark.databricks.delta.schema.autoMerge.enabled`.
+  default: "false"
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: overwrite_schema
+  aliases:
+    - overwriteSchema
+  description: |
+    If `true`, allows overwriting the schema of the table when using `overwrite` mode.
+  default: "false"
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: data_change
+  aliases:
+    - dataChange
+  description: |
+    Set to `false` to indicate that the write operation only rearranges data (e.g. `OPTIMIZE`) and does not change the table's content. This ensures that downstream streaming queries do not re-process the data.
+  default: "true"
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: txn_version
+  aliases:
+    - txnVersion
+  description: |
+    A monotonically increasing number that acts as a transaction version for idempotent writes.
+  supported: false
+  rust_type: String
+
+- key: txn_app_id
+  aliases:
+    - txnAppId
+  description: |
+    A unique string that is used as an application ID for idempotent writes.
+  supported: false
+  rust_type: String
+
+- key: partition_overwrite_mode
+  aliases:
+    - partitionOverwriteMode
+  description: |
+    When `overwrite` mode is `true`, this controls the partition overwrite behavior. Supported values are `STATIC` and `DYNAMIC`. Default is `STATIC`.
+  default: "STATIC"
+  supported: false
+  rust_type: String
+
+- key: compression
+  description: |
+    Compression codec to use when writing data files. This will be applied to all files of this format.
+  supported: false
+  rust_type: String
+
+- key: max_records_per_file
+  aliases:
+    - maxRecordsPerFile
+  description: |
+    Maximum number of records to write to a single file.
+  supported: false
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
+
+- key: write_partition_columns
+  aliases:
+    - writePartitionColumns
+  description: |
+    An option to control if delta will write partition columns to data files.
+  supported: false
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
