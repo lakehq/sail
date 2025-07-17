@@ -2,19 +2,16 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt64Array};
+use arrow::array::{Int32Array, Int64Array};
+use datafusion::arrow::array::{Array, ArrayRef};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
-use datafusion_common::{exec_err, plan_datafusion_err, plan_err, Result};
+use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
 use datafusion_expr_common::signature::ArrayFunctionArgument;
-
-use crate::extension::function::functions_nested_utils::{
-    compute_array_dims, make_scalar_function,
-};
 
 // expr_fn::cardinality doesn't fully match expected behavior.
 // Spark's cardinality function seems to be the same as the size function.
@@ -23,16 +20,18 @@ use crate::extension::function::functions_nested_utils::{
 #[derive(Debug)]
 pub struct SparkSize {
     signature: Signature,
+    is_array_size: bool,
+    is_legacy_cardinality: bool,
 }
 
 impl Default for SparkSize {
     fn default() -> Self {
-        Self::new()
+        Self::new(false, false)
     }
 }
 
 impl SparkSize {
-    pub fn new() -> Self {
+    pub fn new(is_array_size: bool, is_legacy_cardinality: bool) -> Self {
         Self {
             signature: Signature::one_of(
                 vec![
@@ -44,7 +43,17 @@ impl SparkSize {
                 ],
                 Volatility::Immutable,
             ),
+            is_array_size,
+            is_legacy_cardinality,
         }
+    }
+
+    pub fn is_array_size(&self) -> bool {
+        self.is_array_size
+    }
+
+    pub fn is_legacy_cardinality(&self) -> bool {
+        self.is_legacy_cardinality
     }
 }
 
@@ -62,14 +71,22 @@ impl ScalarUDFImpl for SparkSize {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::FixedSizeList(_, _)
-            | DataType::Map(_, _) => DataType::UInt64,
-            _ => {
+        Ok(match (self.is_array_size, &arg_types[0]) {
+            (_, DataType::List(_))
+            | (_, DataType::FixedSizeList(_, _))
+            | (_, DataType::ListView(_))
+            | (false, DataType::Map(_, _)) => DataType::Int32,
+            (false, DataType::LargeList(_)) | (false, DataType::LargeListView(_)) => {
+                DataType::Int64
+            }
+            (false, _) => {
                 return plan_err!(
-                    "The size function can only accept List/LargeList/FixedSizeList/Map."
+                    "The size function can only accept List/LargeList/FixedSizeList/Map"
+                );
+            }
+            (true, _) => {
+                return plan_err!(
+                    "The array_size function can only accept List/ListView/FixedSizeList"
                 );
             }
         })
@@ -77,54 +94,46 @@ impl ScalarUDFImpl for SparkSize {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(size_inner)(&args)
-    }
-}
+        if args.len() != 1 {
+            return exec_err!("size expects one argument");
+        }
+        let is_scalar = matches!(args.first(), Some(ColumnarValue::Scalar(_)));
+        let args = ColumnarValue::values_to_arrays(&args)?;
 
-pub fn size_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("size expects one argument");
-    }
-    match &args[0].data_type() {
-        DataType::List(_) => {
-            let list_array = as_list_array(&args[0])?;
-            generic_list_size::<i32>(list_array)
-        }
-        DataType::LargeList(_) => {
-            let list_array = as_large_list_array(&args[0])?;
-            generic_list_size::<i64>(list_array)
-        }
-        DataType::Map(_, _) => {
-            let map_array = as_map_array(&args[0])?;
-            let result: UInt64Array = map_array
-                .iter()
-                .map(|opt_arr| opt_arr.map(|arr| arr.len() as u64))
-                .collect();
-            Ok(Arc::new(result))
-        }
-        other => {
-            exec_err!("size does not support type '{:?}'", other)
-        }
-    }
-}
+        let legacy_cardinality = self.is_legacy_cardinality.then_some(-1);
 
-fn generic_list_size<O: OffsetSizeTrait>(array: &GenericListArray<O>) -> Result<ArrayRef> {
-    let result = array
-        .iter()
-        .map(|arr| match compute_array_dims(arr)? {
-            Some(vector) => {
-                let product = vector
-                    .iter()
-                    .map(|x| {
-                        x.ok_or_else(|| {
-                            plan_datafusion_err!("Unexpected None in compute_array_dims result")
-                        })
-                    })
-                    .product::<Result<u64>>()?;
-                Ok(Some(product))
+        let result = match &args[0].data_type() {
+            DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::ListView(_) => {
+                Ok(Arc::new(
+                    as_list_array(&args[0])?
+                        .iter()
+                        .map(|opt_arr| opt_arr.map(|arr| arr.len() as i32).or(legacy_cardinality))
+                        .collect::<Int32Array>(),
+                ) as ArrayRef)
             }
-            None => Ok(Some(0)),
-        })
-        .collect::<Result<UInt64Array>>()?;
-    Ok(Arc::new(result) as ArrayRef)
+            DataType::Map(_, _) => Ok(Arc::new(
+                as_map_array(&args[0])?
+                    .iter()
+                    .map(|opt_arr| opt_arr.map(|arr| arr.len() as i32).or(legacy_cardinality))
+                    .collect::<Int32Array>(),
+            ) as ArrayRef),
+            DataType::LargeList(_) | DataType::LargeListView(_) => Ok(Arc::new(
+                as_large_list_array(&args[0])?
+                    .iter()
+                    .map(|opt_arr| opt_arr.map(|arr| arr.len() as i64))
+                    .collect::<Int64Array>(),
+            ) as ArrayRef),
+            other => {
+                exec_err!("size does not support type '{:?}'", other)
+            }
+        };
+
+        if is_scalar {
+            // If all inputs are scalar, keeps output as scalar
+            let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
+            result.map(ColumnarValue::Scalar)
+        } else {
+            result.map(ColumnarValue::Array)
+        }
+    }
 }

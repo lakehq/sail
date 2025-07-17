@@ -3,8 +3,8 @@ mod resolver;
 mod serde;
 
 pub use internal::{
-    CsvReadOptions, CsvWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions,
-    ParquetWriteOptions,
+    CsvReadOptions, CsvWriteOptions, DeltaReadOptions, DeltaWriteOptions, JsonReadOptions,
+    JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
 };
 pub use loader::{load_default_options, load_options};
 pub use resolver::DataSourceOptionsResolver;
@@ -16,6 +16,13 @@ mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/json_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/parquet_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/parquet_write.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/delta_read.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/delta_write.rs"));
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TableDeltaOptions {
+    // Placeholder structure for Delta table configuration options
 }
 
 pub trait DataSourceOptions: for<'de> serde::Deserialize<'de> {

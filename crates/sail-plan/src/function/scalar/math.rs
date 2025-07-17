@@ -16,9 +16,13 @@ use crate::extension::function::math::randn::Randn;
 use crate::extension::function::math::random::Random;
 use crate::extension::function::math::spark_abs::SparkAbs;
 use crate::extension::function::math::spark_bin::SparkBin;
+use crate::extension::function::math::spark_bround::SparkBRound;
 use crate::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
+use crate::extension::function::math::spark_conv::SparkConv;
+use crate::extension::function::math::spark_csc::SparkCsc;
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_pmod::SparkPmod;
+use crate::extension::function::math::spark_sec::SparkSec;
 use crate::extension::function::math::spark_signum::SparkSignum;
 use crate::extension::function::math::spark_try_add::SparkTryAdd;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -552,15 +556,15 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("atan2", F::binary(expr_fn::atan2)),
         ("atanh", F::unary(expr_fn::atanh)),
         ("bin", F::udf(SparkBin::new())),
-        ("bround", F::unknown("bround")),
+        ("bround", F::udf(SparkBRound::new())),
         ("cbrt", F::unary(expr_fn::cbrt)),
         ("ceil", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("ceiling", F::custom(|arg| ceil_floor(arg, "ceil"))),
-        ("conv", F::unknown("conv")),
+        ("conv", F::udf(SparkConv::new())),
         ("cos", F::unary(expr_fn::cos)),
         ("cosh", F::unary(expr_fn::cosh)),
         ("cot", F::unary(expr_fn::cot)),
-        ("csc", F::unknown("csc")),
+        ("csc", F::udf(SparkCsc::new())),
         ("degrees", F::unary(expr_fn::degrees)),
         ("div", F::custom(spark_div)),
         ("e", F::nullary(eulers_constant)),
@@ -591,7 +595,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("random", F::udf(Random::new())),
         ("rint", F::unary(rint)),
         ("round", F::var_arg(expr_fn::round)),
-        ("sec", F::unknown("sec")),
+        ("sec", F::udf(SparkSec::new())),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),
         ("sin", F::unary(expr_fn::sin)),

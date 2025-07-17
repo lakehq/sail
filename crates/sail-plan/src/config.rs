@@ -2,6 +2,9 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
+use datafusion_common::Result;
+use sail_catalog::manager::CatalogManagerConfig;
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::PlanResult;
@@ -63,5 +66,15 @@ impl Default for PlanConfig {
             session_user_id: "sail".to_string(),
             ansi_mode: false,
         }
+    }
+}
+
+impl CatalogManagerConfig for PlanConfig {
+    fn data_type_to_simple_string(&self, data_type: &DataType) -> Result<String> {
+        self.plan_formatter.data_type_to_simple_string(data_type)
+    }
+
+    fn global_temporary_database(&self) -> &str {
+        self.global_temp_database.as_str()
     }
 }

@@ -4,16 +4,17 @@ use std::sync::Arc;
 use datafusion::datasource::TableProvider;
 use datafusion_common::{exec_err, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference};
 use datafusion_expr::{DdlStatement, DropTable, LogicalPlan, TableType};
-use sail_data_source::TableProviderFactory;
+use sail_common_datafusion::datasource::SourceInfo;
+use sail_data_source::default_registry;
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::utils::match_pattern;
-use crate::catalog::CatalogManager;
-use crate::extension::logical::CatalogTableDefinition;
+use crate::command::CatalogTableDefinition;
+use crate::manager::utils::match_pattern;
+use crate::manager::CatalogManager;
 use crate::temp_view::manage_temporary_views;
 
 #[derive(Debug, Clone)]
-pub(crate) enum TableObject {
+pub enum TableObject {
     Table {
         catalog_name: String,
         database_name: String,
@@ -32,7 +33,7 @@ pub(crate) enum TableObject {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TableTypeName {
+pub enum TableTypeName {
     #[allow(dead_code)]
     External,
     Managed,
@@ -41,7 +42,7 @@ pub(crate) enum TableTypeName {
 }
 
 impl TableTypeName {
-    pub(crate) fn from_table_object(table: &TableObject) -> Self {
+    pub fn from_table_object(table: &TableObject) -> Self {
         match table {
             TableObject::Table { table_provider, .. } => {
                 match table_provider.table_type() {
@@ -71,17 +72,17 @@ impl fmt::Display for TableTypeName {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct TableMetadata {
-    pub(crate) name: String,
-    pub(crate) catalog: Option<String>,
-    pub(crate) namespace: Vec<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) table_type: String,
-    pub(crate) is_temporary: bool,
+pub struct TableMetadata {
+    pub name: String,
+    pub catalog: Option<String>,
+    pub namespace: Vec<String>,
+    pub description: Option<String>,
+    pub table_type: String,
+    pub is_temporary: bool,
 }
 
 impl TableMetadata {
-    pub(crate) fn from_table_object(table: TableObject) -> Self {
+    pub fn from_table_object(table: TableObject) -> Self {
         let table_type = TableTypeName::from_table_object(&table);
         let (name, catalog, namespace) = match table {
             TableObject::Table {
@@ -112,7 +113,7 @@ impl TableMetadata {
 }
 
 impl CatalogManager<'_> {
-    pub(crate) async fn create_table(
+    pub async fn create_table(
         &self,
         table: TableReference,
         definition: CatalogTableDefinition,
@@ -140,24 +141,22 @@ impl CatalogManager<'_> {
                 false => exec_err!("table already exists: {table}"),
             };
         }
-        let factory = TableProviderFactory::new(self.ctx);
+
         // TODO: This only registers the table for read and we need to support write as well.
-        let table_provider = factory
-            .read_table(
-                &file_format,
-                vec![location],
-                Some(schema.inner().as_ref().clone()),
-                options,
-            )
+        let table_provider = default_registry()
+            .get_format(&file_format)?
+            .create_provider(SourceInfo {
+                ctx: self.ctx,
+                paths: vec![location],
+                schema: Some(schema.inner().as_ref().clone()),
+                options: options.into_iter().collect(),
+            })
             .await?;
         self.ctx.register_table(table, table_provider)?;
         Ok(())
     }
 
-    pub(crate) async fn get_table_object(
-        &self,
-        table: TableReference,
-    ) -> Result<Option<TableObject>> {
+    pub async fn get_table_object(&self, table: TableReference) -> Result<Option<TableObject>> {
         match &table {
             TableReference::Bare { table } => {
                 if let Some(plan) =
@@ -170,7 +169,7 @@ impl CatalogManager<'_> {
                 }
             }
             TableReference::Partial { schema, table }
-                if schema.as_ref() == self.config.global_temp_database =>
+                if schema.as_ref() == self.config.global_temporary_database() =>
             {
                 if let Some(plan) =
                     manage_temporary_views(self.ctx, true, |views| views.get_view(table))?
@@ -202,7 +201,7 @@ impl CatalogManager<'_> {
         }))
     }
 
-    pub(crate) async fn get_table(&self, table: TableReference) -> Result<Option<TableMetadata>> {
+    pub async fn get_table(&self, table: TableReference) -> Result<Option<TableMetadata>> {
         Ok(self
             .get_table_object(table)
             .await?
@@ -239,7 +238,7 @@ impl CatalogManager<'_> {
         Ok(tables)
     }
 
-    pub(crate) async fn list_tables(
+    pub async fn list_tables(
         &self,
         database: Option<SchemaReference>,
         table_pattern: Option<&str>,
@@ -258,7 +257,7 @@ impl CatalogManager<'_> {
         Ok(output)
     }
 
-    pub(crate) async fn drop_table(
+    pub async fn drop_table(
         &self,
         table: TableReference,
         if_exists: bool,

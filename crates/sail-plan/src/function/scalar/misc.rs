@@ -3,8 +3,8 @@ use std::sync::Arc;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, ExprSchemable, Operator, ScalarUDF};
+use sail_catalog::manager::CatalogManager;
 
-use crate::catalog::CatalogManager;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::raise_error::RaiseError;
 use crate::extension::function::spark_aes::{

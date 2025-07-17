@@ -1,0 +1,19 @@
+[package]
+name = "sail-catalog"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-data-source = { path = "../sail-data-source" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+serde = { workspace = true }
+serde_arrow = { workspace = true }
+regex = { workspace = true }
+lazy_static = { workspace = true }

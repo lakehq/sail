@@ -1,0 +1,35 @@
+>>> spark.sql("SELECT from_csv('1, 0.8', 'a INT, b DOUBLE') AS result, typeof(from_csv('1, 0.8', 'a INT, b DOUBLE')) AS type").show(truncate=False)
++--------+----------------------+
+|result  |type                  |
++--------+----------------------+
+|{1, 0.8}|struct<a:int,b:double>|
++--------+----------------------+
+
+>>> spark.sql("SELECT from_csv('2015-08-26 00:00:00', 'time TIMESTAMP') AS result, typeof(from_csv('2015-08-26 00:00:00', 'time TIMESTAMP')) AS type").show(truncate=False)
++---------------------+----------------------+
+|result               |type                  |
++---------------------+----------------------+
+|{2015-08-26 00:00:00}|struct<time:timestamp>|
++---------------------+----------------------+
+
+>>> spark.sql("SELECT from_csv('42;3.14;2024-12-01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';')) AS result, typeof(from_csv('42;3.14;2024-12-01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';'))) AS type").show(truncate=False)
++-------------------------------+-----------------------------------------------+
+|result                         |type                                           |
++-------------------------------+-----------------------------------------------+
+|{42, 3.14, 2024-12-01 10:00:00}|struct<id:int,value:double,timestamp:timestamp>|
++-------------------------------+-----------------------------------------------+
+
+>>> spark.sql("SELECT from_csv('42;3.14;2024/12/01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';', 'timestampFormat', 'yyyy/MM/dd HH:mm:ss')) AS result, typeof(from_csv('42;3.14;2024/12/01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';', 'timestampFormat', 'yyyy/MM/dd HH:mm:ss'))) AS type").show(truncate=False)
++-------------------------------+-----------------------------------------------+
+|result                         |type                                           |
++-------------------------------+-----------------------------------------------+
+|{42, 3.14, 2024-12-01 10:00:00}|struct<id:int,value:double,timestamp:timestamp>|
++-------------------------------+-----------------------------------------------+
+
+
+>>> spark.sql("SELECT from_csv('26/08/2015', 'time TIMESTAMP', map('timestampFormat', 'dd/MM/yyyy')) AS result, typeof(from_csv('26/08/2015', 'time TIMESTAMP', map('timestampFormat', 'dd/MM/yyyy'))) AS type").show(truncate=False)
++---------------------+----------------------+
+|result               |type                  |
++---------------------+----------------------+
+|{2015-08-26 00:00:00}|struct<time:timestamp>|
++---------------------+----------------------+

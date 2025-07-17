@@ -1,5 +1,7 @@
-mod factory;
+mod formats;
+mod listing;
 pub mod options;
+mod registry;
 mod url;
 
-pub use factory::TableProviderFactory;
+pub use registry::default_registry;
