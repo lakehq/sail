@@ -9,7 +9,7 @@ The `compose.yml` file in the project defines the containerized local testing en
 You can use container orchestration tools such as [Docker Compose](https://docs.docker.com/compose/)
 or [Podman Compose](https://github.com/containers/podman-compose) to manage the containers that mock external services.
 
-We use [MinIO](https://min.io/) for S3 and [Azurite](https://github.com/Azure/Azurite) for Azure Blob Storage in local testing.
+We use [MinIO](https://min.io/) for S3 and [Azurite](https://github.com/Azure/Azurite) for Azure Storage in local testing.
 This guide shows you how to test object store data access locally.
 
 ## Managing the Containers
@@ -57,22 +57,27 @@ env \
 You need to create the bucket manually by visiting the MinIO console at <http://localhost:19001/>.
 Log in with the credentials configured in `compose.yml`.
 
-### Azure Blob Storage
+### Azure
 
-First, install the Azure Storage SDK:
+First, install the Azure Storage Python client libraries:
 
 ```bash
-pip install azure-storage-blob
+pip install azure-storage-blob azure-storage-file-datalake
 ```
 
 Then create the container using Python:
 
 ```python
 from azure.storage.blob import BlobServiceClient
+from azure.storage.filedatalake import DataLakeServiceClient
 
 connection_string = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;"
+
 blob_service_client = BlobServiceClient.from_connection_string(connection_string)
 container_client = blob_service_client.create_container("foo")
+
+datalake_service_client = DataLakeServiceClient.from_connection_string(connection_string)
+file_system_client = datalake_service_client.create_file_system("meow")
 ```
 
 You can then test the object store by using a [local PySpark session](./pyspark-local.md).
@@ -80,11 +85,18 @@ You can then test the object store by using a [local PySpark session](./pyspark-
 ### Example Code
 
 ```python
+# S3
 path = "s3://foo/bar.parquet"
 spark.sql("SELECT 1").write.parquet(path)
 spark.read.parquet(path).show()
 
+# Azure Blob Storage
 path = "azure://foo/bar.parquet"
+spark.sql("SELECT 1").write.parquet(path)
+spark.read.parquet(path).show()
+
+# Azure DataLake Storage
+path = "abfss://meow/bar.parquet"
 spark.sql("SELECT 1").write.parquet(path)
 spark.read.parquet(path).show()
 ```

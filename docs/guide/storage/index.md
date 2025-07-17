@@ -17,9 +17,10 @@ Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) st
 | ------------------------------ | ------------------ | ------------------ |
 | [File Systems](./fs)           | :white_check_mark: | :white_check_mark: |
 | [AWS S3](./s3)                 | :white_check_mark: | :white_check_mark: |
+| Cloudflare R2                  | :white_check_mark: | :white_check_mark: |
 | [HDFS](./hdfs)                 | :white_check_mark: | :white_check_mark: |
 | [Hugging Face](./hf)           | :white_check_mark: | :x:                |
-| Azure Data Lake Storage (ADLS) | :construction:     | :construction:     |
-| Azure Blob Storage             | :construction:     | :construction:     |
-| Google Cloud Storage (GCS)     | :construction:     | :construction:     |
+| Azure Data Lake Storage (ADLS) | :white_check_mark: | :white_check_mark: |
+| Azure Blob Storage             | :white_check_mark: | :white_check_mark: |
+| Google Cloud Storage (GCS)     | :white_check_mark: | :white_check_mark: |
 | JDBC                           | :x:                | :x:                |
