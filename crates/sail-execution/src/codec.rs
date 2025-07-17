@@ -48,6 +48,7 @@ use sail_plan::extension::function::array::spark_array_item_with_position::Array
 use sail_plan::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_plan::extension::function::array::spark_map_to_array::MapToArray;
 use sail_plan::extension::function::array::spark_sequence::SparkSequence;
+use sail_plan::extension::function::collection::deep_size::DeepSize;
 use sail_plan::extension::function::collection::spark_concat::SparkConcat;
 use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
 use sail_plan::extension::function::collection::spark_size::SparkSize;
@@ -749,6 +750,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromUtcTimestamp::new(time_unit.into());
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkSize(gen::SparkSizeUdf {
+                is_array_size,
+                is_legacy_cardinality,
+            }) => {
+                let udf = SparkSize::new(is_array_size, is_legacy_cardinality);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -766,9 +774,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
-            "spark_size" | "size" | "spark_cardinality" | "cardinality" => {
-                Ok(Arc::new(ScalarUDF::from(SparkSize::new())))
-            }
+            "deep_size" => Ok(Arc::new(ScalarUDF::from(DeepSize::new()))),
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
             }
@@ -854,6 +860,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ArrayEmptyToNull>()
             || node.inner().as_any().is::<ArrayMin>()
             || node.inner().as_any().is::<ArrayMax>()
+            || node.inner().as_any().is::<DeepSize>()
             || node.inner().as_any().is::<Greatest>()
             || node.inner().as_any().is::<Least>()
             || node.inner().as_any().is::<Levenshtein>()
@@ -998,6 +1005,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
             let time_unit = time_unit.as_str_name().to_string();
             UdfKind::SparkFromUtcTimestamp(gen::SparkFromUtcTimestampUdf { time_unit })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkSize>() {
+            UdfKind::SparkSize(gen::SparkSizeUdf {
+                is_array_size: func.is_array_size(),
+                is_legacy_cardinality: func.is_legacy_cardinality(),
+            })
         } else {
             return Ok(());
         };
