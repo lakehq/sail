@@ -25,7 +25,11 @@ impl DeltaFormatFactory {
     }
 
     pub fn new_with_options(mode: SaveMode, options: HashMap<String, String>) -> Self {
-        Self { mode, options, partition_columns: Vec::new() }
+        Self {
+            mode,
+            options,
+            partition_columns: Vec::new(),
+        }
     }
 
     pub fn new_with_partitioning(
@@ -33,7 +37,11 @@ impl DeltaFormatFactory {
         options: HashMap<String, String>,
         partition_columns: Vec<String>,
     ) -> Self {
-        Self { mode, options, partition_columns }
+        Self {
+            mode,
+            options,
+            partition_columns,
+        }
     }
 }
 

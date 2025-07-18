@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use bytes::Bytes;
 use datafusion::arrow::array::{RecordBatch, UInt32Array};
 use datafusion::arrow::compute;
@@ -13,9 +17,6 @@ use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use super::async_utils::AsyncShareableBuffer;
@@ -235,8 +236,8 @@ impl DeltaWriter {
                     .map_err(|e| DeltaTableError::Arrow { source: e })?;
                 new_columns.push(new_col);
             }
-            let partitioned_batch =
-                RecordBatch::try_new(schema.clone(), new_columns).map_err(|e| DeltaTableError::Arrow { source: e })?;
+            let partitioned_batch = RecordBatch::try_new(schema.clone(), new_columns)
+                .map_err(|e| DeltaTableError::Arrow { source: e })?;
 
             // Get partition values from the first row of the group
             let first_row_idx = indices_arr.value(0) as usize;

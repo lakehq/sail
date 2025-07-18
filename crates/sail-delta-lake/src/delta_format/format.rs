@@ -25,8 +25,16 @@ pub struct DeltaFileFormat {
 }
 
 impl DeltaFileFormat {
-    pub fn new(mode: SaveMode, options: HashMap<String, String>, partition_columns: Vec<String>) -> Self {
-        Self { mode, options, partition_columns }
+    pub fn new(
+        mode: SaveMode,
+        options: HashMap<String, String>,
+        partition_columns: Vec<String>,
+    ) -> Self {
+        Self {
+            mode,
+            options,
+            partition_columns,
+        }
     }
 }
 
