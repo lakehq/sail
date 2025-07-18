@@ -681,21 +681,23 @@ impl ExecutionPlan for DeltaScan {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        // DataSourceExec has no children, so DeltaScan should also have no children
-        vec![]
+        // Delegate to the wrapped DataSourceExec
+        self.parquet_scan.children()
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        if !children.is_empty() {
-            return Err(DataFusionError::Plan(format!(
-                "DeltaScan should have no children, but got {}",
-                children.len()
-            )));
-        }
-        Ok(self)
+        // DeltaScan wraps a DataSourceExec, so we delegate the rewriting to the wrapped plan
+        let new_parquet_scan = Arc::clone(&self.parquet_scan).with_new_children(children)?;
+        Ok(Arc::new(DeltaScan {
+            table_uri: self.table_uri.clone(),
+            config: self.config.clone(),
+            parquet_scan: new_parquet_scan,
+            logical_schema: self.logical_schema.clone(),
+            metrics: self.metrics.clone(),
+        }))
     }
 
     fn execute(
