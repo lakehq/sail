@@ -1,9 +1,6 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use bytes::Bytes;
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{RecordBatch, UInt32Array};
+use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use delta_kernel::expressions::Scalar;
 use deltalake::errors::DeltaTableError;
@@ -16,6 +13,9 @@ use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use super::async_utils::AsyncShareableBuffer;
@@ -181,12 +181,77 @@ impl DeltaWriter {
         &self,
         batch: &RecordBatch,
     ) -> Result<Vec<PartitionResult>, DeltaTableError> {
-        // For now, implement a simple non-partitioned case
-        // TODO: Implement proper partitioning logic
-        Ok(vec![PartitionResult {
-            record_batch: batch.clone(),
-            partition_values: IndexMap::new(),
-        }])
+        let partition_columns = &self.config.partition_columns;
+        if partition_columns.is_empty() {
+            return Ok(vec![PartitionResult {
+                record_batch: batch.clone(),
+                partition_values: IndexMap::new(),
+            }]);
+        }
+
+        let partition_col_indices = partition_columns
+            .iter()
+            .map(|name| {
+                batch
+                    .schema()
+                    .index_of(name)
+                    .map_err(|e| DeltaTableError::Arrow { source: e })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let partition_arrays = partition_col_indices
+            .iter()
+            .map(|i| batch.column(*i).clone())
+            .collect::<Vec<_>>();
+
+        // Build a map from partition key to row indices
+        let mut partitions: HashMap<String, Vec<u32>> = HashMap::new();
+        for row_idx in 0..batch.num_rows() {
+            let key: String = partition_arrays
+                .iter()
+                .map(|arr| {
+                    Scalar::from_array(arr.as_ref(), row_idx)
+                        .map(|s| s.serialize())
+                        .unwrap_or_else(|| "__HIVE_DEFAULT_PARTITION__".to_string())
+                })
+                .collect::<Vec<_>>()
+                .join("\0");
+            partitions.entry(key).or_default().push(row_idx as u32);
+        }
+
+        let mut results = Vec::with_capacity(partitions.len());
+
+        for (_, indices) in partitions {
+            let indices_arr = UInt32Array::from(indices);
+
+            let schema = batch.schema();
+            let mut new_columns = Vec::with_capacity(batch.num_columns());
+            for column in batch.columns() {
+                let new_col = compute::take(column.as_ref(), &indices_arr, None)
+                    .map_err(|e| DeltaTableError::Arrow { source: e })?;
+                new_columns.push(new_col);
+            }
+            let partitioned_batch =
+                RecordBatch::try_new(schema.clone(), new_columns).map_err(|e| DeltaTableError::Arrow { source: e })?;
+
+            // Get partition values from the first row of the group
+            let first_row_idx = indices_arr.value(0) as usize;
+            let mut partition_values = IndexMap::new();
+            for (i, col_name) in partition_columns.iter().enumerate() {
+                let arr = &partition_arrays[i];
+                // Assuming partition columns are not null.
+                let scalar = Scalar::from_array(arr.as_ref(), first_row_idx)
+                    .expect("Partition column value should not be null");
+                partition_values.insert(col_name.clone(), scalar);
+            }
+
+            results.push(PartitionResult {
+                record_batch: partitioned_batch,
+                partition_values,
+            });
+        }
+
+        Ok(results)
     }
 
     /// Close the writer and get the Add actions
