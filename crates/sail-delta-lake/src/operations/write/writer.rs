@@ -27,12 +27,17 @@ const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
     fn hive_partition_path(&self) -> String;
+    fn hive_partition_segments(&self) -> Vec<String>;
 }
 
 impl PartitionsExt for IndexMap<String, Scalar> {
     fn hive_partition_path(&self) -> String {
+        self.hive_partition_segments().join("/")
+    }
+
+    fn hive_partition_segments(&self) -> Vec<String> {
         if self.is_empty() {
-            return String::new();
+            return vec![];
         }
 
         self.iter()
@@ -40,12 +45,11 @@ impl PartitionsExt for IndexMap<String, Scalar> {
                 let value_str = if v.is_null() {
                     "__HIVE_DEFAULT_PARTITION__".to_string()
                 } else {
-                    v.serialize()
+                    v.serialize_encoded()
                 };
                 format!("{k}={value_str}")
             })
-            .collect::<Vec<_>>()
-            .join("/")
+            .collect()
     }
 }
 
@@ -281,8 +285,8 @@ pub struct PartitionWriterConfig {
     pub table_path: Path,
     /// Schema of the data written to disk
     pub file_schema: ArrowSchemaRef,
-    /// Partition path prefix
-    pub prefix: String,
+    /// Partition path segments
+    pub partition_segments: Vec<String>,
     /// Values for all partition columns
     pub partition_values: IndexMap<String, Scalar>,
     /// Properties passed to underlying parquet writer
@@ -302,12 +306,12 @@ impl PartitionWriterConfig {
         target_file_size: usize,
         write_batch_size: usize,
     ) -> Self {
-        let prefix = partition_values.hive_partition_path();
+        let partition_segments = partition_values.hive_partition_segments();
 
         Self {
             table_path,
             file_schema,
-            prefix,
+            partition_segments,
             partition_values,
             writer_properties,
             target_file_size,
@@ -459,18 +463,16 @@ impl PartitionWriter {
             self.part_counter, self.writer_id, compression_suffix
         );
 
-        let (relative_path, full_path) = if self.config.prefix.is_empty() {
-            // Non-partitioned table case
-            let relative_path = file_name.clone();
-            let full_path = self.config.table_path.child(relative_path.clone());
-            (relative_path, full_path)
+        let mut full_path = self.config.table_path.clone();
+        for segment in &self.config.partition_segments {
+            full_path = full_path.child(segment.as_str());
+        }
+        full_path = full_path.child(file_name.as_str());
+
+        let relative_path = if self.config.partition_segments.is_empty() {
+            file_name
         } else {
-            // Partitioned table case
-            let relative_path = format!("{}/{}", self.config.prefix, &file_name);
-            let full_path = self.config.table_path
-                .child(self.config.prefix.clone())
-                .child(file_name);
-            (relative_path, full_path)
+            format!("{}/{}", self.config.partition_segments.join("/"), file_name)
         };
 
         (relative_path, full_path)
