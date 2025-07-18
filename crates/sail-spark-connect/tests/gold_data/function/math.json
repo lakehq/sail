@@ -2021,7 +2021,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "success": "ok"
       }
     },
     {
@@ -2043,7 +2043,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "success": "ok"
       }
     },
     {
@@ -2065,7 +2065,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "success": "ok"
       }
     },
     {
@@ -2087,7 +2087,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'try_add' user-defined coercion failed with \"Execution error: Unsupported Data Type: Spark `spark_try_add` function expects Int32, Int32, got Date32, Interval(YearMonth)\" No function matches the given name and argument types 'try_add(Date32, Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttry_add(UserDefined)"
       }
     },
     {
@@ -2109,7 +2109,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'try_add' user-defined coercion failed with \"Execution error: Unsupported Data Type: Spark `spark_try_add` function expects Int32, Int32, got Interval(YearMonth), Interval(YearMonth)\" No function matches the given name and argument types 'try_add(Interval(YearMonth), Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttry_add(UserDefined)"
       }
     },
     {
@@ -2131,7 +2131,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'try_add' user-defined coercion failed with \"Execution error: Unsupported Data Type: Spark `spark_try_add` function expects Int32, Int32, got Timestamp(Microsecond, Some(\\\"Europe/Madrid\\\")), Duration(Microsecond)\" No function matches the given name and argument types 'try_add(Timestamp(Microsecond, Some(\"Europe/Madrid\")), Duration(Microsecond))'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttry_add(UserDefined)"
       }
     },
     {
