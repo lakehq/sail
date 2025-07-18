@@ -77,15 +77,17 @@ df.write.partitionBy("year").parquet("https://webdav.example.com/data/partitione
 Some HTTPS URLs are automatically recognized as cloud storage and routed through the appropriate backend:
 
 **Azure Storage** (URLs ending with):
+
 - `dfs.core.windows.net`
 - `blob.core.windows.net`
 - `dfs.fabric.microsoft.com`
 - `blob.fabric.microsoft.com`
 
 **S3 Storage** (URLs ending with):
+
 - `amazonaws.com` (URLs starting with `s3.amazonaws.com` strip the bucket from path)
 - `r2.cloudflarestorage.com`
-:::
+  :::
 
 ## Configuration
 
