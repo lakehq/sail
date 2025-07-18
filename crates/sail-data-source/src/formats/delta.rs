@@ -33,9 +33,17 @@ impl TableFormat for DeltaTableFormat {
     }
 
     fn create_writer(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
-        let SinkInfo { mode, options, .. } = info;
-        Ok(Arc::new(DeltaFormatFactory::new_with_options(
-            mode, options,
-        )))
+        let SinkInfo {
+            mode,
+            options,
+            partitioning_columns,
+            ..
+        } = info;
+        Ok(Arc::new(
+            <DeltaFormatFactory as Default>::default()
+                .with_mode(mode)
+                .with_options(options)
+                .with_partition_columns(partitioning_columns),
+        ))
     }
 }

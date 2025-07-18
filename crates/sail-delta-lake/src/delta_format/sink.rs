@@ -28,6 +28,7 @@ pub struct DeltaDataSink {
     options: HashMap<String, String>,
     table_paths: Vec<datafusion::datasource::listing::ListingTableUrl>,
     schema: SchemaRef,
+    partition_columns: Vec<String>,
 }
 
 impl DeltaDataSink {
@@ -36,12 +37,14 @@ impl DeltaDataSink {
         options: HashMap<String, String>,
         table_paths: Vec<datafusion::datasource::listing::ListingTableUrl>,
         schema: SchemaRef,
+        partition_columns: Vec<String>,
     ) -> Self {
         Self {
             mode,
             options,
             table_paths,
             schema,
+            partition_columns,
         }
     }
 
@@ -90,19 +93,6 @@ impl DeltaDataSink {
 
     // TODO: The following parsing methods does not make sense, we should find a better way to handle spec::Write.
     // Maybe datafusion has handled it already.
-    /// Parse partition columns from options
-    fn parse_partition_columns(&self) -> Vec<String> {
-        self.options
-            .get("partition_columns")
-            .or(self.options.get("partitionBy"))
-            .map(|cols| {
-                cols.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
 
     /// Parse target file size from options
     fn parse_target_file_size(&self) -> Option<usize> {
@@ -190,7 +180,7 @@ impl DataSink for DeltaDataSink {
             }
         };
 
-        let partition_columns = self.parse_partition_columns();
+        let partition_columns = self.partition_columns.clone();
         let writer_properties = WriterProperties::builder().build();
 
         let writer_config = WriterConfig::new(

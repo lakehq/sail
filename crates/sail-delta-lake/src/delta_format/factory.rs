@@ -8,22 +8,41 @@ use datafusion::datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_common::{GetExt, Result};
 use sail_common::spec::SaveMode;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 pub struct DeltaFormatFactory {
     mode: SaveMode,
     options: HashMap<String, String>,
+    partition_columns: Vec<String>,
 }
 
 impl DeltaFormatFactory {
     pub fn new() -> Self {
-        Self {
-            mode: SaveMode::ErrorIfExists, // Default save mode
-            options: HashMap::new(),
-        }
+        <Self as Default>::default()
     }
 
-    pub fn new_with_options(mode: SaveMode, options: HashMap<String, String>) -> Self {
-        Self { mode, options }
+    pub fn with_mode(mut self, mode: SaveMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    pub fn with_options(mut self, options: HashMap<String, String>) -> Self {
+        self.options = options;
+        self
+    }
+
+    pub fn with_partition_columns(mut self, columns: Vec<String>) -> Self {
+        self.partition_columns = columns;
+        self
+    }
+}
+
+impl Default for DeltaFormatFactory {
+    fn default() -> Self {
+        Self {
+            mode: SaveMode::ErrorIfExists,
+            options: HashMap::new(),
+            partition_columns: Vec::new(),
+        }
     }
 }
 
@@ -46,6 +65,7 @@ impl FileFormatFactory for DeltaFormatFactory {
         Ok(Arc::new(super::format::DeltaFileFormat::new(
             self.mode.clone(),
             combined_options,
+            self.partition_columns.clone(),
         )))
     }
 

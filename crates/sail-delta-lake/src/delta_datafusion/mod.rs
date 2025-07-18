@@ -308,13 +308,198 @@ pub(crate) fn files_matching_predicate<'a>(
         return Ok(Box::new(adds.into_iter()));
     }
 
-    // Filter files based on predicates
-    let filtered = adds.into_iter().filter(|_add| {
-        // TODO: Evaluate predicates against partition values
-        true // For now return all files
+    // Get partition columns and their schema
+    let metadata = snapshot.metadata();
+    let partition_columns = metadata.partition_columns();
+    if partition_columns.is_empty() {
+        // No partition columns, cannot filter based on partitions
+        return Ok(Box::new(adds.into_iter()));
+    }
+
+    // Extract partition-only predicates from mixed expressions
+    let mut partition_only_filters = Vec::new();
+
+    for filter in filters {
+        if let Some(partition_filter) = extract_partition_predicates(filter, partition_columns) {
+            partition_only_filters.push(partition_filter);
+        }
+    }
+
+    // If no partition-only filters, return all files
+    if partition_only_filters.is_empty() {
+        return Ok(Box::new(adds.into_iter()));
+    }
+
+    // Create partition schema for evaluation
+    let table_schema = snapshot.schema();
+    let partition_schema_fields: Vec<Field> = partition_columns
+        .iter()
+        .filter_map(|col_name| {
+            if let Some(field) = table_schema.field(col_name) {
+                let field_name = field.name().to_string();
+                if let Ok(field_type) = arrow_type_from_delta_type(field.data_type()) {
+                    Some(Field::new(field_name, field_type, field.is_nullable()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if partition_schema_fields.is_empty() {
+        return Ok(Box::new(adds.into_iter()));
+    }
+
+    let partition_schema = Arc::new(ArrowSchema::new(partition_schema_fields));
+
+    // For expression evaluation
+    let context = SessionContext::new();
+    let df_schema = partition_schema
+        .clone()
+        .to_dfschema()
+        .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
+
+    let physical_exprs: Result<Vec<_>, _> = partition_only_filters
+        .iter()
+        .map(|filter| {
+            let simplified = simplify_expr(&context, &df_schema, filter.clone());
+            Ok(simplified)
+        })
+        .collect();
+
+    let physical_exprs = physical_exprs.map_err(|e: DeltaTableError| e)?;
+
+    let filtered = adds.into_iter().filter(move |add| {
+        let partition_batch =
+            match create_partition_batch_for_file(add, partition_columns, &partition_schema) {
+                Ok(batch) => batch,
+                Err(_) => return true, // Fallback if partition batch creation fails.
+            };
+
+        for physical_expr in &physical_exprs {
+            match physical_expr.evaluate(&partition_batch) {
+                Ok(columnar_value) => match columnar_value {
+                    datafusion::logical_expr::ColumnarValue::Array(array) => {
+                        if let Some(bool_array) = array
+                            .as_any()
+                            .downcast_ref::<datafusion::arrow::array::BooleanArray>(
+                        ) {
+                            if !bool_array.is_empty() && !bool_array.value(0) {
+                                return false;
+                            }
+                        }
+                    }
+                    datafusion::logical_expr::ColumnarValue::Scalar(scalar) => {
+                        if let ScalarValue::Boolean(Some(false)) = scalar {
+                            return false;
+                        }
+                    }
+                },
+                Err(_) => return true, // Fallback if evaluation fails.
+            }
+        }
+        true
     });
 
     Ok(Box::new(filtered))
+}
+
+/// Extract partition-only predicates from a mixed expression
+/// For example, from "year = 2023 AND score >= 5" with partition columns ["year", "category"],
+/// this would extract "year = 2023"
+fn extract_partition_predicates(expr: &Expr, partition_columns: &[String]) -> Option<Expr> {
+    match expr {
+        // For AND expressions, try to extract partition-only parts
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::And,
+            right,
+        }) => {
+            let left_partition = extract_partition_predicates(left, partition_columns);
+            let right_partition = extract_partition_predicates(right, partition_columns);
+
+            match (left_partition, right_partition) {
+                (Some(left_expr), Some(right_expr)) => Some(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(left_expr),
+                    op: Operator::And,
+                    right: Box::new(right_expr),
+                })),
+                (Some(expr), None) | (None, Some(expr)) => Some(expr),
+                (None, None) => None,
+            }
+        }
+        // For other expressions, check if they only reference partition columns
+        _ => {
+            let column_refs = expr.column_refs();
+            let only_partition_cols = !column_refs.is_empty()
+                && column_refs
+                    .iter()
+                    .all(|col| partition_columns.contains(&col.name));
+
+            if only_partition_cols {
+                Some(expr.clone())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Create a RecordBatch containing partition values for a single file
+fn create_partition_batch_for_file(
+    add: &Add,
+    partition_columns: &[String],
+    schema: &ArrowSchemaRef,
+) -> DeltaResult<RecordBatch> {
+    use datafusion::arrow::array::ArrayRef;
+    use datafusion::arrow::record_batch::RecordBatch;
+
+    let mut arrays: Vec<ArrayRef> = Vec::new();
+
+    for column_name in partition_columns {
+        let field = schema
+            .field_with_name(column_name)
+            .map_err(|e| DeltaTableError::Generic(format!("Field not found: {e}")))?;
+
+        let partition_value = add.partition_values.get(column_name);
+
+        let array: ArrayRef = match partition_value {
+            Some(Some(value)) => {
+                match to_correct_scalar_value(
+                    &serde_json::Value::String(value.clone()),
+                    field.data_type(),
+                ) {
+                    Ok(Some(scalar)) => scalar.to_array_of_size(1).map_err(|e| {
+                        DeltaTableError::Generic(format!("Failed to create array: {e}"))
+                    })?,
+                    Ok(None) => get_null_of_arrow_type(field.data_type())?
+                        .to_array_of_size(1)
+                        .map_err(|e| {
+                            DeltaTableError::Generic(format!("Failed to create null array: {e}"))
+                        })?,
+                    Err(_) => get_null_of_arrow_type(field.data_type())?
+                        .to_array_of_size(1)
+                        .map_err(|e| {
+                            DeltaTableError::Generic(format!("Failed to create default array: {e}"))
+                        })?,
+                }
+            }
+            Some(None) | None => {
+                // Null value
+                get_null_of_arrow_type(field.data_type())?
+                    .to_array_of_size(1)
+                    .map_err(|e| {
+                        DeltaTableError::Generic(format!("Failed to create null array: {e}"))
+                    })?
+            }
+        };
+
+        arrays.push(array);
+    }
+    RecordBatch::try_new(schema.clone(), arrays)
+        .map_err(|e| DeltaTableError::Generic(format!("Failed to create RecordBatch: {e}")))
 }
 
 // Extension trait to add datafusion_table_statistics method to DeltaTableState
@@ -551,23 +736,20 @@ impl ExecutionPlan for DeltaScan {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.parquet_scan]
+        // Delegate to the wrapped DataSourceExec
+        self.parquet_scan.children()
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
-            return Err(DataFusionError::Plan(format!(
-                "DeltaScan wrong number of children {}",
-                children.len()
-            )));
-        }
+        // DeltaScan wraps a DataSourceExec, so we delegate the rewriting to the wrapped plan
+        let new_parquet_scan = Arc::clone(&self.parquet_scan).with_new_children(children)?;
         Ok(Arc::new(DeltaScan {
             table_uri: self.table_uri.clone(),
             config: self.config.clone(),
-            parquet_scan: children[0].clone(),
+            parquet_scan: new_parquet_scan,
             logical_schema: self.logical_schema.clone(),
             metrics: self.metrics.clone(),
         }))
@@ -685,6 +867,17 @@ impl<'a> DeltaScanBuilder<'a> {
                     }
                 }
             }
+            // Ensure all partition columns are included in logical schema
+            let table_partition_cols = self.snapshot.metadata().partition_columns();
+            for partition_col in table_partition_cols.iter() {
+                if let Ok(idx) = logical_schema.index_of(partition_col.as_str()) {
+                    if !used_columns.contains(&idx)
+                        && !fields.iter().any(|f| f.name() == partition_col)
+                    {
+                        fields.push(logical_schema.field(idx).to_owned());
+                    }
+                }
+            }
             Arc::new(ArrowSchema::new(fields))
         } else {
             logical_schema
@@ -709,7 +902,15 @@ impl<'a> DeltaScanBuilder<'a> {
             .filter(|_| config.enable_parquet_pushdown)
             .map(|expr| simplify_expr(&context, &df_schema, expr));
 
-        let file_schema = schema.clone();
+        let table_partition_cols = self.snapshot.metadata().partition_columns();
+        let file_schema = Arc::new(ArrowSchema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|f| !table_partition_cols.contains(f.name()))
+                .cloned()
+                .collect::<Vec<_>>(),
+        ));
 
         let (files, files_scanned, files_pruned, _pruning_mask) = match self.files {
             Some(files) => {
@@ -746,52 +947,30 @@ impl<'a> DeltaScanBuilder<'a> {
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
         let table_partition_cols = &self.snapshot.metadata().partition_columns();
 
-        for action in files {
-            let mut partition_values = Vec::new();
-            for partition_col in table_partition_cols.iter() {
-                let partition_value = action
-                    .partition_values
-                    .get(partition_col)
-                    .map(|val| {
-                        val.as_ref()
-                            .map(|v| {
-                                let field = logical_schema
-                                    .field_with_name(partition_col)
-                                    .expect("Partition column should exist in logical schema");
-                                to_correct_scalar_value(
-                                    &serde_json::Value::String(v.to_string()),
-                                    field.data_type(),
-                                )
-                                .unwrap_or(Some(ScalarValue::Null))
-                                .unwrap_or(ScalarValue::Null)
-                            })
-                            .unwrap_or_else(|| {
-                                let field = logical_schema
-                                    .field_with_name(partition_col)
-                                    .expect("Partition column should exist in logical schema");
-                                get_null_of_arrow_type(field.data_type())
-                                    .unwrap_or(ScalarValue::Null)
-                            })
-                    })
-                    .unwrap_or(ScalarValue::Null);
+        for action in files.iter() {
+            let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
 
-                if config.wrap_partition_values {
-                    partition_values.push(wrap_partition_value_in_dict(partition_value));
+            if config.file_column_name.is_some() {
+                let partition_value = if config.wrap_partition_values {
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(action.path.clone())))
                 } else {
-                    partition_values.push(partition_value);
-                }
+                    ScalarValue::Utf8(Some(action.path.clone()))
+                };
+                part.partition_values.push(partition_value);
             }
 
-            let part = partitioned_file_from_action(&action, table_partition_cols, &logical_schema);
-            file_groups.entry(partition_values).or_default().push(part);
+            file_groups
+                .entry(part.partition_values.clone())
+                .or_default()
+                .push(part);
         }
 
         let mut table_partition_cols = table_partition_cols
             .iter()
             .map(|col| {
-                let field = logical_schema
+                let field = schema
                     .field_with_name(col)
-                    .expect("Column should exist in logical schema");
+                    .expect("Column should exist in schema");
                 let corrected = if config.wrap_partition_values {
                     match field.data_type() {
                         ArrowDataType::Utf8
