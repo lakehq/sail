@@ -5,6 +5,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, ExprSchemable, Operator, ScalarUDF};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::raise_error::RaiseError;
@@ -53,11 +54,7 @@ fn current_catalog(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let catalog_manager = input
         .function_context
         .session_context
-        .state_ref()
-        .read()
-        .config()
-        .get_extension::<CatalogManager>()
-        .ok_or_else(|| PlanError::internal("missing catalog manager"))?;
+        .extension::<CatalogManager>()?;
     Ok(lit(catalog_manager.default_catalog()?.to_string()))
 }
 
@@ -66,11 +63,7 @@ fn current_database(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let catalog_manager = input
         .function_context
         .session_context
-        .state_ref()
-        .read()
-        .config()
-        .get_extension::<CatalogManager>()
-        .ok_or_else(|| PlanError::internal("missing catalog manager"))?;
+        .extension::<CatalogManager>()?;
     Ok(lit(quote_namespace_if_needed(
         &catalog_manager.default_database()?,
     )))

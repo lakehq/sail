@@ -12,6 +12,7 @@ use log::info;
 use sail_catalog::temp_view::TemporaryViewManager;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
 use sail_object_store::DynamicObjectStoreRegistry;
@@ -26,7 +27,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::error::{SparkError, SparkResult};
-use crate::session::{SparkExtension, DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA};
+use crate::session::{SparkSession, DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA};
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct SessionKey {
@@ -102,7 +103,7 @@ impl SessionManager {
             // directly for catalog operations.
             .with_information_schema(false)
             .with_extension(Arc::new(TemporaryViewManager::default()))
-            .with_extension(Arc::new(SparkExtension::try_new(
+            .with_extension(Arc::new(SparkSession::try_new(
                 key.user_id,
                 key.session_id,
                 job_runner,
@@ -263,8 +264,10 @@ impl SessionManagerActor {
             }
         };
         if let Ok(context) = &context {
-            if let Ok(active_at) =
-                SparkExtension::get(context).and_then(|spark| spark.track_activity())
+            if let Ok(active_at) = context
+                .extension::<SparkSession>()
+                .map_err(|e| e.into())
+                .and_then(|spark| spark.track_activity())
             {
                 ctx.send_with_delay(
                     SessionManagerEvent::ProbeIdleSession {
@@ -287,7 +290,7 @@ impl SessionManagerActor {
     ) -> ActorAction {
         let context = self.sessions.get(&key);
         if let Some(context) = context {
-            if let Ok(spark) = SparkExtension::get(context) {
+            if let Ok(spark) = context.extension::<SparkSession>() {
                 if spark.active_at().is_ok_and(|x| x <= instant) {
                     info!("removing idle session {key}");
                     ctx.spawn(async move { spark.job_runner().stop().await });

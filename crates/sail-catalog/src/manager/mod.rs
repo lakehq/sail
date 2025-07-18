@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use sail_common::config::{AppConfig, CatalogKind};
+use sail_common_datafusion::extension::SessionExtension;
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::provider::{CatalogProvider, MemoryCatalogProvider, Namespace};
@@ -24,6 +25,12 @@ pub(super) struct CatalogManagerState {
     pub(super) default_catalog: Arc<str>,
     pub(super) default_database: Namespace,
     pub(super) global_temporary_database: Namespace,
+}
+
+impl SessionExtension for CatalogManager {
+    fn name() -> &'static str {
+        "catalog manager"
+    }
 }
 
 impl CatalogManager {

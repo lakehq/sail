@@ -14,6 +14,7 @@ use sail_catalog::descriptor::DescriptorFactory;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{NamespaceMetadata, TableColumnMetadata, TableKind, TableMetadata};
 use sail_catalog::utils::quote_names_if_needed;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use serde::{Deserialize, Serialize};
 
 use crate::config::PlanConfig;
@@ -67,14 +68,7 @@ impl CatalogCommandNode {
 
 impl CatalogCommandNode {
     pub(crate) async fn execute(&self, ctx: &SessionContext) -> Result<LogicalPlan> {
-        let manager = ctx
-            .state_ref()
-            .read()
-            .config()
-            .get_extension::<CatalogManager>()
-            .ok_or_else(|| {
-                internal_datafusion_err!("missing catalog manager in session context")
-            })?;
+        let manager = ctx.extension::<CatalogManager>()?;
         let batch = self
             .command
             .clone()
