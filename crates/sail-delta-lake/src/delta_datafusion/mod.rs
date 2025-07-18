@@ -815,6 +815,15 @@ impl<'a> DeltaScanBuilder<'a> {
                     }
                 }
             }
+            // Ensure all partition columns are included in logical schema
+            let table_partition_cols = self.snapshot.metadata().partition_columns();
+            for partition_col in table_partition_cols.iter() {
+                if let Ok(idx) = logical_schema.index_of(partition_col.as_str()) {
+                    if !used_columns.contains(&idx) && !fields.iter().any(|f| f.name() == partition_col) {
+                        fields.push(logical_schema.field(idx).to_owned());
+                    }
+                }
+            }
             Arc::new(ArrowSchema::new(fields))
         } else {
             logical_schema
@@ -884,52 +893,30 @@ impl<'a> DeltaScanBuilder<'a> {
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
         let table_partition_cols = &self.snapshot.metadata().partition_columns();
 
-        for action in files {
-            let mut partition_values = Vec::new();
-            for partition_col in table_partition_cols.iter() {
-                let partition_value = action
-                    .partition_values
-                    .get(partition_col)
-                    .map(|val| {
-                        val.as_ref()
-                            .map(|v| {
-                                let field = logical_schema
-                                    .field_with_name(partition_col)
-                                    .expect("Partition column should exist in logical schema");
-                                to_correct_scalar_value(
-                                    &serde_json::Value::String(v.to_string()),
-                                    field.data_type(),
-                                )
-                                .unwrap_or(Some(ScalarValue::Null))
-                                .unwrap_or(ScalarValue::Null)
-                            })
-                            .unwrap_or_else(|| {
-                                let field = logical_schema
-                                    .field_with_name(partition_col)
-                                    .expect("Partition column should exist in logical schema");
-                                get_null_of_arrow_type(field.data_type())
-                                    .unwrap_or(ScalarValue::Null)
-                            })
-                    })
-                    .unwrap_or(ScalarValue::Null);
+        for action in files.iter() {
+            let mut part = partitioned_file_from_action(&action, table_partition_cols, &schema);
 
-                if config.wrap_partition_values {
-                    partition_values.push(wrap_partition_value_in_dict(partition_value));
+            if config.file_column_name.is_some() {
+                let partition_value = if config.wrap_partition_values {
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(action.path.clone())))
                 } else {
-                    partition_values.push(partition_value);
-                }
+                    ScalarValue::Utf8(Some(action.path.clone()))
+                };
+                part.partition_values.push(partition_value);
             }
 
-            let part = partitioned_file_from_action(&action, table_partition_cols, &logical_schema);
-            file_groups.entry(partition_values).or_default().push(part);
+            file_groups
+                .entry(part.partition_values.clone())
+                .or_default()
+                .push(part);
         }
 
         let mut table_partition_cols = table_partition_cols
             .iter()
             .map(|col| {
-                let field = logical_schema
+                let field = schema
                     .field_with_name(col)
-                    .expect("Column should exist in logical schema");
+                    .expect("Column should exist in schema");
                 let corrected = if config.wrap_partition_values {
                     match field.data_type() {
                         ArrowDataType::Utf8
