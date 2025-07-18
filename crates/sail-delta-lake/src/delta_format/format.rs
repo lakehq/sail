@@ -21,11 +21,12 @@ use super::sink::DeltaDataSink;
 pub struct DeltaFileFormat {
     mode: SaveMode,
     options: HashMap<String, String>,
+    partition_columns: Vec<String>,
 }
 
 impl DeltaFileFormat {
-    pub fn new(mode: SaveMode, options: HashMap<String, String>) -> Self {
-        Self { mode, options }
+    pub fn new(mode: SaveMode, options: HashMap<String, String>, partition_columns: Vec<String>) -> Self {
+        Self { mode, options, partition_columns }
     }
 }
 
@@ -87,6 +88,7 @@ impl FileFormat for DeltaFileFormat {
             options,
             conf.table_paths.clone(),
             conf.output_schema().clone(),
+            self.partition_columns.clone(),
         ));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)))

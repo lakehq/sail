@@ -709,7 +709,15 @@ impl<'a> DeltaScanBuilder<'a> {
             .filter(|_| config.enable_parquet_pushdown)
             .map(|expr| simplify_expr(&context, &df_schema, expr));
 
-        let file_schema = schema.clone();
+        let table_partition_cols = self.snapshot.metadata().partition_columns();
+        let file_schema = Arc::new(ArrowSchema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|f| !table_partition_cols.contains(f.name()))
+                .cloned()
+                .collect::<Vec<_>>(),
+        ));
 
         let (files, files_scanned, files_pruned, _pruning_mask) = match self.files {
             Some(files) => {

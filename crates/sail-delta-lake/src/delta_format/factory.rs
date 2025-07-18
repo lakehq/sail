@@ -12,6 +12,7 @@ use sail_common::spec::SaveMode;
 pub struct DeltaFormatFactory {
     mode: SaveMode,
     options: HashMap<String, String>,
+    partition_columns: Vec<String>,
 }
 
 impl DeltaFormatFactory {
@@ -19,11 +20,20 @@ impl DeltaFormatFactory {
         Self {
             mode: SaveMode::ErrorIfExists, // Default save mode
             options: HashMap::new(),
+            partition_columns: Vec::new(),
         }
     }
 
     pub fn new_with_options(mode: SaveMode, options: HashMap<String, String>) -> Self {
-        Self { mode, options }
+        Self { mode, options, partition_columns: Vec::new() }
+    }
+
+    pub fn new_with_partitioning(
+        mode: SaveMode,
+        options: HashMap<String, String>,
+        partition_columns: Vec<String>,
+    ) -> Self {
+        Self { mode, options, partition_columns }
     }
 }
 
@@ -46,6 +56,7 @@ impl FileFormatFactory for DeltaFormatFactory {
         Ok(Arc::new(super::format::DeltaFileFormat::new(
             self.mode.clone(),
             combined_options,
+            self.partition_columns.clone(),
         )))
     }
 

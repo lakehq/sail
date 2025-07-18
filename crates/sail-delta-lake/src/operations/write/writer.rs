@@ -239,7 +239,7 @@ impl DeltaWriter {
             let mut partition_values = IndexMap::new();
             for (i, col_name) in partition_columns.iter().enumerate() {
                 let arr = &partition_arrays[i];
-                // Assuming partition columns are not null.
+                // FIXME: Assuming partition columns are not null.
                 let scalar = Scalar::from_array(arr.as_ref(), first_row_idx)
                     .expect("Partition column value should not be null");
                 partition_values.insert(col_name.clone(), scalar);
@@ -282,7 +282,7 @@ pub struct PartitionWriterConfig {
     /// Schema of the data written to disk
     pub file_schema: ArrowSchemaRef,
     /// Partition path prefix
-    pub prefix: Path,
+    pub prefix: String,
     /// Values for all partition columns
     pub partition_values: IndexMap<String, Scalar>,
     /// Properties passed to underlying parquet writer
@@ -302,8 +302,7 @@ impl PartitionWriterConfig {
         target_file_size: usize,
         write_batch_size: usize,
     ) -> Self {
-        let part_path = partition_values.hive_partition_path();
-        let prefix = Path::parse(part_path).unwrap_or_else(|_| Path::from(""));
+        let prefix = partition_values.hive_partition_path();
 
         Self {
             table_path,
@@ -431,7 +430,7 @@ impl PartitionWriter {
             .map_err(|e| DeltaTableError::generic(format!("Failed to write file: {e}")))?;
 
         // Create Add action
-        let add_action = self.create_add_action(relative_path.as_ref(), file_size, &metadata)?;
+        let add_action = self.create_add_action(&relative_path, file_size, &metadata)?;
         self.files_written.push(add_action);
 
         self.reset_writer()?;
@@ -440,7 +439,7 @@ impl PartitionWriter {
     }
 
     /// Generate the next data file path, returning both relative and full paths
-    fn next_data_path(&mut self) -> (Path, Path) {
+    fn next_data_path(&mut self) -> (String, Path) {
         self.part_counter += 1;
 
         let column_path = ColumnPath::new(Vec::new());
@@ -460,15 +459,20 @@ impl PartitionWriter {
             self.part_counter, self.writer_id, compression_suffix
         );
 
-        let relative_path = if self.config.prefix.as_ref().is_empty() {
-            // For non-partitioned tables, put files directly in table root
-            Path::from(file_name)
+        let (relative_path, full_path) = if self.config.prefix.is_empty() {
+            // Non-partitioned table case
+            let relative_path = file_name.clone();
+            let full_path = self.config.table_path.child(relative_path.clone());
+            (relative_path, full_path)
         } else {
-            // For partitioned tables, include the partition path
-            self.config.prefix.child(file_name)
+            // Partitioned table case
+            let relative_path = format!("{}/{}", self.config.prefix, &file_name);
+            let full_path = self.config.table_path
+                .child(self.config.prefix.clone())
+                .child(file_name);
+            (relative_path, full_path)
         };
 
-        let full_path = self.config.table_path.child(relative_path.to_string());
         (relative_path, full_path)
     }
 

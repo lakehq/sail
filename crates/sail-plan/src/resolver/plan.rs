@@ -2926,6 +2926,7 @@ impl PlanResolver<'_> {
                             ctx: self.ctx,
                             mode: mode.clone(),
                             options: options.into_iter().collect(),
+                            partitioning_columns: partitioning_columns.clone(),
                         })?;
                 let plan = if sort_columns.is_empty() {
                     plan

@@ -22,6 +22,7 @@ pub struct SinkInfo<'a> {
     pub ctx: &'a SessionContext,
     pub mode: SaveMode,
     pub options: HashMap<String, String>,
+    pub partitioning_columns: Vec<String>,
 }
 
 /// A trait for creating a `TableProvider` for a specific format.
