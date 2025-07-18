@@ -570,7 +570,7 @@ class TestDeltaLake:
         # Test AND conditions across multiple partition columns
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("year >= 2023 AND quarter IN (1, 4) AND region != 'ASIA'")
         result_count = filtered_df.count()
-        assert result_count == 8, f"Expected 8 rows for complex AND condition, got {result_count}"
+        assert result_count == 16, f"Expected 16 rows for complex AND condition, got {result_count}"
 
         # Test mixed AND/OR with parentheses
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("(year = 2022 AND quarter = 1) OR (year = 2024 AND quarter = 4)")

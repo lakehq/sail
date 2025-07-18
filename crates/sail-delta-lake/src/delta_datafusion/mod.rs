@@ -316,6 +316,20 @@ pub(crate) fn files_matching_predicate<'a>(
         return Ok(Box::new(adds.into_iter()));
     }
 
+    // Extract partition-only predicates from mixed expressions
+    let mut partition_only_filters = Vec::new();
+
+    for filter in filters {
+        if let Some(partition_filter) = extract_partition_predicates(filter, partition_columns) {
+            partition_only_filters.push(partition_filter);
+        }
+    }
+
+    // If no partition-only filters, return all files
+    if partition_only_filters.is_empty() {
+        return Ok(Box::new(adds.into_iter()));
+    }
+
     // Create partition schema for evaluation
     let table_schema = snapshot.schema();
     let partition_schema_fields: Vec<Field> = partition_columns
@@ -347,7 +361,7 @@ pub(crate) fn files_matching_predicate<'a>(
         .to_dfschema()
         .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
 
-    let physical_exprs: Result<Vec<_>, _> = filters
+    let physical_exprs: Result<Vec<_>, _> = partition_only_filters
         .iter()
         .map(|filter| {
             let simplified = simplify_expr(&context, &df_schema, filter.clone());
@@ -390,6 +404,47 @@ pub(crate) fn files_matching_predicate<'a>(
     });
 
     Ok(Box::new(filtered))
+}
+
+/// Extract partition-only predicates from a mixed expression
+/// For example, from "year = 2023 AND score >= 5" with partition columns ["year", "category"],
+/// this would extract "year = 2023"
+fn extract_partition_predicates(expr: &Expr, partition_columns: &[String]) -> Option<Expr> {
+    match expr {
+        // For AND expressions, try to extract partition-only parts
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::And,
+            right,
+        }) => {
+            let left_partition = extract_partition_predicates(left, partition_columns);
+            let right_partition = extract_partition_predicates(right, partition_columns);
+
+            match (left_partition, right_partition) {
+                (Some(left_expr), Some(right_expr)) => Some(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(left_expr),
+                    op: Operator::And,
+                    right: Box::new(right_expr),
+                })),
+                (Some(expr), None) | (None, Some(expr)) => Some(expr),
+                (None, None) => None,
+            }
+        }
+        // For other expressions, check if they only reference partition columns
+        _ => {
+            let column_refs = expr.column_refs();
+            let only_partition_cols = !column_refs.is_empty()
+                && column_refs
+                    .iter()
+                    .all(|col| partition_columns.contains(&col.name));
+
+            if only_partition_cols {
+                Some(expr.clone())
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// Create a RecordBatch containing partition values for a single file
@@ -816,7 +871,9 @@ impl<'a> DeltaScanBuilder<'a> {
             let table_partition_cols = self.snapshot.metadata().partition_columns();
             for partition_col in table_partition_cols.iter() {
                 if let Ok(idx) = logical_schema.index_of(partition_col.as_str()) {
-                    if !used_columns.contains(&idx) && !fields.iter().any(|f| f.name() == partition_col) {
+                    if !used_columns.contains(&idx)
+                        && !fields.iter().any(|f| f.name() == partition_col)
+                    {
                         fields.push(logical_schema.field(idx).to_owned());
                     }
                 }
