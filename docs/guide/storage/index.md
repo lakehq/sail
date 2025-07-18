@@ -5,11 +5,43 @@ rank: 5
 
 # Data Storage
 
-Sail supports various storage solutions, including file systems, cloud storage services, and other data sources.
+Sail provides a unified interface for reading and writing data across various storage systems, from local file systems to cloud object stores and distributed file systems. This abstraction allows you to seamlessly work with data regardless of where it's stored, using the same familiar Spark APIs.
 
-You can use the `SparkSession.read` and `SparkSession.write` API to load data from and write data to the storage.
+## Overview
 
-You can also use the `CREATE TABLE` SQL statement to create a table that refers to data stored in the storage.
+The storage layer in Sail is built on top of the Apache Arrow object_store crate, providing:
+
+- **Unified API**: Use the same `spark.read` and `spark.write` operations across all storage types
+- **Automatic Detection**: Sail automatically determines the storage backend based on URL format
+- **High Performance**: Optimized connectors for each storage system
+- **Seamless Integration**: Works with Spark SQL, DataFrames, and streaming APIs
+
+## Quick Examples
+
+```python
+# Local file system
+df = spark.read.parquet("/path/to/local/data")
+
+# Cloud storage
+df = spark.read.parquet("s3://bucket/data")
+df = spark.read.parquet("gs://bucket/data")
+df = spark.read.parquet("azure://container/data")
+
+# In-memory storage
+df = spark.read.parquet("memory:///cached/data")
+
+# HTTP endpoints
+df = spark.read.json("https://api.example.com/data.json")
+
+# Create tables from any storage
+spark.sql("""
+    CREATE TABLE my_table
+    USING parquet
+    LOCATION 's3://bucket/path/to/data'
+""")
+```
+
+## Storage Support Matrix
 
 Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) storage features for reading and writing data. There are also features that are planned in our roadmap (:construction:).
 

@@ -38,6 +38,22 @@ test_df.write.mode("overwrite").parquet("memory:///test_data")
 # Read it back
 result_df = spark.read.parquet("memory:///test_data")
 assert result_df.count() == 100
+
+# Test with complex schemas
+from pyspark.sql.types import *
+
+schema = StructType([
+    StructField("id", LongType(), False),
+    StructField("data", ArrayType(StringType()), True),
+    StructField("metadata", MapType(StringType(), StringType()), True)
+])
+
+test_df = spark.createDataFrame([
+    (1, ["a", "b"], {"key": "value"}),
+    (2, ["c", "d"], {"foo": "bar"})
+], schema)
+
+test_df.write.parquet("memory:///complex_test")
 ```
 
 ### Temporary Processing
@@ -65,6 +81,20 @@ spark.read.csv("s3://bucket/reference_data.csv") \
 
 # Use it multiple times without re-reading from S3
 ref_df = spark.read.parquet("memory:///cache/reference")
+
+# Implement cache warming on startup
+def warm_cache():
+    datasets = [
+        ("s3://bucket/dim_users.parquet", "memory:///cache/dim_users"),
+        ("s3://bucket/dim_products.parquet", "memory:///cache/dim_products"),
+        ("s3://bucket/lookup_table.csv", "memory:///cache/lookup")
+    ]
+
+    for source, cache_path in datasets:
+        spark.read.parquet(source).write.mode("overwrite").parquet(cache_path)
+        print(f"Cached {source} to {cache_path}")
+
+warm_cache()
 ```
 
 ## Examples
@@ -81,20 +111,6 @@ users_df = spark.read.parquet("memory:///users")
 users_df.show()
 ```
 
-### Working with Multiple Formats
-
-```python
-# Write different formats
-df.write.json("memory:///data.json")
-df.write.csv("memory:///data.csv")
-df.write.orc("memory:///data.orc")
-
-# Read them back
-json_df = spark.read.json("memory:///data.json")
-csv_df = spark.read.csv("memory:///data.csv")
-orc_df = spark.read.orc("memory:///data.orc")
-```
-
 ### SQL Tables
 
 ```sql
@@ -108,36 +124,4 @@ INSERT INTO memory_table VALUES (1, 'Data in memory');
 
 -- Query the table
 SELECT * FROM memory_table;
-```
-
-## Limitations
-
-::: warning
-**Memory Constraints**: The in-memory store is limited by available RAM. Large datasets may cause out-of-memory errors.
-
-**Persistence**: Data is not persisted and will be lost when:
-
-- The Spark session ends
-- The process terminates
-- The system restarts
-  :::
-
-## Performance Characteristics
-
-- **Write Speed**: Extremely fast, limited only by memory bandwidth
-- **Read Speed**: Instant access with no network or disk latency
-- **Capacity**: Limited by available system memory
-- **Concurrency**: Thread-safe for concurrent reads and writes
-
-## Best Practices
-
-1. **Use for small to medium datasets**: Ideal for data that fits comfortably in memory
-2. **Temporary data only**: Don't use for data that needs to persist
-3. **Clean up**: Remove data when no longer needed to free memory
-4. **Monitor memory usage**: Keep track of memory consumption in long-running processes
-
-```python
-# Clean up memory storage when done
-# Note: There's no direct delete API, but overwriting with empty data achieves the same
-spark.createDataFrame([], schema).write.mode("overwrite").parquet("memory:///temp_data")
 ```
