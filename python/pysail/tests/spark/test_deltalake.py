@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, date, datetime
 
 import pandas as pd
@@ -173,10 +174,10 @@ class TestDeltaLake:
             {
                 "id": [1, 2, 3, 4],
                 "event": ["A", "B", "A", "B"],
-                "year": [2025, 2025, 2026, 2026],
                 "score": [0.8, 0.9, 0.7, 0.6],
+                "year": [2025, 2025, 2026, 2026],
             }
-        ).astype({"id": "int32", "event": "string", "year": "int32", "score": "float64"})
+        ).astype({"id": "int32", "event": "string", "score": "float64", "year": "int32"})
 
         assert_frame_equal(
             result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False
@@ -188,6 +189,87 @@ class TestDeltaLake:
         expected_filtered = expected_data[expected_data["year"] == expected].sort_values("id").reset_index(drop=True)
 
         assert_frame_equal(filtered_df.toPandas(), expected_filtered, check_dtype=False)
+
+    def test_delta_partition_behavior(self, spark, delta_test_data, tmp_path):
+        delta_path = tmp_path / "partitioned_delta_table"
+        delta_table_path = f"file://{delta_path}"
+
+        df = spark.createDataFrame(delta_test_data)
+
+        df.write.format("delta").mode("overwrite").partitionBy("id").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
+
+        expected_data = pd.DataFrame(
+            {"event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76], "id": [10, 11, 12]}
+        ).astype({"event": "string", "score": "float64", "id": "int32"})
+
+        result_pandas = result_df.toPandas()
+        result_pandas = result_pandas.sort_values("id").reset_index(drop=True)
+        expected_data = expected_data.sort_values("id").reset_index(drop=True)
+
+        assert_frame_equal(result_pandas, expected_data, check_dtype=False)
+
+        partition_dirs = []
+        for item in os.listdir(delta_path):
+            item_path = delta_path / item
+            if os.path.isdir(item_path) and item.startswith("id="):
+                partition_dirs.append(item)
+
+        expected_partitions = {"id=10", "id=11", "id=12"}
+        actual_partitions = set(partition_dirs)
+        assert actual_partitions == expected_partitions, f"Expected {expected_partitions}, got {actual_partitions}"
+
+        for partition_dir in partition_dirs:
+            partition_path = delta_path / partition_dir
+            parquet_files = [f for f in os.listdir(partition_path) if f.endswith(".parquet")]
+            assert len(parquet_files) > 0, f"No parquet files found in partition directory {partition_dir}"
+
+    def test_delta_multi_column_partitioning(self, spark, tmp_path):
+        """Test multi-column partitioning behavior."""
+        delta_path = tmp_path / "multi_partitioned_delta_table"
+
+        multi_partition_data = [
+            Row(id=1, region=1, category=1, value=100),
+            Row(id=2, region=1, category=2, value=200),
+            Row(id=3, region=2, category=1, value=300),
+            Row(id=4, region=2, category=2, value=400),
+        ]
+
+        df = spark.createDataFrame(multi_partition_data)
+
+        df.write.format("delta").mode("overwrite").partitionBy("region", "category").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
+
+        expected_data = pd.DataFrame(
+            {"id": [1, 2, 3, 4], "value": [100, 200, 300, 400], "region": [1, 1, 2, 2], "category": [1, 2, 1, 2]}
+        ).astype({"id": "int32", "value": "int32", "region": "int32", "category": "int32"})
+
+        result_pandas = result_df.toPandas().sort_values("id").reset_index(drop=True)
+        expected_data = expected_data.sort_values("id").reset_index(drop=True)
+
+        assert_frame_equal(result_pandas, expected_data, check_dtype=False)
+
+        expected_partition_structure = {
+            "region=1/category=1",
+            "region=1/category=2",
+            "region=2/category=1",
+            "region=2/category=2",
+        }
+
+        actual_partitions = set()
+        for region_dir in os.listdir(delta_path):
+            if region_dir.startswith("region="):
+                region_path = delta_path / region_dir
+                if os.path.isdir(region_path):
+                    for category_dir in os.listdir(region_path):
+                        if category_dir.startswith("category="):
+                            actual_partitions.add(f"{region_dir}/{category_dir}")
+
+        assert (
+            actual_partitions == expected_partition_structure
+        ), f"Expected {expected_partition_structure}, got {actual_partitions}"
 
     def test_delta_with_different_data_types(self, spark, tmp_path):
         """Test Delta Lake support for different data types"""
