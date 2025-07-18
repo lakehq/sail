@@ -58,10 +58,6 @@ impl CatalogManager {
         table: &[T],
         options: DeleteTableOptions,
     ) -> CatalogResult<()> {
-        // We don't know what type of table to drop from a SQL query like "DROP TABLE ...".
-        // This is because TableSaveMethod::SaveAsTable on a DF saves as View in the Sail code,
-        // and Spark expects "DROP TABLE ..." to work on tables created via DF SaveAsTable.
-        // FIXME: saving table as view may be incorrect
         let (catalog, namespace, table) = self.resolve_object_reference(table)?;
         let provider = self.get_catalog(&catalog)?;
         provider.delete_table(&namespace, &table, options).await
