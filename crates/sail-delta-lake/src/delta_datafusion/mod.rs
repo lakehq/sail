@@ -948,7 +948,7 @@ impl<'a> DeltaScanBuilder<'a> {
         let table_partition_cols = &self.snapshot.metadata().partition_columns();
 
         for action in files.iter() {
-            let mut part = partitioned_file_from_action(&action, table_partition_cols, &schema);
+            let mut part = partitioned_file_from_action(action, table_partition_cols, &schema);
 
             if config.file_column_name.is_some() {
                 let partition_value = if config.wrap_partition_values {
