@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_arrow::schema::{SchemaLike, TracingOptions};
 use serde_arrow::to_arrow;
 
-use crate::descriptor::{DescriptorFactory, EmptyDescriptor, SingleValueDescriptor};
+use crate::display::{CatalogDisplay, EmptyDisplay, SingleValueDisplay};
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{
@@ -276,36 +276,34 @@ impl CatalogCommand {
         }
     }
 
-    pub fn schema<F: DescriptorFactory>(&self) -> CatalogResult<SchemaRef> {
+    pub fn schema<D: CatalogDisplay>(&self) -> CatalogResult<SchemaRef> {
         // TODO: make sure we return the same schema as Spark for each command
         let fields = match self {
             CatalogCommand::ListCatalogs { .. } => {
-                Vec::<FieldRef>::from_type::<F::Catalog>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<D::Catalog>(TracingOptions::default())
             }
             CatalogCommand::GetDatabase { .. } | CatalogCommand::ListDatabases { .. } => {
-                Vec::<FieldRef>::from_type::<F::Database>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<D::Database>(TracingOptions::default())
             }
             CatalogCommand::GetTable { .. }
             | CatalogCommand::ListTables { .. }
             | CatalogCommand::ListViews { .. } => {
-                Vec::<FieldRef>::from_type::<F::Table>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<D::Table>(TracingOptions::default())
             }
             CatalogCommand::ListColumns { .. } => {
-                Vec::<FieldRef>::from_type::<F::TableColumn>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<D::TableColumn>(TracingOptions::default())
             }
             CatalogCommand::GetFunction { .. } | CatalogCommand::ListFunctions { .. } => {
-                Vec::<FieldRef>::from_type::<F::Function>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<D::Function>(TracingOptions::default())
             }
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
             | CatalogCommand::RegisterFunction { .. }
             | CatalogCommand::RegisterTableFunction { .. } => {
-                Vec::<FieldRef>::from_type::<EmptyDescriptor>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<EmptyDisplay>(TracingOptions::default())
             }
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
-                Vec::<FieldRef>::from_type::<SingleValueDescriptor<String>>(
-                    TracingOptions::default(),
-                )
+                Vec::<FieldRef>::from_type::<SingleValueDisplay<String>>(TracingOptions::default())
             }
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
@@ -319,7 +317,7 @@ impl CatalogCommand {
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
             | CatalogCommand::DropView { .. } => {
-                Vec::<FieldRef>::from_type::<SingleValueDescriptor<bool>>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<SingleValueDisplay<bool>>(TracingOptions::default())
             }
         }
         .map_err(|e| {
@@ -328,41 +326,41 @@ impl CatalogCommand {
         Ok(Arc::new(Schema::new(fields)))
     }
 
-    pub async fn execute<F: DescriptorFactory>(
+    pub async fn execute<D: CatalogDisplay>(
         self,
         ctx: &SessionContext,
         manager: &CatalogManager,
     ) -> CatalogResult<RecordBatch> {
         // TODO: `ctx` will not be needed if `CatalogManager` manages functions internally.
-        let schema = self.schema::<F>()?;
+        let schema = self.schema::<D>()?;
         match self {
             CatalogCommand::CurrentCatalog => {
                 let value = manager.default_catalog()?;
-                let rows = vec![SingleValueDescriptor { value }];
+                let rows = vec![SingleValueDisplay { value }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::SetCurrentCatalog { catalog } => {
                 manager.set_default_catalog(catalog)?;
-                let rows: Vec<EmptyDescriptor> = vec![];
+                let rows: Vec<EmptyDisplay> = vec![];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::ListCatalogs { pattern } => {
                 let rows = manager
                     .list_catalogs(pattern.as_deref())?
                     .into_iter()
-                    .map(|x| F::catalog(x.to_string()))
+                    .map(|x| D::catalog(x.to_string()))
                     .collect::<Vec<_>>();
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::CurrentDatabase => {
                 let value = manager.default_database()?;
                 let value = quote_namespace_if_needed(&value);
-                let rows = vec![SingleValueDescriptor { value }];
+                let rows = vec![SingleValueDisplay { value }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::SetCurrentDatabase { database } => {
                 manager.set_default_database(database)?;
-                let rows: Vec<EmptyDescriptor> = vec![];
+                let rows: Vec<EmptyDisplay> = vec![];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::CreateDatabase {
@@ -382,30 +380,30 @@ impl CatalogCommand {
                     properties,
                 };
                 manager.create_database(&database, options).await?;
-                let rows = vec![SingleValueDescriptor { value: true }];
+                let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::DatabaseExists { database } => {
                 let value = match manager.get_database(&database).await {
                     Ok(_) => true,
-                    Err(CatalogError::NotFound(_)) => false,
+                    Err(CatalogError::NotFound(_, _)) => false,
                     Err(e) => return Err(e),
                 };
-                let rows = vec![SingleValueDescriptor { value }];
+                let rows = vec![SingleValueDisplay { value }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::GetDatabase { database } => {
                 let rows = match manager.get_database(&database).await {
-                    Ok(x) => vec![F::database(x)],
-                    Err(CatalogError::NotFound(_)) => vec![],
+                    Ok(x) => vec![D::database(x)],
+                    Err(CatalogError::NotFound(_, _)) => vec![],
                     Err(e) => return Err(e),
                 };
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::ListDatabases { qualifier, pattern } => {
                 let rows = match manager.list_databases(&qualifier, pattern.as_deref()).await {
-                    Ok(rows) => rows.into_iter().map(F::database).collect::<Vec<_>>(),
-                    Err(CatalogError::NotFound(_)) => vec![],
+                    Ok(rows) => rows.into_iter().map(D::database).collect::<Vec<_>>(),
+                    Err(CatalogError::NotFound(_, _)) => vec![],
                     Err(e) => return Err(e),
                 };
                 build_record_batch(schema, &rows)
@@ -417,7 +415,7 @@ impl CatalogCommand {
             } => {
                 let options = DeleteNamespaceOptions { if_exists, cascade };
                 manager.delete_database(&database, options).await?;
-                let rows = vec![SingleValueDescriptor { value: true }];
+                let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::CreateTable {
@@ -453,22 +451,22 @@ impl CatalogCommand {
                     properties: options,
                 };
                 manager.create_table(&table, options).await?;
-                let rows = vec![SingleValueDescriptor { value: true }];
+                let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::TableExists { table } => {
                 let value = match manager.get_table(&table).await {
                     Ok(_) => true,
-                    Err(CatalogError::NotFound(_)) => false,
+                    Err(CatalogError::NotFound(_, _)) => false,
                     Err(e) => return Err(e),
                 };
-                let rows = vec![SingleValueDescriptor { value }];
+                let rows = vec![SingleValueDisplay { value }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::GetTable { table } => {
                 // We are supposed to return an error if the table does not exist.
                 let table = manager.get_table(&table).await?;
-                let table = F::table(table);
+                let table = D::table(table);
                 build_record_batch(schema, &[table])
             }
             CatalogCommand::ListTables { database, pattern } => {
@@ -476,7 +474,7 @@ impl CatalogCommand {
                     .list_tables_and_temporary_views(&database, pattern.as_deref())
                     .await?
                     .into_iter()
-                    .map(F::table)
+                    .map(D::table)
                     .collect::<Vec<_>>();
                 build_record_batch(schema, &rows)
             }
@@ -485,7 +483,7 @@ impl CatalogCommand {
                     .list_views_and_temporary_views(&database, pattern.as_deref())
                     .await?
                     .into_iter()
-                    .map(F::table)
+                    .map(D::table)
                     .collect::<Vec<_>>();
                 build_record_batch(schema, &rows)
             }
@@ -496,7 +494,7 @@ impl CatalogCommand {
             } => {
                 let options = DeleteTableOptions { if_exists, purge };
                 manager.delete_table(&table, options).await?;
-                let rows = vec![SingleValueDescriptor { value: true }];
+                let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::ListColumns { table } => {
@@ -504,7 +502,7 @@ impl CatalogCommand {
                     .list_table_columns(&table)
                     .await?
                     .into_iter()
-                    .map(F::table_column)
+                    .map(D::table_column)
                     .collect::<Vec<_>>();
                 build_record_batch(schema, &rows)
             }
@@ -525,17 +523,17 @@ impl CatalogCommand {
                 manager
                     .deregister_function(ctx, &function, if_exists, is_temporary)
                     .await?;
-                let rows = vec![SingleValueDescriptor { value: true }];
+                let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::RegisterFunction { udf } => {
                 manager.register_function(ctx, udf)?;
-                let rows: Vec<EmptyDescriptor> = vec![];
+                let rows: Vec<EmptyDisplay> = vec![];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::RegisterTableFunction { name, udtf } => {
                 manager.register_table_function(ctx, name, udtf)?;
-                let rows: Vec<EmptyDescriptor> = vec![];
+                let rows: Vec<EmptyDisplay> = vec![];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::DropTemporaryView {
@@ -547,13 +545,13 @@ impl CatalogCommand {
                 } else {
                     manager.delete_temporary_view(&view, if_exists).await?;
                 }
-                let rows = vec![SingleValueDescriptor { value: true }];
+                let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::DropView { view, if_exists } => {
                 let options = DeleteViewOptions { if_exists };
                 manager.delete_maybe_temporary_view(&view, options).await?;
-                let rows = vec![SingleValueDescriptor { value: true }];
+                let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::CreateTemporaryView {
@@ -569,7 +567,7 @@ impl CatalogCommand {
                 } else {
                     manager.create_temporary_view(input, &view, replace).await?;
                 }
-                let rows = vec![SingleValueDescriptor { value: true }];
+                let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::CreateView {
@@ -589,7 +587,7 @@ impl CatalogCommand {
                     properties: vec![],
                 };
                 manager.create_view(&view, options).await?;
-                let rows = vec![SingleValueDescriptor { value: true }];
+                let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
         }

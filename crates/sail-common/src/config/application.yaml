@@ -484,7 +484,7 @@
 
 - key: catalog.list
   type: array
-  default: '[{name="sail", type="memory"}]'
+  default: '[{name="sail", type="memory", database=["default"]}]'
   description: |
     The list of catalogs to use. Each catalog is defined by a name and a type, along with optional parameters.
     `name` is used to refer to the catalog name, and `type` defines the catalog implementation.

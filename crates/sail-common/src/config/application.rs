@@ -227,10 +227,7 @@ pub struct CatalogConfig {
 #[serde(deny_unknown_fields)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CatalogKind {
-    Memory {
-        name: String,
-        initial_database: Vec<String>,
-    },
+    Memory { name: String, database: Vec<String> },
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -48,10 +48,10 @@ impl CatalogManager {
             .map_err(|e| CatalogError::Internal(e.to_string()))?
             .is_some();
         if !found && !if_exists {
-            return Err(CatalogError::NotFound(format!(
-                "function: {}",
-                name.as_ref()
-            )));
+            return Err(CatalogError::NotFound(
+                "function",
+                name.as_ref().to_string(),
+            ));
         }
         Ok(())
     }

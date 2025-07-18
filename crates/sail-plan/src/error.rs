@@ -69,8 +69,8 @@ impl From<CatalogError> for PlanError {
     fn from(error: CatalogError) -> Self {
         match error {
             CatalogError::InvalidArgument(message) => PlanError::InvalidArgument(message),
-            CatalogError::NotFound(message) => PlanError::AnalysisError(message),
-            CatalogError::AlreadyExists(message) => PlanError::AnalysisError(message),
+            e @ CatalogError::NotFound(_, _) => PlanError::AnalysisError(e.to_string()),
+            e @ CatalogError::AlreadyExists(_, _) => PlanError::AnalysisError(e.to_string()),
             CatalogError::NotSupported(message) => PlanError::NotSupported(message),
             CatalogError::Internal(message) => PlanError::InternalError(message),
             CatalogError::External(message) => PlanError::AnalysisError(message),

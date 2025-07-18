@@ -50,9 +50,7 @@ impl TemporaryViewManager {
     ) -> CatalogResult<()> {
         let mut views = self.write()?;
         if views.contains_key(&name) && !replace {
-            return Err(CatalogError::AlreadyExists(format!(
-                "temporary view: {name}"
-            )));
+            return Err(CatalogError::AlreadyExists("temporary view", name.clone()));
         }
         views.insert(name, plan);
         Ok(())
@@ -61,7 +59,7 @@ impl TemporaryViewManager {
     pub fn remove_view(&self, name: &str, if_exists: bool) -> CatalogResult<()> {
         let mut views = self.write()?;
         if !views.contains_key(name) && !if_exists {
-            return Err(CatalogError::NotFound(format!("temporary view: {name}")));
+            return Err(CatalogError::NotFound("temporary view", name.to_string()));
         }
         views.remove(name);
         Ok(())
@@ -71,7 +69,7 @@ impl TemporaryViewManager {
         let views = self.read()?;
         let view = views
             .get(name)
-            .ok_or_else(|| CatalogError::NotFound(format!("temporary view: {name}")))?;
+            .ok_or_else(|| CatalogError::NotFound("temporary view", name.to_string()))?;
         Ok(Arc::clone(view))
     }
 

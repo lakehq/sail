@@ -18,7 +18,7 @@ impl CatalogManager {
     pub fn get_catalog(&self, catalog: &str) -> CatalogResult<Arc<dyn CatalogProvider>> {
         let state = self.state()?;
         let Some(provider) = state.catalogs.get(catalog) else {
-            return Err(CatalogError::NotFound(format!("catalog: {catalog}")));
+            return Err(CatalogError::NotFound("catalog", catalog.to_string()));
         };
         Ok(Arc::clone(provider))
     }

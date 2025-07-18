@@ -4,7 +4,7 @@ use datafusion_expr::LogicalPlan;
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
-use crate::provider::{CreateViewOptions, DeleteViewOptions, TableKind, TableMetadata};
+use crate::provider::{CreateViewOptions, DeleteViewOptions, TableKind, TableStatus};
 use crate::temp_view::GLOBAL_TEMPORARY_VIEW_MANAGER;
 use crate::utils::match_pattern;
 
@@ -12,12 +12,12 @@ impl CatalogManager {
     pub async fn list_global_temporary_views(
         &self,
         pattern: Option<&str>,
-    ) -> CatalogResult<Vec<TableMetadata>> {
+    ) -> CatalogResult<Vec<TableStatus>> {
         let state = self.state()?;
         let views = GLOBAL_TEMPORARY_VIEW_MANAGER
             .list_views(pattern)?
             .into_iter()
-            .map(|(name, plan)| TableMetadata {
+            .map(|(name, plan)| TableStatus {
                 name,
                 kind: TableKind::GlobalTemporaryView {
                     namespace: state.global_temporary_database.clone().into(),
@@ -31,12 +31,12 @@ impl CatalogManager {
     pub async fn list_temporary_views(
         &self,
         pattern: Option<&str>,
-    ) -> CatalogResult<Vec<TableMetadata>> {
+    ) -> CatalogResult<Vec<TableStatus>> {
         let views = self
             .temporary_views
             .list_views(pattern)?
             .into_iter()
-            .map(|(name, plan)| TableMetadata {
+            .map(|(name, plan)| TableStatus {
                 name,
                 kind: TableKind::TemporaryView { plan },
             })
@@ -48,7 +48,7 @@ impl CatalogManager {
         &self,
         database: &[T],
         pattern: Option<&str>,
-    ) -> CatalogResult<Vec<TableMetadata>> {
+    ) -> CatalogResult<Vec<TableStatus>> {
         let (catalog, namespace) = self.resolve_database_reference(database)?;
         let provider = self.get_catalog(&catalog)?;
         Ok(provider
@@ -63,7 +63,7 @@ impl CatalogManager {
         &self,
         database: &[T],
         pattern: Option<&str>,
-    ) -> CatalogResult<Vec<TableMetadata>> {
+    ) -> CatalogResult<Vec<TableStatus>> {
         // See `list_tables_and_temporary_views()` for how the (global) temporary views are handled.
         let mut output = if self.is_global_temporary_view_database(database)? {
             self.list_global_temporary_views(pattern).await?
@@ -94,7 +94,7 @@ impl CatalogManager {
         if let [name] = view {
             match self.temporary_views.remove_view(name.as_ref(), false) {
                 Ok(_) => return Ok(()),
-                Err(CatalogError::NotFound(_)) => {}
+                Err(CatalogError::NotFound(_, _)) => {}
                 Err(e) => return Err(e),
             }
         }
@@ -102,7 +102,7 @@ impl CatalogManager {
             if self.is_global_temporary_view_database(x)? {
                 match GLOBAL_TEMPORARY_VIEW_MANAGER.remove_view(name.as_ref(), false) {
                     Ok(_) => return Ok(()),
-                    Err(CatalogError::NotFound(_)) => {}
+                    Err(CatalogError::NotFound(_, _)) => {}
                     Err(e) => return Err(e),
                 }
             }
@@ -139,10 +139,10 @@ impl CatalogManager {
             .add_view(view.to_string(), input.clone(), replace)
     }
 
-    pub async fn get_global_temporary_view(&self, view: &str) -> CatalogResult<TableMetadata> {
+    pub async fn get_global_temporary_view(&self, view: &str) -> CatalogResult<TableStatus> {
         let plan = GLOBAL_TEMPORARY_VIEW_MANAGER.get_view(view)?;
         let state = self.state()?;
-        Ok(TableMetadata {
+        Ok(TableStatus {
             name: view.to_string(),
             kind: TableKind::GlobalTemporaryView {
                 namespace: state.global_temporary_database.clone().into(),
@@ -151,9 +151,9 @@ impl CatalogManager {
         })
     }
 
-    pub async fn get_temporary_view(&self, view: &str) -> CatalogResult<TableMetadata> {
+    pub async fn get_temporary_view(&self, view: &str) -> CatalogResult<TableStatus> {
         let plan = self.temporary_views.get_view(view)?;
-        Ok(TableMetadata {
+        Ok(TableStatus {
             name: view.to_string(),
             kind: TableKind::TemporaryView { plan },
         })
@@ -169,7 +169,7 @@ impl CatalogManager {
         provider.create_view(&namespace, &view, options).await
     }
 
-    pub async fn get_view<T: AsRef<str>>(&self, view: &[T]) -> CatalogResult<TableMetadata> {
+    pub async fn get_view<T: AsRef<str>>(&self, view: &[T]) -> CatalogResult<TableStatus> {
         let (catalog, namespace, view) = self.resolve_object_reference(view)?;
         let provider = self.get_catalog(&catalog)?;
         provider.get_view(&namespace, &view).await

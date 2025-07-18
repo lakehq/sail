@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use sail_common::config::{AppConfig, CatalogKind};
 use sail_common_datafusion::extension::SessionExtension;
 
 use crate::error::{CatalogError, CatalogResult};
-use crate::provider::{CatalogProvider, MemoryCatalogProvider, Namespace};
+use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
 
 pub mod catalog;
@@ -27,41 +26,25 @@ pub(super) struct CatalogManagerState {
     pub(super) global_temporary_database: Namespace,
 }
 
-impl SessionExtension for CatalogManager {
-    fn name() -> &'static str {
-        "catalog manager"
-    }
+pub struct CatalogManagerOptions {
+    pub catalogs: HashMap<String, Arc<dyn CatalogProvider>>,
+    pub default_catalog: String,
+    pub default_database: Vec<String>,
+    pub global_temporary_database: Vec<String>,
 }
 
 impl CatalogManager {
-    fn try_new_catalog(kind: &CatalogKind) -> CatalogResult<(Arc<str>, Arc<dyn CatalogProvider>)> {
-        match kind {
-            CatalogKind::Memory {
-                name,
-                initial_database,
-            } => {
-                let provider = MemoryCatalogProvider::new(initial_database.clone().try_into()?);
-                Ok((name.clone().into(), Arc::new(provider)))
-            }
-        }
-    }
-
-    pub fn try_new(config: &AppConfig) -> CatalogResult<Self> {
-        let catalogs = config
-            .catalog
-            .list
-            .iter()
-            .map(|x| Self::try_new_catalog(x))
-            .collect::<CatalogResult<HashMap<_, _>>>()?;
+    pub fn new(options: CatalogManagerOptions) -> CatalogResult<Self> {
+        let catalogs = options
+            .catalogs
+            .into_iter()
+            .map(|(name, provider)| (name.into(), provider))
+            .collect::<HashMap<_, _>>();
         let state = CatalogManagerState {
             catalogs,
-            default_catalog: config.catalog.default_catalog.clone().into(),
-            default_database: config.catalog.default_database.clone().try_into()?,
-            global_temporary_database: config
-                .catalog
-                .global_temporary_database
-                .clone()
-                .try_into()?,
+            default_catalog: options.default_catalog.into(),
+            default_database: options.default_database.try_into()?,
+            global_temporary_database: options.global_temporary_database.try_into()?,
         };
         Ok(CatalogManager {
             state: Arc::new(Mutex::new(state)),
@@ -150,5 +133,11 @@ impl CatalogManager {
             [] => Ok(false),
             x => Ok(self.state()?.global_temporary_database == x),
         }
+    }
+}
+
+impl SessionExtension for CatalogManager {
+    fn name() -> &'static str {
+        "catalog manager"
     }
 }

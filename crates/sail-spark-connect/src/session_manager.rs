@@ -9,7 +9,6 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use log::info;
-use sail_catalog::temp_view::TemporaryViewManager;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -23,11 +22,12 @@ use sail_plan::function::{
 };
 use sail_plan::new_query_planner;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
+use sail_session::catalog::create_catalog_manager;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::error::{SparkError, SparkResult};
-use crate::session::{SparkSession, DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA};
+use crate::session::SparkSession;
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct SessionKey {
@@ -97,12 +97,10 @@ impl SessionManager {
         // TODO: support more systematic configuration
         // TODO: return error on invalid environment variables
         let mut session_config = SessionConfig::new()
-            .with_create_default_catalog_and_schema(true)
-            .with_default_catalog_and_schema(DEFAULT_SPARK_CATALOG, DEFAULT_SPARK_SCHEMA)
-            // We do not use the information schema since we use the catalog/schema/table providers
-            // directly for catalog operations.
+            // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
+            .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
-            .with_extension(Arc::new(TemporaryViewManager::default()))
+            .with_extension(Arc::new(create_catalog_manager(&options.config)?))
             .with_extension(Arc::new(SparkSession::try_new(
                 key.user_id,
                 key.session_id,

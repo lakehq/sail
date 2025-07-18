@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use crate::error::CatalogResult;
 use crate::manager::CatalogManager;
-use crate::provider::{
-    CreateNamespaceOptions, DeleteNamespaceOptions, Namespace, NamespaceMetadata,
-};
+use crate::provider::{CreateNamespaceOptions, DeleteNamespaceOptions, Namespace, NamespaceStatus};
 use crate::utils::{match_pattern, quote_names_if_needed};
 
 impl CatalogManager {
@@ -20,7 +18,7 @@ impl CatalogManager {
     pub async fn get_database<T: AsRef<str>>(
         &self,
         database: &[T],
-    ) -> CatalogResult<NamespaceMetadata> {
+    ) -> CatalogResult<NamespaceStatus> {
         let (catalog, namespace) = self.resolve_database_reference(database)?;
         let provider = self.get_catalog(&catalog)?;
         provider.get_namespace(&namespace).await
@@ -30,7 +28,7 @@ impl CatalogManager {
         &self,
         qualifier: &[T],
         pattern: Option<&str>,
-    ) -> CatalogResult<Vec<NamespaceMetadata>> {
+    ) -> CatalogResult<Vec<NamespaceStatus>> {
         let (catalog, prefix) = self.resolve_optional_database_reference(qualifier)?;
         let provider = self.get_catalog(&catalog)?;
         Ok(provider

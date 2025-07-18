@@ -5365,10 +5365,17 @@ dependencies = [
  "regex",
  "sail-common",
  "sail-common-datafusion",
- "sail-data-source",
  "serde",
  "serde_arrow",
  "thiserror 2.0.12",
+]
+
+[[package]]
+name = "sail-catalog-memory"
+version = "0.3.1"
+dependencies = [
+ "async-trait",
+ "sail-catalog",
 ]
 
 [[package]]
@@ -5656,6 +5663,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-session"
+version = "0.3.1"
+dependencies = [
+ "datafusion",
+ "sail-catalog",
+ "sail-catalog-memory",
+ "sail-common",
+]
+
+[[package]]
 name = "sail-spark-connect"
 version = "0.3.1"
 dependencies = [
@@ -5673,15 +5690,14 @@ dependencies = [
  "prost-build",
  "quote",
  "regex",
- "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
- "sail-delta-lake",
  "sail-execution",
  "sail-object-store",
  "sail-plan",
  "sail-python-udf",
  "sail-server",
+ "sail-session",
  "sail-sql-analyzer",
  "serde",
  "serde_json",

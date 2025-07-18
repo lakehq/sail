@@ -10,12 +10,11 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{exec_datafusion_err, internal_datafusion_err, DFSchema};
 use datafusion_expr::{TableScan, UNNAMED_TABLE};
 use sail_catalog::command::CatalogCommand;
-use sail_catalog::descriptor::DescriptorFactory;
+use sail_catalog::display::CatalogDisplay;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{NamespaceMetadata, TableColumnMetadata, TableKind, TableMetadata};
+use sail_catalog::provider::{NamespaceStatus, TableColumnStatus, TableKind, TableStatus};
 use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use serde::{Deserialize, Serialize};
 
 use crate::config::PlanConfig;
 use crate::formatter::{PlanFormatter, SparkPlanFormatter};
@@ -55,7 +54,7 @@ impl PartialOrd for CatalogCommandNode {
 impl CatalogCommandNode {
     pub(crate) fn try_new(command: CatalogCommand, config: Arc<PlanConfig>) -> Result<Self> {
         let schema = command
-            .schema::<SparkDescriptorFactory>()
+            .schema::<SparkCatalogDisplay>()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
         Ok(Self {
             name: format!("CatalogCommand: {}", command.name()),
@@ -72,7 +71,7 @@ impl CatalogCommandNode {
         let batch = self
             .command
             .clone()
-            .execute::<SparkDescriptorFactory>(ctx, manager.as_ref())
+            .execute::<SparkCatalogDisplay>(ctx, manager.as_ref())
             .await
             .map_err(|e| exec_datafusion_err!("{e}"))?;
         let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
@@ -114,58 +113,62 @@ impl UserDefinedLogicalNodeCore for CatalogCommandNode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CatalogDescriptor {
-    name: String,
-    description: Option<String>,
+mod display {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SparkCatalog {
+        pub name: String,
+        pub description: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SparkDatabase {
+        pub name: String,
+        pub catalog: Option<String>,
+        pub description: Option<String>,
+        pub location_uri: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SparkTable {
+        pub name: String,
+        pub catalog: Option<String>,
+        pub namespace: Vec<String>,
+        pub description: Option<String>,
+        pub table_type: String,
+        pub is_temporary: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SparkTableColumn {
+        pub name: String,
+        pub description: Option<String>,
+        pub data_type: String,
+        pub nullable: bool,
+        pub is_partition: bool,
+        pub is_bucket: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SparkFunction {
+        pub name: String,
+        pub catalog: Option<String>,
+        pub namespace: Option<Vec<String>>,
+        pub description: Option<String>,
+        pub class_name: String,
+        pub is_temporary: bool,
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DatabaseDescriptor {
-    pub name: String,
-    pub catalog: Option<String>,
-    pub description: Option<String>,
-    pub location_uri: Option<String>,
-}
+struct SparkCatalogDisplay;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TableDescriptor {
-    pub name: String,
-    pub catalog: Option<String>,
-    pub namespace: Vec<String>,
-    pub description: Option<String>,
-    pub table_type: String,
-    pub is_temporary: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TableColumnDescriptor {
-    name: String,
-    description: Option<String>,
-    data_type: String,
-    nullable: bool,
-    is_partition: bool,
-    is_bucket: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FunctionDescriptor {
-    pub name: String,
-    pub catalog: Option<String>,
-    pub namespace: Option<Vec<String>>,
-    pub description: Option<String>,
-    pub class_name: String,
-    pub is_temporary: bool,
-}
-
-struct SparkDescriptorFactory;
-
-impl DescriptorFactory for SparkDescriptorFactory {
-    type Catalog = CatalogDescriptor;
-    type Database = DatabaseDescriptor;
-    type Table = TableDescriptor;
-    type TableColumn = TableColumnDescriptor;
-    type Function = FunctionDescriptor;
+impl CatalogDisplay for SparkCatalogDisplay {
+    type Catalog = display::SparkCatalog;
+    type Database = display::SparkDatabase;
+    type Table = display::SparkTable;
+    type TableColumn = display::SparkTableColumn;
+    type Function = display::SparkFunction;
 
     fn catalog(name: String) -> Self::Catalog {
         Self::Catalog {
@@ -174,31 +177,31 @@ impl DescriptorFactory for SparkDescriptorFactory {
         }
     }
 
-    fn database(metadata: NamespaceMetadata) -> Self::Database {
+    fn database(status: NamespaceStatus) -> Self::Database {
         Self::Database {
-            name: quote_names_if_needed(&metadata.namespace),
-            catalog: Some(metadata.catalog),
+            name: quote_names_if_needed(&status.namespace),
+            catalog: Some(status.catalog),
             description: None,
             location_uri: None,
         }
     }
 
-    fn table(metadata: TableMetadata) -> Self::Table {
-        let table_type = match metadata.kind {
+    fn table(status: TableStatus) -> Self::Table {
+        let table_type = match status.kind {
             TableKind::Table { .. } => "MANAGED",
             TableKind::View { .. } => "VIEW",
             TableKind::TemporaryView { .. } => "TEMPORARY",
             TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
         };
-        let is_temporary = match metadata.kind {
+        let is_temporary = match status.kind {
             TableKind::Table { .. } | TableKind::View { .. } => false,
             TableKind::TemporaryView { .. } | TableKind::GlobalTemporaryView { .. } => true,
         };
-        let catalog = metadata.catalog();
-        let namespace = metadata.namespace();
-        let description = metadata.description();
+        let catalog = status.kind.catalog();
+        let namespace = status.kind.namespace();
+        let description = status.kind.description();
         Self::Table {
-            name: metadata.name,
+            name: status.name,
             catalog,
             namespace,
             description,
@@ -207,17 +210,17 @@ impl DescriptorFactory for SparkDescriptorFactory {
         }
     }
 
-    fn table_column(metadata: TableColumnMetadata) -> Self::TableColumn {
+    fn table_column(status: TableColumnStatus) -> Self::TableColumn {
         let data_type = SparkPlanFormatter
-            .data_type_to_simple_string(&metadata.data_type)
+            .data_type_to_simple_string(&status.data_type)
             .unwrap_or("invalid".to_string());
         Self::TableColumn {
-            name: metadata.name,
-            description: metadata.description,
+            name: status.name,
+            description: status.description,
             data_type,
-            nullable: metadata.nullable,
-            is_partition: metadata.is_partition,
-            is_bucket: metadata.is_bucket,
+            nullable: status.nullable,
+            is_partition: status.is_partition,
+            is_bucket: status.is_bucket,
         }
     }
 }

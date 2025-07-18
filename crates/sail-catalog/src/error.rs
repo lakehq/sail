@@ -6,10 +6,10 @@ pub type CatalogResult<T> = Result<T, CatalogError>;
 pub enum CatalogError {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
-    #[error("not found: {0}")]
-    NotFound(String),
-    #[error("already exists: {0}")]
-    AlreadyExists(String),
+    #[error("{0} not found: {1}")]
+    NotFound(&'static str, String),
+    #[error("{0} already exists: {1}")]
+    AlreadyExists(&'static str, String),
     #[error("not supported: {0}")]
     NotSupported(String),
     #[error("internal error: {0}")]

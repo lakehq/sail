@@ -1,5 +1,5 @@
 pub mod command;
-pub mod descriptor;
+pub mod display;
 pub mod error;
 pub mod manager;
 pub mod provider;

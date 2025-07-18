@@ -1,6 +1,6 @@
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
-use crate::provider::{CreateTableOptions, DeleteTableOptions, TableMetadata};
+use crate::provider::{CreateTableOptions, DeleteTableOptions, TableStatus};
 use crate::utils::match_pattern;
 
 impl CatalogManager {
@@ -14,7 +14,7 @@ impl CatalogManager {
         provider.create_table(&namespace, &table, options).await
     }
 
-    pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableMetadata> {
+    pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
         let (catalog, namespace, table) = self.resolve_object_reference(table)?;
         let provider = self.get_catalog(&catalog)?;
         provider.get_table(&namespace, &table).await
@@ -24,7 +24,7 @@ impl CatalogManager {
         &self,
         database: &[T],
         pattern: Option<&str>,
-    ) -> CatalogResult<Vec<TableMetadata>> {
+    ) -> CatalogResult<Vec<TableStatus>> {
         let (catalog, namespace) = self.resolve_database_reference(database)?;
         let provider = self.get_catalog(&catalog)?;
         Ok(provider
@@ -39,7 +39,7 @@ impl CatalogManager {
         &self,
         database: &[T],
         pattern: Option<&str>,
-    ) -> CatalogResult<Vec<TableMetadata>> {
+    ) -> CatalogResult<Vec<TableStatus>> {
         // Spark *global* temporary views should be put in the "global temporary" database, and they will be
         // included in the output if the database name matches.
         let mut output = if self.is_global_temporary_view_database(database)? {
@@ -70,11 +70,11 @@ impl CatalogManager {
     pub async fn get_table_or_view<T: AsRef<str>>(
         &self,
         reference: &[T],
-    ) -> CatalogResult<TableMetadata> {
+    ) -> CatalogResult<TableStatus> {
         if let [name] = reference {
             match self.get_temporary_view(name.as_ref()).await {
                 Ok(x) => return Ok(x),
-                Err(CatalogError::NotFound(_)) => {}
+                Err(CatalogError::NotFound(_, _)) => {}
                 Err(e) => return Err(e),
             }
         }
@@ -85,7 +85,7 @@ impl CatalogManager {
         }
         match self.get_table(reference).await {
             Ok(x) => return Ok(x),
-            Err(CatalogError::NotFound(_)) => {}
+            Err(CatalogError::NotFound(_, _)) => {}
             Err(e) => return Err(e),
         }
         self.get_view(reference).await

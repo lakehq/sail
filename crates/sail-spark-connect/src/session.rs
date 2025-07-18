@@ -13,9 +13,6 @@ use crate::error::{SparkError, SparkResult};
 use crate::executor::Executor;
 use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
 
-pub(crate) const DEFAULT_SPARK_SCHEMA: &str = "default";
-pub(crate) const DEFAULT_SPARK_CATALOG: &str = "spark_catalog";
-
 /// A Spark session extension to the DataFusion [`SessionContext`].
 ///
 /// [`SessionContext`]: datafusion::prelude::SessionContext

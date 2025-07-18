@@ -1,18 +1,19 @@
 use crate::error::CatalogResult;
 use crate::manager::CatalogManager;
-use crate::provider::TableColumnMetadata;
+use crate::provider::TableColumnStatus;
 
 impl CatalogManager {
     pub async fn list_table_columns<T: AsRef<str>>(
         &self,
         table: &[T],
-    ) -> CatalogResult<Vec<TableColumnMetadata>> {
+    ) -> CatalogResult<Vec<TableColumnStatus>> {
         let metadata = self.get_table_or_view(table).await?;
         let columns = metadata
+            .kind
             .schema()
             .fields()
             .iter()
-            .map(|field| TableColumnMetadata {
+            .map(|field| TableColumnStatus {
                 // TODO: support all fields
                 name: field.name().clone(),
                 description: None,

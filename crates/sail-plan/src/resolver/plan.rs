@@ -39,9 +39,12 @@ use rand::{rng, Rng};
 use sail_catalog::command::{
     CatalogCommand, CatalogDatabaseDefinition, CatalogTableDefinition, CatalogViewDefinition,
 };
+use sail_catalog::manager::CatalogManager;
+use sail_catalog::provider::TableKind;
 use sail_common::spec;
 use sail_common::spec::TableFileFormat;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_data_source::default_registry;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
@@ -707,26 +710,51 @@ impl PlanResolver<'_> {
             return Ok(cte.clone());
         }
 
-        // TODO: read table or view
-        let view: Option<LogicalPlan> = None;
-        if let Some(view) = view {
-            let names = state.register_fields(view.schema().inner().fields());
-            return Ok(rename_logical_plan(view, &names)?);
-        }
-
+        let reference: Vec<String> = name.clone().into();
+        let status = self
+            .ctx
+            .extension::<CatalogManager>()?
+            .get_table_or_view(&reference)
+            .await?;
         if !options.is_empty() {
             return Err(PlanError::todo("table options"));
         }
-        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
-        let names = state.register_fields(table_provider.schema().fields());
-        let table_provider = RenameTableProvider::try_new(table_provider, names)?;
-        Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-            table_reference,
-            provider_as_source(Arc::new(table_provider)),
-            None,
-            vec![],
-            None,
-        )?))
+        let plan = match status.kind {
+            TableKind::Table {
+                catalog: _,
+                namespace: _,
+                schema,
+                format,
+                comment: _,
+                location,
+                properties,
+            } => {
+                let table_provider = default_registry()
+                    .get_format(&format)?
+                    .create_provider(SourceInfo {
+                        ctx: self.ctx,
+                        paths: location.map(|x| vec![x]).unwrap_or_default(),
+                        schema: Some(schema.as_ref().clone()),
+                        options: properties,
+                    })
+                    .await?;
+                let names = state.register_fields(table_provider.schema().fields());
+                let table_provider = RenameTableProvider::try_new(table_provider, names)?;
+                LogicalPlan::TableScan(plan::TableScan::try_new(
+                    table_reference,
+                    provider_as_source(Arc::new(table_provider)),
+                    None,
+                    vec![],
+                    None,
+                )?)
+            }
+            TableKind::View { .. } => return Err(PlanError::todo("read view")),
+            TableKind::TemporaryView { plan } | TableKind::GlobalTemporaryView { plan, .. } => {
+                let names = state.register_fields(plan.schema().inner().fields());
+                rename_logical_plan(plan.as_ref().clone(), &names)?
+            }
+        };
+        Ok(plan)
     }
 
     async fn resolve_query_read_udtf(

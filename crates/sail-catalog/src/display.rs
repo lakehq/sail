@@ -1,16 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-use crate::provider::{NamespaceMetadata, TableColumnMetadata, TableMetadata};
+use crate::provider::{NamespaceStatus, TableColumnStatus, TableStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmptyDescriptor {}
+pub struct EmptyDisplay {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SingleValueDescriptor<T> {
+pub struct SingleValueDisplay<T> {
     pub value: T,
 }
 
-pub trait DescriptorFactory {
+pub trait CatalogDisplay {
     type Catalog: Serialize + for<'de> Deserialize<'de>;
     type Database: Serialize + for<'de> Deserialize<'de>;
     type Table: Serialize + for<'de> Deserialize<'de>;
@@ -19,9 +19,9 @@ pub trait DescriptorFactory {
 
     fn catalog(name: String) -> Self::Catalog;
 
-    fn database(metadata: NamespaceMetadata) -> Self::Database;
+    fn database(status: NamespaceStatus) -> Self::Database;
 
-    fn table(metadata: TableMetadata) -> Self::Table;
+    fn table(status: TableStatus) -> Self::Table;
 
-    fn table_column(metadata: TableColumnMetadata) -> Self::TableColumn;
+    fn table_column(status: TableColumnStatus) -> Self::TableColumn;
 }
