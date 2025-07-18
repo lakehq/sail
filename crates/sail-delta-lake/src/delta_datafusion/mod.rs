@@ -681,26 +681,21 @@ impl ExecutionPlan for DeltaScan {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.parquet_scan]
+        // DataSourceExec has no children, so DeltaScan should also have no children
+        vec![]
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
+        if !children.is_empty() {
             return Err(DataFusionError::Plan(format!(
-                "DeltaScan wrong number of children {}",
+                "DeltaScan should have no children, but got {}",
                 children.len()
             )));
         }
-        Ok(Arc::new(DeltaScan {
-            table_uri: self.table_uri.clone(),
-            config: self.config.clone(),
-            parquet_scan: children[0].clone(),
-            logical_schema: self.logical_schema.clone(),
-            metrics: self.metrics.clone(),
-        }))
+        Ok(self)
     }
 
     fn execute(
