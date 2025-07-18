@@ -8,9 +8,6 @@ use datafusion::datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_common::{GetExt, Result};
 use sail_common::spec::SaveMode;
 
-/// Factory for creating DeltaFileFormat instances.
-///
-/// This struct also acts as its own builder, providing a fluent interface.
 #[derive(Debug, Clone)]
 pub struct DeltaFormatFactory {
     mode: SaveMode,

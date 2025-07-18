@@ -372,7 +372,7 @@ pub(crate) fn files_matching_predicate<'a>(
                             .as_any()
                             .downcast_ref::<datafusion::arrow::array::BooleanArray>(
                         ) {
-                            if bool_array.len() > 0 && !bool_array.value(0) {
+                            if !bool_array.is_empty() && !bool_array.value(0) {
                                 return false;
                             }
                         }
@@ -406,7 +406,7 @@ fn create_partition_batch_for_file(
     for column_name in partition_columns {
         let field = schema
             .field_with_name(column_name)
-            .map_err(|e| DeltaTableError::Generic(format!("Field not found: {}", e)))?;
+            .map_err(|e| DeltaTableError::Generic(format!("Field not found: {e}")))?;
 
         let partition_value = add.partition_values.get(column_name);
 
@@ -417,20 +417,17 @@ fn create_partition_batch_for_file(
                     field.data_type(),
                 ) {
                     Ok(Some(scalar)) => scalar.to_array_of_size(1).map_err(|e| {
-                        DeltaTableError::Generic(format!("Failed to create array: {}", e))
+                        DeltaTableError::Generic(format!("Failed to create array: {e}"))
                     })?,
                     Ok(None) => get_null_of_arrow_type(field.data_type())?
                         .to_array_of_size(1)
                         .map_err(|e| {
-                            DeltaTableError::Generic(format!("Failed to create null array: {}", e))
+                            DeltaTableError::Generic(format!("Failed to create null array: {e}"))
                         })?,
                     Err(_) => get_null_of_arrow_type(field.data_type())?
                         .to_array_of_size(1)
                         .map_err(|e| {
-                            DeltaTableError::Generic(format!(
-                                "Failed to create default array: {}",
-                                e
-                            ))
+                            DeltaTableError::Generic(format!("Failed to create default array: {e}"))
                         })?,
                 }
             }
@@ -439,7 +436,7 @@ fn create_partition_batch_for_file(
                 get_null_of_arrow_type(field.data_type())?
                     .to_array_of_size(1)
                     .map_err(|e| {
-                        DeltaTableError::Generic(format!("Failed to create null array: {}", e))
+                        DeltaTableError::Generic(format!("Failed to create null array: {e}"))
                     })?
             }
         };
@@ -447,7 +444,7 @@ fn create_partition_batch_for_file(
         arrays.push(array);
     }
     RecordBatch::try_new(schema.clone(), arrays)
-        .map_err(|e| DeltaTableError::Generic(format!("Failed to create RecordBatch: {}", e)))
+        .map_err(|e| DeltaTableError::Generic(format!("Failed to create RecordBatch: {e}")))
 }
 
 // Extension trait to add datafusion_table_statistics method to DeltaTableState
