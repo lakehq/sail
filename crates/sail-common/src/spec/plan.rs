@@ -274,23 +274,23 @@ pub enum CommandNode {
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {
-        database_name: Identifier,
+        database: ObjectName,
     },
     ListDatabases {
-        catalog: Option<Identifier>,
-        database_pattern: Option<String>,
+        qualifier: Option<ObjectName>,
+        pattern: Option<String>,
     },
     ListTables {
         database: Option<ObjectName>,
-        table_pattern: Option<String>,
+        pattern: Option<String>,
     },
     ListViews {
         database: Option<ObjectName>,
-        view_pattern: Option<String>,
+        pattern: Option<String>,
     },
     ListFunctions {
         database: Option<ObjectName>,
-        function_pattern: Option<String>,
+        pattern: Option<String>,
     },
     ListColumns {
         table: ObjectName,
@@ -343,10 +343,10 @@ pub enum CommandNode {
     },
     CurrentCatalog,
     SetCurrentCatalog {
-        catalog_name: Identifier,
+        catalog: Identifier,
     },
     ListCatalogs {
-        catalog_pattern: Option<String>,
+        pattern: Option<String>,
     },
     CreateCatalog {
         catalog: Identifier,
@@ -384,10 +384,20 @@ pub enum CommandNode {
         #[serde(flatten)]
         definition: ViewDefinition,
     },
+    /// Drop a view or a temporary view.
     DropView {
         view: ObjectName,
-        /// An optional view kind to match the view name.
-        kind: Option<ViewKind>,
+        if_exists: bool,
+    },
+    CreateTemporaryView {
+        view: Identifier,
+        is_global: bool,
+        #[serde(flatten)]
+        definition: TemporaryViewDefinition,
+    },
+    DropTemporaryView {
+        view: Identifier,
+        is_global: bool,
         if_exists: bool,
     },
     Write(Write),
@@ -753,7 +763,6 @@ pub struct TableDefinition {
     pub file_sort_order: Vec<Vec<SortOrder>>,
     pub if_not_exists: bool,
     pub or_replace: bool,
-    pub unbounded: bool,
     pub options: Vec<(String, String)>,
     /// The query for `CREATE TABLE ... AS SELECT ...` (CTAS) statements.
     pub query: Option<Box<QueryPlan>>,
@@ -777,24 +786,20 @@ pub struct CatalogDefinition {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ViewKind {
-    /// A view that is stored in the catalog.
-    Default,
-    /// A temporary view that is tied to the session.
-    Temporary,
-    /// A temporary view that is available for all sessions in the same Spark application.
-    /// See also: <https://spark.apache.org/docs/latest/sql-getting-started.html#global-temporary-view>
-    GlobalTemporary,
+pub struct ViewDefinition {
+    pub input: Box<QueryPlan>,
+    /// The corresponding SQL query that defines the view.
+    pub definition: String,
+    pub columns: Option<Vec<Identifier>>,
+    pub replace: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ViewDefinition {
+pub struct TemporaryViewDefinition {
     pub input: Box<QueryPlan>,
     pub columns: Option<Vec<Identifier>>,
-    pub kind: ViewKind,
     pub replace: bool,
-    pub definition: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

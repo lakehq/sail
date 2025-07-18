@@ -41,9 +41,9 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
 impl_dyn_object_traits!(PlanFormatter);
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
-pub struct DefaultPlanFormatter;
+pub struct SparkPlanFormatter;
 
-impl DefaultPlanFormatter {
+impl SparkPlanFormatter {
     fn time_unit_to_simple_string(unit: &TimeUnit) -> &'static str {
         match unit {
             TimeUnit::Second => "second",
@@ -54,7 +54,7 @@ impl DefaultPlanFormatter {
     }
 }
 
-impl PlanFormatter for DefaultPlanFormatter {
+impl PlanFormatter for SparkPlanFormatter {
     fn data_type_to_simple_string(&self, data_type: &DataType) -> Result<String> {
         match data_type {
             DataType::Null => Ok("void".to_string()),
@@ -611,7 +611,7 @@ mod tests {
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {
         let plan_config = PlanConfig::new()?;
-        let formatter = DefaultPlanFormatter;
+        let formatter = SparkPlanFormatter;
         let to_string = |literal| formatter.literal_to_string(&literal, &plan_config);
 
         assert_eq!(to_string(ScalarValue::Null)?, "NULL");
