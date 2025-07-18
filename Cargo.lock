@@ -5585,6 +5585,7 @@ dependencies = [
  "lazy_static",
  "num",
  "object_store",
+ "percent-encoding",
  "rand 0.9.1",
  "rand_chacha 0.9.0",
  "rand_distr",
@@ -5602,6 +5603,7 @@ dependencies = [
  "tokio-stream",
  "tonic 0.12.3",
  "twox-hash",
+ "url",
 ]
 
 [[package]]
