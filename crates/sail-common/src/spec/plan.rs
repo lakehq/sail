@@ -857,6 +857,12 @@ pub enum SaveMode {
     Replace,
 }
 
+impl Default for SaveMode {
+    fn default() -> Self {
+        Self::ErrorIfExists
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum JoinType {

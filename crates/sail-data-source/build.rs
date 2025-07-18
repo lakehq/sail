@@ -133,5 +133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     build_options("JsonWriteOptions", "json_write")?;
     build_options("ParquetReadOptions", "parquet_read")?;
     build_options("ParquetWriteOptions", "parquet_write")?;
+    build_options("DeltaReadOptions", "delta_read")?;
+    build_options("DeltaWriteOptions", "delta_write")?;
     Ok(())
 }

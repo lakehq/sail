@@ -320,7 +320,7 @@ impl<'a> RawGlobUrl<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub(super) struct GlobUrl {
+pub struct GlobUrl {
     pub base: Url,
     pub glob: Option<Pattern>,
 }
@@ -485,6 +485,20 @@ impl TryFrom<GlobUrl> for ListingTableUrl {
         let GlobUrl { base, glob } = value;
         Self::try_new(base, glob)
     }
+}
+
+pub async fn resolve_listing_urls(
+    ctx: &SessionContext,
+    paths: Vec<String>,
+) -> Result<Vec<ListingTableUrl>> {
+    let mut urls = vec![];
+    for path in paths {
+        for url in GlobUrl::parse(&path)? {
+            let url = rewrite_directory_url(url, ctx).await?;
+            urls.push(url.try_into()?);
+        }
+    }
+    Ok(urls)
 }
 
 pub async fn rewrite_directory_url(url: GlobUrl, session: &SessionContext) -> Result<GlobUrl> {
