@@ -39,10 +39,11 @@ impl TableFormat for DeltaTableFormat {
             partitioning_columns,
             ..
         } = info;
-        Ok(Arc::new(DeltaFormatFactory::new_with_partitioning(
-            mode,
-            options,
-            partitioning_columns,
-        )))
+        Ok(Arc::new(
+            <DeltaFormatFactory as Default>::default()
+                .with_mode(mode)
+                .with_options(options)
+                .with_partition_columns(partitioning_columns),
+        ))
     }
 }
