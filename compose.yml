@@ -40,15 +40,6 @@ services:
       - "10001:10001" # Queue service
       - "11000:11000" # Table service
 
-  fake-gcs-server:
-    image: fsouza/fake-gcs-server:latest
-    command:
-      ["-scheme", "http", "-port", "4443", "-public-host", "localhost:4443"]
-    volumes:
-      - gcs-data:/data
-    ports:
-      - "4443:4443"
-
   hdfs:
     build:
       context: ./scripts/hadoop
@@ -72,6 +63,4 @@ volumes:
   minio-data:
     driver: local
   azurite-data:
-    driver: local
-  gcs-data:
     driver: local

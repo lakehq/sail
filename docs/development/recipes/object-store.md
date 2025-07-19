@@ -62,14 +62,6 @@ datalake_service_client = DataLakeServiceClient.from_connection_string(connectio
 file_system_client = datalake_service_client.create_file_system("meow")
 ```
 
-### Google Cloud Storage (fake-gcs-server)
-
-Configure the service account and create a bucket:
-
-```bash
-curl -v -X POST --data-binary '{"name":"sail"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
-```
-
 ## Running the Spark Connect Server
 
 After configuring the object stores, use the following command to run the Spark Connect server.
@@ -86,8 +78,6 @@ env \
   AZURE_STORAGE_ACCOUNT_KEY="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==" \
   AZURE_STORAGE_ENDPOINT="http://localhost:10000/devstoreaccount1" \
   AZURE_STORAGE_USE_EMULATOR="true" \
-  GOOGLE_SERVICE_ACCOUNT_KEY='{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": "", "private_key_id": ""}' \
-  GOOGLE_BUCKET="sail" \
   HADOOP_USER_NAME="sail" \
   hatch run scripts/spark-tests/run-server.sh
 ```
@@ -113,11 +103,6 @@ spark.read.parquet(path).show()
 
 # Azure DataLake Storage
 path = "abfss://meow/bar.parquet"
-spark.sql("SELECT 1").write.parquet(path)
-spark.read.parquet(path).show()
-
-# Google Cloud Storage
-path = "gs://sail/bar.parquet"
 spark.sql("SELECT 1").write.parquet(path)
 spark.read.parquet(path).show()
 ```
