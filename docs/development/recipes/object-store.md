@@ -30,34 +30,16 @@ Run the following command to stop and remove all the services, and delete the vo
 docker compose down --volumes
 ```
 
-## Running the Spark Connect Server
+## Configuring the Object Stores
 
-Use the following command to run the Spark Connect server.
-The environment variables related to AWS must match the configuration `compose.yml`.
+Before starting the Spark Connect server, you need to configure the object stores. Follow the setup instructions for each storage service you plan to use.
 
-```bash
-env \
-  AWS_ACCESS_KEY_ID="sail" \
-  AWS_SECRET_ACCESS_KEY="password" \
-  AWS_ENDPOINT="http://localhost:19000" \
-  AWS_VIRTUAL_HOSTED_STYLE_REQUEST="false" \
-  AWS_ALLOW_HTTP="true" \
-  AZURE_STORAGE_ACCOUNT_NAME="devstoreaccount1" \
-  AZURE_STORAGE_ACCOUNT_KEY="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==" \
-  AZURE_STORAGE_ENDPOINT="http://localhost:10000/devstoreaccount1" \
-  AZURE_STORAGE_USE_EMULATOR="true" \
-  HADOOP_USER_NAME="sail" \
-  hatch run scripts/spark-tests/run-server.sh
-```
-
-## Testing the Object Store
-
-### S3
+### S3 (MinIO)
 
 You need to create the bucket manually by visiting the MinIO console at <http://localhost:19001/>.
-Log in with the credentials configured in `compose.yml`.
+Log in with the credentials configured in `compose.yml` (username: `sail`, password: `password`).
 
-### Azure
+### Azure Storage (Azurite)
 
 First, install the Azure Storage Python client libraries:
 
@@ -80,25 +62,34 @@ datalake_service_client = DataLakeServiceClient.from_connection_string(connectio
 file_system_client = datalake_service_client.create_file_system("meow")
 ```
 
-### Google Cloud Storage
+### Google Cloud Storage (fake-gcs-server)
 
-First, install the Google Cloud Storage Python client library:
+Configure the service account and create a bucket:
 
 ```bash
-pip install google-cloud-storage
+curl -v -X POST --data-binary '{"name":"sail"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
 ```
 
-Then create the bucket using Python:
+## Running the Spark Connect Server
 
-```python
-import os
+After configuring the object stores, use the following command to run the Spark Connect server.
+The environment variables must match the configuration in `compose.yml` and the setup steps above.
 
-from google.auth.credentials import AnonymousCredentials
-from google.cloud import storage
-
-os.environ.setdefault("STORAGE_EMULATOR_HOST", "http://localhost:4443")
-client = storage.Client(credentials=AnonymousCredentials(), project="sail")
-bucket = client.create_bucket("foo")
+```bash
+env \
+  AWS_ACCESS_KEY_ID="sail" \
+  AWS_SECRET_ACCESS_KEY="password" \
+  AWS_ENDPOINT="http://localhost:19000" \
+  AWS_VIRTUAL_HOSTED_STYLE_REQUEST="false" \
+  AWS_ALLOW_HTTP="true" \
+  AZURE_STORAGE_ACCOUNT_NAME="devstoreaccount1" \
+  AZURE_STORAGE_ACCOUNT_KEY="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==" \
+  AZURE_STORAGE_ENDPOINT="http://localhost:10000/devstoreaccount1" \
+  AZURE_STORAGE_USE_EMULATOR="true" \
+  GOOGLE_SERVICE_ACCOUNT_KEY='{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": "", "private_key_id": ""}' \
+  GOOGLE_BUCKET="sail" \
+  HADOOP_USER_NAME="sail" \
+  hatch run scripts/spark-tests/run-server.sh
 ```
 
 You can then test the object store by using a [local PySpark session](./pyspark-local.md).
@@ -106,6 +97,10 @@ You can then test the object store by using a [local PySpark session](./pyspark-
 ### Example Code
 
 ```python
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()
+
 # S3
 path = "s3://foo/bar.parquet"
 spark.sql("SELECT 1").write.parquet(path)
@@ -122,7 +117,7 @@ spark.sql("SELECT 1").write.parquet(path)
 spark.read.parquet(path).show()
 
 # Google Cloud Storage
-path = "gs://foo/bar.parquet"
+path = "gs://sail/bar.parquet"
 spark.sql("SELECT 1").write.parquet(path)
 spark.read.parquet(path).show()
 ```
