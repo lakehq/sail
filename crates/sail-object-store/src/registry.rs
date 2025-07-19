@@ -5,6 +5,7 @@ use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{plan_datafusion_err, Result};
 #[cfg(feature = "hdfs")]
 use hdfs_native_object_store::HdfsObjectStore;
+use log::debug;
 use object_store::azure::{MicrosoftAzure, MicrosoftAzureBuilder};
 use object_store::gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder};
 use object_store::http::{HttpBuilder, HttpStore};
@@ -28,10 +29,12 @@ struct ObjectStoreKey {
 
 impl ObjectStoreKey {
     fn new(url: &Url) -> Self {
-        Self {
+        let key = Self {
             scheme: url.scheme().to_string(),
             authority: url.authority().to_string(),
-        }
+        };
+        debug!("ObjectStoreKey::new({url}) = {key:?}");
+        key
     }
 }
 

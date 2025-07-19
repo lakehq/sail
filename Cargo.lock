@@ -5433,6 +5433,7 @@ dependencies = [
  "datafusion-common",
  "futures",
  "glob",
+ "log",
  "object_store",
  "once_cell",
  "percent-encoding",

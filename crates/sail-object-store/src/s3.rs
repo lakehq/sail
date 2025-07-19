@@ -15,7 +15,10 @@ use aws_smithy_runtime_api::client::runtime_components::{
     RuntimeComponents, RuntimeComponentsBuilder,
 };
 use aws_smithy_types::config_bag::ConfigBag;
-use object_store::aws::{resolve_bucket_region, AmazonS3, AmazonS3Builder, AwsCredential};
+use log::debug;
+use object_store::aws::{
+    resolve_bucket_region, AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential,
+};
 use object_store::{ClientOptions, CredentialProvider, Result};
 use tokio::sync::OnceCell;
 use url::Url;
@@ -99,16 +102,15 @@ impl CredentialProvider for S3CredentialProvider {
 }
 
 pub async fn get_s3_object_store(url: &Url) -> Result<AmazonS3> {
+    let bucket = url.authority();
+    let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
+    debug!("Creating S3 object store for url: {url}, bucket (url authority): {bucket}");
+
     let config = DEFAULT_AWS_CONFIG
         .get_or_init(|| aws_config::defaults(BehaviorVersion::latest()).load())
         .await;
-    let bucket = url.authority();
-    let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
-    let region = match config.region() {
-        Some(region) if !region.as_ref().is_empty() => region.to_string(),
-        Some(_) | None => resolve_bucket_region(bucket, &ClientOptions::default()).await?,
-    };
-    builder = builder.with_region(region);
+    debug!("Using AWS config: {config:#?}");
+
     if let Some(provider) = config.credentials_provider() {
         let cache = config
             .identity_cache()
@@ -116,5 +118,25 @@ pub async fn get_s3_object_store(url: &Url) -> Result<AmazonS3> {
         let credentials = S3CredentialProvider::try_new(provider, cache)?;
         builder = builder.with_credentials(Arc::new(credentials));
     }
+
+    let region = match config.region() {
+        Some(region) if !region.as_ref().is_empty() => Some(region.to_string()),
+        Some(_) | None => {
+            if builder
+                .get_config_value(&AmazonS3ConfigKey::Region)
+                .is_none()
+            {
+                debug!("Resolving S3 bucket region for url: {url} bucket: {bucket}");
+                Some(resolve_bucket_region(bucket, &ClientOptions::default()).await?)
+            } else {
+                None
+            }
+        }
+    };
+
+    if let Some(region) = region {
+        builder = builder.with_region(region);
+    }
+
     builder.build()
 }
