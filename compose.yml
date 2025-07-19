@@ -42,7 +42,8 @@ services:
 
   fake-gcs-server:
     image: fsouza/fake-gcs-server:latest
-    command: ["-scheme", "http", "-port", "4443"]
+    command:
+      ["-scheme", "http", "-port", "4443", "-public-host", "localhost:4443"]
     volumes:
       - gcs-data:/data
     ports:
