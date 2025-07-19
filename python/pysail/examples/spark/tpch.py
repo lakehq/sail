@@ -32,6 +32,7 @@ class TpchBenchmark:
             spark.stop()
 
     def _run_query(self, spark: SparkSession, query: int, explain: bool):  # noqa: FBT001
+        total_time = 0
         with open(f"{self.query_path}/q{query}.sql") as f:
             for sql in f.read().split(";"):
                 sql = sql.strip()  # noqa: PLW2901
@@ -56,15 +57,21 @@ class TpchBenchmark:
                     df = spark.sql(sql)
                     rows = df.collect()
                     end_time = time.time()
-                    print(f"The query returned {len(rows)} rows and took {end_time - start_time} seconds.")
+                    query_time = end_time - start_time
+                    total_time += query_time
+                    print(f"The query returned {len(rows)} rows and took {query_time} seconds.")
+        return total_time
 
     def run(self, query: int | None = None, explain: bool = False):  # noqa: FBT001, FBT002
         with self.spark_session() as spark:
             if query is not None:
                 self._run_query(spark, query, explain)
             else:
+                total_time = 0
                 for query in range(1, 23):
-                    self._run_query(spark, query, explain)
+                    total_time += self._run_query(spark, query, explain)
+                if not explain:
+                    print(f"\n\nTotal time for all queries: {total_time} seconds.")
 
 
 def main():

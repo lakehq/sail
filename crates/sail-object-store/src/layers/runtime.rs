@@ -9,7 +9,7 @@ use futures::{Stream, StreamExt};
 use object_store::path::Path;
 use object_store::{
     GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, Mutex};
@@ -111,7 +111,7 @@ impl ObjectStore for RuntimeAwareObjectStore {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         let inner = self.inner.clone();
         let location = location.clone();
@@ -313,6 +313,8 @@ where
         A: Send + 'static,
         F: FnOnce(&A) -> BoxStream<'_, T> + Send + 'static,
     {
+        // Testing with larger buffer values showed no performance improvement.
+        // Network I/O is the bottleneck, not channel capacity.
         let (tx, rx) = mpsc::channel(1);
         handle.spawn(async move {
             let mut stream = initializer(&args);

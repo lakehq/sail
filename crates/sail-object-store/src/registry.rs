@@ -5,8 +5,13 @@ use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{plan_datafusion_err, Result};
 #[cfg(feature = "hdfs")]
 use hdfs_native_object_store::HdfsObjectStore;
+use log::debug;
+use object_store::azure::{MicrosoftAzure, MicrosoftAzureBuilder};
+use object_store::gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder};
+use object_store::http::{HttpBuilder, HttpStore};
 use object_store::local::LocalFileSystem;
-use object_store::ObjectStore;
+use object_store::memory::InMemory;
+use object_store::{ObjectStore, ObjectStoreScheme};
 use sail_common::runtime::RuntimeHandle;
 use url::Url;
 
@@ -24,10 +29,12 @@ struct ObjectStoreKey {
 
 impl ObjectStoreKey {
     fn new(url: &Url) -> Self {
-        Self {
+        let key = Self {
             scheme: url.scheme().to_string(),
             authority: url.authority().to_string(),
-        }
+        };
+        debug!("ObjectStoreKey::new({url}) = {key:?}");
+        key
     }
 }
 
@@ -87,19 +94,8 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
 fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectStore>> {
     let key = ObjectStoreKey::new(url);
     let store: Arc<dyn ObjectStore> = match key.scheme.as_str() {
-        "s3" => {
-            let url = url.clone();
-            let store = LazyObjectStore::new(move || {
-                let url = url.clone();
-                async move { get_s3_object_store(&url).await }
-            });
-            Arc::new(store)
-        }
         #[cfg(feature = "hdfs")]
-        "hdfs" => {
-            let store = HdfsObjectStore::with_url(url.as_str())?;
-            Arc::new(store)
-        }
+        "hdfs" => Arc::new(HdfsObjectStore::with_url(url.as_str())?),
         "hf" => {
             if key.authority != "datasets" {
                 return Err(object_store::Error::Generic {
@@ -113,12 +109,78 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
             Arc::new(HuggingFaceObjectStore::try_new()?)
         }
         _ => {
-            return Err(object_store::Error::Generic {
-                store: "unknown",
-                source: Box::new(plan_datafusion_err!("unsupported object store URL: {url}")),
-            })
+            let (scheme, _path) = ObjectStoreScheme::parse(url)?;
+            let store: Arc<dyn ObjectStore> = match scheme {
+                ObjectStoreScheme::Local => Arc::new(LocalFileSystem::new()),
+                ObjectStoreScheme::Memory => Arc::new(InMemory::new()),
+                ObjectStoreScheme::AmazonS3 => {
+                    let url = url.clone();
+                    let store = LazyObjectStore::new(move || {
+                        let url = url.clone();
+                        async move { get_s3_object_store(&url).await }
+                    });
+                    Arc::new(store)
+                }
+                ObjectStoreScheme::MicrosoftAzure => {
+                    let url = url.clone();
+                    let store = LazyObjectStore::new(move || {
+                        let url = url.clone();
+                        async move { get_azure_object_store(&url).await }
+                    });
+                    Arc::new(store)
+                }
+                ObjectStoreScheme::GoogleCloudStorage => {
+                    let url = url.clone();
+                    let store = LazyObjectStore::new(move || {
+                        let url = url.clone();
+                        async move { get_gcs_object_store(&url).await }
+                    });
+                    Arc::new(store)
+                }
+                ObjectStoreScheme::Http => {
+                    let url = url[..url::Position::BeforePath].to_string();
+                    let store = LazyObjectStore::new(move || {
+                        let url = url.to_string();
+                        async move { get_http_object_store(url).await }
+                    });
+                    Arc::new(store)
+                }
+                other => {
+                    return Err(object_store::Error::Generic {
+                        store: "unknown",
+                        source: Box::new(plan_datafusion_err!(
+                            "unsupported object store URL: {url} for {other:?}"
+                        )),
+                    })
+                }
+            };
+            store
         }
     };
-    let store = Arc::new(LoggingObjectStore::new(store));
-    Ok(store)
+    Ok(Arc::new(LoggingObjectStore::new(store)))
+}
+
+// The following implementations are basic for now just to get preliminary functionality.
+pub async fn get_azure_object_store(url: &Url) -> object_store::Result<MicrosoftAzure> {
+    MicrosoftAzureBuilder::from_env()
+        .with_url(url.to_string())
+        .build()
+}
+
+pub async fn get_gcs_object_store(url: &Url) -> object_store::Result<GoogleCloudStorage> {
+    GoogleCloudStorageBuilder::from_env()
+        .with_url(url.to_string())
+        .build()
+}
+
+pub async fn get_http_object_store(url: String) -> object_store::Result<HttpStore> {
+    let options: Vec<(String, String)> = std::env::vars().collect();
+    let builder = options.into_iter().fold(
+        HttpBuilder::new().with_url(url),
+        |builder, (key, value)| match key.parse() {
+            Ok(k) => builder.with_config(k, value),
+            Err(_) => builder,
+        },
+    );
+    builder.build()
 }
