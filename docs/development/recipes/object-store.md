@@ -83,6 +83,8 @@ env \
   hatch run scripts/spark-tests/run-server.sh
 ```
 
+## Testing the Object Store
+
 You can then test the object store by using a [local PySpark session](./pyspark-local.md).
 
 ### Example Code
