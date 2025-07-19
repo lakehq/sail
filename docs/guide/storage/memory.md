@@ -17,13 +17,6 @@ memory:///path/to/data
 
 The path after `memory://` is virtual and used to organize data within the in-memory store.
 
-## Features
-
-- **Fast access**: No disk I/O overhead
-- **Isolated**: Each Sail session has its own memory store
-- **Temporary**: Data is lost when the session ends
-- **Full operations**: Supports all read and write operations
-
 ## Use Cases
 
 ### Testing and Development
@@ -31,11 +24,9 @@ The path after `memory://` is virtual and used to organize data within the in-me
 Memory storage is ideal for unit tests and development workflows:
 
 ```python
-# Write test data to memory
 test_df = spark.range(100).toDF("id")
 test_df.write.mode("overwrite").parquet("memory:///test_data")
 
-# Read it back
 result_df = spark.read.parquet("memory:///test_data")
 assert result_df.count() == 100
 
@@ -52,49 +43,20 @@ test_df = spark.createDataFrame([
     (1, ["a", "b"], {"key": "value"}),
     (2, ["c", "d"], {"foo": "bar"})
 ], schema)
-
 test_df.write.parquet("memory:///complex_test")
-```
 
-### Temporary Processing
-
-Use memory storage for intermediate results in complex pipelines:
-
-```python
-# Stage 1: Process raw data
-raw_df = spark.read.csv("s3://bucket/raw_data.csv")
-processed_df = raw_df.filter(col("status") == "active")
-processed_df.write.parquet("memory:///temp/processed")
-
-# Stage 2: Aggregate
-temp_df = spark.read.parquet("memory:///temp/processed")
-final_df = temp_df.groupBy("category").agg(sum("amount"))
-final_df.write.parquet("s3://bucket/final_results")
+result_df = spark.read.parquet("memory:///complex_test")
+result_df.show()
 ```
 
 ### Caching Frequently Used Data
 
 ```python
-# Load reference data into memory once
-spark.read.csv("s3://bucket/reference_data.csv") \
+spark.read.parquet("s3://foo/bar.parquet") \
     .write.mode("overwrite").parquet("memory:///cache/reference")
 
-# Use it multiple times without re-reading from S3
 ref_df = spark.read.parquet("memory:///cache/reference")
-
-# Implement cache warming on startup
-def warm_cache():
-    datasets = [
-        ("s3://bucket/dim_users.parquet", "memory:///cache/dim_users"),
-        ("s3://bucket/dim_products.parquet", "memory:///cache/dim_products"),
-        ("s3://bucket/lookup_table.csv", "memory:///cache/lookup")
-    ]
-
-    for source, cache_path in datasets:
-        spark.read.parquet(source).write.mode("overwrite").parquet(cache_path)
-        print(f"Cached {source} to {cache_path}")
-
-warm_cache()
+ref_df.show()
 ```
 
 ## Examples
@@ -102,26 +64,24 @@ warm_cache()
 ### Basic Read/Write
 
 ```python
-# Create a DataFrame and write to memory
 df = spark.createDataFrame([(1, "Alice"), (2, "Bob")], ["id", "name"])
 df.write.parquet("memory:///users")
 
-# Read it back
 users_df = spark.read.parquet("memory:///users")
 users_df.show()
 ```
 
 ### SQL Tables
 
-```sql
--- Create a table backed by memory storage
+```python
+sql = """
 CREATE TABLE memory_table
 USING parquet
-LOCATION 'memory:///tables/my_table';
+LOCATION 'memory:///users';
+"""
+spark.sql(sql)
+spark.sql("SELECT * FROM memory_table;").show()
 
--- Insert data
-INSERT INTO memory_table VALUES (1, 'Data in memory');
-
--- Query the table
-SELECT * FROM memory_table;
+spark.sql("INSERT INTO memory_table VALUES (3::int64, 'Charlie'), (4::int64, 'David');")
+spark.sql("SELECT * FROM memory_table;").show()
 ```
