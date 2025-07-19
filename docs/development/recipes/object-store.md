@@ -9,7 +9,7 @@ The `compose.yml` file in the project defines the containerized local testing en
 You can use container orchestration tools such as [Docker Compose](https://docs.docker.com/compose/)
 or [Podman Compose](https://github.com/containers/podman-compose) to manage the containers that mock external services.
 
-We use [MinIO](https://min.io/) for S3, [Azurite](https://github.com/Azure/Azurite) for Azure Storage, and [fake-gcs-server](https://github.com/fsouza/fake-gcs-server) for Google Cloud Storage in local testing.
+We use [MinIO](https://min.io/) for S3 and [Azurite](https://github.com/Azure/Azurite) for Azure Storage in local testing.
 This guide shows you how to test object store data access locally.
 
 ## Managing the Containers
@@ -78,6 +78,7 @@ env \
   AZURE_STORAGE_ACCOUNT_KEY="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==" \
   AZURE_STORAGE_ENDPOINT="http://localhost:10000/devstoreaccount1" \
   AZURE_STORAGE_USE_EMULATOR="true" \
+  GOOGLE_SKIP_SIGNATURE="true" \
   HADOOP_USER_NAME="sail" \
   hatch run scripts/spark-tests/run-server.sh
 ```
@@ -104,5 +105,10 @@ spark.read.parquet(path).show()
 # Azure DataLake Storage
 path = "abfss://meow/bar.parquet"
 spark.sql("SELECT 1").write.parquet(path)
+spark.read.parquet(path).show()
+
+# Google Cloud Storage
+# Note: There is no working emulator for GCS, so we read from a public bucket for testing
+path = "gs://anaconda-public-data/nyc-taxi/nyc.parquet/part.0.parquet"
 spark.read.parquet(path).show()
 ```
