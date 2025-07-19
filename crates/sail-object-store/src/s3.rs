@@ -121,17 +121,13 @@ pub async fn get_s3_object_store(url: &Url) -> Result<AmazonS3> {
 
     let region = match config.region() {
         Some(region) if !region.as_ref().is_empty() => Some(region.to_string()),
-        Some(_) | None => {
-            if builder
-                .get_config_value(&AmazonS3ConfigKey::Region)
-                .is_none()
-            {
+        Some(_) | None => match builder.get_config_value(&AmazonS3ConfigKey::Region) {
+            Some(region) if !region.is_empty() => None,
+            Some(_) | None => {
                 debug!("Resolving S3 bucket region for url: {url} bucket: {bucket}");
                 Some(resolve_bucket_region(bucket, &ClientOptions::default()).await?)
-            } else {
-                None
             }
-        }
+        },
     };
 
     if let Some(region) = region {
