@@ -9,7 +9,7 @@ The `compose.yml` file in the project defines the containerized local testing en
 You can use container orchestration tools such as [Docker Compose](https://docs.docker.com/compose/)
 or [Podman Compose](https://github.com/containers/podman-compose) to manage the containers that mock external services.
 
-We use [MinIO](https://min.io/) for S3 and [Azurite](https://github.com/Azure/Azurite) for Azure Storage in local testing.
+We use [MinIO](https://min.io/) for S3, [Azurite](https://github.com/Azure/Azurite) for Azure Storage, and [fake-gcs-server](https://github.com/fsouza/fake-gcs-server) for Google Cloud Storage in local testing.
 This guide shows you how to test object store data access locally.
 
 ## Managing the Containers
@@ -80,6 +80,27 @@ datalake_service_client = DataLakeServiceClient.from_connection_string(connectio
 file_system_client = datalake_service_client.create_file_system("meow")
 ```
 
+### Google Cloud Storage
+
+First, install the Google Cloud Storage Python client library:
+
+```bash
+pip install google-cloud-storage
+```
+
+Then create the bucket using Python:
+
+```python
+import os
+
+from google.auth.credentials import AnonymousCredentials
+from google.cloud import storage
+
+os.environ.setdefault("STORAGE_EMULATOR_HOST", "http://localhost:4443")
+client = storage.Client(credentials=AnonymousCredentials(), project="sail")
+bucket = client.create_bucket("foo")
+```
+
 You can then test the object store by using a [local PySpark session](./pyspark-local.md).
 
 ### Example Code
@@ -97,6 +118,11 @@ spark.read.parquet(path).show()
 
 # Azure DataLake Storage
 path = "abfss://meow/bar.parquet"
+spark.sql("SELECT 1").write.parquet(path)
+spark.read.parquet(path).show()
+
+# Google Cloud Storage
+path = "gs://foo/bar.parquet"
 spark.sql("SELECT 1").write.parquet(path)
 spark.read.parquet(path).show()
 ```
