@@ -9,7 +9,7 @@ Sail provides a unified interface for reading and writing data across various st
 
 ## Overview
 
-The storage layer in Sail is built on top of the Apache Arrow object_store crate, providing:
+The storage layer in Sail provides:
 
 - **Unified API**: Use the same `spark.read` and `spark.write` operations across all storage types
 - **Automatic Detection**: Sail automatically determines the storage backend based on URL format
@@ -66,7 +66,8 @@ Sail recognizes various URL formats to identify the appropriate storage backend:
 - **File System**: `file:///path/to/file`
 - **Memory**: `memory:///path`
 - **S3**: `s3://bucket/path` or `s3a://bucket/path`
-- **Azure**: `az://container/path`, `azure://container/path`, `abfs://container@account.dfs.core.windows.net/path`, `abfss://container@account.dfs.core.windows.net/path`
+- **Cloudflare R2**: `"https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/path"`
+- **Azure**: `az://container/path`, `azure://container/path`, `abfs://container/path`, `abfss://container/path`, `adl://container/path`
 - **Google Cloud Storage**: `gs://bucket/path`
 - **HTTP/HTTPS**: `http://example.com/path` or `https://example.com/path`
 - **HDFS**: `hdfs://namenode:port/path`
