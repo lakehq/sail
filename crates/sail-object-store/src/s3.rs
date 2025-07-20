@@ -118,7 +118,7 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
         builder = builder.with_credentials(Arc::new(credentials));
     }
 
-    let mut builder = parse_s3_url(builder, url).await?;
+    let mut builder = parse_s3_url(builder, url)?;
     let bucket = builder
         .get_config_value(&AmazonS3ConfigKey::Bucket)
         .ok_or_else(|| object_store::Error::Generic {
@@ -143,7 +143,7 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
     builder.build()
 }
 
-pub async fn parse_s3_url(
+pub fn parse_s3_url(
     mut builder: AmazonS3Builder,
     url: &Url,
 ) -> object_store::Result<AmazonS3Builder> {
