@@ -15,11 +15,12 @@ use aws_smithy_runtime_api::client::runtime_components::{
     RuntimeComponents, RuntimeComponentsBuilder,
 };
 use aws_smithy_types::config_bag::ConfigBag;
+use datafusion_common::plan_datafusion_err;
 use log::debug;
 use object_store::aws::{
     resolve_bucket_region, AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential,
 };
-use object_store::{ClientOptions, CredentialProvider, Result};
+use object_store::{ClientOptions, CredentialProvider};
 use tokio::sync::OnceCell;
 use url::Url;
 
@@ -52,7 +53,7 @@ impl S3CredentialProvider {
     pub fn try_new(
         provider: SharedCredentialsProvider,
         cache: SharedIdentityCache,
-    ) -> Result<Self> {
+    ) -> object_store::Result<Self> {
         let runtime_components = RuntimeComponentsBuilder::for_tests()
             .with_time_source(Some(SystemTimeSource::new()))
             .with_sleep_impl(Some(TokioSleep::new()))
@@ -74,7 +75,7 @@ impl S3CredentialProvider {
 impl CredentialProvider for S3CredentialProvider {
     type Credential = AwsCredential;
 
-    async fn get_credential(&self) -> Result<Arc<Self::Credential>> {
+    async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
         let identity = self
             .identity_cache
             .resolve_cached_identity(
@@ -101,11 +102,9 @@ impl CredentialProvider for S3CredentialProvider {
     }
 }
 
-pub async fn get_s3_object_store(url: &Url) -> Result<AmazonS3> {
-    let bucket = url.authority();
-    let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
-    debug!("Creating S3 object store for url: {url}, bucket (url authority): {bucket}");
-
+pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
+    debug!("Creating S3 object store for url: {url}");
+    let mut builder = AmazonS3Builder::from_env();
     let config = DEFAULT_AWS_CONFIG
         .get_or_init(|| aws_config::defaults(BehaviorVersion::latest()).load())
         .await;
@@ -119,20 +118,110 @@ pub async fn get_s3_object_store(url: &Url) -> Result<AmazonS3> {
         builder = builder.with_credentials(Arc::new(credentials));
     }
 
-    let region = match config.region() {
-        Some(region) if !region.as_ref().is_empty() => Some(region.to_string()),
-        Some(_) | None => match builder.get_config_value(&AmazonS3ConfigKey::Region) {
-            Some(region) if !region.is_empty() => None,
-            Some(_) | None => {
-                debug!("Resolving S3 bucket region for url: {url} bucket: {bucket}");
-                Some(resolve_bucket_region(bucket, &ClientOptions::default()).await?)
-            }
-        },
-    };
+    let mut builder = parse_s3_url(builder, url).await?;
+    let bucket = builder
+        .get_config_value(&AmazonS3ConfigKey::Bucket)
+        .ok_or_else(|| object_store::Error::Generic {
+            store: "S3",
+            source: Box::new(plan_datafusion_err!(
+                "S3 bucket name must be specified in url: {url}"
+            )),
+        })?;
+    let region = builder.get_config_value(&AmazonS3ConfigKey::Region);
 
-    if let Some(region) = region {
+    if region.is_none_or(|r| r.is_empty()) {
+        let region = match config.region() {
+            Some(region) if !region.as_ref().is_empty() => region.to_string(),
+            _ => {
+                debug!("Resolving S3 bucket region for url: {url} bucket: {bucket}");
+                resolve_bucket_region(bucket.as_str(), &ClientOptions::default()).await?
+            }
+        };
         builder = builder.with_region(region);
     }
 
     builder.build()
+}
+
+pub async fn parse_s3_url(
+    mut builder: AmazonS3Builder,
+    url: &Url,
+) -> object_store::Result<AmazonS3Builder> {
+    let host = url.host_str().ok_or_else(|| object_store::Error::Generic {
+        store: "S3",
+        source: Box::new(plan_datafusion_err!(
+            "URL did not match any known pattern for scheme: {url}"
+        )),
+    })?;
+    let scheme = url.scheme();
+    let first_path_segment = url.path_segments().into_iter().flatten().next();
+
+    match scheme {
+        "s3" | "s3a" => {
+            builder = builder.with_bucket_name(host);
+        }
+        "http" | "https" => {
+            if scheme == "http" {
+                builder = builder.with_allow_http(true);
+            }
+            match host.split('.').collect::<Vec<&str>>()[..] {
+                ["s3", "amazonaws", "com"] => {
+                    if let Some(bucket) = first_path_segment {
+                        builder = builder.with_bucket_name(bucket);
+                    }
+                }
+                ["s3", region, "amazonaws", "com"] => {
+                    builder = builder.with_region(region);
+                    if let Some(bucket) = first_path_segment {
+                        builder = builder.with_bucket_name(bucket);
+                    }
+                }
+                [bucket, "s3", "amazonaws", "com"] => {
+                    builder = builder.with_bucket_name(bucket);
+                    builder = builder.with_virtual_hosted_style_request(true);
+                }
+                [bucket, "s3", region, "amazonaws", "com"] => {
+                    builder = builder.with_bucket_name(bucket);
+                    builder = builder.with_region(region);
+                    builder = builder.with_virtual_hosted_style_request(true);
+                }
+                [bucket, "s3-accelerate", "amazonaws", "com"] => {
+                    builder = builder.with_bucket_name(bucket);
+                    builder =
+                        builder.with_endpoint(format!("{scheme}://s3-accelerate.amazonaws.com"));
+                }
+                [bucket, "s3-accelerate", "dualstack", "amazonaws", "com"] => {
+                    builder = builder.with_bucket_name(bucket);
+                    builder = builder
+                        .with_endpoint(format!("{scheme}://s3-accelerate.dualstack.amazonaws.com"));
+                }
+                [account, "r2", "cloudflarestorage", "com"] => {
+                    builder = builder.with_region("auto");
+                    builder = builder
+                        .with_endpoint(format!("{scheme}://{account}.r2.cloudflarestorage.com"));
+                    if let Some(bucket) = first_path_segment {
+                        builder = builder.with_bucket_name(bucket);
+                    }
+                }
+                _ => {
+                    return Err(object_store::Error::Generic {
+                        store: "S3",
+                        source: Box::new(plan_datafusion_err!(
+                            "URL did not match any known pattern for scheme: {url}"
+                        )),
+                    })
+                }
+            }
+        }
+        scheme => {
+            return Err(object_store::Error::Generic {
+                store: "S3",
+                source: Box::new(plan_datafusion_err!(
+                    "Unknown url scheme cannot be parsed into storage location: {scheme}"
+                )),
+            });
+        }
+    };
+
+    Ok(builder)
 }
