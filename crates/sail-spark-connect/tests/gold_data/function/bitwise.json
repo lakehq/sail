@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bit_count"
+        "success": "ok"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bit_get"
+        "success": "ok"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: bit_get"
+        "success": "ok"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: getbit"
+        "success": "ok"
       }
     },
     {
@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: getbit"
+        "success": "ok"
       }
     },
     {
@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: shiftrightunsigned"
+        "success": "ok"
       }
     },
     {
@@ -327,7 +327,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: ~"
+        "success": "ok"
       }
     }
   ]
