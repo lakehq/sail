@@ -332,3 +332,19 @@ pub(crate) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreat
         None => None,
     }
 }
+
+#[macro_export]
+/// Helper macro to create Case expression boilerplate from when-then pairs and NULL otherwise
+macro_rules! when_then_or_null {
+    ($($when:expr => $then:expr),* $(,)?) => {
+        expr::Expr::Case(expr::Case {
+            expr: None,
+            when_then_expr: vec![
+                $(
+                    (Box::new($when.clone()), Box::new($then.clone()))
+                ),*
+            ],
+            else_expr: None,
+        })
+    };
+}
