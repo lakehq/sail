@@ -128,6 +128,7 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
             )),
         })?;
     let region = builder.get_config_value(&AmazonS3ConfigKey::Region);
+    debug!("S3 object store bucket: {bucket} region from builder: {region:?}");
 
     if region.is_none_or(|r| r.is_empty()) {
         let region = match config.region() {
@@ -137,6 +138,7 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
                 resolve_bucket_region(bucket.as_str(), &ClientOptions::default()).await?
             }
         };
+        debug!("S3 object store bucket: {bucket} resolved region: {region}");
         builder = builder.with_region(region);
     }
 
@@ -147,14 +149,15 @@ pub fn parse_s3_url(
     mut builder: AmazonS3Builder,
     url: &Url,
 ) -> object_store::Result<AmazonS3Builder> {
+    let scheme = url.scheme();
     let host = url.host_str().ok_or_else(|| object_store::Error::Generic {
         store: "S3",
         source: Box::new(plan_datafusion_err!(
             "URL did not match any known pattern for scheme: {url}"
         )),
     })?;
-    let scheme = url.scheme();
     let first_path_segment = url.path_segments().into_iter().flatten().next();
+    debug!("Parsing S3 url: {url} scheme: {scheme} host: {host} first_path_segment: {first_path_segment:?}");
 
     match scheme {
         "s3" | "s3a" => {
@@ -187,13 +190,16 @@ pub fn parse_s3_url(
                 }
                 [bucket, "s3-accelerate", "amazonaws", "com"] => {
                     builder = builder.with_bucket_name(bucket);
-                    builder =
-                        builder.with_endpoint(format!("{scheme}://s3-accelerate.amazonaws.com"));
+                    builder = builder
+                        .with_endpoint(format!("{scheme}://{bucket}.s3-accelerate.amazonaws.com"));
+                    builder = builder.with_virtual_hosted_style_request(true);
                 }
                 [bucket, "s3-accelerate", "dualstack", "amazonaws", "com"] => {
                     builder = builder.with_bucket_name(bucket);
-                    builder = builder
-                        .with_endpoint(format!("{scheme}://s3-accelerate.dualstack.amazonaws.com"));
+                    builder = builder.with_endpoint(format!(
+                        "{scheme}://{bucket}.s3-accelerate.dualstack.amazonaws.com"
+                    ));
+                    builder = builder.with_virtual_hosted_style_request(true);
                 }
                 [account, "r2", "cloudflarestorage", "com"] => {
                     builder = builder.with_region("auto");
