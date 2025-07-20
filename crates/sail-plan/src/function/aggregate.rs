@@ -7,11 +7,10 @@ use datafusion::functions_aggregate::{
     correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
     variance,
 };
-use datafusion::functions_nested::expr_fn;
 use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{expr, lit, AggregateUDF};
+use datafusion_expr::{expr, AggregateUDF};
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
