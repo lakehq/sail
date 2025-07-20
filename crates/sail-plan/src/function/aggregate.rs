@@ -233,6 +233,15 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    use crate::function::common::AggFunctionBuilder as F;
+
+    Ok(expr_fn::array_remove_all(
+        F::default(array_agg::array_agg_udaf)(input)?,
+        lit(ScalarValue::Null),
+    ))
+}
+
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
     use crate::function::common::AggFunctionBuilder as F;
 
@@ -247,7 +256,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             "approx_percentile",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
-        ("array_agg", F::default(array_agg::array_agg_udaf)),
+        ("array_agg", F::custom(array_agg_compacted)),
         ("avg", F::default(average::avg_udaf)),
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
         ("bit_or", F::default(bit_and_or_xor::bit_or_udaf)),
