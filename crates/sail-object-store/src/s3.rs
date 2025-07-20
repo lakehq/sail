@@ -168,15 +168,19 @@ pub fn parse_s3_url(
                 builder = builder.with_allow_http(true);
             }
             match host.split('.').collect::<Vec<&str>>()[..] {
+                // Support for path-style continues for buckets created on/before Sept. 30, 2020:
+                // https://aws.amazon.com/blogs/aws/amazon-s3-path-deprecation-plan-the-rest-of-the-story/
                 ["s3", "amazonaws", "com"] => {
                     if let Some(bucket) = first_path_segment {
                         builder = builder.with_bucket_name(bucket);
+                        builder = builder.with_virtual_hosted_style_request(false);
                     }
                 }
                 ["s3", region, "amazonaws", "com"] => {
                     builder = builder.with_region(region);
                     if let Some(bucket) = first_path_segment {
                         builder = builder.with_bucket_name(bucket);
+                        builder = builder.with_virtual_hosted_style_request(false);
                     }
                 }
                 [bucket, "s3", "amazonaws", "com"] => {
