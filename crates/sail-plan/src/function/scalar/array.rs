@@ -3,7 +3,8 @@ use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position as datafusion_array_position;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, BinaryExpr, Operator};
+use datafusion_expr::{expr, is_null, lit, or, BinaryExpr, ExprSchemable, Operator};
+use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 
 use crate::error::{PlanError, PlanResult};
@@ -148,6 +149,44 @@ fn array_position(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     ])
 }
 
+fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+
+    let (left, right) = arguments.two()?;
+
+    let same_type_null_only_array = expr::Expr::Cast(expr::Cast {
+        expr: Box::new(make_array(vec![lit(ScalarValue::Null)])),
+        data_type: left.get_type(function_context.schema)?,
+    });
+
+    let left_has_null = expr_fn::array_has_any(left.clone(), same_type_null_only_array.clone());
+    let right_has_null = expr_fn::array_has_any(left.clone(), same_type_null_only_array);
+
+    Ok(expr::Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![
+            (
+                Box::new(or(is_null(left.clone()), is_null(right.clone()))),
+                Box::new(lit(ScalarValue::Null)),
+            ),
+            (
+                Box::new(or(left_has_null, right_has_null)),
+                Box::new(or(
+                    expr_fn::array_has_any(
+                        array_compact(left.clone()),
+                        array_compact(right.clone()),
+                    ),
+                    lit(ScalarValue::Null),
+                )),
+            ),
+        ],
+        else_expr: Some(Box::new(expr_fn::array_has_any(left, right))),
+    }))
+}
+
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -169,7 +208,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_remove", F::binary(expr_fn::array_remove_all)),
         ("array_repeat", F::binary(array_repeat)),
         ("array_union", F::binary(expr_fn::array_union)),
-        ("arrays_overlap", F::binary(expr_fn::array_has_any)),
+        ("arrays_overlap", F::custom(arrays_overlap)),
         ("arrays_zip", F::unknown("arrays_zip")),
         ("flatten", F::unary(expr_fn::flatten)),
         ("get", F::binary(array_element)),
