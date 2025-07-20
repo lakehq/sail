@@ -46,8 +46,7 @@ fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         DataType::Int32 => Ok((DataType::UInt32, u32::MAX as u64)),
         DataType::Int64 => Ok((DataType::UInt64, u64::MAX)),
         wrong_type => Err(PlanError::InvalidArgument(format!(
-            "`shiftrightunsigned`: unsupported input type {:?}",
-            wrong_type
+            "`shiftrightunsigned`: unsupported input type {wrong_type:?}"
         ))),
     }?;
 
@@ -74,6 +73,7 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
         ("shiftright", F::binary_op(Operator::BitwiseShiftRight)),
         (">>", F::binary_op(Operator::BitwiseShiftRight)),
         ("shiftrightunsigned", F::custom(shiftrightunsigned)),
+        (">>>", F::custom(shiftrightunsigned)),
         ("|", F::binary_op(Operator::BitwiseOr)),
         ("~", F::unary(|arg| (-arg) - lit(1))),
     ]
