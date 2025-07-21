@@ -7,11 +7,10 @@ use datafusion::functions_aggregate::{
     correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
     variance,
 };
-use datafusion::functions_nested::expr_fn;
 use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{expr, lit, AggregateUDF};
+use datafusion_expr::{expr, AggregateUDF};
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
@@ -225,12 +224,29 @@ fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    use crate::function::common::AggFunctionBuilder as F;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: array_agg::array_agg_udaf(),
+        params: AggregateFunctionParams {
+            args: input.arguments.clone(),
+            distinct: true,
+            order_by: input.order_by,
+            filter: input.filter,
+            null_treatment: get_null_treatment(Some(true)),
+        },
+    }))
+}
 
-    Ok(expr_fn::array_remove(
-        expr_fn::array_distinct(F::default(array_agg::array_agg_udaf)(input)?),
-        lit(ScalarValue::Null),
-    ))
+fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: array_agg::array_agg_udaf(),
+        params: AggregateFunctionParams {
+            args: input.arguments.clone(),
+            distinct: input.distinct,
+            order_by: input.order_by,
+            filter: input.filter,
+            null_treatment: get_null_treatment(Some(true)),
+        },
+    }))
 }
 
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
@@ -247,7 +263,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             "approx_percentile",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
-        ("array_agg", F::default(array_agg::array_agg_udaf)),
+        ("array_agg", F::custom(array_agg_compacted)),
         ("avg", F::default(average::avg_udaf)),
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
         ("bit_or", F::default(bit_and_or_xor::bit_or_udaf)),
