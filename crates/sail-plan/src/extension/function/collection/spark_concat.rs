@@ -1,6 +1,9 @@
 use std::any::Any;
 use std::cmp::Ordering;
 
+use arrow::array::BooleanArray;
+use arrow::compute::kernels::boolean::{is_null, or};
+use arrow::compute::kernels::nullif::nullif;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
@@ -81,6 +84,16 @@ impl ScalarUDFImpl for SparkConcat {
                 }
             }
             Ok(expr_type)
+        } else if arg_types
+            .iter()
+            .all(|arg_type| matches!(arg_type, DataType::Binary))
+        {
+            Ok(DataType::Binary)
+        } else if arg_types
+            .iter()
+            .all(|arg_type| matches!(arg_type, DataType::Binary | DataType::LargeBinary))
+        {
+            Ok(DataType::LargeBinary)
         } else {
             Ok(arg_types
                 .iter()
@@ -104,14 +117,79 @@ impl ScalarUDFImpl for SparkConcat {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args
+        let mut null_mask = None;
+        for arg in args.args.clone() {
+            match arg {
+                ColumnarValue::Scalar(s) if s.is_null() => {
+                    return Ok(ColumnarValue::Scalar(s.clone()));
+                }
+                ColumnarValue::Array(a) => {
+                    let mask = is_null(&a)?;
+                    null_mask = match null_mask {
+                        Some(existing) => Some(or(&existing, &mask)?),
+                        None => Some(mask),
+                    };
+                }
+                _ => (),
+            }
+        }
+        let null_mask = null_mask.unwrap_or_else(|| BooleanArray::from(vec![false; 1]));
+
+        let return_field = args.return_field.clone();
+        let return_type = return_field.data_type();
+
+        let concatenated = if args
             .args
             .iter()
             .any(|arg| matches!(arg.data_type(), DataType::List(_)))
         {
             ArrayConcat::new().invoke_with_args(args)
         } else {
-            ConcatFunc::new().invoke_with_args(args)
-        }
+            let casted_columns =
+                if args.args.iter().any(|arg| {
+                    matches!(arg.data_type(), DataType::LargeUtf8 | DataType::LargeBinary)
+                }) {
+                    cast_columnar_values(args.args, &DataType::LargeUtf8)?
+                } else {
+                    cast_columnar_values(args.args, &DataType::Utf8)?
+                };
+
+            let casted_args = ScalarFunctionArgs {
+                args: casted_columns,
+                arg_fields: args.arg_fields,
+                number_rows: args.number_rows,
+                return_field: args.return_field,
+            };
+
+            ConcatFunc::new().invoke_with_args(casted_args)
+        }?;
+
+        let concatenated_array = match concatenated {
+            ColumnarValue::Array(arr) => arr,
+            ColumnarValue::Scalar(s) => s.to_array()?, // преобразуем скаляр в массив
+        };
+
+        Ok(ColumnarValue::Array(nullif(
+            arrow::compute::cast(&concatenated_array, return_type)?.as_ref(),
+            &null_mask,
+        )?))
     }
+}
+
+fn cast_columnar_values(
+    values: Vec<ColumnarValue>,
+    target_type: &DataType,
+) -> Result<Vec<ColumnarValue>> {
+    values
+        .into_iter()
+        .map(|value| match value {
+            ColumnarValue::Scalar(scalar) => {
+                Ok(ColumnarValue::Scalar(scalar.cast_to(target_type)?))
+            }
+            ColumnarValue::Array(array) => {
+                let cast_array = arrow::compute::cast(&array, target_type)?;
+                Ok(ColumnarValue::Array(cast_array))
+            }
+        })
+        .collect()
 }
