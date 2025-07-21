@@ -399,7 +399,8 @@ fn try_add_date32_interval_yearmonth(
     intervals: &PrimitiveArray<IntervalYearMonthType>,
 ) -> Date32Array {
     let mut builder = Date32Builder::with_capacity(dates.len());
-    let base = NaiveDate::from_ymd(1970, 1, 1);
+    let base = NaiveDate::from_ymd_opt(1970, 1, 1)
+        .expect("1970-01-01 is a valid date and should never fail");
 
     for i in 0..dates.len() {
         if dates.is_null(i) || intervals.is_null(i) {
@@ -454,7 +455,9 @@ fn try_add_date32_monthdaynano(
     intervals: &PrimitiveArray<IntervalMonthDayNanoType>,
 ) -> Date32Array {
     let mut builder = PrimitiveBuilder::<Date32Type>::with_capacity(dates.len());
-    let base = NaiveDate::from_ymd(1970, 1, 1);
+    let base = NaiveDate::from_ymd_opt(1970, 1, 1)
+        .expect("1970-01-01 is a valid date and should never fail");
+
 
     for i in 0..dates.len() {
         if dates.is_null(i) || intervals.is_null(i) {
