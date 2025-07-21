@@ -148,6 +148,7 @@ mod display {
         pub nullable: bool,
         pub is_partition: bool,
         pub is_bucket: bool,
+        pub is_cluster: bool, // new in Spark 4.0
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,6 +222,7 @@ impl CatalogDisplay for SparkCatalogDisplay {
             nullable: status.nullable,
             is_partition: status.is_partition,
             is_bucket: status.is_bucket,
+            is_cluster: status.is_cluster,
         }
     }
 }

@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::CatalogResult;
 use crate::manager::CatalogManager;
-use crate::provider::CatalogProvider;
 use crate::utils::match_pattern;
 
 impl CatalogManager {
@@ -13,14 +12,6 @@ impl CatalogManager {
     pub fn set_default_catalog(&self, catalog: impl Into<Arc<str>>) -> CatalogResult<()> {
         self.state()?.default_catalog = catalog.into();
         Ok(())
-    }
-
-    pub fn get_catalog(&self, catalog: &str) -> CatalogResult<Arc<dyn CatalogProvider>> {
-        let state = self.state()?;
-        let Some(provider) = state.catalogs.get(catalog) else {
-            return Err(CatalogError::NotFound("catalog", catalog.to_string()));
-        };
-        Ok(Arc::clone(provider))
     }
 
     pub fn list_catalogs(&self, pattern: Option<&str>) -> CatalogResult<Vec<Arc<str>>> {

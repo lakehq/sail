@@ -21,6 +21,7 @@ impl CatalogManager {
                 nullable: field.is_nullable(),
                 is_partition: false,
                 is_bucket: false,
+                is_cluster: false,
                 metadata: field.metadata().clone().into_iter().collect(),
             })
             .collect();

@@ -9,14 +9,12 @@ impl CatalogManager {
         table: &[T],
         options: CreateTableOptions,
     ) -> CatalogResult<()> {
-        let (catalog, namespace, table) = self.resolve_object_reference(table)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace, table) = self.resolve_object(table)?;
         provider.create_table(&namespace, &table, options).await
     }
 
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
-        let (catalog, namespace, table) = self.resolve_object_reference(table)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace, table) = self.resolve_object(table)?;
         provider.get_table(&namespace, &table).await
     }
 
@@ -25,8 +23,11 @@ impl CatalogManager {
         database: &[T],
         pattern: Option<&str>,
     ) -> CatalogResult<Vec<TableStatus>> {
-        let (catalog, namespace) = self.resolve_database_reference(database)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace) = if database.is_empty() {
+            self.resolve_default_database()?
+        } else {
+            self.resolve_database(database)?
+        };
         Ok(provider
             .list_tables(&namespace)
             .await?
@@ -42,7 +43,7 @@ impl CatalogManager {
     ) -> CatalogResult<Vec<TableStatus>> {
         // Spark *global* temporary views should be put in the "global temporary" database, and they will be
         // included in the output if the database name matches.
-        let mut output = if self.is_global_temporary_view_database(database)? {
+        let mut output = if self.state()?.is_global_temporary_view_database(database) {
             self.list_global_temporary_views(pattern).await?
         } else {
             self.list_tables(database, pattern).await?
@@ -58,8 +59,7 @@ impl CatalogManager {
         table: &[T],
         options: DeleteTableOptions,
     ) -> CatalogResult<()> {
-        let (catalog, namespace, table) = self.resolve_object_reference(table)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace, table) = self.resolve_object(table)?;
         provider.delete_table(&namespace, &table, options).await
     }
 
@@ -75,7 +75,7 @@ impl CatalogManager {
             }
         }
         if let [x @ .., name] = reference {
-            if self.is_global_temporary_view_database(x)? {
+            if self.state()?.is_global_temporary_view_database(x) {
                 return self.get_global_temporary_view(name.as_ref()).await;
             }
         }

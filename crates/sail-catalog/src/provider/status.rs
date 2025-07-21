@@ -93,5 +93,6 @@ pub struct TableColumnStatus {
     pub nullable: bool,
     pub is_partition: bool,
     pub is_bucket: bool,
+    pub is_cluster: bool,
     pub metadata: Vec<(String, String)>,
 }

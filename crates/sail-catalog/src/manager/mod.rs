@@ -58,22 +58,59 @@ impl CatalogManager {
             .map_err(|e| CatalogError::Internal(e.to_string()))
     }
 
+    pub(super) fn resolve_default_database(
+        &self,
+    ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {
+        let state = self.state()?;
+        let catalog = state.default_catalog.clone();
+        let namespace = state.default_database.clone();
+        Ok((state.get_catalog(&catalog)?, namespace))
+    }
+
+    pub(super) fn resolve_database<T: AsRef<str>>(
+        &self,
+        database: &[T],
+    ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {
+        let state = self.state()?;
+        let (catalog, namespace) = state.resolve_database_reference(database)?;
+        Ok((state.get_catalog(&catalog)?, namespace))
+    }
+
+    pub(super) fn resolve_optional_database<T: AsRef<str>>(
+        &self,
+        database: &[T],
+    ) -> CatalogResult<(Arc<dyn CatalogProvider>, Option<Namespace>)> {
+        let state = self.state()?;
+        let (catalog, namespace) = state.resolve_optional_database_reference(database)?;
+        Ok((state.get_catalog(&catalog)?, namespace))
+    }
+
+    pub(super) fn resolve_object<T: AsRef<str>>(
+        &self,
+        object: &[T],
+    ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace, Arc<str>)> {
+        let state = self.state()?;
+        let (catalog, namespace, table) = state.resolve_object_reference(object)?;
+        Ok((state.get_catalog(&catalog)?, namespace, table))
+    }
+}
+
+impl CatalogManagerState {
     pub fn resolve_database_reference<T: AsRef<str>>(
         &self,
         reference: &[T],
     ) -> CatalogResult<(Arc<str>, Namespace)> {
-        let state = self.state()?;
         match reference {
             [] => Err(CatalogError::InvalidArgument(
                 "empty database reference".to_string(),
             )),
-            [head, tail @ ..] if state.catalogs.contains_key(head.as_ref()) => {
+            [head, tail @ ..] if self.catalogs.contains_key(head.as_ref()) => {
                 let catalog = head.as_ref().into();
                 let namespace = tail.try_into()?;
                 Ok((catalog, namespace))
             }
             x => {
-                let catalog = state.default_catalog.clone();
+                let catalog = self.default_catalog.clone();
                 let namespace = x.try_into()?;
                 Ok((catalog, namespace))
             }
@@ -84,18 +121,17 @@ impl CatalogManager {
         &self,
         reference: &[T],
     ) -> CatalogResult<(Arc<str>, Option<Namespace>)> {
-        let state = self.state()?;
         match reference {
             [] => {
-                let catalog = state.default_catalog.clone();
+                let catalog = self.default_catalog.clone();
                 Ok((catalog, None))
             }
-            [name] if state.catalogs.contains_key(name.as_ref()) => {
+            [name] if self.catalogs.contains_key(name.as_ref()) => {
                 let catalog = name.as_ref().into();
                 Ok((catalog, None))
             }
             x => {
-                let catalog = state.default_catalog.clone();
+                let catalog = self.default_catalog.clone();
                 let namespace = x.try_into()?;
                 Ok((catalog, Some(namespace)))
             }
@@ -106,15 +142,14 @@ impl CatalogManager {
         &self,
         reference: &[T],
     ) -> CatalogResult<(Arc<str>, Namespace, Arc<str>)> {
-        let state = self.state()?;
         match reference {
             [] => Err(CatalogError::InvalidArgument(
                 "empty object reference".to_string(),
             )),
             [name] => {
                 let table = name.as_ref().into();
-                let catalog = state.default_catalog.clone();
-                let namespace = state.default_database.clone();
+                let catalog = self.default_catalog.clone();
+                let namespace = self.default_database.clone();
                 Ok((catalog, namespace, table))
             }
             [x @ .., last] => {
@@ -125,14 +160,18 @@ impl CatalogManager {
         }
     }
 
-    pub fn is_global_temporary_view_database<T: AsRef<str>>(
-        &self,
-        reference: &[T],
-    ) -> CatalogResult<bool> {
+    pub fn is_global_temporary_view_database<T: AsRef<str>>(&self, reference: &[T]) -> bool {
         match reference {
-            [] => Ok(false),
-            x => Ok(self.state()?.global_temporary_database == x),
+            [] => false,
+            x => self.global_temporary_database == x,
         }
+    }
+
+    pub fn get_catalog(&self, catalog: &str) -> CatalogResult<Arc<dyn CatalogProvider>> {
+        let Some(provider) = self.catalogs.get(catalog) else {
+            return Err(CatalogError::NotFound("catalog", catalog.to_string()));
+        };
+        Ok(Arc::clone(provider))
     }
 }
 

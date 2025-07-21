@@ -320,7 +320,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         },
                     }
                 }
-                None => return Err(SqlError::todo("CREATE VIEW")),
+                None => spec::CommandNode::CreateView {
+                    view: name,
+                    definition: spec::ViewDefinition {
+                        input: Box::new(query),
+                        // TODO: handle view definition
+                        definition: "".to_string(),
+                        columns,
+                        replace: or_replace.is_some(),
+                    },
+                },
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }

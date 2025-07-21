@@ -19,8 +19,7 @@ impl CatalogManager {
         &self,
         database: &[T],
     ) -> CatalogResult<NamespaceStatus> {
-        let (catalog, namespace) = self.resolve_database_reference(database)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace) = self.resolve_database(database)?;
         provider.get_namespace(&namespace).await
     }
 
@@ -29,8 +28,7 @@ impl CatalogManager {
         qualifier: &[T],
         pattern: Option<&str>,
     ) -> CatalogResult<Vec<NamespaceStatus>> {
-        let (catalog, prefix) = self.resolve_optional_database_reference(qualifier)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, prefix) = self.resolve_optional_database(qualifier)?;
         Ok(provider
             .list_namespaces(prefix.as_ref())
             .await?
@@ -44,8 +42,7 @@ impl CatalogManager {
         database: &[T],
         options: CreateNamespaceOptions,
     ) -> CatalogResult<()> {
-        let (catalog, namespace) = self.resolve_database_reference(database)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace) = self.resolve_database(database)?;
         provider.create_namespace(&namespace, options).await
     }
 
@@ -54,8 +51,7 @@ impl CatalogManager {
         database: &[T],
         options: DeleteNamespaceOptions,
     ) -> CatalogResult<()> {
-        let (catalog, namespace) = self.resolve_database_reference(database)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace) = self.resolve_database(database)?;
         provider.delete_namespace(&namespace, options).await
     }
 }

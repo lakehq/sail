@@ -13,14 +13,14 @@ impl CatalogManager {
         &self,
         pattern: Option<&str>,
     ) -> CatalogResult<Vec<TableStatus>> {
-        let state = self.state()?;
+        let namespace = self.state()?.global_temporary_database.clone();
         let views = GLOBAL_TEMPORARY_VIEW_MANAGER
             .list_views(pattern)?
             .into_iter()
             .map(|(name, plan)| TableStatus {
                 name,
                 kind: TableKind::GlobalTemporaryView {
-                    namespace: state.global_temporary_database.clone().into(),
+                    namespace: namespace.clone().into(),
                     plan,
                 },
             })
@@ -49,8 +49,11 @@ impl CatalogManager {
         database: &[T],
         pattern: Option<&str>,
     ) -> CatalogResult<Vec<TableStatus>> {
-        let (catalog, namespace) = self.resolve_database_reference(database)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace) = if database.is_empty() {
+            self.resolve_default_database()?
+        } else {
+            self.resolve_database(database)?
+        };
         Ok(provider
             .list_views(&namespace)
             .await?
@@ -65,7 +68,7 @@ impl CatalogManager {
         pattern: Option<&str>,
     ) -> CatalogResult<Vec<TableStatus>> {
         // See `list_tables_and_temporary_views()` for how the (global) temporary views are handled.
-        let mut output = if self.is_global_temporary_view_database(database)? {
+        let mut output = if self.state()?.is_global_temporary_view_database(database) {
             self.list_global_temporary_views(pattern).await?
         } else {
             vec![]
@@ -99,7 +102,7 @@ impl CatalogManager {
             }
         }
         if let [x @ .., name] = view {
-            if self.is_global_temporary_view_database(x)? {
+            if self.state()?.is_global_temporary_view_database(x) {
                 match GLOBAL_TEMPORARY_VIEW_MANAGER.remove_view(name.as_ref(), false) {
                     Ok(_) => return Ok(()),
                     Err(CatalogError::NotFound(_, _)) => {}
@@ -115,8 +118,7 @@ impl CatalogManager {
         view: &[T],
         options: DeleteViewOptions,
     ) -> CatalogResult<()> {
-        let (catalog, namespace, view) = self.resolve_object_reference(view)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace, view) = self.resolve_object(view)?;
         provider.delete_view(&namespace, &view, options).await
     }
 
@@ -141,11 +143,11 @@ impl CatalogManager {
 
     pub async fn get_global_temporary_view(&self, view: &str) -> CatalogResult<TableStatus> {
         let plan = GLOBAL_TEMPORARY_VIEW_MANAGER.get_view(view)?;
-        let state = self.state()?;
+        let namespace = self.state()?.global_temporary_database.clone();
         Ok(TableStatus {
             name: view.to_string(),
             kind: TableKind::GlobalTemporaryView {
-                namespace: state.global_temporary_database.clone().into(),
+                namespace: namespace.into(),
                 plan,
             },
         })
@@ -164,14 +166,12 @@ impl CatalogManager {
         view: &[T],
         options: CreateViewOptions,
     ) -> CatalogResult<()> {
-        let (catalog, namespace, view) = self.resolve_object_reference(view)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace, view) = self.resolve_object(view)?;
         provider.create_view(&namespace, &view, options).await
     }
 
     pub async fn get_view<T: AsRef<str>>(&self, view: &[T]) -> CatalogResult<TableStatus> {
-        let (catalog, namespace, view) = self.resolve_object_reference(view)?;
-        let provider = self.get_catalog(&catalog)?;
+        let (provider, namespace, view) = self.resolve_object(view)?;
         provider.get_view(&namespace, &view).await
     }
 }
