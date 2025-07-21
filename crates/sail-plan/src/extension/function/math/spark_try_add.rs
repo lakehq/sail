@@ -9,9 +9,9 @@ use arrow::datatypes::{
     Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNanoType,
     IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
 };
-use chrono::{Datelike, Duration, Months, NaiveDate};
+use chrono::{Duration, Months, NaiveDate};
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::extension::function::error_utils::{
@@ -394,15 +394,12 @@ fn try_add_date32_days(
     builder.finish()
 }
 
-fn is_leap_year(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
 fn try_add_date32_interval_yearmonth(
     dates: &PrimitiveArray<Date32Type>,
     intervals: &PrimitiveArray<IntervalYearMonthType>,
 ) -> Date32Array {
     let mut builder = Date32Builder::with_capacity(dates.len());
+    let base = NaiveDate::from_ymd(1970, 1, 1);
 
     for i in 0..dates.len() {
         if dates.is_null(i) || intervals.is_null(i) {
@@ -410,61 +407,22 @@ fn try_add_date32_interval_yearmonth(
             continue;
         }
 
-        let base: Option<NaiveDate> = NaiveDate::from_ymd_opt(1970, 1, 1);
-        let Some(base_date): Option<NaiveDate> = base else {
-            builder.append_null();
-            continue;
-        };
-
         let days = dates.value(i);
-        let Some(date) = base_date.checked_add_signed(Duration::days(days as i64)) else {
+        let Some(date) = base.checked_add_signed(Duration::days(days as i64)) else {
             builder.append_null();
             continue;
         };
 
-        let interval = intervals.value(i); // in months
-        let months_to_add = interval % 12;
-        let years_to_add = interval / 12;
+        let interval_months = intervals.value(i);
+        let Some(new_date) = add_months(date, interval_months) else {
+            builder.append_null();
+            continue;
+        };
 
-        // Compute new year and month
-        let mut new_year = date.year() + years_to_add;
-        let mut new_month = date.month() as i32 + months_to_add;
-
-        if new_month > 12 {
-            new_month -= 12;
-            new_year += 1;
-        } else if new_month < 1 {
-            new_month += 12;
-            new_year -= 1;
-        }
-
-        let new_day = date.day();
-
-        let result_date =
-            NaiveDate::from_ymd_opt(new_year, new_month as u32, new_day).or_else(|| {
-                let last_day: u32 = match new_month {
-                    1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-                    4 | 6 | 9 | 11 => 30,
-                    2 => {
-                        if is_leap_year(new_year) {
-                            29
-                        } else {
-                            28
-                        }
-                    }
-                    _ => 28,
-                };
-                NaiveDate::from_ymd_opt(new_year, new_month as u32, last_day)
-            });
-
-        match result_date {
-            Some(new_date) => {
-                let days: i64 = new_date.signed_duration_since(base_date).num_days();
-                builder.append_value(days as i32);
-            }
-            None => builder.append_null(),
-        }
+        let result_days = new_date.signed_duration_since(base).num_days();
+        builder.append_value(result_days as i32);
     }
+
     builder.finish()
 }
 
@@ -529,23 +487,11 @@ fn try_add_date32_monthdaynano(
 }
 
 fn add_months(date: NaiveDate, months: i32) -> Option<NaiveDate> {
-    let mut year = date.year();
-    let mut month = date.month() as i32;
-
-    let total_months = year * 12 + (month - 1) + months;
-    year = total_months / 12;
-    month = total_months % 12 + 1;
-    date.checked_add_months(Months::new(month as u32));
-    let day = date.day();
-    NaiveDate::from_ymd_opt(year, month as u32, day).or_else(|| {
-        let last_day = match month {
-            2 if is_leap_year(year) => 29,
-            2 => 28,
-            4 | 6 | 9 | 11 => 30,
-            _ => 31,
-        };
-        NaiveDate::from_ymd_opt(year, month as u32, last_day)
-    })
+    if months >= 0 {
+        date.checked_add_months(Months::new(months as u32))
+    } else {
+        date.checked_sub_months(Months::new(months.unsigned_abs()))
+    }
 }
 
 fn try_add_interval_monthdaynano(
