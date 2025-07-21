@@ -5469,6 +5469,7 @@ dependencies = [
  "futures",
  "indexmap 2.10.0",
  "itertools 0.14.0",
+ "log",
  "object_store",
  "parquet",
  "percent-encoding",

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use datafusion::arrow::array::{RecordBatch, UInt32Array};
@@ -20,6 +19,7 @@ use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
 use super::async_utils::AsyncShareableBuffer;
+use super::stats::create_add;
 
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 const DEFAULT_TARGET_FILE_SIZE: usize = 104_857_600; // 100MB
@@ -434,7 +434,7 @@ impl PartitionWriter {
             .await
             .map_err(|e| DeltaTableError::generic(format!("Failed to write file: {e}")))?;
 
-        // Create Add action
+        // Create Add action with statistics
         let add_action = self.create_add_action(&relative_path, file_size, &metadata)?;
         self.files_written.push(add_action);
 
@@ -484,44 +484,16 @@ impl PartitionWriter {
         &self,
         path: &str,
         file_size: i64,
-        _metadata: &parquet::format::FileMetaData,
+        metadata: &parquet::format::FileMetaData,
     ) -> Result<Add, DeltaTableError> {
-        // Get current timestamp
-        let modification_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("System time before Unix epoch")
-            .as_millis() as i64;
-
-        // Convert partition values to the format expected by Add
-        let partition_values = self
-            .config
-            .partition_values
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    if v.is_null() {
-                        None
-                    } else {
-                        Some(v.serialize())
-                    },
-                )
-            })
-            .collect();
-
-        Ok(Add {
-            path: path.to_string(),
-            size: file_size,
-            partition_values,
-            modification_time,
-            data_change: true,
-            stats: None, // TODO: Implement statistics collection
-            tags: None,
-            deletion_vector: None,
-            base_row_id: None,
-            default_row_commit_version: None,
-            clustering_provider: None,
-        })
+        create_add(
+            &self.config.partition_values,
+            path.to_string(),
+            file_size,
+            metadata,
+            self.num_indexed_cols,
+            &self.stats_columns,
+        )
     }
 
     /// Reset the writer for the next file
