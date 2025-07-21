@@ -3,7 +3,7 @@ use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position as datafusion_array_position;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, is_null, lit, or, BinaryExpr, ExprSchemable, Operator};
+use datafusion_expr::{expr, is_null, lit, not, or, BinaryExpr, ExprSchemable, Operator};
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 
@@ -187,6 +187,31 @@ fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn flatten(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+
+    let array = arguments.one()?;
+
+    let same_type_null_only_array = expr::Expr::Cast(expr::Cast {
+        expr: Box::new(make_array(vec![lit(ScalarValue::Null)])),
+        data_type: array.get_type(function_context.schema)?,
+    });
+
+    let array_has_null = expr_fn::array_has_any(array.clone(), same_type_null_only_array);
+
+    Ok(expr::Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(
+            Box::new(not(array_has_null)),
+            Box::new(expr_fn::flatten(array)),
+        )],
+        else_expr: None,
+    }))
+}
+
 pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -210,7 +235,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_union", F::binary(expr_fn::array_union)),
         ("arrays_overlap", F::custom(arrays_overlap)),
         ("arrays_zip", F::unknown("arrays_zip")),
-        ("flatten", F::unary(expr_fn::flatten)),
+        ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
         ("sequence", F::udf(SparkSequence::new())),
         ("shuffle", F::unknown("shuffle")),
