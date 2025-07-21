@@ -11,6 +11,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array::spark_array::SparkArray;
 use crate::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use crate::extension::function::array::spark_sequence::SparkSequence;
+use crate::extension::function::raise_error::RaiseError;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
@@ -150,6 +151,7 @@ fn array_position(array: expr::Expr, element: expr::Expr) -> expr::Expr {
 }
 
 fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    use crate::function::common::ScalarFunctionBuilder as F;
     let (array, position, value) = input.arguments.three()?;
 
     let array_len = expr::Expr::Cast(expr::Cast {
@@ -164,12 +166,14 @@ fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         )
         .end()?;
 
+    let zero_index_error = F::udf(RaiseError::new())(ScalarFunctionInput {
+        arguments: vec![lit("[INVALID_INDEX_OF_ZERO] The index 0 is invalid. 
+        An index shall be either < 0 or > 0 (the first element has index 1)")],
+        function_context: input.function_context,
+    })?;
+
     Ok(when(array.clone().is_null(), array.clone())
-        // This causes datafusion exception, so the spark failing behaviour on position == 0 is saved
-        .when(
-            pos_from_zero.clone().is_null(),
-            expr_fn::array_concat(vec![]),
-        )
+        .when(pos_from_zero.clone().is_null(), zero_index_error)
         .when(
             pos_from_zero.clone().lt(lit(0)),
             expr_fn::array_concat(vec![
