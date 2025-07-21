@@ -6,12 +6,12 @@ use arrow::array::{
     PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
 };
 use arrow::datatypes::{
-    Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalYearMonthType, TimeUnit,
-    TimestampMicrosecondType,
+    Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNanoType,
+    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
 };
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Datelike, Duration, Months, NaiveDate};
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::extension::function::error_utils::{
@@ -64,6 +64,16 @@ impl ScalarUDFImpl for SparkTryAdd {
         ) {
             Ok(DataType::Interval(
                 arrow::datatypes::IntervalUnit::YearMonth,
+            ))
+        } else if matches!(
+            arg_types,
+            [
+                DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+                DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano)
+            ]
+        ) {
+            Ok(DataType::Interval(
+                arrow::datatypes::IntervalUnit::MonthDayNano,
             ))
         } else if matches!(
             arg_types,
@@ -198,6 +208,38 @@ impl ScalarUDFImpl for SparkTryAdd {
                 }
             }
             (
+                DataType::Date32,
+                DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+            ) => {
+                let dates = left_arr.as_primitive::<Date32Type>();
+                let intervals = right_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let result = try_add_date32_monthdaynano(dates, intervals);
+                if matches!(left, ColumnarValue::Scalar(_))
+                    && matches!(right, ColumnarValue::Scalar(_))
+                {
+                    let scalar = ScalarValue::try_from_array(&result, 0)?;
+                    Ok(ColumnarValue::Scalar(scalar))
+                } else {
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+            }
+            (
+                DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+                DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+            ) => {
+                let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let result = try_add_interval_monthdaynano(l, r);
+                if matches!(left, ColumnarValue::Scalar(_))
+                    && matches!(right, ColumnarValue::Scalar(_))
+                {
+                    let scalar = ScalarValue::try_from_array(&result, 0)?;
+                    Ok(ColumnarValue::Scalar(scalar))
+                } else {
+                    Ok(ColumnarValue::Array(Arc::new(result)))
+                }
+            }
+            (
                 DataType::Timestamp(TimeUnit::Microsecond, _),
                 DataType::Duration(TimeUnit::Microsecond),
             ) => {
@@ -243,6 +285,10 @@ impl ScalarUDFImpl for SparkTryAdd {
                     DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth)
                 )
                 | (
+                    DataType::Date32,
+                    DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano)
+                )
+                | (
                     DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
                     DataType::Date32
                 )
@@ -254,7 +300,16 @@ impl ScalarUDFImpl for SparkTryAdd {
                     DataType::Timestamp(TimeUnit::Microsecond, _),
                     DataType::Duration(TimeUnit::Microsecond)
                 )
+                | (
+                    DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+                    DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano)
+                )
         );
+        if *left == DataType::Null {
+            return Ok(vec![right.clone(), right.clone()]);
+        } else if *right == DataType::Null {
+            return Ok(vec![left.clone(), left.clone()]);
+        }
 
         if valid_pair {
             Ok(vec![left.clone(), right.clone()])
@@ -338,6 +393,7 @@ fn try_add_date32_days(
 
     builder.finish()
 }
+
 fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
@@ -354,7 +410,6 @@ fn try_add_date32_interval_yearmonth(
             continue;
         }
 
-        // Convert Date32 value (days since epoch) to NaiveDate
         let base: Option<NaiveDate> = NaiveDate::from_ymd_opt(1970, 1, 1);
         let Some(base_date): Option<NaiveDate> = base else {
             builder.append_null();
@@ -383,7 +438,7 @@ fn try_add_date32_interval_yearmonth(
             new_year -= 1;
         }
 
-        let new_day = date.day(); // could overflow, will check later
+        let new_day = date.day();
 
         let result_date =
             NaiveDate::from_ymd_opt(new_year, new_month as u32, new_day).or_else(|| {
@@ -412,6 +467,7 @@ fn try_add_date32_interval_yearmonth(
     }
     builder.finish()
 }
+
 fn try_add_timestamp_duration(
     timestamps: &TimestampMicrosecondArray,
     durations: &DurationMicrosecondArray,
@@ -434,10 +490,93 @@ fn try_add_timestamp_duration(
 
     builder.finish()
 }
+
+fn try_add_date32_monthdaynano(
+    dates: &PrimitiveArray<Date32Type>,
+    intervals: &PrimitiveArray<IntervalMonthDayNanoType>,
+) -> Date32Array {
+    let mut builder = PrimitiveBuilder::<Date32Type>::with_capacity(dates.len());
+    let base = NaiveDate::from_ymd(1970, 1, 1);
+
+    for i in 0..dates.len() {
+        if dates.is_null(i) || intervals.is_null(i) {
+            builder.append_null();
+            continue;
+        }
+
+        let days = dates.value(i);
+        let Some(date) = base.checked_add_signed(Duration::days(days as i64)) else {
+            builder.append_null();
+            continue;
+        };
+
+        let interval = intervals.value(i);
+        let date_with_months = add_months(date, interval.months);
+
+        let final_date = date_with_months
+            .and_then(|d| d.checked_add_signed(Duration::days(interval.days as i64)));
+
+        match final_date {
+            Some(d) => {
+                let result_days = d.signed_duration_since(base).num_days();
+                builder.append_value(result_days as i32);
+            }
+            None => builder.append_null(),
+        }
+    }
+
+    builder.finish()
+}
+
+fn add_months(date: NaiveDate, months: i32) -> Option<NaiveDate> {
+    let mut year = date.year();
+    let mut month = date.month() as i32;
+
+    let total_months = year * 12 + (month - 1) + months;
+    year = total_months / 12;
+    month = total_months % 12 + 1;
+    date.checked_add_months(Months::new(month as u32));
+    let day = date.day();
+    NaiveDate::from_ymd_opt(year, month as u32, day).or_else(|| {
+        let last_day = match month {
+            2 if is_leap_year(year) => 29,
+            2 => 28,
+            4 | 6 | 9 | 11 => 30,
+            _ => 31,
+        };
+        NaiveDate::from_ymd_opt(year, month as u32, last_day)
+    })
+}
+
+fn try_add_interval_monthdaynano(
+    l: &PrimitiveArray<IntervalMonthDayNanoType>,
+    r: &PrimitiveArray<IntervalMonthDayNanoType>,
+) -> PrimitiveArray<IntervalMonthDayNanoType> {
+    let mut builder = PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(l.len());
+
+    for i in 0..l.len() {
+        if l.is_null(i) || r.is_null(i) {
+            builder.append_null();
+        } else {
+            let a = l.value(i);
+            let b = r.value(i);
+
+            match a.checked_add(b) {
+                Some(sum) => builder.append_value(sum),
+                None => builder.append_null(),
+            }
+        }
+    }
+
+    builder.finish()
+}
+
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Date32Array, Int32Array, IntervalYearMonthArray, PrimitiveArray};
-    use arrow::datatypes::{Int32Type, Int64Type};
+    use arrow::array::{
+        Date32Array, Int32Array, IntervalMonthDayNanoArray, IntervalYearMonthArray, PrimitiveArray,
+    };
+    use arrow::datatypes::{Int32Type, Int64Type, IntervalMonthDayNano};
     use chrono::NaiveDate;
     use datafusion_common::DataFusionError;
 
@@ -647,5 +786,73 @@ mod tests {
 
         assert_eq!(result, expected);
         Ok(())
+    }
+
+    #[test]
+    fn test_add_date32_monthdaynano_basic() -> Result<()> {
+        let dates = to_date32_array(&[Some("2022-12-31"), Some("2010-12-31"), None])?;
+        let intervals = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(0, 2, 0)), // +2 días
+            Some(IntervalMonthDayNano::new(1, 1, 0)), // +1 mes, +1 día
+            None,
+        ]);
+
+        let result = try_add_date32_monthdaynano(&dates, &intervals);
+        let expected = to_date32_array(&[Some("2023-01-02"), Some("2011-02-01"), None])?;
+
+        assert_eq!(result, expected);
+
+        let dates = to_date32_array(&[Some("2023-01-01"), Some("2000-01-01"), None])?;
+        let intervals = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(0, 1, 0)),   // +1 día
+            Some(IntervalMonthDayNano::new(0, 365, 0)), // +365 días
+            Some(IntervalMonthDayNano::new(0, 10, 0)),
+        ]);
+
+        let result = try_add_date32_monthdaynano(&dates, &intervals);
+
+        let expected = to_date32_array(&[Some("2023-01-02"), Some("2000-12-31"), None])?;
+
+        assert_eq!(result, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_add_date32_monthdaynano_overflow() -> Result<()> {
+        use arrow::array::IntervalMonthDayNanoArray;
+
+        let dates = Date32Array::from(vec![Some(i32::MAX)]);
+        let intervals =
+            IntervalMonthDayNanoArray::from(vec![Some(IntervalMonthDayNano::new(0, 1, 0))]);
+
+        let result = try_add_date32_monthdaynano(&dates, &intervals);
+        let expected = Date32Array::from(vec![None]);
+
+        assert_eq!(result, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_add_interval_monthdaynano_basic() {
+        let l = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(1, 2, 3)),
+            Some(IntervalMonthDayNano::new(0, 100, 1000)),
+            None,
+        ]);
+        let r = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(4, 5, 6)),
+            Some(IntervalMonthDayNano::new(0, 50, 2000)),
+            Some(IntervalMonthDayNano::new(1, 1, 1)),
+        ]);
+
+        let result = try_add_interval_monthdaynano(&l, &r);
+
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(5, 7, 9)),
+            Some(IntervalMonthDayNano::new(0, 150, 3000)),
+            None,
+        ]);
+
+        assert_eq!(result, expected);
     }
 }
