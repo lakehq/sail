@@ -11,19 +11,18 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
     let mut when_then_expr = Vec::new();
     let mut iter = arguments.into_iter();
-    let mut else_expr: Option<Box<expr::Expr>> = None;
     while let Some(condition) = iter.next() {
         if let Some(result) = iter.next() {
             when_then_expr.push((Box::new(condition), Box::new(result)));
         } else {
-            else_expr = Some(Box::new(condition));
+            when_then_expr.push((Box::new(lit(true)), Box::new(condition)));
             break;
         }
     }
     Ok(expr::Expr::Case(expr::Case {
         expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
         when_then_expr,
-        else_expr,
+        else_expr: None,
     }))
 }
 
