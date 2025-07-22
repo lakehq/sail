@@ -163,6 +163,11 @@ pub fn parse_s3_url(
     match scheme {
         "s3" | "s3a" => {
             builder = builder.with_bucket_name(host);
+            if let Some(bucket_prefix) = host.strip_suffix("--x-s3") {
+                if let Some(_bucket_az) = bucket_prefix.rsplit_once("--") {
+                    builder = builder.with_s3_express(true);
+                }
+            }
         }
         "http" | "https" => {
             if scheme == "http" {
@@ -213,6 +218,11 @@ pub fn parse_s3_url(
                     if let Some(bucket) = first_path_segment {
                         builder = builder.with_bucket_name(bucket);
                     }
+                }
+                [bucket, _s3express_zone_id, region, "amazonaws", "com"] => {
+                    builder = builder.with_bucket_name(bucket);
+                    builder = builder.with_region(region);
+                    builder = builder.with_s3_express(true);
                 }
                 _ => {
                     return Err(object_store::Error::Generic {
