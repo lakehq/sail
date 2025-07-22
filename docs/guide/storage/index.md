@@ -54,9 +54,9 @@ Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) st
 | [Azure Data Lake Storage (ADLS)](./azure) | :white_check_mark: | :white_check_mark: |
 | [Azure Blob Storage](./azure)             | :white_check_mark: | :white_check_mark: |
 | [Google Cloud Storage](./gcs)             | :white_check_mark: | :white_check_mark: |
-| [HTTP/HTTPS](./http)                      | :white_check_mark: | :white_check_mark: |
 | [HDFS](./hdfs)                            | :white_check_mark: | :white_check_mark: |
 | [Hugging Face](./hf)                      | :white_check_mark: | :x:                |
+| HTTP/HTTPS                                | :white_check_mark: | :white_check_mark: |
 | JDBC                                      | :x:                | :x:                |
 
 ## Supported URL Formats
