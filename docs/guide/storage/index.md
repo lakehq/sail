@@ -7,15 +7,6 @@ rank: 5
 
 Sail provides a unified interface for reading and writing data across various storage systems, from local file systems to cloud object stores and distributed file systems. This abstraction allows you to seamlessly work with data regardless of where it's stored, using the same familiar Spark APIs.
 
-## Overview
-
-The storage layer in Sail provides:
-
-- **Unified API**: Use the same `spark.read` and `spark.write` operations across all storage types
-- **Automatic Detection**: Sail automatically determines the storage backend based on URL format
-- **High Performance**: Optimized connectors for each storage system
-- **Seamless Integration**: Works with Spark SQL, DataFrames, and streaming APIs
-
 ## Quick Examples
 
 ```python
