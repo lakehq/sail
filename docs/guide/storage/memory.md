@@ -17,7 +17,7 @@ memory:///path/to/data
 
 ## Examples
 
-### Basic Read/Write
+### DataFrame
 
 ```python
 df = spark.createDataFrame([(1, "Alice"), (2, "Bob")], ["id", "name"])
@@ -27,7 +27,7 @@ users_df = spark.read.parquet("memory:///users")
 users_df.show()
 ```
 
-### SQL Tables
+### SQL
 
 ```python
 sql = """
