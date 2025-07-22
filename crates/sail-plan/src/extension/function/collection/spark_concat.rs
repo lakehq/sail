@@ -166,7 +166,7 @@ impl ScalarUDFImpl for SparkConcat {
 
         let concatenated_array = match concatenated {
             ColumnarValue::Array(arr) => arr,
-            ColumnarValue::Scalar(s) => s.to_array()?, // преобразуем скаляр в массив
+            ColumnarValue::Scalar(s) => s.to_array()?,
         };
 
         Ok(ColumnarValue::Array(nullif(
