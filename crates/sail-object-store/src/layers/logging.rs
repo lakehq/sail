@@ -6,8 +6,8 @@ use futures::stream::BoxStream;
 use log::debug;
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts,
-    PutOptions, PutPayload, PutResult, Result,
+    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
 use tonic::codegen::Bytes;
 
@@ -53,7 +53,7 @@ impl ObjectStore for LoggingObjectStore {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         debug!("put_multipart_opts: location: {location:?} opts: {opts:?}");
         self.inner.put_multipart_opts(location, opts).await
