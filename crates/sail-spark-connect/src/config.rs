@@ -263,9 +263,11 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
             .map(|x| x.parse::<i128>())
             .transpose()?
         {
-            output.arrow_max_records_per_batch = (value <= 0 || value > usize::MAX as i128)
-                .then(|| usize::MAX)
-                .unwrap_or(value as usize);
+            output.arrow_max_records_per_batch = if value <= 0 || value > usize::MAX as i128 {
+                usize::MAX
+            } else {
+                value as usize
+            };
         }
 
         Ok(output)
