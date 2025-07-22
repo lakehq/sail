@@ -499,6 +499,7 @@ class TestDeltaLake:
         # Test combination of NULL and equality
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NOT NULL AND category = 'A'")
         result_count = filtered_df.count()
+        print(filtered_df.explain())
         assert result_count == 2, f"Expected 2 rows for region IS NOT NULL AND category = 'A', got {result_count}"  # noqa: PLR2004
 
     def test_delta_partition_pruning_complex_expressions(self, spark, tmp_path):

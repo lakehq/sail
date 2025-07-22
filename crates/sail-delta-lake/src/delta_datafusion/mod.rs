@@ -37,6 +37,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
@@ -50,12 +51,14 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
+use crate::delta_datafusion::statistics::create_file_statistics;
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 // pub mod cdf;
 
 mod schema_adapter;
+mod statistics;
 
 /// Convert DeltaTableError to DataFusionError
 pub fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {
@@ -308,198 +311,39 @@ pub(crate) fn files_matching_predicate<'a>(
         return Ok(Box::new(adds.into_iter()));
     }
 
-    // Get partition columns and their schema
-    let metadata = snapshot.metadata();
-    let partition_columns = metadata.partition_columns();
-    if partition_columns.is_empty() {
-        // No partition columns, cannot filter based on partitions
-        return Ok(Box::new(adds.into_iter()));
-    }
+    let combined_filter = if filters.len() == 1 {
+        filters[0].clone()
+    } else {
+        conjunction(filters.iter().cloned()).unwrap_or(filters[0].clone())
+    };
 
-    // Extract partition-only predicates from mixed expressions
-    let mut partition_only_filters = Vec::new();
-
-    for filter in filters {
-        if let Some(partition_filter) = extract_partition_predicates(filter, partition_columns) {
-            partition_only_filters.push(partition_filter);
-        }
-    }
-
-    // If no partition-only filters, return all files
-    if partition_only_filters.is_empty() {
-        return Ok(Box::new(adds.into_iter()));
-    }
-
-    // Create partition schema for evaluation
-    let table_schema = snapshot.schema();
-    let partition_schema_fields: Vec<Field> = partition_columns
-        .iter()
-        .filter_map(|col_name| {
-            if let Some(field) = table_schema.field(col_name) {
-                let field_name = field.name().to_string();
-                if let Ok(field_type) = arrow_type_from_delta_type(field.data_type()) {
-                    Some(Field::new(field_name, field_type, field.is_nullable()))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if partition_schema_fields.is_empty() {
-        return Ok(Box::new(adds.into_iter()));
-    }
-
-    let partition_schema = Arc::new(ArrowSchema::new(partition_schema_fields));
-
-    // For expression evaluation
-    let context = SessionContext::new();
-    let df_schema = partition_schema
+    let arrow_schema = snapshot.arrow_schema()?;
+    let df_schema = arrow_schema
         .clone()
         .to_dfschema()
         .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
 
-    let physical_exprs: Result<Vec<_>, _> = partition_only_filters
-        .iter()
-        .map(|filter| {
-            let simplified = simplify_expr(&context, &df_schema, filter.clone());
-            Ok(simplified)
-        })
-        .collect();
+    let context = SessionContext::new();
+    let physical_expr = context
+        .create_physical_expr(combined_filter, &df_schema)
+        .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
 
-    let physical_exprs = physical_exprs.map_err(|e: DeltaTableError| e)?;
+    let pruning_predicate = PruningPredicate::try_new(physical_expr, arrow_schema)
+        .map_err(|e| DeltaTableError::Generic(format!("Failed to create pruning predicate: {e}")))?;
 
-    let filtered = adds.into_iter().filter(move |add| {
-        let partition_batch =
-            match create_partition_batch_for_file(add, partition_columns, &partition_schema) {
-                Ok(batch) => batch,
-                Err(_) => return true, // Fallback if partition batch creation fails.
-            };
+    let file_statistics = create_file_statistics(snapshot, Some(&adds))?;
 
-        for physical_expr in &physical_exprs {
-            match physical_expr.evaluate(&partition_batch) {
-                Ok(columnar_value) => match columnar_value {
-                    datafusion::logical_expr::ColumnarValue::Array(array) => {
-                        if let Some(bool_array) = array
-                            .as_any()
-                            .downcast_ref::<datafusion::arrow::array::BooleanArray>(
-                        ) {
-                            if !bool_array.is_empty() && !bool_array.value(0) {
-                                return false;
-                            }
-                        }
-                    }
-                    datafusion::logical_expr::ColumnarValue::Scalar(scalar) => {
-                        if let ScalarValue::Boolean(Some(false)) = scalar {
-                            return false;
-                        }
-                    }
-                },
-                Err(_) => return true, // Fallback if evaluation fails.
-            }
-        }
-        true
-    });
+    let pruning_results = pruning_predicate
+        .prune(&file_statistics)
+        .map_err(|e| DeltaTableError::Generic(format!("Failed to prune files: {e}")))?;
 
-    Ok(Box::new(filtered))
-}
+    // Filter files based on pruning results
+    let filtered_files = adds
+        .into_iter()
+        .zip(pruning_results.into_iter())
+        .filter_map(|(add, should_keep)| if should_keep { Some(add) } else { None });
 
-/// Extract partition-only predicates from a mixed expression
-/// For example, from "year = 2023 AND score >= 5" with partition columns ["year", "category"],
-/// this would extract "year = 2023"
-fn extract_partition_predicates(expr: &Expr, partition_columns: &[String]) -> Option<Expr> {
-    match expr {
-        // For AND expressions, try to extract partition-only parts
-        Expr::BinaryExpr(BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        }) => {
-            let left_partition = extract_partition_predicates(left, partition_columns);
-            let right_partition = extract_partition_predicates(right, partition_columns);
-
-            match (left_partition, right_partition) {
-                (Some(left_expr), Some(right_expr)) => Some(Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(left_expr),
-                    op: Operator::And,
-                    right: Box::new(right_expr),
-                })),
-                (Some(expr), None) | (None, Some(expr)) => Some(expr),
-                (None, None) => None,
-            }
-        }
-        // For other expressions, check if they only reference partition columns
-        _ => {
-            let column_refs = expr.column_refs();
-            let only_partition_cols = !column_refs.is_empty()
-                && column_refs
-                    .iter()
-                    .all(|col| partition_columns.contains(&col.name));
-
-            if only_partition_cols {
-                Some(expr.clone())
-            } else {
-                None
-            }
-        }
-    }
-}
-
-/// Create a RecordBatch containing partition values for a single file
-fn create_partition_batch_for_file(
-    add: &Add,
-    partition_columns: &[String],
-    schema: &ArrowSchemaRef,
-) -> DeltaResult<RecordBatch> {
-    use datafusion::arrow::array::ArrayRef;
-    use datafusion::arrow::record_batch::RecordBatch;
-
-    let mut arrays: Vec<ArrayRef> = Vec::new();
-
-    for column_name in partition_columns {
-        let field = schema
-            .field_with_name(column_name)
-            .map_err(|e| DeltaTableError::Generic(format!("Field not found: {e}")))?;
-
-        let partition_value = add.partition_values.get(column_name);
-
-        let array: ArrayRef = match partition_value {
-            Some(Some(value)) => {
-                match to_correct_scalar_value(
-                    &serde_json::Value::String(value.clone()),
-                    field.data_type(),
-                ) {
-                    Ok(Some(scalar)) => scalar.to_array_of_size(1).map_err(|e| {
-                        DeltaTableError::Generic(format!("Failed to create array: {e}"))
-                    })?,
-                    Ok(None) => get_null_of_arrow_type(field.data_type())?
-                        .to_array_of_size(1)
-                        .map_err(|e| {
-                            DeltaTableError::Generic(format!("Failed to create null array: {e}"))
-                        })?,
-                    Err(_) => get_null_of_arrow_type(field.data_type())?
-                        .to_array_of_size(1)
-                        .map_err(|e| {
-                            DeltaTableError::Generic(format!("Failed to create default array: {e}"))
-                        })?,
-                }
-            }
-            Some(None) | None => {
-                // Null value
-                get_null_of_arrow_type(field.data_type())?
-                    .to_array_of_size(1)
-                    .map_err(|e| {
-                        DeltaTableError::Generic(format!("Failed to create null array: {e}"))
-                    })?
-            }
-        };
-
-        arrays.push(array);
-    }
-    RecordBatch::try_new(schema.clone(), arrays)
-        .map_err(|e| DeltaTableError::Generic(format!("Failed to create RecordBatch: {e}")))
+    Ok(Box::new(filtered_files))
 }
 
 // Extension trait to add datafusion_table_statistics method to DeltaTableState

@@ -43,11 +43,7 @@ impl PartitionsExt for IndexMap<String, Scalar> {
 
         self.iter()
             .map(|(k, v)| {
-                let value_str = if v.is_null() {
-                    "__HIVE_DEFAULT_PARTITION__".to_string()
-                } else {
-                    v.serialize_encoded()
-                };
+                let value_str = v.serialize_encoded();
                 format!("{k}={value_str}")
             })
             .collect()
@@ -216,8 +212,8 @@ impl DeltaWriter {
                 .iter()
                 .map(|arr| {
                     Scalar::from_array(arr.as_ref(), row_idx)
-                        .map(|s| s.serialize())
-                        .unwrap_or_else(|| "__HIVE_DEFAULT_PARTITION__".to_string())
+                        .map(|s| s.serialize_encoded()) // Use serialize_encoded to handle nulls properly
+                        .unwrap_or_else(|| "null".to_string())
                 })
                 .collect::<Vec<_>>()
                 .join("\0");
@@ -244,10 +240,15 @@ impl DeltaWriter {
             let mut partition_values = IndexMap::new();
             for (i, col_name) in partition_columns.iter().enumerate() {
                 let arr = &partition_arrays[i];
-                // FIXME: Assuming partition columns are not null.
-                let scalar = Scalar::from_array(arr.as_ref(), first_row_idx)
-                    .expect("Partition column value should not be null");
-                partition_values.insert(col_name.clone(), scalar);
+                let scalar = Scalar::from_array(arr.as_ref(), first_row_idx);
+                if let Some(scalar) = scalar {
+                    partition_values.insert(col_name.clone(), scalar);
+                } else {
+                    // This shouldn't happen as from_array handles nulls properly,
+                    // but just in case, create a null scalar
+                    // We'll use a string null as the default type
+                    partition_values.insert(col_name.clone(), Scalar::String("".to_string()));
+                }
             }
 
             results.push(PartitionResult {

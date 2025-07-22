@@ -5463,6 +5463,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-physical-optimizer",
  "delta_kernel",
  "deltalake",
  "either",
