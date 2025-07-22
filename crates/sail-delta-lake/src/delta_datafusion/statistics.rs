@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::operations::write::stats::{ColumnCountStat, ColumnValueStat, Stats};
 
 /// Implementation of PruningStatistics for Delta Lake files
+#[derive(Debug)]
 pub struct DeltaFileStatistics {
     files: Vec<Add>,
     partition_columns: Vec<String>,
@@ -44,26 +45,20 @@ impl DeltaFileStatistics {
         column_name: &str,
         get_max: bool,
     ) -> Option<ScalarValue> {
-        // Check if it's a partition column first
+        // Check if the column is a partition column
         if self.partition_columns.contains(&column_name.to_string()) {
-            if let Some(partition_value) = add.partition_values.get(column_name) {
-                return match partition_value {
-                    Some(value) => {
-                        // Check if this is the special Hive null partition value
-                        if value == NULL_PARTITION_VALUE_DATA_PATH {
-                            Some(ScalarValue::Null)
-                        } else {
-                            Self::parse_partition_value(value)
-                        }
+            return match add.partition_values.get(column_name) {
+                Some(Some(value_str)) => {
+                    if value_str == NULL_PARTITION_VALUE_DATA_PATH {
+                        Some(ScalarValue::Null)
+                    } else {
+                        Self::parse_partition_value(value_str)
                     }
-                    None => Some(ScalarValue::Null),
-                };
-            }
-            // If partition column is not found in partition values, return Null
-            return Some(ScalarValue::Null);
+                }
+                Some(None) | None => Some(ScalarValue::Null),
+            };
         }
-
-        // Otherwise, look in file statistics
+        // Check statistics for non-partition columns
         if let Some(stats) = Self::extract_stats_from_add(add) {
             let stat_map = if get_max {
                 &stats.max_values
@@ -187,6 +182,8 @@ impl PruningStatistics for DeltaFileStatistics {
             })
             .collect();
 
+        dbg!(&values);
+
         ScalarValue::iter_to_array(values).ok()
     }
 
@@ -199,6 +196,8 @@ impl PruningStatistics for DeltaFileStatistics {
                     .unwrap_or(ScalarValue::Null)
             })
             .collect();
+
+        dbg!(&values);
 
         ScalarValue::iter_to_array(values).ok()
     }
@@ -214,6 +213,8 @@ impl PruningStatistics for DeltaFileStatistics {
             .map(|add| self.get_null_count(add, &column.name).unwrap_or(0))
             .collect();
 
+        dbg!(&counts);
+
         Some(Arc::new(UInt64Array::from(counts)))
     }
 
@@ -223,6 +224,8 @@ impl PruningStatistics for DeltaFileStatistics {
             .iter()
             .map(|add| self.get_row_count(add).unwrap_or(0))
             .collect();
+
+        dbg!(&counts);
 
         Some(Arc::new(UInt64Array::from(counts)))
     }

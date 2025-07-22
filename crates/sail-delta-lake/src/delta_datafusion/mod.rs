@@ -317,6 +317,8 @@ pub(crate) fn files_matching_predicate<'a>(
         conjunction(filters.iter().cloned()).unwrap_or(filters[0].clone())
     };
 
+    dbg!(&combined_filter);
+
     let arrow_schema = snapshot.arrow_schema()?;
     let df_schema = arrow_schema
         .clone()
@@ -328,20 +330,30 @@ pub(crate) fn files_matching_predicate<'a>(
         .create_physical_expr(combined_filter, &df_schema)
         .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
 
+    dbg!(&physical_expr);
+
     let pruning_predicate = PruningPredicate::try_new(physical_expr, arrow_schema)
         .map_err(|e| DeltaTableError::Generic(format!("Failed to create pruning predicate: {e}")))?;
 
+    dbg!(&pruning_predicate);
+
     let file_statistics = create_file_statistics(snapshot, Some(&adds))?;
+
+    dbg!(&file_statistics);
 
     let pruning_results = pruning_predicate
         .prune(&file_statistics)
         .map_err(|e| DeltaTableError::Generic(format!("Failed to prune files: {e}")))?;
+
+    dbg!(&pruning_results);
 
     // Filter files based on pruning results
     let filtered_files = adds
         .into_iter()
         .zip(pruning_results.into_iter())
         .filter_map(|(add, should_keep)| if should_keep { Some(add) } else { None });
+
+    dbg!(&filtered_files);
 
     Ok(Box::new(filtered_files))
 }
