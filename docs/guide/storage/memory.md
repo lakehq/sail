@@ -9,11 +9,7 @@ Sail provides an in-memory storage backend that stores data entirely in RAM. Thi
 
 ## URI Format
 
-Memory storage uses the `memory://` URL scheme:
-
-```
-memory:///path/to/data
-```
+Memory storage uses the `memory://` URI scheme.
 
 ## Examples
 
