@@ -2417,7 +2417,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {
@@ -2439,7 +2439,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {
@@ -2461,7 +2461,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {
@@ -2483,7 +2483,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {
@@ -2505,7 +2505,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {
@@ -2527,7 +2527,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {

@@ -347,7 +347,7 @@ fn try_add_i64(left: &PrimitiveArray<Int64Type>, right: &PrimitiveArray<Int64Typ
     builder.finish()
 }
 
-fn try_add_date32_days(
+pub fn try_add_date32_days(
     date_array: &PrimitiveArray<Date32Type>,
     days_array: &PrimitiveArray<Int32Type>,
 ) -> PrimitiveArray<Date32Type> {
@@ -371,7 +371,7 @@ fn try_add_date32_days(
     builder.finish()
 }
 
-fn try_add_date32_interval_yearmonth(
+pub fn try_add_date32_interval_yearmonth(
     dates: &PrimitiveArray<Date32Type>,
     intervals: &PrimitiveArray<IntervalYearMonthType>,
 ) -> Date32Array {
@@ -406,7 +406,7 @@ fn try_add_date32_interval_yearmonth(
     builder.finish()
 }
 
-fn try_add_date32_monthdaynano(
+pub fn try_add_date32_monthdaynano(
     dates: &PrimitiveArray<Date32Type>,
     intervals: &PrimitiveArray<IntervalMonthDayNanoType>,
 ) -> Date32Array {
@@ -445,7 +445,7 @@ fn try_add_date32_monthdaynano(
     builder.finish()
 }
 
-fn try_add_timestamp_duration(
+pub fn try_add_timestamp_duration(
     timestamps: &TimestampMicrosecondArray,
     durations: &DurationMicrosecondArray,
 ) -> TimestampMicrosecondArray {
@@ -468,7 +468,7 @@ fn try_add_timestamp_duration(
     builder.finish()
 }
 
-fn try_add_interval_monthdaynano(
+pub fn try_add_interval_monthdaynano(
     l: &PrimitiveArray<IntervalMonthDayNanoType>,
     r: &PrimitiveArray<IntervalMonthDayNanoType>,
 ) -> PrimitiveArray<IntervalMonthDayNanoType> {

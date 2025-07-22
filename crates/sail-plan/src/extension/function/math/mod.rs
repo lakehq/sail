@@ -17,6 +17,7 @@ pub mod spark_pmod;
 pub mod spark_sec;
 pub mod spark_signum;
 pub mod spark_try_add;
+pub mod spark_try_substract;
 
 #[inline]
 pub(crate) fn both_are_decimal(left: &DataType, right: &DataType) -> bool {
