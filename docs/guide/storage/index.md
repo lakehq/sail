@@ -59,20 +59,6 @@ Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) st
 | HTTP/HTTPS                                | :white_check_mark: | :white_check_mark: |
 | JDBC                                      | :x:                | :x:                |
 
-## Supported URL Formats
-
-Sail recognizes various URL formats to identify the appropriate storage backend:
-
-- **File System**: `file:///path/to/file`
-- **Memory**: `memory:///path`
-- **S3**: `s3://bucket/path` or `s3a://bucket/path`
-- **Cloudflare R2**: `"https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/path"`
-- **Azure**: `az://container/path`, `azure://container/path`, `abfs://container/path`, `abfss://container/path`, `adl://container/path`
-- **Google Cloud Storage**: `gs://bucket/path`
-- **HTTP/HTTPS**: `http://example.com/path` or `https://example.com/path`
-- **HDFS**: `hdfs://namenode:port/path`
-- **Hugging Face**: `hf://datasets/org/dataset`
-
 ## Special URL Handling
 
 Some HTTPS URLs are automatically recognized as cloud storage:
