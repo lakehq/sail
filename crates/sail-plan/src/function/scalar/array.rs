@@ -3,7 +3,7 @@ use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position as datafusion_array_position;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, is_null, lit, not, or, BinaryExpr, ExprSchemable, Operator};
+use datafusion_expr::{expr, is_null, lit, not, or, when, BinaryExpr, ExprSchemable, Operator};
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 
@@ -11,6 +11,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::extension::function::array::spark_array::SparkArray;
 use crate::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use crate::extension::function::array::spark_sequence::SparkSequence;
+use crate::extension::function::raise_error::RaiseError;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
@@ -149,6 +150,72 @@ fn array_position(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     ])
 }
 
+fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    use crate::function::common::ScalarFunctionBuilder as F;
+    let (array, position, value) = input.arguments.three()?;
+
+    let array_len = expr::Expr::Cast(expr::Cast {
+        expr: Box::new(expr_fn::array_length(array.clone())),
+        data_type: DataType::Int64,
+    });
+
+    let pos_from_zero = when(position.clone().gt(lit(0)), position.clone() - lit(1))
+        .when(
+            position.clone().lt(lit(0)),
+            array_len.clone() + position + lit(1),
+        )
+        .end()?;
+
+    let zero_index_error = F::udf(RaiseError::new())(ScalarFunctionInput {
+        arguments: vec![lit("[INVALID_INDEX_OF_ZERO] The index 0 is invalid. 
+        An index shall be either < 0 or > 0 (the first element has index 1)")],
+        function_context: input.function_context,
+    })?;
+
+    Ok(when(array.clone().is_null(), array.clone())
+        .when(pos_from_zero.clone().is_null(), zero_index_error)
+        .when(
+            pos_from_zero.clone().lt(lit(0)),
+            expr_fn::array_concat(vec![
+                expr_fn::array_repeat(value.clone(), lit(1)),
+                expr_fn::array_repeat(lit(ScalarValue::Null), -pos_from_zero.clone()),
+                array.clone(),
+            ]),
+        )
+        .when(
+            pos_from_zero.clone().eq(lit(0)),
+            expr_fn::array_prepend(value.clone(), array.clone()),
+        )
+        .when(
+            pos_from_zero
+                .clone()
+                .between(lit(1), array_len.clone() - lit(1)),
+            expr_fn::array_concat(vec![
+                expr_fn::array_slice(array.clone(), lit(1), pos_from_zero.clone(), None),
+                expr_fn::array_repeat(value.clone(), lit(1)),
+                expr_fn::array_slice(
+                    array.clone(),
+                    pos_from_zero.clone() + lit(1),
+                    array_len.clone(),
+                    None,
+                ),
+            ]),
+        )
+        .when(
+            pos_from_zero.clone().eq(array_len.clone()),
+            expr_fn::array_append(array.clone(), value.clone()),
+        )
+        .when(
+            pos_from_zero.clone().gt(array_len.clone()),
+            expr_fn::array_concat(vec![
+                array.clone(),
+                expr_fn::array_repeat(lit(ScalarValue::Null), pos_from_zero - array_len),
+                expr_fn::array_repeat(value, lit(1)),
+            ]),
+        )
+        .end()?)
+}
+
 fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -223,7 +290,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_contains_all", F::binary(array_contains_all)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
         ("array_except", F::binary(expr_fn::array_except)),
-        ("array_insert", F::unknown("array_insert")),
+        ("array_insert", F::custom(array_insert)),
         ("array_intersect", F::binary(expr_fn::array_intersect)),
         ("array_join", F::udf(ArrayToString::new())),
         ("array_max", F::udf(ArrayMax::new())),

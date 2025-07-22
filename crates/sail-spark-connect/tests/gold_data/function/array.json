@@ -253,7 +253,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_insert"
+        "success": "ok"
       }
     },
     {
@@ -279,7 +279,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_insert"
+        "success": "ok"
       }
     },
     {
@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: array_insert"
+        "success": "ok"
       }
     },
     {
