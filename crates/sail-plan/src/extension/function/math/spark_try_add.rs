@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use arrow::array::{Array, AsArray, PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray};
+use arrow::array::{Array, AsArray, PrimitiveArray, PrimitiveBuilder};
 use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use arrow::datatypes::{
     Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNanoType,
@@ -113,7 +113,7 @@ impl ScalarUDFImpl for SparkTryAdd {
             (DataType::Int32, DataType::Int32) => {
                 let l = left_arr.as_primitive::<Int32Type>();
                 let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_binary_op_i32(&l, &r, i32::checked_add);
+                let result = try_binary_op_i32(l, r, i32::checked_add);
 
                 binary_op_scalar_or_array(left, right, result)
             }
