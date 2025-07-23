@@ -2,30 +2,6 @@
 use std::sync::{Arc, LazyLock};
 
 use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
-use deltalake::kernel::ActionType;
-
-pub trait ActionTypeSchemaField {
-    /// Returns the type of the corresponding field in the delta log schema
-    fn schema_field(&self) -> &StructField;
-}
-
-impl ActionTypeSchemaField for ActionType {
-    /// Returns the type of the corresponding field in the delta log schema
-    fn schema_field(&self) -> &StructField {
-        match self {
-            Self::Metadata => &METADATA_FIELD,
-            Self::Protocol => &PROTOCOL_FIELD,
-            Self::CommitInfo => &COMMIT_INFO_FIELD,
-            Self::Add => &ADD_FIELD,
-            Self::Remove => &REMOVE_FIELD,
-            Self::Cdc => &CDC_FIELD,
-            Self::Txn => &TXN_FIELD,
-            Self::DomainMetadata => &DOMAIN_METADATA_FIELD,
-            Self::CheckpointMetadata => &CHECKPOINT_METADATA_FIELD,
-            Self::Sidecar => &SIDECAR_FIELD,
-        }
-    }
-}
 
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#change-metadata
 static METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
@@ -110,7 +86,7 @@ static COMMIT_INFO_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
-pub(crate) static ADD_FIELD: LazyLock<StructField> = LazyLock::new(|| {
+static ADD_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "add",
         StructType::new(vec![
@@ -205,6 +181,7 @@ static DOMAIN_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#checkpoint-metadata
+#[allow(dead_code)]
 static CHECKPOINT_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "checkpointMetadata",
@@ -216,6 +193,7 @@ static CHECKPOINT_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#sidecar-file-information
+#[allow(dead_code)]
 static SIDECAR_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "sidecar",
@@ -271,11 +249,6 @@ fn deletion_vector_field() -> StructField {
         ]))),
         true,
     )
-}
-
-#[cfg(test)]
-pub(crate) fn log_schema() -> &'static StructType {
-    &LOG_SCHEMA
 }
 
 pub(crate) fn log_schema_ref() -> &'static Arc<StructType> {

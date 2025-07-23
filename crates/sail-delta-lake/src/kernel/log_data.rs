@@ -12,7 +12,7 @@ use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::expressions::Expression;
 use delta_kernel::schema::{DataType, PrimitiveType};
 use delta_kernel::{EngineData, EvaluationHandler, ExpressionEvaluator};
-use deltalake::kernel::{EagerSnapshot, Metadata, StructType};
+use deltalake::kernel::{Metadata, StructType};
 use deltalake::{DeltaResult, DeltaTableError};
 
 use crate::kernel::ARROW_HANDLER;

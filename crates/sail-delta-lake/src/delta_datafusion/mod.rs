@@ -327,8 +327,10 @@ pub(crate) async fn files_matching_predicate<'a>(
         .create_physical_expr(filters[0].clone(), &df_schema)
         .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
 
-    let pruning_predicate = PruningPredicate::try_new(physical_expr, arrow_schema)
-        .map_err(|e| DeltaTableError::Generic(format!("Failed to create pruning predicate: {e}")))?;
+    let pruning_predicate =
+        PruningPredicate::try_new(physical_expr, arrow_schema).map_err(|e| {
+            DeltaTableError::Generic(format!("Failed to create pruning predicate: {e}"))
+        })?;
 
     let pruning_results = pruning_predicate
         .prune(&log_data)
@@ -775,8 +777,13 @@ impl<'a> DeltaScanBuilder<'a> {
                         vec![]
                     };
 
-                    let files: Vec<Add> =
-                        files_matching_predicate(self.snapshot.snapshot(), self.log_store.clone(), &filters).await?.collect();
+                    let files: Vec<Add> = files_matching_predicate(
+                        self.snapshot.snapshot(),
+                        self.log_store.clone(),
+                        &filters,
+                    )
+                    .await?
+                    .collect();
                     let files_scanned = files.len();
                     let total_files = self.snapshot.files_count();
                     let files_pruned = total_files - files_scanned;
