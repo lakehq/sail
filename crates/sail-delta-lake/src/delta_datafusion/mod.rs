@@ -51,7 +51,6 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
-use crate::delta_datafusion::statistics::create_file_statistics;
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -306,18 +305,11 @@ pub(crate) fn files_matching_predicate<'a>(
     snapshot: &'a EagerSnapshot,
     filters: &[Expr],
 ) -> DeltaResult<Box<dyn Iterator<Item = Add> + 'a>> {
-    let adds: Vec<Add> = snapshot.file_actions()?.collect();
     if filters.is_empty() {
-        return Ok(Box::new(adds.into_iter()));
+        return Ok(Box::new(snapshot.file_actions()?));
     }
 
-    let combined_filter = if filters.len() == 1 {
-        filters[0].clone()
-    } else {
-        conjunction(filters.iter().cloned()).unwrap_or(filters[0].clone())
-    };
-
-    dbg!(&combined_filter);
+    let log_data = crate::kernel::log_data::SailLogDataHandler::new(snapshot)?;
 
     let arrow_schema = snapshot.arrow_schema()?;
     let df_schema = arrow_schema
@@ -327,33 +319,23 @@ pub(crate) fn files_matching_predicate<'a>(
 
     let context = SessionContext::new();
     let physical_expr = context
-        .create_physical_expr(combined_filter, &df_schema)
+        .create_physical_expr(filters[0].clone(), &df_schema)
         .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
-
-    dbg!(&physical_expr);
 
     let pruning_predicate = PruningPredicate::try_new(physical_expr, arrow_schema)
         .map_err(|e| DeltaTableError::Generic(format!("Failed to create pruning predicate: {e}")))?;
 
-    dbg!(&pruning_predicate);
-
-    let file_statistics = create_file_statistics(snapshot, Some(&adds))?;
-
-    dbg!(&file_statistics);
-
     let pruning_results = pruning_predicate
-        .prune(&file_statistics)
+        .prune(&log_data)
         .map_err(|e| DeltaTableError::Generic(format!("Failed to prune files: {e}")))?;
 
-    dbg!(&pruning_results);
+    let files: Vec<Add> = snapshot.file_actions()?.collect();
 
     // Filter files based on pruning results
-    let filtered_files = adds
+    let filtered_files = files
         .into_iter()
         .zip(pruning_results.into_iter())
         .filter_map(|(add, should_keep)| if should_keep { Some(add) } else { None });
-
-    dbg!(&filtered_files);
 
     Ok(Box::new(filtered_files))
 }
