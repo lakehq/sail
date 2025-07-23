@@ -1,9 +1,6 @@
 use std::any::Any;
 
-use arrow::array::{
-    Array, AsArray, Date32Array, Int64Array, PrimitiveArray, PrimitiveBuilder,
-    TimestampMicrosecondArray,
-};
+use arrow::array::{Array, AsArray, PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray};
 use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use arrow::datatypes::{
     Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNanoType,
@@ -17,9 +14,9 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_add_date32_days, try_add_date32_interval_yearmonth,
-    try_add_date32_monthdaynano, try_add_i32, try_add_i64, try_add_interval_monthdaynano,
-    try_add_timestamp_duration,
+    binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_date32_monthdaynano,
+    try_add_interval_monthdaynano, try_add_timestamp_duration, try_binary_op_date32_i32,
+    try_binary_op_i32, try_binary_op_i64,
 };
 
 #[derive(Debug)]
@@ -114,39 +111,36 @@ impl ScalarUDFImpl for SparkTryAdd {
 
         match (left_arr.data_type(), right_arr.data_type()) {
             (DataType::Int32, DataType::Int32) => {
-                let l: &PrimitiveArray<Int32Type> = left_arr.as_primitive::<Int32Type>();
-                let r: &PrimitiveArray<Int32Type> = right_arr.as_primitive::<Int32Type>();
-                let result: PrimitiveArray<Int32Type> = try_add_i32(l, r);
+                let l = left_arr.as_primitive::<Int32Type>();
+                let r = right_arr.as_primitive::<Int32Type>();
+                let result = try_binary_op_i32(&l, &r, i32::checked_add);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Int64, DataType::Int64) => {
-                let l: &PrimitiveArray<Int64Type> = left_arr.as_primitive::<Int64Type>();
-                let r: &PrimitiveArray<Int64Type> = right_arr.as_primitive::<Int64Type>();
-                let result: Int64Array = try_add_i64(l, r);
+                let l = left_arr.as_primitive::<Int64Type>();
+                let r = right_arr.as_primitive::<Int64Type>();
+                let result = try_binary_op_i64(l, r, i64::checked_add);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Date32, DataType::Int32) => {
-                let l: &PrimitiveArray<Date32Type> = left_arr.as_primitive::<Date32Type>();
-                let r: &PrimitiveArray<Int32Type> = right_arr.as_primitive::<Int32Type>();
-                let result: PrimitiveArray<Date32Type> = try_add_date32_days(l, r);
+                let l = left_arr.as_primitive::<Date32Type>();
+                let r = right_arr.as_primitive::<Int32Type>();
+                let result = try_binary_op_date32_i32(l, r, i32::checked_add);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Date32, DataType::Interval(YearMonth)) => {
-                let l: &PrimitiveArray<Date32Type> = left_arr.as_primitive::<Date32Type>();
-                let r: &PrimitiveArray<IntervalYearMonthType> =
-                    right_arr.as_primitive::<IntervalYearMonthType>();
-                let result: Date32Array = try_add_date32_interval_yearmonth(l, r);
+                let l = left_arr.as_primitive::<Date32Type>();
+                let r = right_arr.as_primitive::<IntervalYearMonthType>();
+                let result = try_add_date32_interval_yearmonth(l, r);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Interval(YearMonth), DataType::Interval(YearMonth)) => {
-                let l: &PrimitiveArray<IntervalYearMonthType> =
-                    left_arr.as_primitive::<IntervalYearMonthType>();
-                let r: &PrimitiveArray<IntervalYearMonthType> =
-                    right_arr.as_primitive::<IntervalYearMonthType>();
+                let l = left_arr.as_primitive::<IntervalYearMonthType>();
+                let r = right_arr.as_primitive::<IntervalYearMonthType>();
 
                 let len: usize = l.len();
                 let mut builder: PrimitiveBuilder<IntervalYearMonthType> =
@@ -168,30 +162,24 @@ impl ScalarUDFImpl for SparkTryAdd {
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Date32, DataType::Interval(MonthDayNano)) => {
-                let dates: &PrimitiveArray<Date32Type> = left_arr.as_primitive::<Date32Type>();
-                let intervals: &PrimitiveArray<IntervalMonthDayNanoType> =
-                    right_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let result: Date32Array = try_add_date32_monthdaynano(dates, intervals);
+                let dates = left_arr.as_primitive::<Date32Type>();
+                let intervals = right_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let result = try_add_date32_monthdaynano(dates, intervals);
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)) => {
-                let l: &PrimitiveArray<IntervalMonthDayNanoType> =
-                    left_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let r: &PrimitiveArray<IntervalMonthDayNanoType> =
-                    right_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let result: PrimitiveArray<IntervalMonthDayNanoType> =
-                    try_add_interval_monthdaynano(l, r);
+                let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let result = try_add_interval_monthdaynano(l, r);
                 binary_op_scalar_or_array(left, right, result)
             }
             (
                 DataType::Timestamp(TimeUnit::Microsecond, _),
                 DataType::Duration(TimeUnit::Microsecond),
             ) => {
-                let l: &PrimitiveArray<TimestampMicrosecondType> =
-                    left_arr.as_primitive::<TimestampMicrosecondType>();
-                let r: &PrimitiveArray<DurationMicrosecondType> =
-                    right_arr.as_primitive::<DurationMicrosecondType>();
-                let result: TimestampMicrosecondArray = try_add_timestamp_duration(l, r);
+                let l = left_arr.as_primitive::<TimestampMicrosecondType>();
+                let r = right_arr.as_primitive::<DurationMicrosecondType>();
+                let result = try_add_timestamp_duration(l, r);
 
                 binary_op_scalar_or_array(left, right, result)
             }

@@ -2,7 +2,7 @@ use std::any::Any;
 use std::ops::Neg;
 use std::sync::Arc;
 
-use arrow::array::{Array, AsArray, Date32Array, PrimitiveArray, TimestampMicrosecondArray};
+use arrow::array::{Array, AsArray, Date32Array, TimestampMicrosecondArray};
 use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{
@@ -17,9 +17,9 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_add_date32_days, try_add_date32_interval_yearmonth,
-    try_add_date32_monthdaynano, try_add_i32, try_add_i64, try_add_interval_monthdaynano,
-    try_add_interval_yearmonth, try_add_timestamp_duration,
+    binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_date32_monthdaynano,
+    try_add_interval_monthdaynano, try_add_interval_yearmonth, try_add_timestamp_duration,
+    try_binary_op_date32_i32, try_binary_op_i32, try_binary_op_i64,
 };
 
 #[derive(Debug)]
@@ -114,91 +114,67 @@ impl ScalarUDFImpl for SparkTrySubtract {
 
         match (left_arr.data_type(), right_arr.data_type()) {
             (DataType::Int32, DataType::Int32) => {
-                let l: &PrimitiveArray<Int32Type> = left_arr.as_primitive::<Int32Type>();
-                let r: &PrimitiveArray<Int32Type> = right_arr.as_primitive::<Int32Type>();
-                let negated_r: PrimitiveArray<Int32Type> = r
-                    .iter()
-                    .map(|opt| opt.map(|v| v.wrapping_neg()))
-                    .collect();
-                let result: PrimitiveArray<Int32Type> = try_add_i32(l, &negated_r);
+                let l = left_arr.as_primitive::<Int32Type>();
+                let r= right_arr.as_primitive::<Int32Type>();
+                let result = try_binary_op_i32(l, r, i32::checked_sub);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Int64, DataType::Int64) => {
-                let l: &PrimitiveArray<Int64Type> = left_arr.as_primitive::<Int64Type>();
-                let r: &PrimitiveArray<Int64Type> = right_arr.as_primitive::<Int64Type>();
-                let negated_r: PrimitiveArray<Int64Type> = r
-                    .iter()
-                    .map(|opt| opt.map(|v| v.wrapping_neg()))
-                    .collect();
-                let result: PrimitiveArray<Int64Type> = try_add_i64(l, &negated_r);
+                let l= left_arr.as_primitive::<Int64Type>();
+                let r = right_arr.as_primitive::<Int64Type>();
+                let result= try_binary_op_i64(l, r, i64::checked_sub);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Date32, DataType::Int32) => {
-                let l: &PrimitiveArray<Date32Type> = left_arr.as_primitive::<Date32Type>();
-                let r: &PrimitiveArray<Int32Type> = right_arr.as_primitive::<Int32Type>();
-                let negated_r: PrimitiveArray<Int32Type> =
-                    r.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
-                let result: PrimitiveArray<Date32Type> = try_add_date32_days(l, &negated_r);
+                let l = left_arr.as_primitive::<Date32Type>();
+                let r= right_arr.as_primitive::<Int32Type>();
+                let result= try_binary_op_date32_i32(l, r, i32::checked_sub);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Date32, DataType::Interval(YearMonth)) => {
-                let l: &PrimitiveArray<Date32Type> = left_arr.as_primitive::<Date32Type>();
-                let r: &PrimitiveArray<IntervalYearMonthType> =
-                    right_arr.as_primitive::<IntervalYearMonthType>();
-                let negated_r: PrimitiveArray<IntervalYearMonthType> =
+                let l = left_arr.as_primitive::<Date32Type>();
+                let r = right_arr.as_primitive::<IntervalYearMonthType>();
+                let negated_r =
                     r.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
                 let result: Date32Array = try_add_date32_interval_yearmonth(l, &negated_r);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Interval(YearMonth), DataType::Interval(YearMonth)) => {
-                let l: &PrimitiveArray<IntervalYearMonthType> =
-                    left_arr.as_primitive::<IntervalYearMonthType>();
-                let r: &PrimitiveArray<IntervalYearMonthType> =
-                    right_arr.as_primitive::<IntervalYearMonthType>();
-                let negated_r: PrimitiveArray<IntervalYearMonthType> =
-                    r.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
-                let result: PrimitiveArray<IntervalYearMonthType> =
-                    try_add_interval_yearmonth(l, &negated_r);
+                let l= left_arr.as_primitive::<IntervalYearMonthType>();
+                let r = right_arr.as_primitive::<IntervalYearMonthType>();
+                let negated_r = r.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
+                let result = try_add_interval_yearmonth(l, &negated_r);
 
                 binary_op_scalar_or_array(left, right, result)
             }
 
             (DataType::Date32, DataType::Interval(MonthDayNano)) => {
-                let l: &PrimitiveArray<Date32Type> = left_arr.as_primitive::<Date32Type>();
-                let r: &PrimitiveArray<IntervalMonthDayNanoType> =
-                    right_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let negated_r: PrimitiveArray<IntervalMonthDayNanoType> =
-                    r.iter().map(|opt| opt.map(|v| v.neg())).collect();
+                let l= left_arr.as_primitive::<Date32Type>();
+                let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let negated_r = r.iter().map(|opt| opt.map(|v| v.neg())).collect();
                 let result: Date32Array = try_add_date32_monthdaynano(l, &negated_r);
 
                 binary_op_scalar_or_array(left, right, result)
             }
 
             (DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)) => {
-                let l: &PrimitiveArray<IntervalMonthDayNanoType> =
-                    left_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let r: &PrimitiveArray<IntervalMonthDayNanoType> =
-                    right_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let negated_r: PrimitiveArray<IntervalMonthDayNanoType> =
-                    r.iter().map(|opt| opt.map(|v| v.neg())).collect();
-                let result: PrimitiveArray<IntervalMonthDayNanoType> =
-                    try_add_interval_monthdaynano(l, &negated_r);
+                let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let negated_r = r.iter().map(|opt| opt.map(|v| v.neg())).collect();
+                let result  = try_add_interval_monthdaynano(l, &negated_r);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Timestamp(Microsecond, tz_l), DataType::Duration(Microsecond)) => {
                 let tz = tz_l.clone();
 
-                let l: &PrimitiveArray<TimestampMicrosecondType> =
-                    left_arr.as_primitive::<TimestampMicrosecondType>();
-                let r: &PrimitiveArray<DurationMicrosecondType> =
-                    right_arr.as_primitive::<DurationMicrosecondType>();
-                let negated_r: PrimitiveArray<DurationMicrosecondType> =
-                    r.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
+                let l = left_arr.as_primitive::<TimestampMicrosecondType>();
+                let r = right_arr.as_primitive::<DurationMicrosecondType>();
+                let negated_r = r.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
 
                 let result: TimestampMicrosecondArray = try_add_timestamp_duration(l, &negated_r);
 
