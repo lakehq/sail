@@ -301,15 +301,21 @@ fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<
     arrow_schema_from_snapshot(snapshot, wrap_partitions)
 }
 
-pub(crate) fn files_matching_predicate<'a>(
+pub(crate) async fn files_matching_predicate<'a>(
     snapshot: &'a EagerSnapshot,
+    log_store: LogStoreRef,
     filters: &[Expr],
 ) -> DeltaResult<Box<dyn Iterator<Item = Add> + 'a>> {
     if filters.is_empty() {
         return Ok(Box::new(snapshot.file_actions()?));
     }
 
-    let log_data = crate::kernel::log_data::SailLogDataHandler::new(snapshot)?;
+    let log_data = crate::kernel::log_data::SailLogDataHandler::new(
+        log_store,
+        snapshot.load_config().clone(),
+        Some(snapshot.version()),
+    )
+    .await?;
 
     let arrow_schema = snapshot.arrow_schema()?;
     let df_schema = arrow_schema
@@ -771,7 +777,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     };
 
                     let files: Vec<Add> =
-                        files_matching_predicate(self.snapshot.snapshot(), &filters)?.collect();
+                        files_matching_predicate(self.snapshot.snapshot(), self.log_store.clone(), &filters).await?.collect();
                     let files_scanned = files.len();
                     let total_files = self.snapshot.files_count();
                     let files_pruned = total_files - files_scanned;
