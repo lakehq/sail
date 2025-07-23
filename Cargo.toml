@@ -119,6 +119,7 @@ datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "a
 datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
@@ -167,7 +168,6 @@ datafusion-doc = { git = "https://github.com/apache/datafusion.git", rev = "afb9
 datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
-datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-functions-aggregate-common = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
@@ -187,7 +187,6 @@ datafusion-pruning = { git = "https://github.com/apache/datafusion.git", rev = "
 datafusion-session = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-spark = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 datafusion-sql = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
-datafusion-substrait = { git = "https://github.com/apache/datafusion.git", rev = "afb9099" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release

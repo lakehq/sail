@@ -5589,6 +5589,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-json",
  "datafusion-functions-nested",
+ "datafusion-physical-expr",
  "datafusion-spark",
  "either",
  "futures",
@@ -7540,13 +7541,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "datafusion-ffi"
-version = "49.0.0"
-source = "git+https://github.com/apache/datafusion.git?rev=afb9099#afb90999d0a1ab500f42a32251370f214f837d1e"
-
-[[patch.unused]]
-name = "datafusion-substrait"
-version = "49.0.0"
-source = "git+https://github.com/apache/datafusion.git?rev=afb9099#afb90999d0a1ab500f42a32251370f214f837d1e"

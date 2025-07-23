@@ -14,7 +14,7 @@ use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::core::get_field;
 use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
-use datafusion_expr::expr::{ScalarFunction, WindowFunctionParams};
+use datafusion_expr::expr::{FieldMetadata, ScalarFunction, WindowFunctionParams};
 use datafusion_expr::{
     col, expr, expr_fn, lit, window_frame, AggregateUDF, BinaryExpr, ExprSchemable, Operator,
     ScalarUDF,
@@ -1001,9 +1001,8 @@ impl PlanResolver<'_> {
         let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
         let expr = if let [n] = name.as_slice() {
             if let Some(metadata) = metadata {
-                let metadata_map: Option<HashMap<String, String>> =
-                    Some(metadata.into_iter().collect());
-                expr.alias_with_metadata(n, metadata_map)
+                let field_metadata = Some(FieldMetadata::from(metadata.into_iter().collect()));
+                expr.alias_with_metadata(n, field_metadata)
             } else {
                 expr.alias(n)
             }
