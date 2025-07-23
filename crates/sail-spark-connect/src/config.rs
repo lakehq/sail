@@ -260,10 +260,14 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
 
         if let Some(value) = config
             .get(SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH)?
-            .map(|x| x.parse::<usize>())
+            .map(|x| x.parse::<i128>())
             .transpose()?
         {
-            output.arrow_max_records_per_batch = value;
+            output.arrow_max_records_per_batch = if value <= 0 || value > usize::MAX as i128 {
+                usize::MAX
+            } else {
+                value as usize
+            };
         }
 
         Ok(output)
