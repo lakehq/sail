@@ -398,6 +398,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         nulls_first: opt.nulls_first,
                     })
                     .collect();
+                let null_equality = if null_equals_null {
+                    datafusion::common::NullEquality::NullEqualsNull
+                } else {
+                    datafusion::common::NullEquality::NullEqualsNothing
+                };
                 Ok(Arc::new(SortMergeJoinExec::try_new(
                     left,
                     right,
@@ -405,7 +410,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     filter,
                     join_type,
                     sort_options,
-                    null_equals_null,
+                    null_equality,
                 )?))
             }
             // TODO: StreamingTableExec?
@@ -547,6 +552,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     nulls_first: x.nulls_first,
                 })
                 .collect();
+            let null_equals_null = match sort_merge_join.null_equality() {
+                datafusion::common::NullEquality::NullEqualsNull => true,
+                datafusion::common::NullEquality::NullEqualsNothing => false,
+            };
             NodeKind::SortMergeJoin(gen::SortMergeJoinExecNode {
                 left,
                 right,
@@ -554,7 +563,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 filter,
                 join_type,
                 sort_options,
-                null_equals_null: sort_merge_join.null_equals_null(),
+                null_equals_null,
             })
         } else if let Some(partial_sort) = node.as_any().downcast_ref::<PartialSortExec>() {
             let expr = Some(self.try_encode_lex_ordering(partial_sort.expr())?);
@@ -1319,7 +1328,14 @@ impl RemoteExecutionCodec {
             .iter()
             .map(|x| self.try_decode_message(x))
             .collect::<Result<_>>()?;
-        parse_physical_sort_exprs(&lex_ordering, registry, schema, self)
+        let lex_ordering = LexOrdering::new(
+            parse_physical_sort_exprs(&lex_ordering, registry, schema, self)
+                .map_err(|e| plan_datafusion_err!("failed to decode lex ordering: {e}"))?,
+        );
+        match lex_ordering {
+            Some(lex_ordering) => Ok(lex_ordering),
+            None => plan_err!("failed to decode lex ordering: invalid sort expressions"),
+        }
     }
 
     fn try_encode_lex_ordering(&self, lex_ordering: &LexOrdering) -> Result<gen::LexOrdering> {
