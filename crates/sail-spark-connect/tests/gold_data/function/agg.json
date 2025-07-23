@@ -1247,7 +1247,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: listagg"
+        "success": "ok"
       }
     },
     {
@@ -1269,7 +1269,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: listagg"
+        "success": "ok"
       }
     },
     {
@@ -1291,7 +1291,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: listagg"
+        "success": "ok"
       }
     },
     {
@@ -1313,7 +1313,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: listagg"
+        "success": "ok"
       }
     },
     {
@@ -1335,7 +1335,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: listagg"
+        "success": "ok"
       }
     },
     {
@@ -1357,7 +1357,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: listagg"
+        "success": "ok"
       }
     },
     {
@@ -1379,7 +1379,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: listagg"
+        "success": "ok"
       }
     },
     {
@@ -3303,7 +3303,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: string_agg"
+        "success": "ok"
       }
     },
     {
@@ -3325,7 +3325,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: string_agg"
+        "success": "ok"
       }
     },
     {
@@ -3347,7 +3347,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: string_agg"
+        "success": "ok"
       }
     },
     {
@@ -3369,7 +3369,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: string_agg"
+        "success": "ok"
       }
     },
     {
@@ -3391,7 +3391,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: string_agg"
+        "success": "ok"
       }
     },
     {
@@ -3413,7 +3413,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: string_agg"
+        "success": "ok"
       }
     },
     {
@@ -3435,7 +3435,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: string_agg"
+        "success": "ok"
       }
     },
     {
