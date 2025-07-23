@@ -20,23 +20,39 @@ use regex::{Captures, Regex};
 use crate::extension::function::functions_nested_utils::downcast_arg;
 use crate::extension::function::functions_utils::make_scalar_function;
 
-// UDF implementation of `spark_to_number`, similar to Spark's `to_number`.
-// This function processes string representations of numbers using specified format strings,
-// converting them into structured numeric representations with defined precision and scale.
-//
-// - The primary input is a `StringArray` containing the number as strings to be parsed.
-// - The secondary input is a `StringArray` indicating the format - specifying elements like signs,
-//   currency symbols, and grouping separators to guide parsing.
-//
-// Features include:
-// - Parsing string numbers into numeric types with specified precision and scale.
-// - Handling of signs, currency symbols, and grouping (thousands) separators to match formats.
-// - Regex-based extraction for flexible capturing of number and format components.
-//
-// The module utilizes Arrow and DataFusion for data type management and error handling.
-// Errors are signaled via `DataFusionError` and custom error messages for unsupported formats
-// or mismatched patterns.
-
+/// UDF implementation of `spark_to_number`, following the semantics of Spark's `to_number`.
+///
+/// This function converts a string expression `expr` into a DECIMAL(p, s) value,
+/// based on a format string `fmt` that defines how the input is structured.
+/// The parsing logic adheres to Spark SQL syntax for `to_number`, supporting a
+/// wide range of formatting options for signs, currency symbols, grouping, and decimals.
+///
+/// - `expr` is a `StringArray` representing numbers as strings (e.g., "$1,234.56").
+/// - `fmt` is a `StringArray` literal specifying the format template to interpret `expr`.
+///
+/// Format strings (`fmt`) may include:
+/// - `9` or `0` for expected digit positions (mandatory or optional).
+/// - `.` or `D` for decimal point placement.
+/// - `,` or `G` for grouping (thousands) separators.
+/// - `L` or `$` for currency symbols.
+/// - `S` or `MI` for signed number handling.
+/// - `PR` for negative numbers wrapped in angle brackets (`<1>`).
+///
+/// Features:
+/// - Accurate extraction of number structure based on format.
+/// - Support for locale-aware grouping and currency parsing.
+/// - Flexible placement of optional signs and symbols (prefix/suffix).
+/// - Output conforms to a DECIMAL type with precision and scale inferred from `fmt`.
+///
+/// The implementation uses Arrow arrays and DataFusion error handling conventions.
+/// Errors are returned when `expr` includes invalid characters, or when `expr`
+/// does not conform to the structure defined by `fmt`.
+///
+/// Examples:
+/// - `to_number('$12,345.67', 'S$999,999.99')` returns `12345.67`.
+/// - `to_number('<1,234.00>', '999,999.99PR')` returns `-1234.00`.
+///
+/// Inspired by Spark SQL's formatting rules for numeric parsing.
 #[derive(Debug)]
 pub struct SparkToNumber {
     signature: Signature,
