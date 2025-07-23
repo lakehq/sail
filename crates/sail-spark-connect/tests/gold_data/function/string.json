@@ -3669,7 +3669,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_number"
+        "success": "ok"
       }
     },
     {
@@ -3691,7 +3691,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_number"
+        "success": "ok"
       }
     },
     {
@@ -3713,7 +3713,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_number"
+        "failure": "error in DataFusion: Execution error: Execution error: String '12,454.8-' does not match the expected regex pattern ^(?<sign>[+-])?(?<numbers>[0-9,G]+)(?<dot>[.])?(?<decimals>[0-9]+)?$"
       }
     },
     {
@@ -3735,7 +3735,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_number"
+        "success": "ok"
       }
     },
     {
@@ -3757,7 +3757,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_number"
+        "success": "ok"
       }
     },
     {
