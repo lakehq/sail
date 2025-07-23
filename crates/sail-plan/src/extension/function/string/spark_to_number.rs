@@ -20,6 +20,23 @@ use regex::{Captures, Regex};
 use crate::extension::function::functions_nested_utils::downcast_arg;
 use crate::extension::function::functions_utils::make_scalar_function;
 
+// UDF implementation of `spark_to_number`, similar to Spark's `to_number`.
+// This function processes string representations of numbers using specified format strings,
+// converting them into structured numeric representations with defined precision and scale.
+//
+// - The primary input is a `StringArray` containing the number as strings to be parsed.
+// - The secondary input is a `StringArray` indicating the format - specifying elements like signs,
+//   currency symbols, and grouping separators to guide parsing.
+//
+// Features include:
+// - Parsing string numbers into numeric types with specified precision and scale.
+// - Handling of signs, currency symbols, and grouping (thousands) separators to match formats.
+// - Regex-based extraction for flexible capturing of number and format components.
+//
+// The module utilizes Arrow and DataFusion for data type management and error handling.
+// Errors are signaled via `DataFusionError` and custom error messages for unsupported formats
+// or mismatched patterns.
+
 #[derive(Debug)]
 pub struct SparkToNumber {
     signature: Signature,
