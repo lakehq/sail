@@ -2,14 +2,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, BooleanArray, UInt64Array};
-
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::Column;
 use datafusion::physical_optimizer::pruning::PruningStatistics;
 use deltalake::errors::DeltaResult;
 use deltalake::kernel::{Add, EagerSnapshot};
 use deltalake::NULL_PARTITION_VALUE_DATA_PATH;
-
 use serde_json::Value;
 
 use crate::operations::write::stats::{ColumnCountStat, ColumnValueStat, Stats};

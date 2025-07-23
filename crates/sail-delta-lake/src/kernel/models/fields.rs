@@ -2,13 +2,11 @@
 use std::sync::{Arc, LazyLock};
 
 use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
-
 use deltalake::kernel::ActionType;
 
 pub trait ActionTypeSchemaField {
     /// Returns the type of the corresponding field in the delta log schema
     fn schema_field(&self) -> &StructField;
-
 }
 
 impl ActionTypeSchemaField for ActionType {

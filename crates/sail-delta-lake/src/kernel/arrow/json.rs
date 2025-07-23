@@ -3,15 +3,15 @@
 use std::io::{BufRead, BufReader, Cursor};
 use std::task::Poll;
 
-use datafusion::arrow::array::{new_null_array, Array, RecordBatch, StringArray};
-use datafusion::arrow::json::{reader::Decoder, ReaderBuilder};
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
-use datafusion::arrow::compute::concat_batches;
 use bytes::{Buf, Bytes};
+use datafusion::arrow::array::{new_null_array, Array, RecordBatch, StringArray};
+use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::json::reader::Decoder;
+use datafusion::arrow::json::ReaderBuilder;
+use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use futures::{ready, Stream, StreamExt};
 use object_store::Result as ObjectStoreResult;
-
-use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 #[inline]
 pub(crate) fn get_reader(data: &[u8]) -> BufReader<Cursor<&[u8]>> {

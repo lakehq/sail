@@ -4,11 +4,12 @@ use std::ops::{AddAssign, Not};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use delta_kernel::expressions::Scalar;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::Add;
-use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
+use log::warn;
 use parquet::basic::{LogicalType, Type};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
@@ -16,7 +17,6 @@ use parquet::format::{FileMetaData, TimeUnit};
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use log::warn;
 
 /// Represent minValues and maxValues in add action statistics.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
