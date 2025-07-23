@@ -303,7 +303,7 @@ impl ScalarUDFImpl for SparkTryAdd {
     }
 }
 
-fn try_add_i32(
+pub fn try_add_i32(
     left: &PrimitiveArray<Int32Type>,
     right: &PrimitiveArray<Int32Type>,
 ) -> PrimitiveArray<Int32Type> {
@@ -327,7 +327,7 @@ fn try_add_i32(
     builder.finish()
 }
 
-fn try_add_i64(left: &PrimitiveArray<Int64Type>, right: &PrimitiveArray<Int64Type>) -> Int64Array {
+pub fn try_add_i64(left: &PrimitiveArray<Int64Type>, right: &PrimitiveArray<Int64Type>) -> Int64Array {
     let len: usize = left.len();
     let mut builder: PrimitiveBuilder<Int64Type> = Int64Builder::with_capacity(len);
 

@@ -8,8 +8,8 @@ use arrow::array::{
 use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{
-    Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNanoType,
-    IntervalYearMonthType, TimestampMicrosecondType,
+    ArrowPrimitiveType, Date32Type, DurationMicrosecondType, Int32Type, Int64Type,
+    IntervalMonthDayNanoType, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
@@ -18,10 +18,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
-use crate::extension::function::math::spark_try_add::{
-    try_add_date32_days, try_add_date32_interval_yearmonth, try_add_date32_monthdaynano,
-    try_add_interval_monthdaynano, try_add_timestamp_duration,
-};
+use crate::extension::function::math::spark_try_add::{try_add_date32_days, try_add_date32_interval_yearmonth, try_add_date32_monthdaynano, try_add_i32, try_add_i64, try_add_interval_monthdaynano, try_add_timestamp_duration};
 
 #[derive(Debug)]
 pub struct SparkTrySubtract {
@@ -115,32 +112,18 @@ impl ScalarUDFImpl for SparkTrySubtract {
 
         match (left_arr.data_type(), right_arr.data_type()) {
             (DataType::Int32, DataType::Int32) => {
-                let l = left_arr.as_primitive::<Int32Type>();
-                let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_sub_i32(l, r);
-                if matches!(left, ColumnarValue::Scalar(_))
-                    && matches!(right, ColumnarValue::Scalar(_))
-                {
-                    Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
-                        &result, 0,
-                    )?))
-                } else {
-                    Ok(ColumnarValue::Array(Arc::new(result)))
-                }
+                let l: &PrimitiveArray<Int32Type> = left_arr.as_primitive::<Int32Type>();
+                let r: &PrimitiveArray<Int32Type> = right_arr.as_primitive::<Int32Type>();
+                let result: PrimitiveArray<Int32Type> = try_sub_i32(l, r);
+
+                binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Int64, DataType::Int64) => {
-                let l = left_arr.as_primitive::<Int64Type>();
-                let r = right_arr.as_primitive::<Int64Type>();
-                let result = try_sub_i64(l, r);
-                if matches!(left, ColumnarValue::Scalar(_))
-                    && matches!(right, ColumnarValue::Scalar(_))
-                {
-                    Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
-                        &result, 0,
-                    )?))
-                } else {
-                    Ok(ColumnarValue::Array(Arc::new(result)))
-                }
+                let l: &PrimitiveArray<Int64Type> = left_arr.as_primitive::<Int64Type>();
+                let r: &PrimitiveArray<Int64Type> = right_arr.as_primitive::<Int64Type>();
+                let result: PrimitiveArray<Int64Type> = try_sub_i64(l, r);
+
+                binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Date32, DataType::Int32) => {
                 let l: &PrimitiveArray<Date32Type> = left_arr.as_primitive::<Date32Type>();
@@ -151,14 +134,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
 
                 let result: PrimitiveArray<Date32Type> = try_add_date32_days(l, &negated_r);
 
-                if matches!(left, ColumnarValue::Scalar(_))
-                    && matches!(right, ColumnarValue::Scalar(_))
-                {
-                    let scalar: ScalarValue = ScalarValue::try_from_array(&result, 0)?;
-                    Ok(ColumnarValue::Scalar(scalar))
-                } else {
-                    Ok(ColumnarValue::Array(Arc::new(result)))
-                }
+                binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Date32, DataType::Interval(YearMonth)) => {
                 let l: &PrimitiveArray<Date32Type> = left_arr.as_primitive::<Date32Type>();
@@ -170,14 +146,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
 
                 let result: Date32Array = try_add_date32_interval_yearmonth(l, &negated_r);
 
-                if matches!(left, ColumnarValue::Scalar(_))
-                    && matches!(right, ColumnarValue::Scalar(_))
-                {
-                    let scalar = ScalarValue::try_from_array(&result, 0)?;
-                    Ok(ColumnarValue::Scalar(scalar))
-                } else {
-                    Ok(ColumnarValue::Array(Arc::new(result)))
-                }
+                binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Interval(YearMonth), DataType::Interval(YearMonth)) => {
                 let l: &PrimitiveArray<IntervalYearMonthType> =
@@ -191,14 +160,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
                 let result: PrimitiveArray<IntervalYearMonthType> =
                     try_add_interval_yearmonth(l, &negated_r);
 
-                if matches!(left, ColumnarValue::Scalar(_))
-                    && matches!(right, ColumnarValue::Scalar(_))
-                {
-                    let scalar = ScalarValue::try_from_array(&result, 0)?;
-                    Ok(ColumnarValue::Scalar(scalar))
-                } else {
-                    Ok(ColumnarValue::Array(Arc::new(result)))
-                }
+                binary_op_scalar_or_array(left, right, result)
             }
 
             (DataType::Date32, DataType::Interval(MonthDayNano)) => {
@@ -211,14 +173,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
 
                 let result: Date32Array = try_add_date32_monthdaynano(l, &negated_r);
 
-                if matches!(left, ColumnarValue::Scalar(_))
-                    && matches!(right, ColumnarValue::Scalar(_))
-                {
-                    let scalar = ScalarValue::try_from_array(&result, 0)?;
-                    Ok(ColumnarValue::Scalar(scalar))
-                } else {
-                    Ok(ColumnarValue::Array(Arc::new(result)))
-                }
+                binary_op_scalar_or_array(left, right, result)
             }
 
             (DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)) => {
@@ -233,14 +188,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
                 let result: PrimitiveArray<IntervalMonthDayNanoType> =
                     try_add_interval_monthdaynano(l, &negated_r);
 
-                if matches!(left, ColumnarValue::Scalar(_))
-                    && matches!(right, ColumnarValue::Scalar(_))
-                {
-                    let scalar = ScalarValue::try_from_array(&result, 0)?;
-                    Ok(ColumnarValue::Scalar(scalar))
-                } else {
-                    Ok(ColumnarValue::Array(Arc::new(result)))
-                }
+                binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Timestamp(Microsecond, tz_l), DataType::Duration(Microsecond)) => {
                 let tz = tz_l.clone(); // guarda la zona horaria
@@ -270,7 +218,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
 
             (l, r) => Err(unsupported_data_types_exec_err(
                 "spark_try_subtract",
-                "Int32 or Int64",
+                "Int32, Int64, Date32, Interval(YearMonth), Interval(MonthDayNano), Timestamp(Microsecond, [None | Some(tz)]) - Duration(Microsecond)",
                 &[l.clone(), r.clone()],
             )),
         }
@@ -296,34 +244,22 @@ impl ScalarUDFImpl for SparkTrySubtract {
         match (left, right) {
             (DataType::Int32, DataType::Int32) => Ok(vec![left.clone(), right.clone()]),
             (DataType::Int64, DataType::Int64) => Ok(vec![left.clone(), right.clone()]),
-
             (DataType::Int32, DataType::Int64) | (DataType::Int64, DataType::Int32) => {
                 Ok(vec![DataType::Int64, DataType::Int64])
             }
-            // Fecha - días
             (DataType::Date32, DataType::Int32) => Ok(vec![left.clone(), right.clone()]),
-
-            // Fecha - intervalos
             (DataType::Date32, DataType::Interval(YearMonth)) => {
                 Ok(vec![left.clone(), right.clone()])
             }
             (DataType::Date32, DataType::Interval(MonthDayNano)) => {
                 Ok(vec![left.clone(), right.clone()])
             }
-
-            // Intervalos - intervalos
             (DataType::Interval(YearMonth), DataType::Interval(YearMonth)) => {
                 Ok(vec![left.clone(), right.clone()])
             }
-
             (DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)) => {
                 Ok(vec![left.clone(), right.clone()])
             }
-
-            // Timestamp - duración
-            // (DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)) => {
-            //     Ok(vec![left.clone(), right.clone()])
-            // }
             (DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)) => Ok(vec![
                 DataType::Timestamp(Microsecond, None),
                 DataType::Duration(Microsecond),
@@ -338,44 +274,38 @@ impl ScalarUDFImpl for SparkTrySubtract {
     }
 }
 
+fn binary_op_scalar_or_array<T: ArrowPrimitiveType>(
+    left: &ColumnarValue,
+    right: &ColumnarValue,
+    result: PrimitiveArray<T>,
+) -> Result<ColumnarValue> {
+    if matches!(left, ColumnarValue::Scalar(_)) && matches!(right, ColumnarValue::Scalar(_)) {
+        Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+            &result, 0,
+        )?))
+    } else {
+        Ok(ColumnarValue::Array(Arc::new(result)))
+    }
+}
+
 fn try_sub_i32(
     left: &PrimitiveArray<Int32Type>,
     right: &PrimitiveArray<Int32Type>,
 ) -> PrimitiveArray<Int32Type> {
-    let mut builder = PrimitiveBuilder::<Int32Type>::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            builder.append_null();
-        } else {
-            let a = left.value(i);
-            let b = right.value(i);
-            match a.checked_sub(b) {
-                Some(v) => builder.append_value(v),
-                None => builder.append_null(),
-            }
-        }
-    }
-    builder.finish()
+    let negated_r: PrimitiveArray<Int32Type> =
+        right.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
+
+    try_add_i32(left, &negated_r)
 }
 
 fn try_sub_i64(
     left: &PrimitiveArray<Int64Type>,
     right: &PrimitiveArray<Int64Type>,
 ) -> PrimitiveArray<Int64Type> {
-    let mut builder = PrimitiveBuilder::<Int64Type>::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            builder.append_null();
-        } else {
-            let a = left.value(i);
-            let b = right.value(i);
-            match a.checked_sub(b) {
-                Some(v) => builder.append_value(v),
-                None => builder.append_null(),
-            }
-        }
-    }
-    builder.finish()
+    let negated_r: PrimitiveArray<Int64Type> =
+        right.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
+
+    try_add_i64(left, &negated_r)
 }
 
 fn try_add_interval_yearmonth(
