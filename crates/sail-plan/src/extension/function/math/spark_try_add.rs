@@ -327,7 +327,10 @@ pub fn try_add_i32(
     builder.finish()
 }
 
-pub fn try_add_i64(left: &PrimitiveArray<Int64Type>, right: &PrimitiveArray<Int64Type>) -> Int64Array {
+pub fn try_add_i64(
+    left: &PrimitiveArray<Int64Type>,
+    right: &PrimitiveArray<Int64Type>,
+) -> Int64Array {
     let len: usize = left.len();
     let mut builder: PrimitiveBuilder<Int64Type> = Int64Builder::with_capacity(len);
 

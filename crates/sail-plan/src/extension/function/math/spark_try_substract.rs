@@ -18,7 +18,10 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
-use crate::extension::function::math::spark_try_add::{try_add_date32_days, try_add_date32_interval_yearmonth, try_add_date32_monthdaynano, try_add_i32, try_add_i64, try_add_interval_monthdaynano, try_add_timestamp_duration};
+use crate::extension::function::math::spark_try_add::{
+    try_add_date32_days, try_add_date32_interval_yearmonth, try_add_date32_monthdaynano,
+    try_add_i32, try_add_i64, try_add_interval_monthdaynano, try_add_timestamp_duration,
+};
 
 #[derive(Debug)]
 pub struct SparkTrySubtract {
@@ -292,8 +295,10 @@ fn try_sub_i32(
     left: &PrimitiveArray<Int32Type>,
     right: &PrimitiveArray<Int32Type>,
 ) -> PrimitiveArray<Int32Type> {
-    let negated_r: PrimitiveArray<Int32Type> =
-        right.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
+    let negated_r: PrimitiveArray<Int32Type> = right
+        .iter()
+        .map(|opt| opt.map(|v| v.wrapping_neg()))
+        .collect();
 
     try_add_i32(left, &negated_r)
 }
@@ -302,8 +307,10 @@ fn try_sub_i64(
     left: &PrimitiveArray<Int64Type>,
     right: &PrimitiveArray<Int64Type>,
 ) -> PrimitiveArray<Int64Type> {
-    let negated_r: PrimitiveArray<Int64Type> =
-        right.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
+    let negated_r: PrimitiveArray<Int64Type> = right
+        .iter()
+        .map(|opt| opt.map(|v| v.wrapping_neg()))
+        .collect();
 
     try_add_i64(left, &negated_r)
 }
