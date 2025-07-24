@@ -31,7 +31,7 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
-use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::utils::{conjunction, split_conjunction};
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, Operator, TableProviderFilterPushDown,
 };
@@ -692,16 +692,29 @@ impl<'a> DeltaScanBuilder<'a> {
             .clone()
             .map(|expr| simplify_expr(&context, &df_schema, expr));
 
-        // only inexact filters should be pushed down to the data source, doing otherwise
-        // will make stats inexact and disable datafusion optimizations like AggregateStatistics
-        let pushdown_filter = if self.snapshot.metadata().partition_columns().is_empty() {
-            self.filter
-                .clone()
-                .filter(|_| config.enable_parquet_pushdown)
-                .map(|expr| simplify_expr(&context, &df_schema, expr))
-        } else {
-            None
-        };
+        let pushdown_filter = self
+            .filter
+            .clone()
+            .and_then(|expr| {
+                let predicates = split_conjunction(&expr);
+                let pushdown_filters = get_pushdown_filters(
+                    &predicates,
+                    self.snapshot.metadata().partition_columns().as_slice(),
+                );
+
+                let filtered_predicates = predicates
+                    .into_iter()
+                    .zip(pushdown_filters.into_iter())
+                    .filter_map(|(filter, pushdown)| {
+                        if pushdown == TableProviderFilterPushDown::Inexact {
+                            Some((*filter).clone())
+                        } else {
+                            None
+                        }
+                    });
+                conjunction(filtered_predicates)
+            })
+            .map(|expr| simplify_expr(&context, &df_schema, expr));
 
         let table_partition_cols = self.snapshot.metadata().partition_columns();
         let file_schema = Arc::new(ArrowSchema::new(
