@@ -300,53 +300,6 @@ fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<
     arrow_schema_from_snapshot(snapshot, wrap_partitions)
 }
 
-pub(crate) async fn files_matching_predicate<'a>(
-    snapshot: &'a EagerSnapshot,
-    log_store: LogStoreRef,
-    filters: &[Expr],
-) -> DeltaResult<Box<dyn Iterator<Item = Add> + 'a>> {
-    if filters.is_empty() {
-        return Ok(Box::new(snapshot.file_actions()?));
-    }
-
-    let log_data = crate::kernel::log_data::SailLogDataHandler::new(
-        log_store,
-        snapshot.load_config().clone(),
-        Some(snapshot.version()),
-    )
-    .await?;
-
-    let arrow_schema = snapshot.arrow_schema()?;
-    let df_schema = arrow_schema
-        .clone()
-        .to_dfschema()
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
-
-    let context = SessionContext::new();
-    let physical_expr = context
-        .create_physical_expr(filters[0].clone(), &df_schema)
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
-
-    let pruning_predicate =
-        PruningPredicate::try_new(physical_expr, arrow_schema).map_err(|e| {
-            DeltaTableError::Generic(format!("Failed to create pruning predicate: {e}"))
-        })?;
-
-    let pruning_results = pruning_predicate
-        .prune(&log_data)
-        .map_err(|e| DeltaTableError::Generic(format!("Failed to prune files: {e}")))?;
-
-    let files: Vec<Add> = snapshot.file_actions()?.collect();
-
-    // Filter files based on pruning results
-    let filtered_files = files
-        .into_iter()
-        .zip(pruning_results.into_iter())
-        .filter_map(|(add, should_keep)| if should_keep { Some(add) } else { None });
-
-    Ok(Box::new(filtered_files))
-}
-
 // Extension trait to add datafusion_table_statistics method to DeltaTableState
 trait DeltaTableStateExt {
     fn datafusion_table_statistics(&self) -> Option<Statistics>;
@@ -783,7 +736,8 @@ impl<'a> DeltaScanBuilder<'a> {
                         let pruning_predicate =
                             PruningPredicate::try_new(predicate.clone(), logical_schema.clone())
                                 .map_err(datafusion_to_delta_error)?;
-                        pruning_predicate.prune(&log_data)
+                        pruning_predicate
+                            .prune(&log_data)
                             .map_err(datafusion_to_delta_error)?
                     } else {
                         vec![true; num_containers]
