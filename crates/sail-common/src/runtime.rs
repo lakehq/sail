@@ -38,7 +38,7 @@ impl RuntimeManager {
     fn build_io_runtime(stack_size: usize) -> CommonResult<Runtime> {
         tokio::runtime::Builder::new_multi_thread()
             .thread_stack_size(stack_size)
-            .enable_io()
+            .enable_all()
             .build()
             .map_err(|e| CommonError::internal(e.to_string()))
     }
