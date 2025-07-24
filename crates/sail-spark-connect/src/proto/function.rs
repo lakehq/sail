@@ -9,6 +9,7 @@ mod tests {
     use sail_common::config::AppConfig;
     use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
+    use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_plan::resolve_and_execute_plan;
     use sail_server::actor::ActorSystem;
     use serde::{Deserialize, Serialize};
@@ -16,7 +17,7 @@ mod tests {
     use crate::error::{SparkError, SparkResult};
     use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
-    use crate::session::SparkExtension;
+    use crate::session::SparkSession;
     use crate::session_manager::{SessionKey, SessionManager, SessionManagerOptions};
     use crate::spark::connect::relation::RelType;
     use crate::spark::connect::{Relation, Sql};
@@ -90,7 +91,7 @@ mod tests {
                 };
                 let plan = relation.try_into()?;
                 let result = handle.primary().block_on(async {
-                    let spark = SparkExtension::get(&context)?;
+                    let spark = context.extension::<SparkSession>()?;
                     let plan =
                         resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
                     let stream = spark.job_runner().execute(&context, plan).await?;

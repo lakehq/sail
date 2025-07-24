@@ -7,7 +7,7 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
-sail-data-source = { path = "../sail-data-source" }
+sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 
 datafusion = { workspace = true }
@@ -17,3 +17,5 @@ serde = { workspace = true }
 serde_arrow = { workspace = true }
 regex = { workspace = true }
 lazy_static = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }

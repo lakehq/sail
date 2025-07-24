@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 
-use datafusion::prelude::SessionContext;
 use sail_common::datetime::get_system_timezone;
+use sail_common_datafusion::extension::SessionExtension;
 use sail_execution::job::JobRunner;
 use sail_plan::config::PlanConfig;
 use tokio::time::Instant;
@@ -13,27 +13,32 @@ use crate::error::{SparkError, SparkResult};
 use crate::executor::Executor;
 use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
 
-pub(crate) const DEFAULT_SPARK_SCHEMA: &str = "default";
-pub(crate) const DEFAULT_SPARK_CATALOG: &str = "spark_catalog";
-
-/// A Spark-specific extension to the DataFusion [SessionContext].
-pub(crate) struct SparkExtension {
+/// A Spark session extension to the DataFusion [`SessionContext`].
+///
+/// [`SessionContext`]: datafusion::prelude::SessionContext
+pub(crate) struct SparkSession {
     user_id: Option<String>,
     session_id: String,
     job_runner: Box<dyn JobRunner>,
-    state: Mutex<SparkExtensionState>,
+    state: Mutex<SparkSessionState>,
 }
 
-impl Debug for SparkExtension {
+impl Debug for SparkSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SparkExtension")
+        f.debug_struct("SparkSession")
             .field("user_id", &self.user_id)
             .field("session_id", &self.session_id)
             .finish()
     }
 }
 
-impl SparkExtension {
+impl SessionExtension for SparkSession {
+    fn name() -> &'static str {
+        "spark session"
+    }
+}
+
+impl SparkSession {
     pub(crate) fn try_new(
         user_id: Option<String>,
         session_id: String,
@@ -43,23 +48,13 @@ impl SparkExtension {
             user_id,
             session_id,
             job_runner,
-            state: Mutex::new(SparkExtensionState::new()),
+            state: Mutex::new(SparkSessionState::new()),
         };
         extension.set_config(vec![ConfigKeyValue {
             key: SPARK_SQL_SESSION_TIME_ZONE.to_string(),
             value: Some(get_system_timezone()?),
         }])?;
         Ok(extension)
-    }
-
-    /// Get the Spark extension from the DataFusion [SessionContext].
-    pub(crate) fn get(context: &SessionContext) -> SparkResult<Arc<SparkExtension>> {
-        context
-            .state_ref()
-            .read()
-            .config()
-            .get_extension::<SparkExtension>()
-            .ok_or_else(|| SparkError::invalid("Spark extension not found in the session context"))
     }
 
     pub(crate) fn session_id(&self) -> &str {
@@ -196,14 +191,14 @@ impl SparkExtension {
     }
 }
 
-struct SparkExtensionState {
+struct SparkSessionState {
     config: SparkRuntimeConfig,
     executors: HashMap<String, Arc<Executor>>,
     /// The time when the Spark session is last seen as active.
     active_at: Instant,
 }
 
-impl SparkExtensionState {
+impl SparkSessionState {
     fn new() -> Self {
         Self {
             config: SparkRuntimeConfig::new(),

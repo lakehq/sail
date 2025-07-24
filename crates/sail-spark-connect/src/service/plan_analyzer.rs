@@ -1,6 +1,7 @@
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::prelude::SessionContext;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::utils::rename_schema;
 use sail_plan::resolve_and_execute_plan;
 use sail_plan::resolver::plan::NamedPlan;
@@ -10,7 +11,7 @@ use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::read_stream;
 use crate::proto::data_type::parse_spark_data_type;
 use crate::schema::{to_spark_schema, to_tree_string};
-use crate::session::SparkExtension;
+use crate::session::SparkSession;
 use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
 use crate::spark::connect::analyze_plan_request::{
@@ -33,7 +34,7 @@ use crate::spark::connect::StorageLevel;
 use crate::SPARK_VERSION;
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
-    let spark = SparkExtension::get(ctx)?;
+    let spark = ctx.extension::<SparkSession>()?;
     let resolver = PlanResolver::new(ctx, spark.plan_config()?);
     let NamedPlan { plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
@@ -62,7 +63,7 @@ pub(crate) async fn handle_analyze_explain(
     ctx: &SessionContext,
     request: ExplainRequest,
 ) -> SparkResult<ExplainResponse> {
-    let spark = SparkExtension::get(ctx)?;
+    let spark = ctx.extension::<SparkSession>()?;
     let ExplainRequest { plan, explain_mode } = request;
     let plan = plan.required("plan")?;
     let explain_mode = ExplainMode::try_from(explain_mode)?;
@@ -129,7 +130,7 @@ pub(crate) async fn handle_analyze_ddl_parse(
     request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
     let data_type = parse_spark_data_type(request.ddl_string.as_str())?;
-    let spark = SparkExtension::get(ctx)?;
+    let spark = ctx.extension::<SparkSession>()?;
     let resolver = PlanResolver::new(ctx, spark.plan_config()?);
     let data_type = resolver.resolve_data_type_for_plan(&data_type)?;
     Ok(DdlParseResponse {

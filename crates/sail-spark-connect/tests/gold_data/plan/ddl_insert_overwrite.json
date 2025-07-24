@@ -103,7 +103,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "p1",
@@ -128,221 +128,20 @@
     {
       "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2)\nSELECT * FROM source\n      ",
       "output": {
-        "success": {
-          "command": {
-            "insertInto": {
-              "input": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "source"
-                        ],
-                        "temporal": null,
-                        "sample": null,
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {
-                        "target": null,
-                        "planId": null,
-                        "wildcardOptions": {
-                          "ilikePattern": null,
-                          "excludeColumns": null,
-                          "exceptColumns": null,
-                          "replaceColumns": null,
-                          "renameColumns": null
-                        }
-                      }
-                    }
-                  ]
-                },
-                "planId": null
-              },
-              "table": [
-                "testcat",
-                "ns1",
-                "ns2",
-                "tbl"
-              ],
-              "columns": [],
-              "partitionSpec": [
-                [
-                  "p1",
-                  {
-                    "literal": {
-                      "int32": {
-                        "value": 3
-                      }
-                    }
-                  }
-                ],
-                [
-                  "p2",
-                  null
-                ]
-              ],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
-            },
-            "planId": null
-          }
-        }
+        "failure": "invalid argument: missing value for partition key"
       }
     },
     {
       "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) (a, b)\nSELECT * FROM source\n      ",
       "output": {
-        "success": {
-          "command": {
-            "insertInto": {
-              "input": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "source"
-                        ],
-                        "temporal": null,
-                        "sample": null,
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {
-                        "target": null,
-                        "planId": null,
-                        "wildcardOptions": {
-                          "ilikePattern": null,
-                          "excludeColumns": null,
-                          "exceptColumns": null,
-                          "replaceColumns": null,
-                          "renameColumns": null
-                        }
-                      }
-                    }
-                  ]
-                },
-                "planId": null
-              },
-              "table": [
-                "testcat",
-                "ns1",
-                "ns2",
-                "tbl"
-              ],
-              "columns": [
-                "a",
-                "b"
-              ],
-              "partitionSpec": [
-                [
-                  "p1",
-                  {
-                    "literal": {
-                      "int32": {
-                        "value": 3
-                      }
-                    }
-                  }
-                ],
-                [
-                  "p2",
-                  null
-                ]
-              ],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
-            },
-            "planId": null
-          }
-        }
+        "failure": "invalid argument: missing value for partition key"
       }
     },
     {
       "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source",
       "exception": "\nOperation not allowed: IF NOT EXISTS with dynamic partitions: p2.\n== SQL (line 1, position 1) ==\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPARTITION (p1 = 3, p2) IF NOT EXISTS\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "success": {
-          "command": {
-            "insertInto": {
-              "input": {
-                "project": {
-                  "input": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "source"
-                        ],
-                        "temporal": null,
-                        "sample": null,
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null
-                  },
-                  "expressions": [
-                    {
-                      "unresolvedStar": {
-                        "target": null,
-                        "planId": null,
-                        "wildcardOptions": {
-                          "ilikePattern": null,
-                          "excludeColumns": null,
-                          "exceptColumns": null,
-                          "replaceColumns": null,
-                          "renameColumns": null
-                        }
-                      }
-                    }
-                  ]
-                },
-                "planId": null
-              },
-              "table": [
-                "testcat",
-                "ns1",
-                "ns2",
-                "tbl"
-              ],
-              "columns": [],
-              "partitionSpec": [
-                [
-                  "p1",
-                  {
-                    "literal": {
-                      "int32": {
-                        "value": 3
-                      }
-                    }
-                  }
-                ],
-                [
-                  "p2",
-                  null
-                ]
-              ],
-              "replace": null,
-              "ifNotExists": true,
-              "overwrite": true
-            },
-            "planId": null
-          }
-        }
+        "failure": "invalid argument: missing value for partition key"
       }
     },
     {
@@ -391,10 +190,12 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [
-                "a",
-                "b"
-              ],
+              "columns": {
+                "columns": [
+                  "a",
+                  "b"
+                ]
+              },
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -451,7 +252,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byName",
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -508,7 +309,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -565,10 +366,12 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [
-                "a",
-                "b"
-              ],
+              "columns": {
+                "columns": [
+                  "a",
+                  "b"
+                ]
+              },
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -625,7 +428,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byName",
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -682,7 +485,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,

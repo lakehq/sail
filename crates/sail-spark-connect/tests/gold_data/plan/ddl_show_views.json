@@ -7,7 +7,7 @@
           "command": {
             "listViews": {
               "database": null,
-              "viewPattern": null
+              "pattern": null
             },
             "planId": null
           }
@@ -21,7 +21,7 @@
           "command": {
             "listViews": {
               "database": null,
-              "viewPattern": "*test*"
+              "pattern": "*test*"
             },
             "planId": null
           }
@@ -40,7 +40,7 @@
                 "ns2",
                 "tbl"
               ],
-              "viewPattern": null
+              "pattern": null
             },
             "planId": null
           }
@@ -56,7 +56,7 @@
               "database": [
                 "ns1"
               ],
-              "viewPattern": "*test*"
+              "pattern": "*test*"
             },
             "planId": null
           }
@@ -72,7 +72,7 @@
               "database": [
                 "ns1"
               ],
-              "viewPattern": "*test*"
+              "pattern": "*test*"
             },
             "planId": null
           }
@@ -91,7 +91,7 @@
                 "ns2",
                 "tbl"
               ],
-              "viewPattern": null
+              "pattern": null
             },
             "planId": null
           }
@@ -105,7 +105,7 @@
           "command": {
             "listViews": {
               "database": null,
-              "viewPattern": "*test*"
+              "pattern": "*test*"
             },
             "planId": null
           }

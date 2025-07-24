@@ -5,8 +5,6 @@ use async_recursion::async_recursion;
 use datafusion::arrow::array::AsArray;
 use datafusion::arrow::datatypes as adt;
 use datafusion::arrow::datatypes::Int64Type;
-use datafusion::dataframe::DataFrame;
-use datafusion::datasource::file_format::format_as_file_type;
 use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions_aggregate::count::count_udaf;
@@ -21,7 +19,6 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, JoinType, ParamValues, ScalarValue, TableReference, ToDFSchema,
 };
 use datafusion_expr::builder::project;
-use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort, WindowFunctionParams};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::registry::FunctionRegistry;
@@ -36,11 +33,18 @@ use datafusion_expr::{
     WindowFrame, WindowFunctionDefinition,
 };
 use rand::{rng, Rng};
-use sail_catalog::command::{CatalogCommand, CatalogTableDefinition};
-use sail_catalog::temp_view::manage_temporary_views;
+use sail_catalog::command::CatalogCommand;
+use sail_catalog::manager::CatalogManager;
+use sail_catalog::provider::{
+    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, CreateTemporaryViewColumnOptions,
+    CreateTemporaryViewOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, TableKind,
+};
 use sail_common::spec;
-use sail_common::spec::TableFileFormat;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo};
+use sail_common::spec::{TableFileFormat, WriteColumns};
+use sail_common_datafusion::datasource::SourceInfo;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches, rename_logical_plan};
 use sail_data_source::default_registry;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
@@ -72,6 +76,7 @@ use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
+use crate::resolver::write::{WriteMode, WriteSpec, WriteTarget};
 use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
@@ -462,104 +467,107 @@ impl PlanResolver<'_> {
             CommandNode::CurrentDatabase => {
                 self.resolve_catalog_command(CatalogCommand::CurrentDatabase)
             }
-            CommandNode::SetCurrentDatabase { database_name } => {
+            CommandNode::SetCurrentDatabase { database } => {
                 self.resolve_catalog_command(CatalogCommand::SetCurrentDatabase {
-                    database_name: database_name.into(),
+                    database: database.into(),
                 })
             }
-            CommandNode::ListDatabases {
-                catalog,
-                database_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListDatabases {
-                catalog: catalog.map(|x| x.into()),
-                database_pattern,
-            }),
-            CommandNode::ListTables {
-                database,
-                table_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListTables {
-                database: database
-                    .map(|db| self.resolve_schema_reference(&db))
-                    .transpose()?,
-                table_pattern,
-            }),
-            CommandNode::ListViews {
-                database,
-                view_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListViews {
-                database: database
-                    .map(|db| self.resolve_schema_reference(&db))
-                    .transpose()?,
-                view_pattern,
-            }),
-            CommandNode::ListFunctions {
-                database,
-                function_pattern,
-            } => self.resolve_catalog_command(CatalogCommand::ListFunctions {
-                database: database
-                    .map(|db| self.resolve_schema_reference(&db))
-                    .transpose()?,
-                function_pattern,
-            }),
+            CommandNode::ListDatabases { qualifier, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListDatabases {
+                    qualifier: qualifier.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ListTables { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListTables {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ListViews { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListViews {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ListFunctions { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListFunctions {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
             CommandNode::ListColumns { table } => {
                 self.resolve_catalog_command(CatalogCommand::ListColumns {
-                    table: self.resolve_table_reference(&table)?,
+                    table: table.into(),
                 })
             }
             CommandNode::GetDatabase { database } => {
                 self.resolve_catalog_command(CatalogCommand::GetDatabase {
-                    database: self.resolve_schema_reference(&database)?,
+                    database: database.into(),
                 })
             }
             CommandNode::GetTable { table } => {
                 self.resolve_catalog_command(CatalogCommand::GetTable {
-                    table: self.resolve_table_reference(&table)?,
+                    table: table.into(),
                 })
             }
             CommandNode::GetFunction { function } => {
                 self.resolve_catalog_command(CatalogCommand::GetFunction {
-                    function: self.resolve_table_reference(&function)?,
+                    function: function.into(),
                 })
             }
             CommandNode::DatabaseExists { database } => {
                 self.resolve_catalog_command(CatalogCommand::DatabaseExists {
-                    database: self.resolve_schema_reference(&database)?,
+                    database: database.into(),
                 })
             }
             CommandNode::TableExists { table } => {
                 self.resolve_catalog_command(CatalogCommand::TableExists {
-                    table: self.resolve_table_reference(&table)?,
+                    table: table.into(),
                 })
             }
             CommandNode::FunctionExists { function } => {
                 self.resolve_catalog_command(CatalogCommand::FunctionExists {
-                    function: self.resolve_table_reference(&function)?,
+                    function: function.into(),
                 })
             }
             CommandNode::CreateTable { table, definition } => {
                 self.resolve_catalog_create_table(table, definition, state)
                     .await
             }
-            CommandNode::DropView {
+            CommandNode::CreateTableAsSelect {
+                table,
+                definition,
+                query,
+            } => {
+                self.resolve_catalog_create_table_as_select(table, definition, *query, state)
+                    .await
+            }
+            CommandNode::DropView { view, if_exists } => {
+                self.resolve_catalog_drop_view(view, if_exists).await
+            }
+            CommandNode::DropTemporaryView {
                 view,
-                kind,
+                is_global,
                 if_exists,
-            } => self.resolve_catalog_drop_view(view, kind, if_exists).await,
+            } => {
+                self.resolve_catalog_drop_temporary_view(view, is_global, if_exists)
+                    .await
+            }
             CommandNode::DropDatabase {
                 database,
                 if_exists,
                 cascade,
             } => self.resolve_catalog_command(CatalogCommand::DropDatabase {
-                database: self.resolve_schema_reference(&database)?,
-                if_exists,
-                cascade,
+                database: database.into(),
+                options: DropDatabaseOptions { if_exists, cascade },
             }),
             CommandNode::DropFunction {
                 function,
                 if_exists,
                 is_temporary,
             } => self.resolve_catalog_command(CatalogCommand::DropFunction {
-                function: self.resolve_table_reference(&function)?,
+                function: function.into(),
                 if_exists,
                 is_temporary,
             }),
@@ -568,9 +576,8 @@ impl PlanResolver<'_> {
                 if_exists,
                 purge,
             } => self.resolve_catalog_command(CatalogCommand::DropTable {
-                table: self.resolve_table_reference(&table)?,
-                if_exists,
-                purge,
+                table: table.into(),
+                options: DropTableOptions { if_exists, purge },
             }),
             CommandNode::RecoverPartitions { .. } => {
                 Err(PlanError::todo("PlanNode::RecoverPartitions"))
@@ -584,13 +591,13 @@ impl PlanResolver<'_> {
             CommandNode::CurrentCatalog => {
                 self.resolve_catalog_command(CatalogCommand::CurrentCatalog)
             }
-            CommandNode::SetCurrentCatalog { catalog_name } => {
+            CommandNode::SetCurrentCatalog { catalog } => {
                 self.resolve_catalog_command(CatalogCommand::SetCurrentCatalog {
-                    catalog_name: catalog_name.into(),
+                    catalog: catalog.into(),
                 })
             }
-            CommandNode::ListCatalogs { catalog_pattern } => {
-                self.resolve_catalog_command(CatalogCommand::ListCatalogs { catalog_pattern })
+            CommandNode::ListCatalogs { pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ListCatalogs { pattern })
             }
             CommandNode::CreateCatalog { .. } => Err(PlanError::todo("create catalog")),
             CommandNode::CreateDatabase {
@@ -610,7 +617,16 @@ impl PlanResolver<'_> {
                 self.resolve_catalog_create_view(view, definition, state)
                     .await
             }
+            CommandNode::CreateTemporaryView {
+                view,
+                is_global,
+                definition,
+            } => {
+                self.resolve_catalog_create_temporary_view(view, is_global, definition, state)
+                    .await
+            }
             CommandNode::Write(write) => self.resolve_command_write(write, state).await,
+            CommandNode::WriteTo(write_to) => self.resolve_command_write_to(write_to, state).await,
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
             }
@@ -626,17 +642,13 @@ impl PlanResolver<'_> {
                 if_not_exists,
                 overwrite,
             } => {
-                if replace.is_some() {
-                    return Err(PlanError::todo("INSERT INTO ... REPLACE"));
-                }
-                if if_not_exists {
-                    return Err(PlanError::todo("IF NOT EXISTS for INSERT"));
-                }
                 self.resolve_command_insert_into(
                     *input,
                     table,
                     columns,
                     partition_spec,
+                    replace,
+                    if_not_exists,
                     overwrite,
                     state,
                 )
@@ -702,48 +714,58 @@ impl PlanResolver<'_> {
             return Ok(cte.clone());
         }
 
-        let view = match &table_reference {
-            TableReference::Bare { table } => {
-                let view = manage_temporary_views(self.ctx, false, |views| {
-                    views.get_view(table.as_ref())
-                })?;
-                view.map(|x| x.as_ref().clone())
-            }
-            TableReference::Partial { schema, table } => {
-                if schema.as_ref() == self.config.global_temp_database {
-                    let view = manage_temporary_views(self.ctx, true, |views| {
-                        views.get_view(table.as_ref())
-                    })?;
-                    let view = view.ok_or_else(|| {
-                        PlanError::AnalysisError(format!(
-                            "global temporary view not found: {table}"
-                        ))
-                    })?;
-                    Some(view.as_ref().clone())
-                } else {
-                    None
-                }
-            }
-            TableReference::Full { .. } => None,
-        };
-        if let Some(view) = view {
-            let names = state.register_fields(view.schema().inner().fields());
-            return Ok(rename_logical_plan(view, &names)?);
-        }
-
+        let reference: Vec<String> = name.clone().into();
+        let status = self
+            .ctx
+            .extension::<CatalogManager>()?
+            .get_table_or_view(&reference)
+            .await?;
         if !options.is_empty() {
             return Err(PlanError::todo("table options"));
         }
-        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
-        let names = state.register_fields(table_provider.schema().fields());
-        let table_provider = RenameTableProvider::try_new(table_provider, names)?;
-        Ok(LogicalPlan::TableScan(plan::TableScan::try_new(
-            table_reference,
-            provider_as_source(Arc::new(table_provider)),
-            None,
-            vec![],
-            None,
-        )?))
+        let plan = match status.kind {
+            TableKind::Table {
+                catalog: _,
+                database: _,
+                columns,
+                comment: _,
+                constraints: _,
+                format,
+                location,
+                partition_by: _,
+                sort_by: _,
+                bucket_by: _,
+                options,
+                properties: _,
+            } => {
+                let schema =
+                    adt::Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
+                let table_provider = default_registry()
+                    .get_format(&format)?
+                    .create_provider(SourceInfo {
+                        ctx: self.ctx,
+                        paths: location.map(|x| vec![x]).unwrap_or_default(),
+                        schema: Some(schema),
+                        options: options.into_iter().collect(),
+                    })
+                    .await?;
+                let names = state.register_fields(table_provider.schema().fields());
+                let table_provider = RenameTableProvider::try_new(table_provider, names)?;
+                LogicalPlan::TableScan(plan::TableScan::try_new(
+                    table_reference,
+                    provider_as_source(Arc::new(table_provider)),
+                    None,
+                    vec![],
+                    None,
+                )?)
+            }
+            TableKind::View { .. } => return Err(PlanError::todo("read view")),
+            TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
+                let names = state.register_fields(plan.schema().inner().fields());
+                rename_logical_plan(plan.as_ref().clone(), &names)?
+            }
+        };
+        Ok(plan)
     }
 
     async fn resolve_query_read_udtf(
@@ -2888,101 +2910,107 @@ impl PlanResolver<'_> {
             clustering_columns,
             bucket_by,
             options,
-            table_properties: _,
-            overwrite_condition: _,
         } = write;
-        if !clustering_columns.is_empty() {
-            return Err(PlanError::unsupported("clustering columns"));
-        }
-        if bucket_by.is_some() {
-            return Err(PlanError::unsupported("bucketing"));
-        }
-
-        let plan = self.resolve_query_plan(*input, state).await?;
-        let fields = Self::get_field_names(plan.schema(), state)?;
-        let plan = rename_logical_plan(plan, &fields)?;
-
-        let sort_columns = self
-            .resolve_sort_orders(sort_columns, true, plan.schema(), state)
-            .await?;
-        let partitioning_columns: Vec<String> =
-            partitioning_columns.into_iter().map(String::from).collect();
-
-        let plan = match save_type {
-            SaveType::Path(path) => {
-                // always write multi-file output
-                let path = if path.ends_with(object_store::path::DELIMITER) {
-                    path
-                } else {
-                    format!("{path}{}", object_store::path::DELIMITER)
-                };
-                let Some(source) = source else {
-                    return Err(PlanError::invalid("missing source"));
-                };
-                let format_factory =
-                    default_registry()
-                        .get_format(&source)?
-                        .create_writer(SinkInfo {
-                            ctx: self.ctx,
-                            mode: mode.clone(),
-                            options: options.into_iter().collect(),
-                        })?;
-                let plan = if sort_columns.is_empty() {
-                    plan
-                } else {
-                    LogicalPlanBuilder::from(plan).sort(sort_columns)?.build()?
-                };
-                LogicalPlanBuilder::copy_to(
-                    plan,
-                    path,
-                    format_as_file_type(format_factory),
-                    HashMap::new(),
-                    partitioning_columns,
-                )?
-                .build()?
-            }
-            SaveType::Table { table, save_method } => {
-                let table_ref = self.resolve_table_reference(&table)?;
-                match save_method {
-                    TableSaveMethod::SaveAsTable => {
-                        // FIXME: It is incorrect to have side-effect in the resolver.
-                        // FIXME: Should we materialize the table or create a view?
-                        let df = DataFrame::new(self.ctx.state(), plan);
-                        self.ctx.register_table(table_ref, df.into_view())?;
-                        LogicalPlan::EmptyRelation(plan::EmptyRelation {
-                            produce_one_row: false,
-                            schema: Arc::new(DFSchema::empty()),
-                        })
-                    }
-                    TableSaveMethod::InsertInto => {
-                        // TODO: consolidate the logic with `INSERT INTO` command
-                        let table_provider = self.ctx.table_provider(table_ref.clone()).await?;
-                        let fields: Vec<_> = table_provider
-                            .schema()
-                            .fields()
-                            .iter()
-                            .map(|f| f.name().clone())
-                            .collect();
-                        // TODO: convert input in a way similar to `SqlToRel::insert_to_plan()`
-                        let plan = rename_logical_plan(plan, &fields)?;
-                        let insert_op = match mode {
-                            SaveMode::Append => InsertOp::Append,
-                            SaveMode::Overwrite => InsertOp::Overwrite,
-                            SaveMode::Replace | SaveMode::CreateOrReplace => InsertOp::Replace,
-                            _ => InsertOp::Append,
-                        };
-                        LogicalPlanBuilder::insert_into(
-                            plan,
-                            table_ref,
-                            provider_as_source(table_provider),
-                            insert_op,
-                        )?
-                        .build()?
-                    }
+        let (target, columns) = match save_type {
+            SaveType::Path(path) => (WriteTarget::Path(path), WriteColumns::ByName),
+            SaveType::Table { table, save_method } => match save_method {
+                TableSaveMethod::SaveAsTable => (WriteTarget::Table(table), WriteColumns::ByName),
+                TableSaveMethod::InsertInto => {
+                    (WriteTarget::Table(table), WriteColumns::ByPosition)
                 }
-            }
+            },
         };
-        Ok(plan)
+        let mode = match mode {
+            SaveMode::Overwrite => WriteMode::CreateOrOverwrite,
+            SaveMode::Append => WriteMode::Append,
+            SaveMode::ErrorIfExists => WriteMode::ErrorIfExists,
+            SaveMode::Ignore => WriteMode::IgnoreIfExists,
+        };
+        let write = WriteSpec {
+            input,
+            partition: vec![],
+            format: source,
+            target,
+            mode,
+            columns,
+            partition_by: partitioning_columns,
+            bucket_by,
+            sort_by: sort_columns,
+            cluster_by: clustering_columns,
+            options,
+            table_properties: vec![],
+        };
+        self.resolve_write_spec(write, state).await
+    }
+
+    async fn resolve_command_write_to(
+        &self,
+        write_to: spec::WriteTo,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        use spec::WriteToMode;
+
+        let spec::WriteTo {
+            input,
+            provider,
+            table,
+            mode,
+            partitioning_columns,
+            clustering_columns,
+            options,
+            table_properties,
+            overwrite_condition,
+        } = write_to;
+        let mode = match (mode, overwrite_condition) {
+            (WriteToMode::Overwrite, Some(condition)) => WriteMode::OverwriteIf {
+                condition: Box::new(condition),
+            },
+            (WriteToMode::Overwrite, None) => {
+                return Err(PlanError::invalid("missing overwrite condition"));
+            }
+            (_, Some(_)) => {
+                return Err(PlanError::invalid(
+                    "overwrite condition only supported for overwrite mode",
+                ));
+            }
+            (WriteToMode::Append, None) => WriteMode::Append,
+            (WriteToMode::Create, None) => WriteMode::ErrorIfExists,
+            (WriteToMode::CreateOrReplace, None) => WriteMode::CreateOrOverwrite,
+            (WriteToMode::Replace, None) => WriteMode::Overwrite,
+            (WriteToMode::OverwritePartitions, None) => WriteMode::OverwritePartitions,
+        };
+        let partition_by = partitioning_columns
+            .into_iter()
+            .map(|x| match x {
+                spec::Expr::UnresolvedAttribute {
+                    name,
+                    plan_id: None,
+                    is_metadata_column: false,
+                } => {
+                    let name: Vec<String> = name.into();
+                    Ok(name.one()?.into())
+                }
+                // TODO: support functions for partitioning columns
+                _ => Err(PlanError::invalid(
+                    "partitioning column must be a column reference",
+                )),
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let write = WriteSpec {
+            input,
+            partition: vec![],
+            format: provider,
+            target: WriteTarget::Table(table),
+            mode,
+            columns: WriteColumns::ByName,
+            partition_by,
+            bucket_by: None,
+            sort_by: vec![],
+            cluster_by: clustering_columns,
+            options,
+            table_properties,
+        };
+        self.resolve_write_spec(write, state).await
     }
 
     fn resolve_catalog_command(&self, command: CatalogCommand) -> PlanResult<LogicalPlan> {
@@ -2998,42 +3026,61 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let spec::TableDefinition {
-            schema,
+            columns,
             comment,
-            column_defaults,
             constraints,
             location,
             file_format,
             row_format,
-            table_partition_cols,
-            file_sort_order,
+            partition_by,
+            sort_by,
+            bucket_by,
             if_not_exists,
-            or_replace,
-            unbounded,
+            replace,
             options,
-            query,
-            definition,
+            properties,
         } = definition;
 
-        if query.is_some() {
-            return Err(PlanError::todo("CREATE TABLE AS SELECT statement"));
-        }
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
         }
 
-        let fields = self.resolve_fields(&schema.fields, state)?;
-        let schema = Arc::new(DFSchema::from_unqualified_fields(fields, HashMap::new())?);
-        let column_defaults: Vec<(String, Expr)> = async {
-            let mut results: Vec<(String, Expr)> = Vec::with_capacity(column_defaults.len());
-            for (name, expr) in column_defaults {
-                let expr = self.resolve_expression(expr, &schema, state).await?;
-                results.push((name.into(), expr));
-            }
-            Ok(results) as PlanResult<_>
-        }
-        .await?;
-        let constraints = self.resolve_table_constraints(constraints, &schema)?;
+        let columns = columns
+            .into_iter()
+            .map(|x| {
+                let spec::TableColumnDefinition {
+                    name,
+                    data_type,
+                    nullable,
+                    default,
+                    comment,
+                    generated_always_as,
+                } = x;
+                Ok(CreateTableColumnOptions {
+                    name,
+                    data_type: self.resolve_data_type(&data_type, state)?,
+                    nullable,
+                    comment,
+                    default,
+                    generated_always_as,
+                })
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let constraints = constraints
+            .into_iter()
+            .map(|x| match x {
+                spec::TableConstraint::PrimaryKey { name, columns } => {
+                    let name = name.map(|x| x.into());
+                    let columns = columns.into_iter().map(|x| x.into()).collect();
+                    CatalogTableConstraint::PrimaryKey { name, columns }
+                }
+                spec::TableConstraint::Unique { name, columns } => {
+                    let name = name.map(|x| x.into());
+                    let columns = columns.into_iter().map(|x| x.into()).collect();
+                    CatalogTableConstraint::Unique { name, columns }
+                }
+            })
+            .collect();
         let location = if let Some(location) = location {
             location
         } else {
@@ -3053,7 +3100,7 @@ impl PlanResolver<'_> {
                 object_store::path::DELIMITER
             )
         };
-        let file_format = if let Some(file_format) = file_format {
+        let format = if let Some(file_format) = file_format {
             match file_format {
                 TableFileFormat::General { format } => format,
                 TableFileFormat::Table { .. } => {
@@ -3062,44 +3109,84 @@ impl PlanResolver<'_> {
                     ));
                 }
             }
-        } else if unbounded {
-            self.config.default_unbounded_table_file_format.clone()
         } else {
-            self.config.default_bounded_table_file_format.clone()
+            self.config.default_table_file_format.clone()
         };
-        let table_partition_cols: Vec<String> =
-            table_partition_cols.into_iter().map(String::from).collect();
-        let file_sort_order: Vec<Vec<Sort>> = async {
-            let mut results: Vec<Vec<Sort>> = Vec::with_capacity(file_sort_order.len());
-            for order in file_sort_order {
-                let order = self
-                    .resolve_sort_orders(order, true, &schema, state)
-                    .await?;
-                results.push(order);
+        let partition_by = partition_by.into_iter().map(|x| x.into()).collect();
+        let sort_by = sort_by
+            .into_iter()
+            .map(|x| {
+                let spec::SortOrder {
+                    child,
+                    direction,
+                    null_ordering,
+                } = x;
+                let column = match *child {
+                    spec::Expr::UnresolvedAttribute {
+                        name,
+                        plan_id: None,
+                        is_metadata_column: false,
+                    } => {
+                        let name: Vec<String> = name.into();
+                        name.one()?
+                    }
+                    _ => {
+                        return Err(PlanError::unsupported(
+                            "sort column must be a column reference in CREATE TABLE statement",
+                        ));
+                    }
+                };
+                let ascending = match direction {
+                    spec::SortDirection::Ascending | spec::SortDirection::Unspecified => true,
+                    spec::SortDirection::Descending => false,
+                };
+                if !matches!(null_ordering, spec::NullOrdering::Unspecified) {
+                    return Err(PlanError::unsupported(
+                        "sort column null ordering in CREATE TABLE statement",
+                    ));
+                }
+                Ok(CatalogTableSort { column, ascending })
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let bucket_by = bucket_by.map(|x| {
+            let spec::SaveBucketBy {
+                bucket_column_names,
+                num_buckets,
+            } = x;
+            CatalogTableBucketBy {
+                columns: bucket_column_names.into_iter().map(|x| x.into()).collect(),
+                num_buckets,
             }
-            Ok(results) as PlanResult<_>
-        }
-        .await?;
+        });
 
         let command = CatalogCommand::CreateTable {
-            table: self.resolve_table_reference(&table)?,
-            definition: CatalogTableDefinition {
-                schema,
+            table: table.into(),
+            options: CreateTableOptions {
+                columns,
                 comment,
-                column_defaults,
                 constraints,
-                location,
-                file_format,
-                table_partition_cols,
-                file_sort_order,
+                location: Some(location),
+                format,
+                partition_by,
+                sort_by,
+                bucket_by,
                 if_not_exists,
-                or_replace,
-                unbounded,
+                replace,
                 options,
-                definition,
+                properties,
             },
         };
         self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_catalog_create_table_as_select(
+        &self,
+        _table: spec::ObjectName,
+        _definition: spec::TableDefinition,
+        _query: spec::QueryPlan,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        Err(PlanError::todo("CREATE TABLE ... AS SELECT ..."))
     }
 
     fn resolve_catalog_create_database(
@@ -3113,70 +3200,40 @@ impl PlanResolver<'_> {
             location,
             properties,
         } = definition;
-        let properties = properties.into_iter().collect::<Vec<_>>();
         let command = CatalogCommand::CreateDatabase {
-            database: self.resolve_schema_reference(&database)?,
-            if_not_exists,
-            comment,
-            location,
-            properties,
+            database: database.into(),
+            options: CreateDatabaseOptions {
+                if_not_exists,
+                comment,
+                location,
+                properties,
+            },
         };
         self.resolve_catalog_command(command)
-    }
-
-    fn resolve_view_name(view: TableReference) -> PlanResult<String> {
-        match view {
-            TableReference::Bare { table } => Ok(table.as_ref().to_string()),
-            TableReference::Partial { .. } | TableReference::Full { .. } => {
-                Err(PlanError::invalid("qualified view name"))
-            }
-        }
     }
 
     async fn resolve_catalog_drop_view(
         &self,
         view: spec::ObjectName,
-        kind: Option<spec::ViewKind>,
         if_exists: bool,
     ) -> PlanResult<LogicalPlan> {
-        use spec::ViewKind;
-
-        let view = self.resolve_table_reference(&view)?;
-        let (kind, view) = match kind {
-            None => match view {
-                TableReference::Bare { ref table } => {
-                    let temporary = manage_temporary_views(self.ctx, false, |views| {
-                        Ok(views.get_view(table)?.is_some())
-                    })?;
-                    if temporary {
-                        (ViewKind::Temporary, view)
-                    } else {
-                        (ViewKind::Default, view)
-                    }
-                }
-                TableReference::Partial { schema, table } => {
-                    if schema.as_ref() == self.config.global_temp_database {
-                        (ViewKind::GlobalTemporary, TableReference::bare(table))
-                    } else {
-                        (ViewKind::Default, TableReference::partial(schema, table))
-                    }
-                }
-                TableReference::Full { .. } => (ViewKind::Default, view),
-            },
-            Some(x) => (x, view),
+        let command = CatalogCommand::DropView {
+            view: view.into(),
+            options: DropViewOptions { if_exists },
         };
-        let command = match kind {
-            ViewKind::Default => CatalogCommand::DropView { view, if_exists },
-            ViewKind::Temporary => CatalogCommand::DropTemporaryView {
-                view_name: Self::resolve_view_name(view)?,
-                is_global: false,
-                if_exists,
-            },
-            ViewKind::GlobalTemporary => CatalogCommand::DropTemporaryView {
-                view_name: Self::resolve_view_name(view)?,
-                is_global: true,
-                if_exists,
-            },
+        self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_catalog_drop_temporary_view(
+        &self,
+        view: spec::Identifier,
+        is_global: bool,
+        if_exists: bool,
+    ) -> PlanResult<LogicalPlan> {
+        let command = CatalogCommand::DropTemporaryView {
+            view: view.into(),
+            is_global,
+            if_exists,
         };
         self.resolve_catalog_command(command)
     }
@@ -3185,48 +3242,92 @@ impl PlanResolver<'_> {
         &self,
         view: spec::ObjectName,
         definition: spec::ViewDefinition,
+        _state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let spec::ViewDefinition {
+            definition,
+            columns,
+            if_not_exists,
+            replace,
+            comment,
+            properties,
+        } = definition;
+        let columns = columns
+            .into_iter()
+            .flatten()
+            .map(|x| {
+                let spec::ViewColumnDefinition { name, comment } = x;
+                // TODO: get the correct data type from the SQL query
+                CreateViewColumnOptions {
+                    name,
+                    data_type: adt::DataType::Null,
+                    nullable: true,
+                    comment,
+                }
+            })
+            .collect();
+        let command = CatalogCommand::CreateView {
+            view: view.into(),
+            options: CreateViewOptions {
+                definition,
+                columns,
+                comment,
+                if_not_exists,
+                replace,
+                properties,
+            },
+        };
+        self.resolve_catalog_command(command)
+    }
+
+    async fn resolve_catalog_create_temporary_view(
+        &self,
+        view: spec::Identifier,
+        is_global: bool,
+        definition: spec::TemporaryViewDefinition,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        use spec::ViewKind;
-
-        let spec::ViewDefinition {
+        let spec::TemporaryViewDefinition {
             input,
             columns,
-            kind,
+            if_not_exists,
             replace,
-            definition,
+            comment,
+            properties,
         } = definition;
         let input = self.resolve_query_plan(*input, state).await?;
         let input = LogicalPlan::SubqueryAlias(plan::SubqueryAlias::try_new(
             Arc::new(input),
-            self.resolve_table_reference(&view)?,
+            TableReference::Bare {
+                table: String::from(view.clone()).into(),
+            },
         )?);
-        let fields = match columns {
-            Some(columns) => columns.into_iter().map(String::from).collect(),
-            None => Self::get_field_names(input.schema(), state)?,
+
+        let (fields, columns) = match columns {
+            Some(columns) => {
+                let fields = columns.iter().map(|x| x.name.clone()).collect();
+                let columns = columns
+                    .into_iter()
+                    .map(|x| {
+                        let spec::ViewColumnDefinition { name: _, comment } = x;
+                        CreateTemporaryViewColumnOptions { comment }
+                    })
+                    .collect::<Vec<_>>();
+                (fields, columns)
+            }
+            None => (Self::get_field_names(input.schema(), state)?, vec![]),
         };
         let input = rename_logical_plan(input, &fields)?;
-        let view = self.resolve_table_reference(&view)?;
-        let command = match kind {
-            ViewKind::Default => CatalogCommand::CreateView {
+        let command = CatalogCommand::CreateTemporaryView {
+            view: view.into(),
+            is_global,
+            options: CreateTemporaryViewOptions {
                 input: Arc::new(input),
-                view,
+                columns,
+                if_not_exists,
                 replace,
-                definition,
-            },
-            ViewKind::Temporary => CatalogCommand::CreateTemporaryView {
-                input: Arc::new(input),
-                view_name: Self::resolve_view_name(view)?,
-                is_global: false,
-                replace,
-                definition,
-            },
-            ViewKind::GlobalTemporary => CatalogCommand::CreateTemporaryView {
-                input: Arc::new(input),
-                view_name: Self::resolve_view_name(view)?,
-                is_global: true,
-                replace,
-                definition,
+                comment,
+                properties,
             },
         };
         self.resolve_catalog_command(command)
@@ -3299,67 +3400,50 @@ impl PlanResolver<'_> {
         self.resolve_catalog_command(command)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn resolve_command_insert_into(
         &self,
         input: spec::QueryPlan,
         table: spec::ObjectName,
-        columns: Vec<spec::Identifier>,
-        partition_spec: Vec<(spec::Identifier, Option<spec::Expr>)>,
+        columns: spec::WriteColumns,
+        partition_spec: Vec<(spec::Identifier, spec::Expr)>,
+        replace: Option<spec::Expr>,
+        if_not_exists: bool,
         overwrite: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        if !partition_spec.is_empty() {
-            return Err(PlanError::todo("partitioned insert"));
-        }
-
-        let input = self.resolve_query_plan(input, state).await?;
-        let table_reference = self.resolve_table_reference(&table)?;
-        let table_provider = self.ctx.table_provider(table_reference.clone()).await?;
-        let schema = if columns.is_empty() {
-            table_provider.schema()
-        } else {
-            self.resolve_schema_projection(table_provider.schema(), &columns)
-                .await?
+        let mode =
+            match (replace, if_not_exists, overwrite) {
+                (Some(condition), false, false) => WriteMode::OverwriteIf {
+                    condition: Box::new(condition),
+                },
+                (Some(_), _, _) => return Err(PlanError::invalid(
+                    "INSERT with REPLACE condition cannot be used with IF NOT EXISTS or OVERWRITE",
+                )),
+                (None, true, false) => WriteMode::IgnoreIfExists,
+                (None, true, true) => {
+                    return Err(PlanError::invalid(
+                        "INSERT with IF NOT EXISTS cannot be used with OVERWRITE",
+                    ))
+                }
+                (None, false, true) => WriteMode::Overwrite,
+                (None, false, false) => WriteMode::ErrorIfExists,
+            };
+        let write = WriteSpec {
+            input: Box::new(input),
+            partition: partition_spec,
+            format: None,
+            target: WriteTarget::Table(table),
+            mode,
+            columns,
+            partition_by: vec![],
+            bucket_by: None,
+            sort_by: vec![],
+            cluster_by: vec![],
+            options: vec![],
+            table_properties: vec![],
         };
-        let df_schema = Arc::new(DFSchema::try_from_qualified_schema(
-            table_reference.clone(),
-            &schema,
-        )?);
-        let table_source = provider_as_source(table_provider);
-        let fields = schema
-            .fields
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>();
-
-        let exprs = table_source
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| {
-                let expr = match fields.iter().find(|f| f == &field.name()) {
-                    Some(matched_field) => Expr::Column(Column::from(matched_field))
-                        .cast_to(field.data_type(), &df_schema)?,
-                    None => table_source
-                        .get_column_default(field.name())
-                        .cloned()
-                        .unwrap_or_else(|| Expr::Literal(ScalarValue::Null, None))
-                        .cast_to(field.data_type(), &DFSchema::empty())?,
-                };
-                Ok(expr.alias(field.name()))
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
-
-        let input = project(rename_logical_plan(input, &fields)?, exprs)?;
-        let insert_op = match overwrite {
-            // TODO: resolve_command_insert_into should pass in insert_op instead of overwrite
-            true => InsertOp::Overwrite,
-            false => InsertOp::Append,
-        };
-        let plan =
-            LogicalPlanBuilder::insert_into(input, table_reference, table_source, insert_op)?
-                .build()?;
-        Ok(plan)
+        self.resolve_write_spec(write, state).await
     }
 
     async fn resolve_query_fill_na(

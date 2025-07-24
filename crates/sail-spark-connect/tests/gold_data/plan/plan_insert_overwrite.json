@@ -43,7 +43,7 @@
               "table": [
                 "s"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "e",
@@ -108,7 +108,7 @@
               "table": [
                 "s"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,

@@ -51,3 +51,4 @@ half = { workspace = true }
 crc32fast = { workspace = true }
 num = { workspace = true }
 arrow = { workspace = true }
+serde = { workspace = true }
