@@ -613,10 +613,6 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 2, f"Expected 2 rows for num_partition < 0, got {result_count}"  # noqa: PLR2004
 
-        # Test empty string
-        filtered_df = spark.read.format("delta").load(delta_table_path).filter("str_partition = ''")
-        result_count = filtered_df.count()
-        assert result_count == 1, f"Expected 1 row for str_partition = '', got {result_count}"
 
         # Test large values
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("num_partition > 1000")

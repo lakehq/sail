@@ -51,7 +51,7 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
         Self { snapshot, schema }
     }
 
-        /// Get the number of containers (Add actions) in the snapshot
+    /// Get the number of containers (Add actions) in the snapshot
     fn get_num_containers(&self) -> usize {
         // In PruningStatistics, num_containers() represents the number of containers (files)
         // being pruned. This should match the total number of Add actions in the log data.
@@ -63,7 +63,11 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
     }
 
     /// Extract statistics arrays by iterating through LogicalFile instances directly
-    fn extract_stats_array(&self, column: &Column, extract_fn: impl Fn(&deltalake::kernel::LogicalFile) -> Option<ScalarValue>) -> Option<ArrayRef> {
+    fn extract_stats_array(
+        &self,
+        column: &Column,
+        extract_fn: impl Fn(&deltalake::kernel::LogicalFile) -> Option<ScalarValue>,
+    ) -> Option<ArrayRef> {
         let log_data = self.snapshot.log_data();
         let values: Vec<ScalarValue> = log_data
             .into_iter()
@@ -97,7 +101,12 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
 
     /// Extract min values for a column
     fn extract_min_values(&self, column: &Column) -> Option<ArrayRef> {
-        if self.snapshot.metadata().partition_columns().contains(&column.name) {
+        if self
+            .snapshot
+            .metadata()
+            .partition_columns()
+            .contains(&column.name)
+        {
             return self.extract_partition_values(column);
         }
         self.extract_stats_array(column, |logical_file| {
@@ -107,7 +116,12 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
 
     /// Extract max values for a column
     fn extract_max_values(&self, column: &Column) -> Option<ArrayRef> {
-        if self.snapshot.metadata().partition_columns().contains(&column.name) {
+        if self
+            .snapshot
+            .metadata()
+            .partition_columns()
+            .contains(&column.name)
+        {
             return self.extract_partition_values(column);
         }
         self.extract_stats_array(column, |logical_file| {
@@ -122,7 +136,12 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
             .into_iter()
             .map(|logical_file| {
                 // Check if it's a partition column
-                if self.snapshot.metadata().partition_columns().contains(&column.name) {
+                if self
+                    .snapshot
+                    .metadata()
+                    .partition_columns()
+                    .contains(&column.name)
+                {
                     // For partition columns, if the partition value is null, return the row count
                     // Otherwise return 0
                     if let Ok(partition_values) = logical_file.partition_values() {
@@ -176,16 +195,18 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
     }
 
     /// Helper function to extract a scalar value from nested statistics structure
-    fn extract_scalar_from_stats(&self, stats_scalar: Option<delta_kernel::expressions::Scalar>, field_name: &str) -> Option<ScalarValue> {
-
-
+    fn extract_scalar_from_stats(
+        &self,
+        stats_scalar: Option<delta_kernel::expressions::Scalar>,
+        field_name: &str,
+    ) -> Option<ScalarValue> {
         stats_scalar.and_then(|scalar| {
             self.find_nested_scalar(&scalar, field_name)
                 .and_then(|nested_scalar| self.kernel_scalar_to_datafusion_scalar(nested_scalar))
         })
     }
 
-        /// Recursively find a scalar value in nested structures by field name
+    /// Recursively find a scalar value in nested structures by field name
     fn find_nested_scalar<'b>(
         &self,
         scalar: &'b delta_kernel::expressions::Scalar,
@@ -217,7 +238,10 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
     }
 
     /// Convert delta_kernel::Scalar to datafusion::ScalarValue
-    fn kernel_scalar_to_datafusion_scalar(&self, kernel_scalar: &delta_kernel::expressions::Scalar) -> Option<ScalarValue> {
+    fn kernel_scalar_to_datafusion_scalar(
+        &self,
+        kernel_scalar: &delta_kernel::expressions::Scalar,
+    ) -> Option<ScalarValue> {
         use delta_kernel::expressions::Scalar;
 
         match kernel_scalar {
@@ -239,9 +263,19 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
         }
     }
 
-        /// Check if any partition values match the given set for contained() implementation
-    fn check_partition_contained(&self, column: &Column, values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
-        if !self.snapshot.metadata().partition_columns().contains(&column.name) || values.is_empty() {
+    /// Check if any partition values match the given set for contained() implementation
+    fn check_partition_contained(
+        &self,
+        column: &Column,
+        values: &HashSet<ScalarValue>,
+    ) -> Option<BooleanArray> {
+        if !self
+            .snapshot
+            .metadata()
+            .partition_columns()
+            .contains(&column.name)
+            || values.is_empty()
+        {
             return None;
         }
 
@@ -251,7 +285,9 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
             .map(|logical_file| {
                 if let Ok(partition_values) = logical_file.partition_values() {
                     if let Some(partition_value) = partition_values.get(column.name.as_str()) {
-                        if let Some(df_scalar) = self.kernel_scalar_to_datafusion_scalar(partition_value) {
+                        if let Some(df_scalar) =
+                            self.kernel_scalar_to_datafusion_scalar(partition_value)
+                        {
                             return values.contains(&df_scalar);
                         }
                     }
@@ -290,9 +326,15 @@ fn get_null_scalar_value(data_type: &ArrowDataType) -> ScalarValue {
         ArrowDataType::Date64 => ScalarValue::Date64(None),
         ArrowDataType::Timestamp(unit, tz) => match unit {
             arrow_schema::TimeUnit::Second => ScalarValue::TimestampSecond(None, tz.clone()),
-            arrow_schema::TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(None, tz.clone()),
-            arrow_schema::TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(None, tz.clone()),
-            arrow_schema::TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(None, tz.clone()),
+            arrow_schema::TimeUnit::Millisecond => {
+                ScalarValue::TimestampMillisecond(None, tz.clone())
+            }
+            arrow_schema::TimeUnit::Microsecond => {
+                ScalarValue::TimestampMicrosecond(None, tz.clone())
+            }
+            arrow_schema::TimeUnit::Nanosecond => {
+                ScalarValue::TimestampNanosecond(None, tz.clone())
+            }
         },
         _ => ScalarValue::Null,
     }

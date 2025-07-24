@@ -729,10 +729,11 @@ impl<'a> DeltaScanBuilder<'a> {
                     let num_containers = self.snapshot.files_count();
 
                     let files_to_prune = if let Some(predicate) = &logical_filter {
-                        let pruning_stats = crate::kernel::log_data::EagerSnapshotPruningStatistics::new(
-                            self.snapshot.snapshot(),
-                            logical_schema.clone(),
-                        );
+                        let pruning_stats =
+                            crate::kernel::log_data::EagerSnapshotPruningStatistics::new(
+                                self.snapshot.snapshot(),
+                                logical_schema.clone(),
+                            );
 
                         let pruning_predicate =
                             PruningPredicate::try_new(predicate.clone(), logical_schema.clone())
@@ -1314,7 +1315,7 @@ fn get_pushdown_filters(
         .map(|expr| {
             let applicable = expr_is_exact_predicate_for_cols(partition_cols, expr);
             if !expr.column_refs().is_empty() && applicable {
-                TableProviderFilterPushDown::Inexact // FIXME: We should be able to push down exact filters, but fails on "IS NOT NULL AND"
+                TableProviderFilterPushDown::Exact // FIXME: We should be able to push down exact filters, but fails on "IS NOT NULL AND"
             } else {
                 TableProviderFilterPushDown::Inexact
             }
