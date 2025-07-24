@@ -148,7 +148,7 @@ pub async fn get_s3_object_store(
     }
 
     if let Some(handle) = handle {
-        builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle.clone()));
+        builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
     } else {
         return Err(object_store::Error::Generic {
             store: "S3",
