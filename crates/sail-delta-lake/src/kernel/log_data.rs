@@ -183,10 +183,10 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
     ) -> Option<&'b delta_kernel::expressions::Scalar> {
         use delta_kernel::expressions::Scalar;
 
-        let mut parts = field_name.split('.');
+        let parts = field_name.split('.');
         let mut current_scalar = scalar;
 
-        while let Some(part) = parts.next() {
+        for part in parts {
             match current_scalar {
                 Scalar::Struct(struct_data) => {
                     if let Some((_, value)) = struct_data
@@ -216,7 +216,7 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
         match kernel_scalar {
             Scalar::Null(_) => None,
             Scalar::Boolean(b) => Some(ScalarValue::Boolean(Some(*b))),
-            Scalar::Byte(b) => Some(ScalarValue::Int8(Some(*b as i8))),
+            Scalar::Byte(b) => Some(ScalarValue::Int8(Some(*b))),
             Scalar::Short(s) => Some(ScalarValue::Int16(Some(*s))),
             Scalar::Integer(i) => Some(ScalarValue::Int32(Some(*i))),
             Scalar::Long(l) => Some(ScalarValue::Int64(Some(*l))),
