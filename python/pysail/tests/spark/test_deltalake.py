@@ -489,17 +489,16 @@ class TestDeltaLake:
         # Test IS NULL on single column
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NULL")
         result_count = filtered_df.count()
-        assert result_count == 2, f"Expected 2 rows for region IS NULL, got {result_count}"
+        assert result_count == 2, f"Expected 2 rows for region IS NULL, got {result_count}"  # noqa: PLR2004
 
         # Test IS NOT NULL
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NOT NULL")
         result_count = filtered_df.count()
-        assert result_count == 4, f"Expected 4 rows for region IS NOT NULL, got {result_count}"
+        assert result_count == 4, f"Expected 4 rows for region IS NOT NULL, got {result_count}"  # noqa: PLR2004
 
         # Test combination of NULL and equality
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NOT NULL AND category = 'A'")
         result_count = filtered_df.count()
-        print(filtered_df.explain())
         assert result_count == 2, f"Expected 2 rows for region IS NOT NULL AND category = 'A', got {result_count}"  # noqa: PLR2004
 
     def test_delta_partition_pruning_complex_expressions(self, spark, tmp_path):
@@ -612,7 +611,6 @@ class TestDeltaLake:
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("num_partition < 0")
         result_count = filtered_df.count()
         assert result_count == 2, f"Expected 2 rows for num_partition < 0, got {result_count}"  # noqa: PLR2004
-
 
         # Test large values
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("num_partition > 1000")
@@ -873,43 +871,36 @@ class TestDeltaLake:
         df3.write.format("delta").mode("append").save(str(delta_path))
 
         total_files = len([f for f in os.listdir(delta_path) if f.endswith(".parquet")])
-        assert total_files == 3, "Table should have 3 data files"
+        assert total_files == 3, "Table should have 3 data files"  # noqa: PLR2004
 
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("value > 200.0")
 
-        assert filtered_df.count() == 10
-        assert filtered_df.agg({"value": "min"}).collect()[0][0] == 201.0
+        assert filtered_df.count() == 10  # noqa: PLR2004
+        assert filtered_df.agg({"value": "min"}).collect()[0][0] == 201.0  # noqa: PLR2004
 
     def test_data_skipping_on_string_and_date_columns(self, spark, tmp_path):
         """Test data skipping on string and date columns."""
         delta_path = tmp_path / "delta_data_skipping_str_date"
         delta_table_path = f"file://{delta_path}"
 
-        df1_data = [
-            Row(event_name=chr(65 + i), event_date=date(2023, 1, 1 + i)) for i in range(3)
-        ]
+        df1_data = [Row(event_name=chr(65 + i), event_date=date(2023, 1, 1 + i)) for i in range(3)]
         spark.createDataFrame(df1_data).write.format("delta").mode("overwrite").save(str(delta_path))
 
-        df2_data = [
-            Row(event_name=chr(77 + i), event_date=date(2023, 6, 1 + i)) for i in range(3)
-        ]
+        df2_data = [Row(event_name=chr(77 + i), event_date=date(2023, 6, 1 + i)) for i in range(3)]
         spark.createDataFrame(df2_data).write.format("delta").mode("append").save(str(delta_path))
 
-        df3_data = [
-            Row(event_name=chr(88 + i), event_date=date(2023, 12, 1 + i)) for i in range(3)
-        ]
+        df3_data = [Row(event_name=chr(88 + i), event_date=date(2023, 12, 1 + i)) for i in range(3)]
         spark.createDataFrame(df3_data).write.format("delta").mode("append").save(str(delta_path))
 
         total_files = len([f for f in os.listdir(delta_path) if f.endswith(".parquet")])
-        assert total_files == 3, "Table should have 3 data files"
+        assert total_files == 3, "Table should have 3 data files"  # noqa: PLR2004
 
         filtered_df_str = spark.read.format("delta").load(delta_table_path).filter("event_name > 'W'")
 
-        assert filtered_df_str.count() == 3
-
+        assert filtered_df_str.count() == 3  # noqa: PLR2004
 
         filtered_df_date = spark.read.format("delta").load(delta_table_path).filter("event_date < '2023-03-01'")
-        assert filtered_df_date.count() == 3
+        assert filtered_df_date.count() == 3  # noqa: PLR2004
 
     def test_data_skipping_on_null_counts(self, spark, tmp_path):
         """Test data skipping using null_count statistics for IS NULL and IS NOT NULL queries."""
@@ -920,10 +911,13 @@ class TestDeltaLake:
         spark.createDataFrame(df1_data).write.format("delta").mode("overwrite").save(str(delta_path))
 
         from pyspark.sql.types import IntegerType, StringType, StructField, StructType
-        schema = StructType([
-            StructField("id", IntegerType(), False),
-            StructField("optional_col", StringType(), True),
-        ])
+
+        schema = StructType(
+            [
+                StructField("id", IntegerType(), False),
+                StructField("optional_col", StringType(), True),
+            ]
+        )
         df2_data = [(i + 10, None) for i in range(10)]
         spark.createDataFrame(df2_data, schema=schema).write.format("delta").mode("append").save(str(delta_path))
 
@@ -931,10 +925,10 @@ class TestDeltaLake:
         spark.createDataFrame(df3_data).write.format("delta").mode("append").save(str(delta_path))
 
         total_files = len([f for f in os.listdir(delta_path) if f.endswith(".parquet")])
-        assert total_files == 3, "Table should have 3 data files"
+        assert total_files == 3, "Table should have 3 data files"  # noqa: PLR2004
 
         filtered_df_not_null = spark.read.format("delta").load(delta_table_path).filter("optional_col IS NOT NULL")
-        assert filtered_df_not_null.count() == 10 + 5 # File 1 (10) + File 3 (5)
+        assert filtered_df_not_null.count() == 10 + 5  # File 1 (10) + File 3 (5)
 
         filtered_df_is_null = spark.read.format("delta").load(delta_table_path).filter("optional_col IS NULL")
-        assert filtered_df_is_null.count() == 10 + 5 # File 2 (10) + File 3 (5)
+        assert filtered_df_is_null.count() == 10 + 5  # File 2 (10) + File 3 (5)
