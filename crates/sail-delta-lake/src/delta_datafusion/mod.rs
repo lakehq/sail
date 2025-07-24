@@ -726,18 +726,16 @@ impl<'a> DeltaScanBuilder<'a> {
                     let num_containers = self.snapshot.files_count();
 
                     let files_to_prune = if let Some(predicate) = &logical_filter {
-                        let log_data = crate::kernel::log_data::SailLogDataHandler::new(
-                            self.log_store.clone(),
-                            self.snapshot.snapshot().load_config().clone(),
-                            Some(self.snapshot.snapshot().version()),
-                        )
-                        .await?;
+                        let pruning_stats = crate::kernel::log_data::EagerSnapshotPruningStatistics::new(
+                            self.snapshot.snapshot(),
+                            logical_schema.clone(),
+                        );
 
                         let pruning_predicate =
                             PruningPredicate::try_new(predicate.clone(), logical_schema.clone())
                                 .map_err(datafusion_to_delta_error)?;
                         pruning_predicate
-                            .prune(&log_data)
+                            .prune(&pruning_stats)
                             .map_err(datafusion_to_delta_error)?
                     } else {
                         vec![true; num_containers]
