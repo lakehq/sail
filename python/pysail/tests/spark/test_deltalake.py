@@ -487,14 +487,14 @@ class TestDeltaLake:
         df.write.format("delta").mode("overwrite").partitionBy("region", "category").save(str(delta_path))
 
         # Test IS NULL on single column
-        # filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NULL")
-        # result_count = filtered_df.count()
-        # assert result_count == 2, f"Expected 2 rows for region IS NULL, got {result_count}"  # noqa: PLR2004
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NULL")
+        result_count = filtered_df.count()
+        assert result_count == 2, f"Expected 2 rows for region IS NULL, got {result_count}"
 
         # Test IS NOT NULL
-        # filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NOT NULL")
-        # result_count = filtered_df.count()
-        # assert result_count == 4, f"Expected 4 rows for region IS NOT NULL, got {result_count}"  # noqa: PLR2004
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NOT NULL")
+        result_count = filtered_df.count()
+        assert result_count == 4, f"Expected 4 rows for region IS NOT NULL, got {result_count}"
 
         # Test combination of NULL and equality
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NOT NULL AND category = 'A'")
@@ -919,7 +919,7 @@ class TestDeltaLake:
         df1_data = [Row(id=i, optional_col=f"value_{i}") for i in range(10)]
         spark.createDataFrame(df1_data).write.format("delta").mode("overwrite").save(str(delta_path))
 
-        from pyspark.sql.types import StructType, StructField, IntegerType, StringType
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
         schema = StructType([
             StructField("id", IntegerType(), False),
             StructField("optional_col", StringType(), True),

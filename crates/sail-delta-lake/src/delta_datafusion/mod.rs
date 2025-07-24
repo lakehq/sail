@@ -1315,7 +1315,7 @@ fn get_pushdown_filters(
         .map(|expr| {
             let applicable = expr_is_exact_predicate_for_cols(partition_cols, expr);
             if !expr.column_refs().is_empty() && applicable {
-                TableProviderFilterPushDown::Exact // FIXME: We should be able to push down exact filters, but fails on "IS NOT NULL AND"
+                TableProviderFilterPushDown::Inexact // FIXME: We should be able to push down exact filters, but fails on "IS NOT NULL AND"
             } else {
                 TableProviderFilterPushDown::Inexact
             }
