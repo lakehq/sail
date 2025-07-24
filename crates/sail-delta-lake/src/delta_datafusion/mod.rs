@@ -770,24 +770,68 @@ impl<'a> DeltaScanBuilder<'a> {
                     let files_scanned = files.len();
                     (files, files_scanned, 0, None::<Vec<bool>>)
                 } else {
-                    // Use files_matching_predicate to get filtered files
-                    let filters = if let Some(filter) = &self.filter {
-                        vec![filter.clone()]
+                    let num_containers = self.snapshot.files_count();
+
+                    let files_to_prune = if let Some(predicate) = &logical_filter {
+                        let log_data = crate::kernel::log_data::SailLogDataHandler::new(
+                            self.log_store.clone(),
+                            self.snapshot.snapshot().load_config().clone(),
+                            Some(self.snapshot.snapshot().version()),
+                        )
+                        .await?;
+
+                        let pruning_predicate =
+                            PruningPredicate::try_new(predicate.clone(), logical_schema.clone())
+                                .map_err(datafusion_to_delta_error)?;
+                        pruning_predicate.prune(&log_data)
+                            .map_err(datafusion_to_delta_error)?
                     } else {
-                        vec![]
+                        vec![true; num_containers]
                     };
 
-                    let files: Vec<Add> = files_matching_predicate(
-                        self.snapshot.snapshot(),
-                        self.log_store.clone(),
-                        &filters,
-                    )
-                    .await?
-                    .collect();
+                    // needed to enforce limit and deal with missing statistics
+                    // rust port of https://github.com/delta-io/delta/pull/1495
+                    let mut pruned_without_stats = vec![];
+                    let mut rows_collected: i64 = 0;
+                    let mut files = vec![];
+
+                    for (action, keep) in self
+                        .snapshot
+                        .file_actions()?
+                        .into_iter()
+                        .zip(files_to_prune.iter().cloned())
+                    {
+                        // prune file based on predicate pushdown
+                        if keep {
+                            // prune file based on limit pushdown
+                            if let Some(limit) = self.limit {
+                                if let Some(stats) = action.get_stats()? {
+                                    if rows_collected <= limit as i64 {
+                                        rows_collected += stats.num_records;
+                                        files.push(action);
+                                    } else {
+                                        break;
+                                    }
+                                } else {
+                                    // some files are missing stats; skipping but storing them
+                                    // in a list in case we can't reach the target limit
+                                    pruned_without_stats.push(action);
+                                }
+                            } else {
+                                files.push(action);
+                            }
+                        }
+                    }
+
+                    if let Some(limit) = self.limit {
+                        if rows_collected < limit as i64 {
+                            files.extend(pruned_without_stats);
+                        }
+                    }
+
                     let files_scanned = files.len();
-                    let total_files = self.snapshot.files_count();
-                    let files_pruned = total_files - files_scanned;
-                    (files, files_scanned, files_pruned, None::<Vec<bool>>)
+                    let files_pruned = num_containers - files_scanned;
+                    (files, files_scanned, files_pruned, Some(files_to_prune))
                 }
             }
         };
