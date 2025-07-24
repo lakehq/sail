@@ -23,12 +23,21 @@ pub trait JobRunner: Send + Sync + 'static {
 
 pub struct LocalJobRunner {
     stopped: AtomicBool,
+    runtime: Option<sail_common::runtime::RuntimeHandle>,
 }
 
 impl LocalJobRunner {
     pub fn new() -> Self {
         Self {
             stopped: AtomicBool::new(false),
+            runtime: None,
+        }
+    }
+
+    pub fn new_with_runtime(runtime: sail_common::runtime::RuntimeHandle) -> Self {
+        Self {
+            stopped: AtomicBool::new(false),
+            runtime: Some(runtime),
         }
     }
 }
@@ -51,7 +60,20 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
-        Ok(execute_stream(plan, ctx.task_ctx())?)
+
+        if let Some(runtime) = &self.runtime {
+            let task_ctx = ctx.task_ctx();
+            let result = runtime
+                .cpu()
+                .spawn(async move { execute_stream(plan, task_ctx) })
+                .await
+                .map_err(|e| {
+                    ExecutionError::InternalError(format!("failed to execute on CPU runtime: {e}"))
+                })?;
+            Ok(result?)
+        } else {
+            Ok(execute_stream(plan, ctx.task_ctx())?)
+        }
     }
 
     async fn stop(&self) {
