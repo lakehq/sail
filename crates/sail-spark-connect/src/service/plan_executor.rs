@@ -179,7 +179,7 @@ pub(crate) async fn handle_execute_write_operation_v2(
     write: WriteOperationV2,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::Write(
+    let plan = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::WriteTo(
         write.try_into()?,
     )));
     handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await

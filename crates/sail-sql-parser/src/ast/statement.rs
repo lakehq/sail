@@ -9,14 +9,15 @@ use crate::ast::keywords::{
     Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog, Change,
     Clear, Clustered, Codegen, Collection, Column, Columns, Comment, Compute, Cost, Create, Data,
     Database, Databases, Dbproperties, Default, Defined, Delete, Delimited, Desc, Describe,
-    Directory, Drop, Escaped, Evolution, Exists, Explain, Extended, External, Fields, Fileformat,
-    First, For, Format, Formatted, From, Function, Functions, Generated, Global, If, In, Inpath,
-    Inputformat, Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map,
-    Matched, Merge, Name, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite, Partition,
-    Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row,
-    Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Statistics, Stored, Table,
-    Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then, Time, To, Type, Uncache,
-    Unset, Update, Use, Using, Values, Verbose, View, Views, When, With, Zone,
+    Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain, Extended, External, Fields,
+    Fileformat, First, For, Format, Formatted, From, Function, Functions, Generated, Global, If,
+    In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local,
+    Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options, Or, Outputformat,
+    Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename,
+    Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source,
+    Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then,
+    Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View, Views, When, With,
+    Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -494,13 +495,16 @@ pub enum CreateDatabaseClause {
 #[derive(Debug, Clone, TreeParser)]
 #[parser(dependency = "DataType")]
 pub enum CreateTableClause {
+    /// The `PARTITIONED BY` clause for table.
     PartitionedBy(
         Partitioned,
         By,
         #[parser(function = |d, o| compose(d, o))] PartitionColumnList,
     ),
+    /// The `CLUSTERED BY ... SORTED BY ... INTO ... BUCKETS` clause for table.
+    /// In Flink, `DISTRIBUTED BY ... INTO ... BUCKETS` seems to have a similar semantic.
     ClusteredBy(
-        Clustered,
+        Either<Clustered, Distributed>,
         By,
         IdentList,
         Option<(Sorted, By, SortColumnList)>,

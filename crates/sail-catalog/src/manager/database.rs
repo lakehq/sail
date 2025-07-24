@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::error::CatalogResult;
 use crate::manager::CatalogManager;
-use crate::provider::{CreateNamespaceOptions, DeleteNamespaceOptions, Namespace, NamespaceStatus};
+use crate::provider::{CreateDatabaseOptions, DatabaseStatus, DropDatabaseOptions, Namespace};
 use crate::utils::{match_pattern, quote_names_if_needed};
 
 impl CatalogManager {
@@ -18,40 +18,40 @@ impl CatalogManager {
     pub async fn get_database<T: AsRef<str>>(
         &self,
         database: &[T],
-    ) -> CatalogResult<NamespaceStatus> {
-        let (provider, namespace) = self.resolve_database(database)?;
-        provider.get_namespace(&namespace).await
+    ) -> CatalogResult<DatabaseStatus> {
+        let (provider, database) = self.resolve_database(database)?;
+        provider.get_database(&database).await
     }
 
     pub async fn list_databases<T: AsRef<str>>(
         &self,
         qualifier: &[T],
         pattern: Option<&str>,
-    ) -> CatalogResult<Vec<NamespaceStatus>> {
+    ) -> CatalogResult<Vec<DatabaseStatus>> {
         let (provider, prefix) = self.resolve_optional_database(qualifier)?;
         Ok(provider
-            .list_namespaces(prefix.as_ref())
+            .list_databases(prefix.as_ref())
             .await?
             .into_iter()
-            .filter(|x| match_pattern(quote_names_if_needed(&x.namespace).as_str(), pattern))
+            .filter(|x| match_pattern(quote_names_if_needed(&x.database).as_str(), pattern))
             .collect())
     }
 
     pub async fn create_database<T: AsRef<str>>(
         &self,
         database: &[T],
-        options: CreateNamespaceOptions,
-    ) -> CatalogResult<()> {
-        let (provider, namespace) = self.resolve_database(database)?;
-        provider.create_namespace(&namespace, options).await
+        options: CreateDatabaseOptions,
+    ) -> CatalogResult<DatabaseStatus> {
+        let (provider, database) = self.resolve_database(database)?;
+        provider.create_database(&database, options).await
     }
 
-    pub async fn delete_database<T: AsRef<str>>(
+    pub async fn drop_database<T: AsRef<str>>(
         &self,
         database: &[T],
-        options: DeleteNamespaceOptions,
+        options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
-        let (provider, namespace) = self.resolve_database(database)?;
-        provider.delete_namespace(&namespace, options).await
+        let (provider, database) = self.resolve_database(database)?;
+        provider.drop_database(&database, options).await
     }
 }

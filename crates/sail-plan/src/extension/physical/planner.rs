@@ -9,8 +9,10 @@ use datafusion_common::{internal_err, Result};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 
 use crate::extension::logical::{
-    MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode, SortWithinPartitionsNode,
+    FileWriteNode, MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode,
+    SortWithinPartitionsNode,
 };
+use crate::extension::physical::create_file_write_physical_plan;
 use crate::extension::physical::map_partitions::MapPartitionsExec;
 use crate::extension::physical::range::RangeExec;
 use crate::extension::physical::schema_pivot::SchemaPivotExec;
@@ -67,6 +69,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.names().to_vec(),
                     node.schema().inner().clone(),
                 ))
+            } else if let Some(node) = node.as_any().downcast_ref::<FileWriteNode>() {
+                create_file_write_physical_plan(physical_inputs.one()?, node.options().clone())?
             } else {
                 return internal_err!("Unsupported logical extension node: {:?}", node);
             };

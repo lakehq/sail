@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::provider::{NamespaceStatus, TableColumnStatus, TableStatus};
+use crate::provider::{DatabaseStatus, TableColumnStatus, TableStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmptyDisplay {}
@@ -19,7 +19,7 @@ pub trait CatalogDisplay {
 
     fn catalog(name: String) -> Self::Catalog;
 
-    fn database(status: NamespaceStatus) -> Self::Database;
+    fn database(status: DatabaseStatus) -> Self::Database;
 
     fn table(status: TableStatus) -> Self::Table;
 

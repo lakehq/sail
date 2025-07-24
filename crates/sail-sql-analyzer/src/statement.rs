@@ -1,6 +1,7 @@
 use either::Either;
 use sail_common::spec;
-use sail_sql_parser::ast::expression::{BooleanLiteral, Expr};
+use sail_common::spec::QueryPlan;
+use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
 use sail_sql_parser::ast::keywords::{Cascade, Global, Overwrite, Restrict, Temp, Temporary};
 use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
@@ -142,9 +143,18 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 clauses: clauses.try_into()?,
                 query: r#as,
             };
-            let node = spec::CommandNode::CreateTable {
-                table: from_ast_object_name(name)?,
-                definition: from_ast_table_definition(definition)?,
+            let (definition, query) = from_ast_table_definition(definition)?;
+            let node = if let Some(query) = query {
+                spec::CommandNode::CreateTableAsSelect {
+                    table: from_ast_object_name(name)?,
+                    definition,
+                    query,
+                }
+            } else {
+                spec::CommandNode::CreateTable {
+                    table: from_ast_object_name(name)?,
+                    definition,
+                }
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -165,9 +175,18 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 clauses: clauses.try_into()?,
                 query: r#as,
             };
-            let node = spec::CommandNode::CreateTable {
-                table: from_ast_object_name(name)?,
-                definition: from_ast_table_definition(definition)?,
+            let (definition, query) = from_ast_table_definition(definition)?;
+            let node = if let Some(query) = query {
+                spec::CommandNode::CreateTableAsSelect {
+                    table: from_ast_object_name(name)?,
+                    definition,
+                    query,
+                }
+            } else {
+                spec::CommandNode::CreateTable {
+                    table: from_ast_object_name(name)?,
+                    definition,
+                }
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -265,15 +284,18 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             r#as: _,
             query,
         } => {
-            if if_not_exists.is_some() {
-                return Err(SqlError::todo("IF NOT EXISTS in CREATE VIEW"));
-            }
             let columns = if let Some((_, columns, _)) = columns {
                 Some(
                     columns
                         .into_items()
-                        .map(|ViewColumn { name, comment: _ }| name.value.into())
-                        .collect(),
+                        .map(|ViewColumn { name, comment }| {
+                            let comment = comment.map(|(_, s)| from_ast_string(s)).transpose()?;
+                            Ok(spec::ViewColumnDefinition {
+                                name: name.value,
+                                comment,
+                            })
+                        })
+                        .collect::<SqlResult<Vec<_>>>()?,
                 )
             } else {
                 None
@@ -281,12 +303,14 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let query = from_ast_query(query)?;
             let name = from_ast_object_name(name)?;
             let CreateViewClauses {
-                comment: _,
+                comment,
                 properties,
             } = clauses.try_into()?;
-            if properties.is_some() {
-                return Err(SqlError::todo("TBLPROPERTIES in CREATE VIEW"));
-            }
+            let comment = comment.map(from_ast_string).transpose()?;
+            let properties = properties
+                .map(from_ast_property_list)
+                .transpose()?
+                .unwrap_or_default();
             let temporary_view_name = |name: spec::ObjectName| {
                 let mut name: Vec<String> = name.into();
                 match (name.pop(), name.is_empty()) {
@@ -306,7 +330,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     definition: spec::TemporaryViewDefinition {
                         input: Box::new(query),
                         columns,
+                        if_not_exists: if_not_exists.is_some(),
                         replace: or_replace.is_some(),
+                        comment,
+                        properties,
                     },
                 },
                 Some((None, Either::Left(Temp { .. }) | Either::Right(Temporary { .. }))) => {
@@ -316,18 +343,23 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         definition: spec::TemporaryViewDefinition {
                             input: Box::new(query),
                             columns,
+                            if_not_exists: if_not_exists.is_some(),
                             replace: or_replace.is_some(),
+                            comment,
+                            properties,
                         },
                     }
                 }
                 None => spec::CommandNode::CreateView {
                     view: name,
                     definition: spec::ViewDefinition {
-                        input: Box::new(query),
                         // TODO: handle view definition
                         definition: "".to_string(),
                         columns,
+                        if_not_exists: if_not_exists.is_some(),
                         replace: or_replace.is_some(),
+                        comment,
+                        properties,
                     },
                 },
             };
@@ -480,7 +512,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let node = spec::CommandNode::InsertInto {
                 input: Box::new(query),
                 table: from_ast_object_name(name)?,
-                columns: vec![],
+                columns: spec::WriteColumns::ByPosition,
                 partition_spec: vec![],
                 replace: Some(from_ast_expression(condition)?),
                 if_not_exists: false,
@@ -498,13 +530,26 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             columns,
             query,
         } => {
-            let partition_spec = partition
-                .map(from_ast_partition)
-                .transpose()?
-                .unwrap_or_default();
+            let partition_spec = if let Some(partition) = partition {
+                let kv = from_ast_partition(partition)?;
+                kv.into_iter()
+                    .map(|x| {
+                        if let (k, Some(v)) = x {
+                            Ok((k, v))
+                        } else {
+                            Err(SqlError::invalid("missing value for partition key"))
+                        }
+                    })
+                    .collect::<SqlResult<Vec<_>>>()?
+            } else {
+                vec![]
+            };
             let columns = match columns {
-                Some(Either::Right(columns)) => from_ast_identifier_list(columns)?,
-                _ => vec![],
+                Some(Either::Left((_, _))) => spec::WriteColumns::ByName,
+                Some(Either::Right(columns)) => {
+                    spec::WriteColumns::Columns(from_ast_identifier_list(columns)?)
+                }
+                None => spec::WriteColumns::ByPosition,
             };
             let query = from_ast_query(query)?;
             let overwrite = matches!(into_or_overwrite, Either::Right(Overwrite { .. }));
@@ -912,7 +957,9 @@ struct TableDefinition {
     query: Option<AsQueryClause>,
 }
 
-fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::TableDefinition> {
+fn from_ast_table_definition(
+    definition: TableDefinition,
+) -> SqlResult<(spec::TableDefinition, Option<Box<QueryPlan>>)> {
     let TableDefinition {
         or_replace,
         if_not_exists,
@@ -921,7 +968,7 @@ fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::Tab
         clauses:
             CreateTableClauses {
                 partition_by,
-                cluster_by,
+                bucket_by,
                 row_format,
                 stored_as,
                 location,
@@ -931,9 +978,6 @@ fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::Tab
             },
         query,
     } = definition;
-    if cluster_by.is_some() {
-        return Err(SqlError::todo("CLUSTERED BY in CREATE TABLE"));
-    }
     let row_format = row_format.map(from_ast_row_format).transpose()?;
     let file_format = match (using, stored_as) {
         (Some(using), None) => Some(spec::TableFileFormat::General {
@@ -945,7 +989,7 @@ fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::Tab
             return Err(SqlError::invalid("conflicting USING and STORED AS clauses"))
         }
     };
-    let table_partition_cols = partition_by
+    let partition_by = partition_by
         .into_iter()
         .flatten()
         .map(|x| match x {
@@ -953,37 +997,59 @@ fn from_ast_table_definition(definition: TableDefinition) -> SqlResult<spec::Tab
             PartitionColumn::Name(x) => x.value.into(),
         })
         .collect();
+    let (sort_by, bucket_by) = if let Some(bucket_by) = bucket_by {
+        let CreateTableBucketBy {
+            columns,
+            sort_columns,
+            buckets,
+        } = bucket_by;
+        let bucket_column_names = columns.into_iter().map(|x| x.value.into()).collect();
+        let sort_columns = sort_columns
+            .into_iter()
+            .flatten()
+            .map(from_ast_sort_column)
+            .collect::<SqlResult<Vec<_>>>()?;
+        let num_buckets = buckets
+            .value
+            .try_into()
+            .map_err(|e| SqlError::invalid(format!("invalid number of buckets: {e}")))?;
+        (
+            sort_columns,
+            Some(spec::SaveBucketBy {
+                bucket_column_names,
+                num_buckets,
+            }),
+        )
+    } else {
+        (vec![], None)
+    };
     let options = options.map(from_ast_property_list).transpose()?;
     let properties = properties.map(from_ast_property_list).transpose()?;
-    let query = query
-        .map(|AsQueryClause { r#as: _, query }| from_ast_query(query).map(Box::new))
-        .transpose()?;
-    let (schema, column_defaults) = from_ast_table_columns(columns)?;
-    Ok(spec::TableDefinition {
-        schema,
+    let columns = from_ast_table_columns(columns)?;
+    let definition = spec::TableDefinition {
+        columns,
         comment: comment.map(from_ast_string).transpose()?,
-        column_defaults,
         constraints: vec![],
         location: location.map(from_ast_string).transpose()?,
         file_format,
         row_format,
-        table_partition_cols,
-        file_sort_order: vec![],
+        partition_by,
+        sort_by,
+        bucket_by,
         if_not_exists,
-        or_replace,
-        options: options
-            .into_iter()
-            .flatten()
-            .chain(properties.into_iter().flatten())
-            .collect(),
-        query,
-        definition: None,
-    })
+        replace: or_replace,
+        options: options.into_iter().flatten().collect(),
+        properties: properties.into_iter().flatten().collect(),
+    };
+    let query = query
+        .map(|AsQueryClause { r#as: _, query }| from_ast_query(query).map(Box::new))
+        .transpose()?;
+    Ok((definition, query))
 }
 
 fn from_ast_table_columns(
     columns: Option<ColumnDefinitionList>,
-) -> SqlResult<(spec::Schema, Vec<(spec::Identifier, spec::Expr)>)> {
+) -> SqlResult<Vec<spec::TableColumnDefinition>> {
     let columns = columns.map(
         |ColumnDefinitionList {
              left: _,
@@ -991,41 +1057,37 @@ fn from_ast_table_columns(
              right: _,
          }| columns,
     );
-    let mut fields = Vec::with_capacity(
+    let mut output = Vec::with_capacity(
         columns
             .as_ref()
             .map(|x| 1 + x.tail.len())
             .unwrap_or_default(),
     );
-    let mut defaults = vec![];
     for column in columns.map(|x| x.into_items()).into_iter().flatten() {
         let ColumnDefinition {
             name,
             data_type,
             options,
         } = column;
+        // TODO: support `default` and `generated_always_as` SQL expression strings
         let ColumnDefinitionOptions {
             not_null,
-            default,
-            generated_always_as,
-            comment: _,
+            default: _,
+            generated_always_as: _,
+            comment,
         } = options.try_into()?;
-        if generated_always_as.is_some() {
-            return Err(SqlError::todo("GENERATED ALWAYS AS in CREATE TABLE column"));
-        }
-        if let Some(default) = default {
-            defaults.push((name.value.as_str().into(), from_ast_expression(default)?));
-        }
-        let field = spec::Field {
+        let comment = comment.map(from_ast_string).transpose()?;
+        let column = spec::TableColumnDefinition {
             name: name.value,
             data_type: from_ast_data_type(data_type)?,
             nullable: !not_null,
-            metadata: vec![],
+            default: None,
+            generated_always_as: None,
+            comment,
         };
-        fields.push(field);
+        output.push(column);
     }
-    let fields = spec::Fields::from(fields);
-    Ok((spec::Schema { fields }, defaults))
+    Ok(output)
 }
 
 fn from_ast_row_format(format: RowFormat) -> SqlResult<spec::TableRowFormat> {
@@ -1225,8 +1287,7 @@ impl TryFrom<Vec<CreateDatabaseClause>> for CreateDatabaseClauses {
     }
 }
 
-#[allow(unused)]
-struct CreateTableClusterBy {
+struct CreateTableBucketBy {
     columns: Vec<Ident>,
     sort_columns: Option<Vec<SortColumn>>,
     buckets: IntegerLiteral,
@@ -1235,7 +1296,7 @@ struct CreateTableClusterBy {
 #[derive(Default)]
 struct CreateTableClauses {
     partition_by: Option<Vec<PartitionColumn>>,
-    cluster_by: Option<CreateTableClusterBy>,
+    bucket_by: Option<CreateTableBucketBy>,
     row_format: Option<RowFormat>,
     stored_as: Option<FileFormat>,
     location: Option<StringLiteral>,
@@ -1281,7 +1342,7 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                     n,
                     _,
                 ) => {
-                    let cluster_by = CreateTableClusterBy {
+                    let bucket_by = CreateTableBucketBy {
                         columns: names.into_items().collect(),
                         sort_columns: sort.map(
                             |(
@@ -1296,7 +1357,7 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                         ),
                         buckets: n,
                     };
-                    if output.cluster_by.replace(cluster_by).is_some() {
+                    if output.bucket_by.replace(bucket_by).is_some() {
                         return Err(SqlError::invalid("duplicate CLUSTERED BY clause"));
                     }
                 }
@@ -1445,6 +1506,24 @@ fn from_ast_partition(
             Ok((column.value.into(), expr))
         })
         .collect::<SqlResult<Vec<_>>>()
+}
+
+fn from_ast_sort_column(sort: SortColumn) -> SqlResult<spec::SortOrder> {
+    let SortColumn { column, direction } = sort;
+    let direction = match direction {
+        Some(OrderDirection::Asc(_)) => spec::SortDirection::Ascending,
+        Some(OrderDirection::Desc(_)) => spec::SortDirection::Descending,
+        None => spec::SortDirection::Unspecified,
+    };
+    Ok(spec::SortOrder {
+        child: Box::new(spec::Expr::UnresolvedAttribute {
+            name: spec::ObjectName::bare(column.value),
+            plan_id: None,
+            is_metadata_column: false,
+        }),
+        direction,
+        null_ordering: spec::NullOrdering::Unspecified,
+    })
 }
 
 fn from_ast_explain_format(format: Option<ExplainFormat>) -> SqlResult<spec::ExplainMode> {

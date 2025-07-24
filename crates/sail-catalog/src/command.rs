@@ -1,13 +1,10 @@
-use std::cmp::Ordering;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::prelude::SessionContext;
-use datafusion_common::Constraints;
-use datafusion_expr::expr::Sort;
-use datafusion_expr::{Expr, LogicalPlan, ScalarUDF};
+use datafusion_expr::ScalarUDF;
 use serde::Serialize;
 use serde_arrow::schema::{SchemaLike, TracingOptions};
 use serde_arrow::to_arrow;
@@ -16,12 +13,12 @@ use crate::display::{CatalogDisplay, EmptyDisplay, SingleValueDisplay};
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    CreateNamespaceOptions, CreateTableOptions, CreateViewOptions, DeleteNamespaceOptions,
-    DeleteTableOptions, DeleteViewOptions,
+    CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions,
 };
 use crate::utils::quote_namespace_if_needed;
 
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
 pub enum CatalogCommand {
     CurrentCatalog,
     SetCurrentCatalog {
@@ -36,7 +33,7 @@ pub enum CatalogCommand {
     },
     CreateDatabase {
         database: Vec<String>,
-        definition: CatalogDatabaseDefinition,
+        options: CreateDatabaseOptions,
     },
     DatabaseExists {
         database: Vec<String>,
@@ -50,12 +47,11 @@ pub enum CatalogCommand {
     },
     DropDatabase {
         database: Vec<String>,
-        if_exists: bool,
-        cascade: bool,
+        options: DropDatabaseOptions,
     },
     CreateTable {
         table: Vec<String>,
-        definition: CatalogTableDefinition,
+        options: CreateTableOptions,
     },
     TableExists {
         table: Vec<String>,
@@ -73,8 +69,7 @@ pub enum CatalogCommand {
     },
     DropTable {
         table: Vec<String>,
-        if_exists: bool,
-        purge: bool,
+        options: DropTableOptions,
     },
     ListColumns {
         table: Vec<String>,
@@ -111,136 +106,23 @@ pub enum CatalogCommand {
     },
     DropView {
         view: Vec<String>,
-        if_exists: bool,
+        options: DropViewOptions,
     },
     CreateTemporaryView {
         view: String,
-        input: Arc<LogicalPlan>,
         is_global: bool,
-        replace: bool,
+        options: CreateTemporaryViewOptions,
     },
     CreateView {
         view: Vec<String>,
-        definition: CatalogViewDefinition,
+        options: CreateViewOptions,
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub enum CatalogTableFunction {
     // We do not support any kind of table functions yet.
     // PySpark UDTF is registered as a scalar UDF.
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
-pub struct CatalogDatabaseDefinition {
-    pub if_not_exists: bool,
-    pub comment: Option<String>,
-    pub location: Option<String>,
-    pub properties: Vec<(String, String)>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct CatalogTableDefinition {
-    pub schema: SchemaRef,
-    pub comment: Option<String>,
-    pub column_defaults: Vec<(String, Expr)>,
-    pub constraints: Constraints,
-    pub location: String,
-    pub file_format: String,
-    pub table_partition_cols: Vec<String>,
-    pub file_sort_order: Vec<Vec<Sort>>,
-    pub if_not_exists: bool,
-    pub or_replace: bool,
-    pub options: Vec<(String, String)>,
-    pub definition: Option<String>,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct CatalogTableDefinitionOrd<'a> {
-    comment: &'a Option<String>,
-    column_defaults: &'a Vec<(String, Expr)>,
-    constraints: &'a Constraints,
-    location: &'a String,
-    file_format: &'a String,
-    table_partition_cols: &'a Vec<String>,
-    file_sort_order: &'a Vec<Vec<Sort>>,
-    if_not_exists: bool,
-    or_replace: bool,
-    options: &'a Vec<(String, String)>,
-    definition: &'a Option<String>,
-}
-
-impl<'a> From<&'a CatalogTableDefinition> for CatalogTableDefinitionOrd<'a> {
-    fn from(definition: &'a CatalogTableDefinition) -> Self {
-        let CatalogTableDefinition {
-            // ignore schema in comparison
-            schema: _,
-            comment,
-            column_defaults,
-            constraints,
-            location,
-            file_format,
-            table_partition_cols,
-            file_sort_order,
-            if_not_exists,
-            or_replace,
-            options,
-            definition,
-        } = definition;
-        CatalogTableDefinitionOrd {
-            comment,
-            column_defaults,
-            constraints,
-            location,
-            file_format,
-            table_partition_cols,
-            file_sort_order,
-            if_not_exists: *if_not_exists,
-            or_replace: *or_replace,
-            options,
-            definition,
-        }
-    }
-}
-
-impl PartialOrd for CatalogTableDefinition {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        CatalogTableDefinitionOrd::from(self).partial_cmp(&other.into())
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct CatalogViewDefinition {
-    pub schema: SchemaRef,
-    pub definition: String,
-    pub replace: bool,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct CatalogViewDefinitionOrd<'a> {
-    definition: &'a String,
-    replace: bool,
-}
-
-impl<'a> From<&'a CatalogViewDefinition> for CatalogViewDefinitionOrd<'a> {
-    fn from(definition: &'a CatalogViewDefinition) -> Self {
-        let CatalogViewDefinition {
-            // ignore schema in comparison
-            schema: _,
-            definition,
-            replace,
-        } = definition;
-        CatalogViewDefinitionOrd {
-            definition,
-            replace: *replace,
-        }
-    }
-}
-
-impl PartialOrd for CatalogViewDefinition {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        CatalogViewDefinitionOrd::from(self).partial_cmp(&other.into())
-    }
 }
 
 impl CatalogCommand {
@@ -277,7 +159,6 @@ impl CatalogCommand {
     }
 
     pub fn schema<D: CatalogDisplay>(&self) -> CatalogResult<SchemaRef> {
-        // TODO: make sure we return the same schema as Spark for each command
         let fields = match self {
             CatalogCommand::ListCatalogs { .. } => {
                 Vec::<FieldRef>::from_type::<D::Catalog>(TracingOptions::default())
@@ -363,22 +244,7 @@ impl CatalogCommand {
                 let rows: Vec<EmptyDisplay> = vec![];
                 build_record_batch(schema, &rows)
             }
-            CatalogCommand::CreateDatabase {
-                database,
-                definition:
-                    CatalogDatabaseDefinition {
-                        if_not_exists,
-                        comment,
-                        location,
-                        properties,
-                    },
-            } => {
-                let options = CreateNamespaceOptions {
-                    if_not_exists,
-                    comment,
-                    location,
-                    properties,
-                };
+            CatalogCommand::CreateDatabase { database, options } => {
                 manager.create_database(&database, options).await?;
                 let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
@@ -408,48 +274,12 @@ impl CatalogCommand {
                 };
                 build_record_batch(schema, &rows)
             }
-            CatalogCommand::DropDatabase {
-                database,
-                if_exists,
-                cascade,
-            } => {
-                let options = DeleteNamespaceOptions { if_exists, cascade };
-                manager.delete_database(&database, options).await?;
+            CatalogCommand::DropDatabase { database, options } => {
+                manager.drop_database(&database, options).await?;
                 let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
-            CatalogCommand::CreateTable {
-                table,
-                definition:
-                    CatalogTableDefinition {
-                        schema: table_schema,
-                        comment,
-                        column_defaults,
-                        constraints,
-                        location,
-                        file_format,
-                        table_partition_cols,
-                        file_sort_order,
-                        if_not_exists,
-                        or_replace,
-                        options,
-                        definition,
-                    },
-            } => {
-                let options = CreateTableOptions {
-                    schema: table_schema,
-                    file_format,
-                    if_not_exists,
-                    or_replace,
-                    comment,
-                    location: Some(location),
-                    column_defaults,
-                    constraints,
-                    table_partition_cols,
-                    file_sort_order,
-                    definition,
-                    properties: options,
-                };
+            CatalogCommand::CreateTable { table, options } => {
                 manager.create_table(&table, options).await?;
                 let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
@@ -487,20 +317,17 @@ impl CatalogCommand {
                     .collect::<Vec<_>>();
                 build_record_batch(schema, &rows)
             }
-            CatalogCommand::DropTable {
-                table,
-                if_exists,
-                purge,
-            } => {
-                let options = DeleteTableOptions { if_exists, purge };
-                manager.delete_table(&table, options).await?;
+            CatalogCommand::DropTable { table, options } => {
+                manager.drop_table(&table, options).await?;
                 let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::ListColumns { table } => {
                 let rows = manager
-                    .list_table_columns(&table)
+                    .get_table_or_view(&table)
                     .await?
+                    .kind
+                    .columns()
                     .into_iter()
                     .map(D::table_column)
                     .collect::<Vec<_>>();
@@ -543,49 +370,30 @@ impl CatalogCommand {
             } => {
                 if is_global {
                 } else {
-                    manager.delete_temporary_view(&view, if_exists).await?;
+                    manager.drop_temporary_view(&view, if_exists).await?;
                 }
                 let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
-            CatalogCommand::DropView { view, if_exists } => {
-                let options = DeleteViewOptions { if_exists };
-                manager.delete_maybe_temporary_view(&view, options).await?;
+            CatalogCommand::DropView { view, options } => {
+                manager.drop_maybe_temporary_view(&view, options).await?;
                 let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::CreateTemporaryView {
-                input,
                 view,
                 is_global,
-                replace,
+                options,
             } => {
                 if is_global {
-                    manager
-                        .create_global_temporary_view(input, &view, replace)
-                        .await?;
+                    manager.create_global_temporary_view(&view, options).await?;
                 } else {
-                    manager.create_temporary_view(input, &view, replace).await?;
+                    manager.create_temporary_view(&view, options).await?;
                 }
                 let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)
             }
-            CatalogCommand::CreateView {
-                view,
-                definition:
-                    CatalogViewDefinition {
-                        definition,
-                        schema: view_schema,
-                        replace,
-                    },
-            } => {
-                let options = CreateViewOptions {
-                    definition,
-                    schema: view_schema,
-                    replace,
-                    comment: None,
-                    properties: vec![],
-                };
+            CatalogCommand::CreateView { view, options } => {
                 manager.create_view(&view, options).await?;
                 let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)

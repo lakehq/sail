@@ -12,7 +12,7 @@ use datafusion_expr::{TableScan, UNNAMED_TABLE};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::display::CatalogDisplay;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{NamespaceStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_catalog::provider::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
@@ -164,6 +164,7 @@ mod display {
 
 struct SparkCatalogDisplay;
 
+// TODO: make sure we return the same schema as Spark for each command
 impl CatalogDisplay for SparkCatalogDisplay {
     type Catalog = display::SparkCatalog;
     type Database = display::SparkDatabase;
@@ -178,9 +179,9 @@ impl CatalogDisplay for SparkCatalogDisplay {
         }
     }
 
-    fn database(status: NamespaceStatus) -> Self::Database {
+    fn database(status: DatabaseStatus) -> Self::Database {
         Self::Database {
-            name: quote_names_if_needed(&status.namespace),
+            name: quote_names_if_needed(&status.database),
             catalog: Some(status.catalog),
             description: None,
             location_uri: None,
@@ -199,7 +200,7 @@ impl CatalogDisplay for SparkCatalogDisplay {
             TableKind::TemporaryView { .. } | TableKind::GlobalTemporaryView { .. } => true,
         };
         let catalog = status.kind.catalog();
-        let namespace = status.kind.namespace();
+        let namespace = status.kind.database();
         let description = status.kind.description();
         Self::Table {
             name: status.name,
@@ -217,7 +218,7 @@ impl CatalogDisplay for SparkCatalogDisplay {
             .unwrap_or("invalid".to_string());
         Self::TableColumn {
             name: status.name,
-            description: status.description,
+            description: status.comment,
             data_type,
             nullable: status.nullable,
             is_partition: status.is_partition,

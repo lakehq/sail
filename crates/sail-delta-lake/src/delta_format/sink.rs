@@ -84,7 +84,6 @@ impl DeltaDataSink {
             sail_common::spec::SaveMode::Overwrite => SaveMode::Overwrite,
             sail_common::spec::SaveMode::ErrorIfExists => SaveMode::ErrorIfExists,
             sail_common::spec::SaveMode::Ignore => SaveMode::Ignore,
-            _ => SaveMode::ErrorIfExists,
         }
     }
 

@@ -11,16 +11,13 @@
       "output": {
         "success": {
           "command": {
-            "createTable": {
+            "createTableAsSelect": {
               "table": [
                 "mydb",
                 "page_view"
               ],
-              "schema": {
-                "fields": []
-              },
+              "columns": [],
               "comment": "This is the staging page view table",
-              "columnDefaults": [],
               "constraints": [],
               "location": "/user/external/page_view",
               "fileFormat": {
@@ -29,11 +26,13 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
-              "options": [
+              "replace": true,
+              "options": [],
+              "properties": [
                 [
                   "p1",
                   "v1"
@@ -76,8 +75,7 @@
                   ]
                 },
                 "planId": null
-              },
-              "definition": null
+              }
             },
             "planId": null
           }
@@ -93,11 +91,8 @@
               "table": [
                 "table_name"
               ],
-              "schema": {
-                "fields": []
-              },
+              "columns": [],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -106,10 +101,11 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [
                 [
                   "a",
@@ -124,8 +120,7 @@
                   "true"
                 ]
               ],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -142,18 +137,17 @@
                 "1m",
                 "2g"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "a",
-                    "dataType": "int32",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -162,13 +156,13 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -178,13 +172,13 @@
     {
       "input": "REPLACE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nCLUSTER BY (a, b)\n",
       "output": {
-        "failure": "invalid argument: found CLUSTER at 67:74 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found CLUSTER at 67:74 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE my_tab (a STRUCT<b INT, c STRING>, ts TIMESTAMP) USING parquet\nCLUSTER BY (a.b, ts)\n",
       "output": {
-        "failure": "invalid argument: found CLUSTER at 77:84 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found CLUSTER at 77:84 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
@@ -196,18 +190,17 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -217,15 +210,15 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -241,18 +234,17 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -267,15 +259,15 @@
                   "properties": []
                 }
               },
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -292,18 +284,17 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -321,15 +312,15 @@
                   "null_defined_as": null
                 }
               },
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -346,18 +337,17 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -376,15 +366,15 @@
                   ]
                 }
               },
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -400,18 +390,17 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -420,15 +409,15 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -444,18 +433,17 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -474,15 +462,15 @@
                   ]
                 }
               },
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -498,18 +486,17 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -528,15 +515,15 @@
                   ]
                 }
               },
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -552,18 +539,17 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -581,15 +567,15 @@
                   "null_defined_as": null
                 }
               },
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -605,18 +591,17 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -635,15 +620,15 @@
                   ]
                 }
               },
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -659,31 +644,30 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": null,
               "rowFormat": null,
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -694,7 +678,7 @@
       "input": "REPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)",
       "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: CREATE TABLE ... SKEWED BY is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found SKEWED at 33:39 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found SKEWED at 33:39 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
@@ -706,18 +690,17 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -726,15 +709,15 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -758,42 +741,43 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "p1",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
                   },
-                  {
-                    "name": "p1",
-                    "dataType": {
-                      "configuredUtf8": {
-                        "utf8Type": "configured"
-                      }
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": null,
               "rowFormat": null,
-              "tablePartitionCols": [
+              "partitionBy": [
                 "p1",
                 "p2"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -817,28 +801,29 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
                   },
-                  {
-                    "name": "part",
-                    "dataType": {
-                      "configuredUtf8": {
-                        "utf8Type": "configured"
-                      }
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -856,13 +841,13 @@
                   "null_defined_as": null
                 }
               },
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -879,28 +864,29 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "id",
-                    "dataType": "int64",
-                    "nullable": true,
-                    "metadata": []
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "part",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
                   },
-                  {
-                    "name": "part",
-                    "dataType": {
-                      "configuredUtf8": {
-                        "utf8Type": "configured"
-                      }
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -914,13 +900,13 @@
                   "properties": []
                 }
               },
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -943,24 +929,21 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": []
-              },
+              "columns": [],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": null,
               "rowFormat": null,
-              "tablePartitionCols": [
+              "partitionBy": [
                 "part"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -976,28 +959,29 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "a",
-                    "dataType": "int32",
-                    "nullable": true,
-                    "metadata": []
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": "test",
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
                   },
-                  {
-                    "name": "b",
-                    "dataType": {
-                      "configuredUtf8": {
-                        "utf8Type": "configured"
-                      }
-                    },
-                    "nullable": false,
-                    "metadata": []
-                  }
-                ]
-              },
+                  "nullable": false,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -1006,13 +990,13 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -1028,28 +1012,29 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "a",
-                    "dataType": "int32",
-                    "nullable": true,
-                    "metadata": []
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": "test",
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
                   },
-                  {
-                    "name": "b",
-                    "dataType": {
-                      "configuredUtf8": {
-                        "utf8Type": "configured"
-                      }
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -1058,15 +1043,15 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [
+              "partitionBy": [
                 "a"
               ],
-              "fileSortOrder": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -1076,7 +1061,50 @@
     {
       "input": "REPLACE TABLE my_tab(a INT, b INT NOT NULL GENERATED ALWAYS AS (a+1)) USING parquet",
       "output": {
-        "failure": "not implemented: GENERATED ALWAYS AS in CREATE TABLE column"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": "int32",
+                  "nullable": false,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "ifNotExists": false,
+              "replace": true,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -1088,39 +1116,29 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "a",
-                    "dataType": "int32",
-                    "nullable": true,
-                    "metadata": []
-                  },
-                  {
-                    "name": "b",
-                    "dataType": {
-                      "configuredUtf8": {
-                        "utf8Type": "configured"
-                      }
-                    },
-                    "nullable": false,
-                    "metadata": []
-                  }
-                ]
-              },
-              "comment": null,
-              "columnDefaults": [
-                [
-                  "b",
-                  {
-                    "literal": {
-                      "utf8": {
-                        "value": "abc"
-                      }
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
                     }
-                  }
-                ]
+                  },
+                  "nullable": false,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
               ],
+              "comment": null,
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -1129,13 +1147,13 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -1146,7 +1164,7 @@
       "input": "REPLACE TABLE my_tab(a INT, b STRING) CLUSTER BY (a) CLUSTER BY (a)",
       "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: CLUSTER BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) CLUSTER BY (a) CLUSTER BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found CLUSTER at 38:45 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found CLUSTER at 38:45 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
@@ -1216,20 +1234,86 @@
       "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTER BY (a) PARTITIONED BY (a)",
       "exception": "\n[SPECIFY_CLUSTER_BY_WITH_PARTITIONED_BY_IS_NOT_ALLOWED] Cannot specify both CLUSTER BY and PARTITIONED BY. SQLSTATE: 42908\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTER BY (a) PARTITIONED BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found CLUSTER at 52:59 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found CLUSTER at 52:59 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS CLUSTER BY (a)",
       "exception": "\n[SPECIFY_CLUSTER_BY_WITH_BUCKETING_IS_NOT_ALLOWED] Cannot specify both CLUSTER BY and CLUSTERED BY INTO BUCKETS. SQLSTATE: 42908\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS CLUSTER BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found CLUSTER at 84:91 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found CLUSTER at 84:91 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) SORTED BY (b) INTO 5 BUCKETS",
       "output": {
-        "failure": "not implemented: CLUSTERED BY in CREATE TABLE"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b"
+                      ],
+                      "planId": null,
+                      "isMetadataColumn": false
+                    }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
+                }
+              ],
+              "bucketBy": {
+                "bucketColumnNames": [
+                  "a"
+                ],
+                "numBuckets": 5
+              },
+              "ifNotExists": false,
+              "replace": true,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -1241,28 +1325,29 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "a",
-                    "dataType": "int32",
-                    "nullable": true,
-                    "metadata": []
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
                   },
-                  {
-                    "name": "b",
-                    "dataType": {
-                      "configuredUtf8": {
-                        "utf8Type": "configured"
-                      }
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": "abc",
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -1271,13 +1356,13 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -1293,28 +1378,29 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "a",
-                    "dataType": "int32",
-                    "nullable": true,
-                    "metadata": []
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
                   },
-                  {
-                    "name": "b",
-                    "dataType": {
-                      "configuredUtf8": {
-                        "utf8Type": "configured"
-                      }
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": "/tmp/file",
               "fileFormat": {
@@ -1323,13 +1409,13 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
+              "replace": true,
               "options": [],
-              "query": null,
-              "definition": null
+              "properties": []
             },
             "planId": null
           }
@@ -1345,28 +1431,29 @@
               "table": [
                 "my_tab"
               ],
-              "schema": {
-                "fields": [
-                  {
-                    "name": "a",
-                    "dataType": "int32",
-                    "nullable": true,
-                    "metadata": []
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
                   },
-                  {
-                    "name": "b",
-                    "dataType": {
-                      "configuredUtf8": {
-                        "utf8Type": "configured"
-                      }
-                    },
-                    "nullable": true,
-                    "metadata": []
-                  }
-                ]
-              },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
               "comment": null,
-              "columnDefaults": [],
               "constraints": [],
               "location": null,
               "fileFormat": {
@@ -1375,18 +1462,18 @@
                 }
               },
               "rowFormat": null,
-              "tablePartitionCols": [],
-              "fileSortOrder": [],
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
               "ifNotExists": false,
-              "orReplace": true,
-              "options": [
+              "replace": true,
+              "options": [],
+              "properties": [
                 [
                   "test",
                   "test"
                 ]
-              ],
-              "query": null,
-              "definition": null
+              ]
             },
             "planId": null
           }
@@ -1588,43 +1675,43 @@
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION sr",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION sr_ci_ai",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode_ci",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode_ci_rtrim",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION utf8_binary",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION utf8_lcase",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     }
   ]

@@ -32,6 +32,7 @@ impl PlanResolver<'_> {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) async fn resolve_schema_projection<T: AsRef<str>>(
         &self,
         schema: SchemaRef,

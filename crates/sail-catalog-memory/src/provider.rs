@@ -3,45 +3,47 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateNamespaceOptions, CreateTableOptions, CreateViewOptions,
-    DeleteNamespaceOptions, DeleteTableOptions, DeleteViewOptions, Namespace, NamespaceStatus,
-    TableKind, TableStatus,
+    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
+    CreateViewColumnOptions, CreateViewOptions, DatabaseStatus, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, Namespace, TableColumnStatus, TableKind, TableStatus,
 };
 
-struct MemoryNamespace {
-    comment: Option<String>,
-    location: Option<String>,
-    properties: HashMap<String, String>,
+struct MemoryDatabase {
+    status: DatabaseStatus,
     tables: HashMap<String, TableStatus>,
     views: HashMap<String, TableStatus>,
 }
 
 pub struct MemoryCatalogProvider {
     name: String,
-    namespaces: Arc<Mutex<HashMap<Namespace, MemoryNamespace>>>,
+    databases: Arc<Mutex<HashMap<Namespace, MemoryDatabase>>>,
 }
 
 impl MemoryCatalogProvider {
     pub fn new(name: String, database: Namespace) -> Self {
-        let mut namespaces = HashMap::new();
-        namespaces.insert(
-            database,
-            MemoryNamespace {
-                comment: None,
-                location: None,
-                properties: HashMap::new(),
+        let mut databases = HashMap::new();
+        databases.insert(
+            database.clone(),
+            MemoryDatabase {
+                status: DatabaseStatus {
+                    catalog: name.clone(),
+                    database: database.into(),
+                    comment: None,
+                    location: None,
+                    properties: vec![],
+                },
                 tables: HashMap::new(),
                 views: HashMap::new(),
             },
         );
         Self {
             name,
-            namespaces: Arc::new(Mutex::new(namespaces)),
+            databases: Arc::new(Mutex::new(databases)),
         }
     }
 
-    fn namespaces(&self) -> CatalogResult<MutexGuard<'_, HashMap<Namespace, MemoryNamespace>>> {
-        self.namespaces
+    fn databases(&self) -> CatalogResult<MutexGuard<'_, HashMap<Namespace, MemoryDatabase>>> {
+        self.databases
             .lock()
             .map_err(|e| CatalogError::Internal(e.to_string()))
     }
@@ -53,183 +55,207 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self.name
     }
 
-    async fn create_namespace(
+    async fn create_database(
         &self,
-        namespace: &Namespace,
-        options: CreateNamespaceOptions,
-    ) -> CatalogResult<()> {
-        let CreateNamespaceOptions {
+        database: &Namespace,
+        options: CreateDatabaseOptions,
+    ) -> CatalogResult<DatabaseStatus> {
+        let CreateDatabaseOptions {
             if_not_exists,
             comment,
             location,
             properties,
         } = options;
-        let mut namespaces = self.namespaces()?;
-        if namespaces.contains_key(namespace) {
+        let mut databases = self.databases()?;
+        if let Some(db) = databases.get(database) {
             if if_not_exists {
-                Ok(())
+                Ok(db.status.clone())
             } else {
                 Err(CatalogError::AlreadyExists(
-                    "namespace",
-                    namespace.to_string(),
+                    "database",
+                    database.to_string(),
                 ))
             }
         } else {
-            namespaces.insert(
-                namespace.clone(),
-                MemoryNamespace {
-                    comment,
-                    location,
-                    properties: properties.into_iter().collect(),
-                    tables: HashMap::new(),
-                    views: HashMap::new(),
-                },
-            );
-            Ok(())
+            let status = DatabaseStatus {
+                catalog: self.name.clone(),
+                database: database.clone().into(),
+                comment,
+                location,
+                properties,
+            };
+            let db = MemoryDatabase {
+                status: status.clone(),
+                tables: HashMap::new(),
+                views: HashMap::new(),
+            };
+            databases.insert(database.clone(), db);
+            Ok(status)
         }
     }
 
-    async fn delete_namespace(
+    async fn drop_database(
         &self,
-        namespace: &Namespace,
-        options: DeleteNamespaceOptions,
+        database: &Namespace,
+        options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
-        let DeleteNamespaceOptions {
+        let DropDatabaseOptions {
             if_exists,
             cascade: _,
         } = options;
-        let mut namespaces = self.namespaces()?;
-        if namespaces.remove(namespace).is_none() {
+        let mut databases = self.databases()?;
+        if databases.remove(database).is_none() {
             if if_exists {
                 Ok(())
             } else {
-                Err(CatalogError::NotFound("namespace", namespace.to_string()))
+                Err(CatalogError::NotFound("database", database.to_string()))
             }
         } else {
             Ok(())
         }
     }
 
-    async fn get_namespace(&self, namespace: &Namespace) -> CatalogResult<NamespaceStatus> {
-        let namespaces = self.namespaces()?;
-        if let Some(ns) = namespaces.get(namespace) {
-            Ok(NamespaceStatus {
-                catalog: self.name.clone(),
-                namespace: namespace.clone().into(),
-                comment: ns.comment.clone(),
-                location: ns.location.clone(),
-                properties: ns.properties.clone(),
-            })
+    async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
+        let databases = self.databases()?;
+        if let Some(db) = databases.get(database) {
+            Ok(db.status.clone())
         } else {
-            Err(CatalogError::NotFound("namespace", namespace.to_string()))
+            Err(CatalogError::NotFound("database", database.to_string()))
         }
     }
 
-    async fn list_namespaces(
+    async fn list_databases(
         &self,
         prefix: Option<&Namespace>,
-    ) -> CatalogResult<Vec<NamespaceStatus>> {
-        let namespaces = self.namespaces()?;
-        Ok(namespaces
+    ) -> CatalogResult<Vec<DatabaseStatus>> {
+        let databases = self.databases()?;
+        Ok(databases
             .iter()
-            .filter(|(namespace, _)| {
+            .filter(|(database, _)| {
                 if let Some(prefix) = prefix {
-                    prefix.is_parent_of(namespace)
+                    prefix.is_parent_of(database)
                 } else {
-                    namespace.tail.is_empty()
+                    database.tail.is_empty()
                 }
             })
-            .map(|(namespace, status)| NamespaceStatus {
-                catalog: self.name.clone(),
-                namespace: namespace.clone().into(),
-                comment: status.comment.clone(),
-                location: status.location.clone(),
-                properties: status.properties.clone(),
-            })
+            .map(|(_, db)| db.status.clone())
             .collect())
     }
 
     async fn create_table(
         &self,
-        namespace: &Namespace,
+        database: &Namespace,
         table: &str,
         options: CreateTableOptions,
-    ) -> CatalogResult<()> {
+    ) -> CatalogResult<TableStatus> {
         let CreateTableOptions {
-            schema,
-            file_format,
-            if_not_exists,
-            or_replace,
+            columns,
             comment,
+            constraints,
             location,
-            column_defaults: _,
-            constraints: _,
-            table_partition_cols: _,
-            file_sort_order: _,
-            definition: _,
+            format,
+            partition_by,
+            sort_by,
+            bucket_by,
+            if_not_exists,
+            replace,
+            options,
             properties,
         } = options;
-        let mut namespaces = self.namespaces()?;
-        let ns = namespaces
-            .get_mut(namespace)
-            .ok_or_else(|| CatalogError::NotFound("namespace", namespace.to_string()))?;
-        if ns.tables.contains_key(table) {
+        let mut databases = self.databases()?;
+        let db = databases
+            .get_mut(database)
+            .ok_or_else(|| CatalogError::NotFound("database", database.to_string()))?;
+        if let Some(status) = db.tables.get(table) {
             if if_not_exists {
-                return Ok(());
-            } else if or_replace {
-                ns.tables.remove(table);
+                return Ok(status.clone());
+            } else if replace {
+                db.tables.remove(table);
             } else {
                 return Err(CatalogError::AlreadyExists("table", table.to_string()));
             }
         }
+        let columns = columns
+            .into_iter()
+            .map(|x| {
+                let CreateTableColumnOptions {
+                    name,
+                    data_type,
+                    nullable,
+                    comment,
+                    default,
+                    generated_always_as,
+                } = x;
+                let is_partition = partition_by.iter().any(|x| x.eq_ignore_ascii_case(&name));
+                let is_bucket = bucket_by
+                    .as_ref()
+                    .is_some_and(|b| b.columns.iter().any(|x| x.eq_ignore_ascii_case(&name)));
+                TableColumnStatus {
+                    name,
+                    data_type,
+                    nullable,
+                    comment,
+                    default,
+                    generated_always_as,
+                    is_partition,
+                    is_bucket,
+                    is_cluster: false,
+                }
+            })
+            .collect();
         let status = TableStatus {
             name: table.to_string(),
             kind: TableKind::Table {
                 catalog: self.name.clone(),
-                namespace: namespace.clone().into(),
-                schema,
-                format: file_format,
+                database: database.clone().into(),
+                columns,
                 comment,
+                constraints,
                 location,
-                properties: properties.into_iter().collect(),
+                format,
+                partition_by,
+                sort_by,
+                bucket_by,
+                options,
+                properties,
             },
         };
-        ns.tables.insert(table.to_string(), status);
-        Ok(())
+        db.tables.insert(table.to_string(), status.clone());
+        Ok(status)
     }
 
-    async fn get_table(&self, namespace: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        let namespaces = self.namespaces()?;
-        if let Some(ns) = namespaces.get(namespace) {
-            if let Some(status) = ns.tables.get(table) {
+    async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
+        let databases = self.databases()?;
+        if let Some(db) = databases.get(database) {
+            if let Some(status) = db.tables.get(table) {
                 return Ok(status.clone());
             }
         }
         Err(CatalogError::NotFound("table", table.to_string()))
     }
 
-    async fn list_tables(&self, namespace: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let namespaces = self.namespaces()?;
-        if let Some(ns) = namespaces.get(namespace) {
-            Ok(ns.tables.values().cloned().collect())
+    async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+        let databases = self.databases()?;
+        if let Some(db) = databases.get(database) {
+            Ok(db.tables.values().cloned().collect())
         } else {
-            Err(CatalogError::NotFound("namespace", namespace.to_string()))
+            Err(CatalogError::NotFound("database", database.to_string()))
         }
     }
 
-    async fn delete_table(
+    async fn drop_table(
         &self,
-        namespace: &Namespace,
+        database: &Namespace,
         table: &str,
-        options: DeleteTableOptions,
+        options: DropTableOptions,
     ) -> CatalogResult<()> {
-        let DeleteTableOptions {
+        let DropTableOptions {
             if_exists,
             purge: _,
         } = options;
-        let mut namespaces = self.namespaces()?;
-        if let Some(ns) = namespaces.get_mut(namespace) {
-            if ns.tables.remove(table).is_some() || if_exists {
+        let mut databases = self.databases()?;
+        if let Some(db) = databases.get_mut(database) {
+            if db.tables.remove(table).is_some() || if_exists {
                 Ok(())
             } else {
                 Err(CatalogError::NotFound("table", table.to_string()))
@@ -237,78 +263,103 @@ impl CatalogProvider for MemoryCatalogProvider {
         } else if if_exists {
             Ok(())
         } else {
-            Err(CatalogError::NotFound("namespace", namespace.to_string()))
+            Err(CatalogError::NotFound("database", database.to_string()))
         }
     }
 
     async fn create_view(
         &self,
-        namespace: &Namespace,
+        database: &Namespace,
         view: &str,
         options: CreateViewOptions,
-    ) -> CatalogResult<()> {
+    ) -> CatalogResult<TableStatus> {
         let CreateViewOptions {
+            columns,
             definition,
-            schema,
+            if_not_exists,
             replace,
             comment,
             properties,
         } = options;
-        let mut namespaces = self.namespaces()?;
-        let ns = namespaces
-            .get_mut(namespace)
-            .ok_or_else(|| CatalogError::NotFound("namespace", namespace.to_string()))?;
-        if ns.views.contains_key(view) {
-            if replace {
-                ns.views.remove(view);
+        let mut databases = self.databases()?;
+        let db = databases
+            .get_mut(database)
+            .ok_or_else(|| CatalogError::NotFound("database", database.to_string()))?;
+        if let Some(status) = db.views.get(view) {
+            if if_not_exists {
+                return Ok(status.clone());
+            } else if replace {
+                db.views.remove(view);
             } else {
                 return Err(CatalogError::AlreadyExists("view", view.to_string()));
             }
         }
+        let columns = columns
+            .into_iter()
+            .map(|x| {
+                let CreateViewColumnOptions {
+                    name,
+                    data_type,
+                    nullable,
+                    comment,
+                } = x;
+                TableColumnStatus {
+                    name,
+                    data_type,
+                    nullable,
+                    comment,
+                    default: None,
+                    generated_always_as: None,
+                    is_partition: false,
+                    is_bucket: false,
+                    is_cluster: false,
+                }
+            })
+            .collect();
         let status = TableStatus {
             name: view.to_string(),
             kind: TableKind::View {
                 catalog: self.name.clone(),
-                namespace: namespace.clone().into(),
-                schema,
+                database: database.clone().into(),
+                columns,
                 definition,
                 comment,
                 properties: properties.into_iter().collect(),
             },
         };
-        ns.views.insert(view.to_string(), status);
-        Ok(())
+        db.views.insert(view.to_string(), status.clone());
+        Ok(status)
     }
 
-    async fn get_view(&self, namespace: &Namespace, view: &str) -> CatalogResult<TableStatus> {
-        let namespaces = self.namespaces()?;
-        if let Some(ns) = namespaces.get(namespace) {
-            if let Some(status) = ns.views.get(view) {
+    async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
+        let databases = self.databases()?;
+        if let Some(db) = databases.get(database) {
+            if let Some(status) = db.views.get(view) {
                 return Ok(status.clone());
             }
         }
         Err(CatalogError::NotFound("view", view.to_string()))
     }
 
-    async fn list_views(&self, namespace: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let namespaces = self.namespaces()?;
-        if let Some(ns) = namespaces.get(namespace) {
-            Ok(ns.views.values().cloned().collect())
+    async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+        let databases = self.databases()?;
+        if let Some(db) = databases.get(database) {
+            Ok(db.views.values().cloned().collect())
         } else {
-            Err(CatalogError::NotFound("namespace", namespace.to_string()))
+            Err(CatalogError::NotFound("database", database.to_string()))
         }
     }
 
-    async fn delete_view(
+    async fn drop_view(
         &self,
-        namespace: &Namespace,
+        database: &Namespace,
         view: &str,
-        options: DeleteViewOptions,
+        options: DropViewOptions,
     ) -> CatalogResult<()> {
-        let DeleteViewOptions { if_exists } = options;
-        let mut namespaces = self.namespaces()?;
-        if let Some(ns) = namespaces.get_mut(namespace) {
-            if ns.views.remove(view).is_some() || if_exists {
+        let DropViewOptions { if_exists } = options;
+        let mut databases = self.databases()?;
+        if let Some(db) = databases.get_mut(database) {
+            if db.views.remove(view).is_some() || if_exists {
                 Ok(())
             } else {
                 Err(CatalogError::NotFound("view", view.to_string()))
@@ -316,7 +367,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         } else if if_exists {
             Ok(())
         } else {
-            Err(CatalogError::NotFound("namespace", namespace.to_string()))
+            Err(CatalogError::NotFound("database", database.to_string()))
         }
     }
 }

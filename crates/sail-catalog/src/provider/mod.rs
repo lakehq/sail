@@ -12,58 +12,58 @@ use crate::error::CatalogResult;
 pub trait CatalogProvider: Send + Sync {
     fn get_name(&self) -> &str;
 
-    async fn create_namespace(
+    async fn create_database(
         &self,
-        namespace: &Namespace,
-        options: CreateNamespaceOptions,
+        database: &Namespace,
+        options: CreateDatabaseOptions,
+    ) -> CatalogResult<DatabaseStatus>;
+
+    async fn drop_database(
+        &self,
+        database: &Namespace,
+        options: DropDatabaseOptions,
     ) -> CatalogResult<()>;
 
-    async fn delete_namespace(
-        &self,
-        namespace: &Namespace,
-        options: DeleteNamespaceOptions,
-    ) -> CatalogResult<()>;
+    async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus>;
 
-    async fn get_namespace(&self, namespace: &Namespace) -> CatalogResult<NamespaceStatus>;
-
-    async fn list_namespaces(
+    async fn list_databases(
         &self,
         prefix: Option<&Namespace>,
-    ) -> CatalogResult<Vec<NamespaceStatus>>;
+    ) -> CatalogResult<Vec<DatabaseStatus>>;
 
     async fn create_table(
         &self,
-        namespace: &Namespace,
+        database: &Namespace,
         table: &str,
         options: CreateTableOptions,
-    ) -> CatalogResult<()>;
+    ) -> CatalogResult<TableStatus>;
 
-    async fn get_table(&self, namespace: &Namespace, table: &str) -> CatalogResult<TableStatus>;
+    async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus>;
 
-    async fn list_tables(&self, namespace: &Namespace) -> CatalogResult<Vec<TableStatus>>;
+    async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>>;
 
-    async fn delete_table(
+    async fn drop_table(
         &self,
-        namespace: &Namespace,
+        database: &Namespace,
         table: &str,
-        options: DeleteTableOptions,
+        options: DropTableOptions,
     ) -> CatalogResult<()>;
 
     async fn create_view(
         &self,
-        namespace: &Namespace,
+        database: &Namespace,
         view: &str,
         options: CreateViewOptions,
-    ) -> CatalogResult<()>;
+    ) -> CatalogResult<TableStatus>;
 
-    async fn get_view(&self, namespace: &Namespace, view: &str) -> CatalogResult<TableStatus>;
+    async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus>;
 
-    async fn list_views(&self, namespace: &Namespace) -> CatalogResult<Vec<TableStatus>>;
+    async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>>;
 
-    async fn delete_view(
+    async fn drop_view(
         &self,
-        namespace: &Namespace,
+        database: &Namespace,
         view: &str,
-        options: DeleteViewOptions,
+        options: DropViewOptions,
     ) -> CatalogResult<()>;
 }

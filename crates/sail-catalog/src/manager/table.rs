@@ -1,6 +1,6 @@
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
-use crate::provider::{CreateTableOptions, DeleteTableOptions, TableStatus};
+use crate::provider::{CreateTableOptions, DropTableOptions, TableStatus};
 use crate::utils::match_pattern;
 
 impl CatalogManager {
@@ -8,14 +8,14 @@ impl CatalogManager {
         &self,
         table: &[T],
         options: CreateTableOptions,
-    ) -> CatalogResult<()> {
-        let (provider, namespace, table) = self.resolve_object(table)?;
-        provider.create_table(&namespace, &table, options).await
+    ) -> CatalogResult<TableStatus> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.create_table(&database, &table, options).await
     }
 
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
-        let (provider, namespace, table) = self.resolve_object(table)?;
-        provider.get_table(&namespace, &table).await
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.get_table(&database, &table).await
     }
 
     pub async fn list_tables<T: AsRef<str>>(
@@ -23,13 +23,13 @@ impl CatalogManager {
         database: &[T],
         pattern: Option<&str>,
     ) -> CatalogResult<Vec<TableStatus>> {
-        let (provider, namespace) = if database.is_empty() {
+        let (provider, database) = if database.is_empty() {
             self.resolve_default_database()?
         } else {
             self.resolve_database(database)?
         };
         Ok(provider
-            .list_tables(&namespace)
+            .list_tables(&database)
             .await?
             .into_iter()
             .filter(|x| match_pattern(&x.name, pattern))
@@ -54,13 +54,13 @@ impl CatalogManager {
         Ok(output)
     }
 
-    pub async fn delete_table<T: AsRef<str>>(
+    pub async fn drop_table<T: AsRef<str>>(
         &self,
         table: &[T],
-        options: DeleteTableOptions,
+        options: DropTableOptions,
     ) -> CatalogResult<()> {
-        let (provider, namespace, table) = self.resolve_object(table)?;
-        provider.delete_table(&namespace, &table, options).await
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.drop_table(&database, &table, options).await
     }
 
     pub async fn get_table_or_view<T: AsRef<str>>(

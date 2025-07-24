@@ -8,7 +8,6 @@ use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
 
 pub mod catalog;
-pub mod column;
 pub mod database;
 pub mod function;
 pub mod table;
@@ -63,8 +62,8 @@ impl CatalogManager {
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {
         let state = self.state()?;
         let catalog = state.default_catalog.clone();
-        let namespace = state.default_database.clone();
-        Ok((state.get_catalog(&catalog)?, namespace))
+        let database = state.default_database.clone();
+        Ok((state.get_catalog(&catalog)?, database))
     }
 
     pub(super) fn resolve_database<T: AsRef<str>>(
@@ -72,8 +71,8 @@ impl CatalogManager {
         database: &[T],
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {
         let state = self.state()?;
-        let (catalog, namespace) = state.resolve_database_reference(database)?;
-        Ok((state.get_catalog(&catalog)?, namespace))
+        let (catalog, database) = state.resolve_database_reference(database)?;
+        Ok((state.get_catalog(&catalog)?, database))
     }
 
     pub(super) fn resolve_optional_database<T: AsRef<str>>(
@@ -81,8 +80,8 @@ impl CatalogManager {
         database: &[T],
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Option<Namespace>)> {
         let state = self.state()?;
-        let (catalog, namespace) = state.resolve_optional_database_reference(database)?;
-        Ok((state.get_catalog(&catalog)?, namespace))
+        let (catalog, database) = state.resolve_optional_database_reference(database)?;
+        Ok((state.get_catalog(&catalog)?, database))
     }
 
     pub(super) fn resolve_object<T: AsRef<str>>(
@@ -90,8 +89,8 @@ impl CatalogManager {
         object: &[T],
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace, Arc<str>)> {
         let state = self.state()?;
-        let (catalog, namespace, table) = state.resolve_object_reference(object)?;
-        Ok((state.get_catalog(&catalog)?, namespace, table))
+        let (catalog, database, table) = state.resolve_object_reference(object)?;
+        Ok((state.get_catalog(&catalog)?, database, table))
     }
 }
 
@@ -106,13 +105,13 @@ impl CatalogManagerState {
             )),
             [head, tail @ ..] if self.catalogs.contains_key(head.as_ref()) => {
                 let catalog = head.as_ref().into();
-                let namespace = tail.try_into()?;
-                Ok((catalog, namespace))
+                let database = tail.try_into()?;
+                Ok((catalog, database))
             }
             x => {
                 let catalog = self.default_catalog.clone();
-                let namespace = x.try_into()?;
-                Ok((catalog, namespace))
+                let database = x.try_into()?;
+                Ok((catalog, database))
             }
         }
     }
@@ -132,8 +131,8 @@ impl CatalogManagerState {
             }
             x => {
                 let catalog = self.default_catalog.clone();
-                let namespace = x.try_into()?;
-                Ok((catalog, Some(namespace)))
+                let database = x.try_into()?;
+                Ok((catalog, Some(database)))
             }
         }
     }
@@ -149,13 +148,13 @@ impl CatalogManagerState {
             [name] => {
                 let table = name.as_ref().into();
                 let catalog = self.default_catalog.clone();
-                let namespace = self.default_database.clone();
-                Ok((catalog, namespace, table))
+                let database = self.default_database.clone();
+                Ok((catalog, database, table))
             }
             [x @ .., last] => {
                 let table = last.as_ref().into();
-                let (catalog, namespace) = self.resolve_database_reference(x)?;
-                Ok((catalog, namespace, table))
+                let (catalog, database) = self.resolve_database_reference(x)?;
+                Ok((catalog, database, table))
             }
         }
     }
