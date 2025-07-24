@@ -106,7 +106,7 @@ impl CredentialProvider for S3CredentialProvider {
 
 pub async fn get_s3_object_store(
     url: &Url,
-    handle: Option<&Handle>,
+    handle: Option<Handle>,
 ) -> object_store::Result<AmazonS3> {
     debug!("Creating S3 object store for url: {url}");
     let mut builder = AmazonS3Builder::from_env();

@@ -110,7 +110,7 @@ fn get_dynamic_object_store(
                 ObjectStoreScheme::Memory => Arc::new(InMemory::new()),
                 ObjectStoreScheme::AmazonS3 => {
                     let url = url.clone();
-                    let handle = handle.clone();
+                    let handle = handle.cloned();
                     let store = LazyObjectStore::new(move || {
                         let url = url.clone();
                         let handle = handle.clone();
