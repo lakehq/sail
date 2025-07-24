@@ -19,7 +19,7 @@ use crate::extension::function::error_utils::{
 use crate::extension::function::math::common_try::{
     binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_date32_monthdaynano,
     try_add_interval_monthdaynano, try_add_interval_yearmonth, try_add_timestamp_duration,
-    try_binary_op_date32_i32, try_binary_op_i32, try_binary_op_i64,
+    try_binary_op_date32_i32, try_binary_op_primitive,
 };
 
 #[derive(Debug)]
@@ -116,14 +116,14 @@ impl ScalarUDFImpl for SparkTrySubtract {
             (DataType::Int32, DataType::Int32) => {
                 let l = left_arr.as_primitive::<Int32Type>();
                 let r= right_arr.as_primitive::<Int32Type>();
-                let result = try_binary_op_i32(l, r, i32::checked_sub);
+                let result = try_binary_op_primitive::<Int32Type, _>(l, r, i32::checked_sub);
 
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Int64, DataType::Int64) => {
                 let l= left_arr.as_primitive::<Int64Type>();
                 let r = right_arr.as_primitive::<Int64Type>();
-                let result= try_binary_op_i64(l, r, i64::checked_sub);
+                let result = try_binary_op_primitive::<Int64Type, _>(l, r, i64::checked_sub);
 
                 binary_op_scalar_or_array(left, right, result)
             }

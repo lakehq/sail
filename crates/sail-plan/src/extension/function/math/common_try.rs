@@ -4,9 +4,7 @@ use arrow::array::{
     Array, ArrowPrimitiveType, Date32Array, Date32Builder, DurationMicrosecondArray,
     PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
 };
-use arrow::datatypes::{
-    Date32Type, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
-};
+use arrow::datatypes::{Date32Type, Int32Type, IntervalMonthDayNanoType, IntervalYearMonthType};
 use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -44,53 +42,24 @@ pub fn try_add_interval_yearmonth(
     builder.finish()
 }
 
-pub fn try_binary_op_i32<F>(
-    left: &PrimitiveArray<Int32Type>,
-    right: &PrimitiveArray<Int32Type>,
+pub fn try_binary_op_primitive<T, F>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
     op: F,
-) -> PrimitiveArray<Int32Type>
+) -> PrimitiveArray<T>
 where
-    F: Fn(i32, i32) -> Option<i32>,
+    T: ArrowPrimitiveType,
+    F: Fn(T::Native, T::Native) -> Option<T::Native>,
 {
-    let len: usize = left.len();
-    let mut builder: PrimitiveBuilder<Int32Type> =
-        PrimitiveBuilder::<Int32Type>::with_capacity(len);
-
-    for i in 0..len {
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(left.len());
+    for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
             builder.append_null();
         } else {
             let a = left.value(i);
             let b = right.value(i);
             match op(a, b) {
-                Some(result) => builder.append_value(result),
-                None => builder.append_null(),
-            }
-        }
-    }
-    builder.finish()
-}
-
-pub fn try_binary_op_i64<F>(
-    left: &PrimitiveArray<Int64Type>,
-    right: &PrimitiveArray<Int64Type>,
-    op: F,
-) -> PrimitiveArray<Int64Type>
-where
-    F: Fn(i64, i64) -> Option<i64>,
-{
-    let len: usize = left.len();
-    let mut builder: PrimitiveBuilder<Int64Type> =
-        PrimitiveBuilder::<Int64Type>::with_capacity(len);
-
-    for i in 0..len {
-        if left.is_null(i) || right.is_null(i) {
-            builder.append_null();
-        } else {
-            let a = left.value(i);
-            let b = right.value(i);
-            match op(a, b) {
-                Some(result) => builder.append_value(result),
+                Some(v) => builder.append_value(v),
                 None => builder.append_null(),
             }
         }
@@ -283,7 +252,7 @@ mod tests {
         use arrow::array::{
             Date32Array, Int32Array, Int64Array, IntervalMonthDayNanoArray, IntervalYearMonthArray,
         };
-        use arrow::datatypes::IntervalMonthDayNano;
+        use arrow::datatypes::{Int64Type, IntervalMonthDayNano};
 
         use super::*;
 
@@ -291,7 +260,7 @@ mod tests {
         fn test_try_add_manual_i32_no_overflow() {
             let left = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
             let right = Int32Array::from(vec![Some(10), Some(20), Some(30)]);
-            let result = try_binary_op_i32(&left, &right, i32::checked_add);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_add);
             let expected = Int32Array::from(vec![Some(11), Some(22), Some(33)]);
             assert_eq!(result, expected);
         }
@@ -300,7 +269,7 @@ mod tests {
         fn test_try_add_manual_i32_with_nulls() {
             let left = Int32Array::from(vec![Some(1), None, Some(3)]);
             let right = Int32Array::from(vec![Some(10), Some(20), None]);
-            let result = try_binary_op_i32(&left, &right, i32::checked_add);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_add);
             let expected = Int32Array::from(vec![Some(11), None, None]);
             assert_eq!(result, expected);
         }
@@ -309,7 +278,7 @@ mod tests {
         fn test_try_add_manual_i32_overflow() {
             let left = Int32Array::from(vec![Some(i32::MAX), Some(i32::MIN)]);
             let right = Int32Array::from(vec![Some(1), Some(-1)]);
-            let result = try_binary_op_i32(&left, &right, i32::checked_add);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_add);
             let expected = Int32Array::from(vec![None, None]);
             assert_eq!(result, expected);
         }
@@ -318,7 +287,7 @@ mod tests {
         fn test_try_add_manual_i64_no_overflow() {
             let left = Int64Array::from(vec![Some(1), Some(2), Some(3)]);
             let right = Int64Array::from(vec![Some(10), Some(20), Some(30)]);
-            let result = try_binary_op_i64(&left, &right, i64::checked_add);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_add);
             let expected = Int64Array::from(vec![Some(11), Some(22), Some(33)]);
             assert_eq!(result, expected);
         }
@@ -327,7 +296,7 @@ mod tests {
         fn test_try_add_manual_i64_with_nulls() {
             let left = Int64Array::from(vec![Some(1), None, Some(3)]);
             let right = Int64Array::from(vec![Some(10), Some(20), None]);
-            let result = try_binary_op_i64(&left, &right, i64::checked_add);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_add);
             let expected = Int64Array::from(vec![Some(11), None, None]);
             assert_eq!(result, expected);
         }
@@ -336,7 +305,7 @@ mod tests {
         fn test_try_add_manual_i64_overflow() -> datafusion_common::Result<()> {
             let left = Int64Array::from(vec![Some(i64::MAX), Some(i64::MIN)]);
             let right = Int64Array::from(vec![Some(1), Some(-1)]);
-            let result = try_binary_op_i64(&left, &right, i64::checked_add);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_add);
             let expected = Int64Array::from(vec![None, None]);
             assert_eq!(result, expected);
             Ok(())
@@ -505,6 +474,7 @@ mod tests {
     #[cfg(test)]
     mod tests_sub {
         use arrow::array::{Date32Array, Int32Array, Int64Array};
+        use arrow::datatypes::Int64Type;
 
         use super::*;
 
@@ -512,7 +482,7 @@ mod tests {
         fn test_try_sub_i32_no_overflow() {
             let left = Int32Array::from(vec![Some(10), Some(5), Some(3)]);
             let right = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
-            let result = try_binary_op_i32(&left, &right, i32::checked_sub);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_sub);
             let expected = Int32Array::from(vec![Some(9), Some(3), Some(0)]);
             assert_eq!(result, expected);
         }
@@ -521,7 +491,7 @@ mod tests {
         fn test_try_sub_i32_with_nulls() {
             let left = Int32Array::from(vec![Some(10), None, Some(3)]);
             let right = Int32Array::from(vec![Some(1), Some(2), None]);
-            let result = try_binary_op_i32(&left, &right, i32::checked_sub);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_sub);
             let expected = Int32Array::from(vec![Some(9), None, None]);
             assert_eq!(result, expected);
         }
@@ -530,7 +500,7 @@ mod tests {
         fn test_try_sub_i32_overflow() {
             let left = Int32Array::from(vec![Some(i32::MIN), Some(i32::MAX)]);
             let right = Int32Array::from(vec![Some(1), Some(-1)]);
-            let result = try_binary_op_i32(&left, &right, i32::checked_sub);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_sub);
             let expected = Int32Array::from(vec![None, None]);
             assert_eq!(result, expected);
         }
@@ -539,7 +509,7 @@ mod tests {
         fn test_try_sub_i64_no_overflow() {
             let left = Int64Array::from(vec![Some(10), Some(5), Some(3)]);
             let right = Int64Array::from(vec![Some(1), Some(2), Some(3)]);
-            let result = try_binary_op_i64(&left, &right, i64::checked_sub);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_sub);
             let expected = Int64Array::from(vec![Some(9), Some(3), Some(0)]);
             assert_eq!(result, expected);
         }
@@ -548,7 +518,7 @@ mod tests {
         fn test_try_sub_i64_with_nulls() {
             let left = Int64Array::from(vec![Some(10), None, Some(3)]);
             let right = Int64Array::from(vec![Some(1), Some(2), None]);
-            let result = try_binary_op_i64(&left, &right, i64::checked_sub);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_sub);
             let expected = Int64Array::from(vec![Some(9), None, None]);
             assert_eq!(result, expected);
         }
@@ -557,7 +527,7 @@ mod tests {
         fn test_try_sub_i64_overflow() {
             let left = Int64Array::from(vec![Some(i64::MIN), Some(i64::MAX)]);
             let right = Int64Array::from(vec![Some(1), Some(-1)]);
-            let result = try_binary_op_i64(&left, &right, i64::checked_sub);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_sub);
             let expected = Int64Array::from(vec![None, None]);
             assert_eq!(result, expected);
         }
