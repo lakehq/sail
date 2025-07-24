@@ -136,7 +136,7 @@ arrow-flight = { version = "55.2.0" }
 arrow-pyarrow = { version = "55.2.0" }
 serde_arrow = { version = "0.13.4", features = ["arrow-55"] }
 # The `object_store` version must match the one used in DataFusion.
-object_store = { version = "0.12.2", features = ["aws", "gcp", "azure", "http"] }
+object_store = { version = "0.12.3", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.14.2"
 
 # Lakehouse

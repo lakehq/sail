@@ -13,7 +13,7 @@ use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::{
     path, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use regex::Regex;
 use reqwest::StatusCode;
@@ -251,7 +251,7 @@ impl ObjectStore for HuggingFaceObjectStore {
     async fn put_multipart_opts(
         &self,
         _location: &Path,
-        _opts: PutMultipartOpts,
+        _opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         Err(object_store::Error::NotImplemented)
     }
