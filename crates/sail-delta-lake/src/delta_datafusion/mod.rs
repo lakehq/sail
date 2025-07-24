@@ -694,11 +694,14 @@ impl<'a> DeltaScanBuilder<'a> {
 
         // only inexact filters should be pushed down to the data source, doing otherwise
         // will make stats inexact and disable datafusion optimizations like AggregateStatistics
-        let pushdown_filter = self
-            .filter
-            .clone()
-            .filter(|_| config.enable_parquet_pushdown)
-            .map(|expr| simplify_expr(&context, &df_schema, expr));
+        let pushdown_filter = if self.snapshot.metadata().partition_columns().is_empty() {
+            self.filter
+                .clone()
+                .filter(|_| config.enable_parquet_pushdown)
+                .map(|expr| simplify_expr(&context, &df_schema, expr))
+        } else {
+            None
+        };
 
         let table_partition_cols = self.snapshot.metadata().partition_columns();
         let file_schema = Arc::new(ArrowSchema::new(
@@ -1311,7 +1314,7 @@ fn get_pushdown_filters(
         .map(|expr| {
             let applicable = expr_is_exact_predicate_for_cols(partition_cols, expr);
             if !expr.column_refs().is_empty() && applicable {
-                TableProviderFilterPushDown::Exact
+                TableProviderFilterPushDown::Inexact // FIXME: We should be able to push down exact filters, but fails on "IS NOT NULL AND"
             } else {
                 TableProviderFilterPushDown::Inexact
             }
