@@ -87,6 +87,8 @@ use sail_plan::extension::function::math::spark_pmod::SparkPmod;
 use sail_plan::extension::function::math::spark_sec::SparkSec;
 use sail_plan::extension::function::math::spark_signum::SparkSignum;
 use sail_plan::extension::function::math::spark_try_add::SparkTryAdd;
+use sail_plan::extension::function::math::spark_try_div::SparkTryDiv;
+use sail_plan::extension::function::math::spark_try_mult::SparkTryMult;
 use sail_plan::extension::function::math::spark_try_substract::SparkTrySubtract;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use sail_plan::extension::function::mode::ModeFunction;
@@ -855,6 +857,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
             "spark_try_add" | "try_add" => Ok(Arc::new(ScalarUDF::from(SparkTryAdd::new()))),
+            "spark_try_divide" | "try_divide" => Ok(Arc::new(ScalarUDF::from(SparkTryDiv::new()))),
+            "spark_try_multiply" | "try_multiply" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryMult::new())))
+            }
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
             }
@@ -928,6 +934,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkToLargeUtf8>()
             || node.inner().as_any().is::<SparkToUtf8View>()
             || node.inner().as_any().is::<SparkTryAdd>()
+            || node.inner().as_any().is::<SparkTryDiv>()
+            || node.inner().as_any().is::<SparkTryMult>()
             || node.inner().as_any().is::<SparkTrySubtract>()
             || node.name() == "json_length"
             || node.name() == "json_len"

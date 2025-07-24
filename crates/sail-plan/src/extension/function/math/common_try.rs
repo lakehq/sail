@@ -223,6 +223,52 @@ pub fn add_months(date: NaiveDate, months: i32) -> Option<NaiveDate> {
     }
 }
 
+pub fn try_mult_interval_yearmonth_i32(
+    intervals: &PrimitiveArray<IntervalYearMonthType>,
+    scalars: &PrimitiveArray<Int32Type>,
+) -> PrimitiveArray<IntervalYearMonthType> {
+    let mut builder = PrimitiveBuilder::<IntervalYearMonthType>::with_capacity(intervals.len());
+
+    for i in 0..intervals.len() {
+        if intervals.is_null(i) || scalars.is_null(i) {
+            builder.append_null();
+        } else {
+            let interval = intervals.value(i);
+            let multiplier = scalars.value(i);
+
+            match interval.checked_mul(multiplier) {
+                Some(v) => builder.append_value(v),
+                None => builder.append_null(), // overflow
+            }
+        }
+    }
+
+    builder.finish()
+}
+
+pub fn try_div_interval_yearmonth_i32(
+    intervals: &PrimitiveArray<IntervalYearMonthType>,
+    scalars: &PrimitiveArray<Int32Type>,
+) -> PrimitiveArray<IntervalYearMonthType> {
+    let mut builder = PrimitiveBuilder::<IntervalYearMonthType>::with_capacity(intervals.len());
+
+    for i in 0..intervals.len() {
+        if intervals.is_null(i) || scalars.is_null(i) {
+            builder.append_null();
+        } else {
+            let dividend = intervals.value(i);
+            let divisor = scalars.value(i);
+
+            match dividend.checked_div(divisor) {
+                Some(v) => builder.append_value(v),
+                None => builder.append_null(), // overflow
+            }
+        }
+    }
+
+    builder.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion_common::DataFusionError;
@@ -570,6 +616,275 @@ mod tests {
             let expected = Date32Array::from(vec![None]);
             assert_eq!(result, expected);
             Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests_mult {
+        use arrow::array::{Date32Array, Int32Array, Int64Array, IntervalYearMonthArray};
+        use arrow::datatypes::{Int32Type, Int64Type};
+
+        use super::*;
+
+        #[test]
+        fn test_try_mult_i32_no_overflow() {
+            let left = Int32Array::from(vec![Some(2), Some(3), Some(4)]);
+            let right = Int32Array::from(vec![Some(5), Some(6), Some(7)]);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_mul);
+            let expected = Int32Array::from(vec![Some(10), Some(18), Some(28)]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_mult_i32_with_nulls() {
+            let left = Int32Array::from(vec![Some(2), None, Some(4)]);
+            let right = Int32Array::from(vec![Some(5), Some(6), None]);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_mul);
+            let expected = Int32Array::from(vec![Some(10), None, None]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_mult_i32_overflow() {
+            let left = Int32Array::from(vec![Some(i32::MAX), Some(i32::MIN)]);
+            let right = Int32Array::from(vec![Some(2), Some(2)]);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_mul);
+            let expected = Int32Array::from(vec![None, None]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_mult_i64_no_overflow() {
+            let left = Int64Array::from(vec![Some(2), Some(3), Some(4)]);
+            let right = Int64Array::from(vec![Some(5), Some(6), Some(7)]);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_mul);
+            let expected = Int64Array::from(vec![Some(10), Some(18), Some(28)]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_mult_i64_with_nulls() {
+            let left = Int64Array::from(vec![Some(2), None, Some(4)]);
+            let right = Int64Array::from(vec![Some(5), Some(6), None]);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_mul);
+            let expected = Int64Array::from(vec![Some(10), None, None]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_mult_i64_overflow() {
+            let left = Int64Array::from(vec![Some(i64::MAX), Some(i64::MIN)]);
+            let right = Int64Array::from(vec![Some(2), Some(2)]);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_mul);
+            let expected = Int64Array::from(vec![None, None]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_mult_days_basic() -> datafusion_common::Result<()> {
+            let dates =
+                to_date32_array(&[Some("2000-01-01"), Some("1970-01-02"), Some("2020-01-01")])?;
+            let multipliers = Int32Array::from(vec![Some(2), Some(0), Some(1)]);
+            let result = try_binary_op_date32_i32(&dates, &multipliers, i32::checked_mul);
+
+            // FIXME review
+            let expected =
+                to_date32_array(&[Some("2029-12-31"), Some("1970-01-01"), Some("2020-01-01")])?;
+
+            assert_eq!(result, expected);
+            Ok(())
+        }
+
+        #[test]
+        fn test_mult_days_with_nulls() -> datafusion_common::Result<()> {
+            let dates = to_date32_array(&[Some("2000-01-01"), None, Some("2020-01-01")])?;
+            let factors = Int32Array::from(vec![None, Some(3), Some(1)]);
+            let result = try_binary_op_date32_i32(&dates, &factors, i32::checked_mul);
+            let expected = Date32Array::from(vec![None, None, Some(18262)]);
+            assert_eq!(result, expected);
+            Ok(())
+        }
+
+        #[test]
+        fn test_mult_days_overflow() -> datafusion_common::Result<()> {
+            let dates = Date32Array::from(vec![Some(i32::MAX)]);
+            let factors = Int32Array::from(vec![Some(2)]);
+            let result = try_binary_op_date32_i32(&dates, &factors, i32::checked_mul);
+            let expected = Date32Array::from(vec![None]);
+            assert_eq!(result, expected);
+            Ok(())
+        }
+
+        #[test]
+        fn test_try_mult_interval_yearmonth_i32_basic() {
+            let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(6), Some(0)]);
+            let scalars = Int32Array::from(vec![Some(2), Some(4), Some(5)]);
+
+            let result = try_mult_interval_yearmonth_i32(&intervals, &scalars);
+            let expected = IntervalYearMonthArray::from(vec![Some(24), Some(24), Some(0)]);
+
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_mult_interval_yearmonth_i32_with_nulls() {
+            let intervals = IntervalYearMonthArray::from(vec![Some(12), None, Some(30)]);
+            let scalars = Int32Array::from(vec![Some(2), Some(4), None]);
+
+            let result = try_mult_interval_yearmonth_i32(&intervals, &scalars);
+            let expected = IntervalYearMonthArray::from(vec![Some(24), None, None]);
+
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_mult_interval_yearmonth_i32_with_zero() {
+            let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(24)]);
+            let scalars = Int32Array::from(vec![Some(0), Some(0)]);
+
+            let result = try_mult_interval_yearmonth_i32(&intervals, &scalars);
+            let expected = IntervalYearMonthArray::from(vec![Some(0), Some(0)]);
+
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_mult_interval_yearmonth_i32_with_negative() {
+            let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(-24)]);
+            let scalars = Int32Array::from(vec![Some(-2), Some(3)]);
+
+            let result = try_mult_interval_yearmonth_i32(&intervals, &scalars);
+            let expected = IntervalYearMonthArray::from(vec![Some(-24), Some(-72)]);
+
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_mult_interval_yearmonth_i32_overflow() {
+            let intervals = IntervalYearMonthArray::from(vec![Some(i32::MAX), Some(i32::MIN)]);
+            let scalars = Int32Array::from(vec![Some(2), Some(2)]);
+
+            let result = try_mult_interval_yearmonth_i32(&intervals, &scalars);
+            let expected = IntervalYearMonthArray::from(vec![None, None]); // overflow
+
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests_div {
+        use arrow::array::{Int32Array, Int64Array, IntervalYearMonthArray};
+        use arrow::datatypes::{Int32Type, Int64Type};
+
+        use super::*;
+
+        #[test]
+        fn test_try_div_i32_no_overflow() {
+            let left = Int32Array::from(vec![Some(10), Some(20), Some(30)]);
+            let right = Int32Array::from(vec![Some(2), Some(4), Some(5)]);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_div);
+            let expected = Int32Array::from(vec![Some(5), Some(5), Some(6)]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_div_i32_with_nulls() {
+            let left = Int32Array::from(vec![Some(10), None, Some(30)]);
+            let right = Int32Array::from(vec![Some(2), Some(4), None]);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_div);
+            let expected = Int32Array::from(vec![Some(5), None, None]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_div_i32_div_by_zero() {
+            let left = Int32Array::from(vec![Some(10), Some(20), Some(30)]);
+            let right = Int32Array::from(vec![Some(2), Some(0), Some(3)]);
+            let result = try_binary_op_primitive::<Int32Type, _>(&left, &right, i32::checked_div);
+            let expected = Int32Array::from(vec![Some(5), None, Some(10)]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_div_i64_no_overflow() {
+            let left = Int64Array::from(vec![Some(100), Some(200), Some(300)]);
+            let right = Int64Array::from(vec![Some(10), Some(20), Some(25)]);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_div);
+            let expected = Int64Array::from(vec![Some(10), Some(10), Some(12)]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_div_i64_decimal_no_overflow() {
+            let left = Int64Array::from(vec![Some(404)]);
+            let right = Int64Array::from(vec![Some(10)]);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_div);
+            // FIXME not decimal result
+            let expected = Int64Array::from(vec![Some(40)]);
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_div_i64_div_by_zero() {
+            let left = Int64Array::from(vec![Some(10), Some(20)]);
+            let right = Int64Array::from(vec![Some(0), Some(2)]);
+            let result = try_binary_op_primitive::<Int64Type, _>(&left, &right, i64::checked_div);
+            let expected = Int64Array::from(vec![None, Some(10)]);
+            assert_eq!(result, expected);
+        }
+        #[test]
+        fn test_try_div_interval_yearmonth_i32_basic() {
+            let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(24), Some(30)]);
+            let divisors = Int32Array::from(vec![Some(3), Some(4), Some(5)]);
+
+            let result = try_div_interval_yearmonth_i32(&intervals, &divisors);
+            let expected = IntervalYearMonthArray::from(vec![Some(4), Some(6), Some(6)]);
+
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_div_interval_yearmonth_i32_with_nulls() {
+            let intervals = IntervalYearMonthArray::from(vec![Some(12), None, Some(30)]);
+            let divisors = Int32Array::from(vec![Some(3), Some(4), None]);
+
+            let result = try_div_interval_yearmonth_i32(&intervals, &divisors);
+            let expected = IntervalYearMonthArray::from(vec![Some(4), None, None]);
+
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_div_interval_yearmonth_i32_div_by_zero() {
+            let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(24)]);
+            let divisors = Int32Array::from(vec![Some(0), Some(6)]);
+
+            let result = try_div_interval_yearmonth_i32(&intervals, &divisors);
+            let expected = IntervalYearMonthArray::from(vec![None, Some(4)]);
+
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_div_interval_yearmonth_i32_negative() {
+            let intervals = IntervalYearMonthArray::from(vec![Some(-12), Some(24)]);
+            let divisors = Int32Array::from(vec![Some(3), Some(-6)]);
+
+            let result = try_div_interval_yearmonth_i32(&intervals, &divisors);
+            let expected = IntervalYearMonthArray::from(vec![Some(-4), Some(-4)]);
+
+            assert_eq!(result, expected);
+        }
+
+        #[test]
+        fn test_try_div_interval_yearmonth_i32_zero_interval() {
+            let intervals = IntervalYearMonthArray::from(vec![Some(0), Some(0)]);
+            let divisors = Int32Array::from(vec![Some(1), Some(-1)]);
+
+            let result = try_div_interval_yearmonth_i32(&intervals, &divisors);
+            let expected = IntervalYearMonthArray::from(vec![Some(0), Some(0)]);
+
+            assert_eq!(result, expected);
         }
     }
 }
