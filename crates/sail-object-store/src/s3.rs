@@ -104,10 +104,7 @@ impl CredentialProvider for S3CredentialProvider {
     }
 }
 
-pub async fn get_s3_object_store(
-    url: &Url,
-    handle: Option<Handle>,
-) -> object_store::Result<AmazonS3> {
+pub async fn get_s3_object_store(url: &Url, handle: Handle) -> object_store::Result<AmazonS3> {
     debug!("Creating S3 object store for url: {url}");
     let mut builder = AmazonS3Builder::from_env();
     let config = DEFAULT_AWS_CONFIG
@@ -147,18 +144,9 @@ pub async fn get_s3_object_store(
         builder = builder.with_region(region);
     }
 
-    if let Some(handle) = handle {
-        builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle));
-    } else {
-        return Err(object_store::Error::Generic {
-            store: "S3",
-            source: Box::new(plan_datafusion_err!(
-                            "Forcing error for testing purposes: Handle is required for S3 object store creation."
-                        )),
-        });
-    }
-
-    builder.build()
+    builder
+        .with_http_connector(SpawnedReqwestConnector::new(handle))
+        .build()
 }
 
 pub fn parse_s3_url(

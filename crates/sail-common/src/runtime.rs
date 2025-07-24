@@ -6,25 +6,26 @@ use crate::error::{CommonError, CommonResult};
 #[derive(Debug)]
 pub struct RuntimeManager {
     primary: Runtime,
-    secondary: Option<Runtime>,
+    cpu: Runtime,
 }
 
 impl RuntimeManager {
     pub fn try_new(config: &RuntimeConfig) -> CommonResult<Self> {
         let primary = Self::build_runtime(config.stack_size)?;
-        let secondary = if config.enable_secondary {
-            Some(Self::build_io_runtime(config.stack_size)?)
-        } else {
-            None
-        };
+        let cpu = Self::build_cpu_runtime(config.stack_size)?;
+        // let secondary = if config.enable_secondary {
+        //     Some(Self::build_cpu_runtime(config.stack_size)?)
+        // } else {
+        //     None
+        // };
 
-        Ok(Self { primary, secondary })
+        Ok(Self { primary, cpu })
     }
 
     pub fn handle(&self) -> RuntimeHandle {
         let primary = self.primary.handle().clone();
-        let secondary = self.secondary.as_ref().map(|r| r.handle().clone());
-        RuntimeHandle { primary, secondary }
+        let cpu = self.cpu.handle().clone();
+        RuntimeHandle { primary, cpu }
     }
 
     fn build_runtime(stack_size: usize) -> CommonResult<Runtime> {
@@ -35,10 +36,10 @@ impl RuntimeManager {
             .map_err(|e| CommonError::internal(e.to_string()))
     }
 
-    fn build_io_runtime(stack_size: usize) -> CommonResult<Runtime> {
+    fn build_cpu_runtime(stack_size: usize) -> CommonResult<Runtime> {
         tokio::runtime::Builder::new_multi_thread()
             .thread_stack_size(stack_size)
-            .enable_all()
+            .enable_time()
             .build()
             .map_err(|e| CommonError::internal(e.to_string()))
     }
@@ -47,7 +48,7 @@ impl RuntimeManager {
 #[derive(Debug, Clone)]
 pub struct RuntimeHandle {
     primary: Handle,
-    secondary: Option<Handle>,
+    cpu: Handle,
 }
 
 impl RuntimeHandle {
@@ -55,7 +56,7 @@ impl RuntimeHandle {
         &self.primary
     }
 
-    pub fn secondary(&self) -> Option<&Handle> {
-        self.secondary.as_ref()
+    pub fn cpu(&self) -> &Handle {
+        &self.cpu
     }
 }
