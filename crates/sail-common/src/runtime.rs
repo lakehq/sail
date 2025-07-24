@@ -13,7 +13,7 @@ impl RuntimeManager {
     pub fn try_new(config: &RuntimeConfig) -> CommonResult<Self> {
         let primary = Self::build_runtime(config.stack_size)?;
         let secondary = if config.enable_secondary {
-            Some(Self::build_runtime(config.stack_size)?)
+            Some(Self::build_io_runtime(config.stack_size)?)
         } else {
             None
         };
@@ -31,6 +31,14 @@ impl RuntimeManager {
         tokio::runtime::Builder::new_multi_thread()
             .thread_stack_size(stack_size)
             .enable_all()
+            .build()
+            .map_err(|e| CommonError::internal(e.to_string()))
+    }
+
+    fn build_io_runtime(stack_size: usize) -> CommonResult<Runtime> {
+        tokio::runtime::Builder::new_multi_thread()
+            .thread_stack_size(stack_size)
+            .enable_io()
             .build()
             .map_err(|e| CommonError::internal(e.to_string()))
     }

@@ -13,6 +13,7 @@ use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::{ObjectStore, ObjectStoreScheme};
 use sail_common::runtime::RuntimeHandle;
+use tokio::runtime::Handle;
 use url::Url;
 
 use crate::hugging_face::HuggingFaceObjectStore;
@@ -75,23 +76,17 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
         let store = self
             .stores
             .entry(key)
-            .or_try_insert_with(|| {
-                if let Some(handle) = self.runtime.secondary() {
-                    Ok(Arc::new(RuntimeAwareObjectStore::try_new(
-                        || get_dynamic_object_store(url),
-                        handle.clone(),
-                    )?))
-                } else {
-                    get_dynamic_object_store(url)
-                }
-            })?
+            .or_try_insert_with(|| get_dynamic_object_store(url, self.runtime.secondary()))?
             .clone();
 
         Ok(store)
     }
 }
 
-fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectStore>> {
+fn get_dynamic_object_store(
+    url: &Url,
+    handle: Option<&Handle>,
+) -> object_store::Result<Arc<dyn ObjectStore>> {
     let key = ObjectStoreKey::new(url);
     let store: Arc<dyn ObjectStore> = match key.scheme.as_str() {
         #[cfg(feature = "hdfs")]
@@ -115,9 +110,11 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
                 ObjectStoreScheme::Memory => Arc::new(InMemory::new()),
                 ObjectStoreScheme::AmazonS3 => {
                     let url = url.clone();
+                    let handle = handle.cloned();
                     let store = LazyObjectStore::new(move || {
                         let url = url.clone();
-                        async move { get_s3_object_store(&url).await }
+                        let handle = handle.clone();
+                        async move { get_s3_object_store(&url, handle).await }
                     });
                     Arc::new(store)
                 }

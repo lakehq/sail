@@ -17,9 +17,8 @@
 
 - key: runtime.enable_secondary
   type: boolean
-  default: "false"
+  default: "true"
   description: Whether to enable a secondary Tokio runtime for separating I/O and compute tasks.
-  experimental: true
 
 - key: cluster.enable_tls
   type: boolean
