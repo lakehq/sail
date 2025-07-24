@@ -19,7 +19,6 @@ use url::Url;
 use crate::hugging_face::HuggingFaceObjectStore;
 use crate::layers::lazy::LazyObjectStore;
 use crate::layers::logging::LoggingObjectStore;
-use crate::layers::runtime::RuntimeAwareObjectStore;
 use crate::s3::get_s3_object_store;
 
 #[derive(Debug, Eq, PartialEq, Hash)]

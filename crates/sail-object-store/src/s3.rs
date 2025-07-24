@@ -149,6 +149,13 @@ pub async fn get_s3_object_store(
 
     if let Some(handle) = handle {
         builder = builder.with_http_connector(SpawnedReqwestConnector::new(handle.clone()));
+    } else {
+        return Err(object_store::Error::Generic {
+            store: "S3",
+            source: Box::new(plan_datafusion_err!(
+                            "Forcing error for testing purposes: Handle is required for S3 object store creation."
+                        )),
+        });
     }
 
     builder.build()
