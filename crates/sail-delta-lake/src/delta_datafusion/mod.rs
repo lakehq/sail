@@ -962,102 +962,67 @@ fn prune_file_statistics(
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
-    Ok(match t {
-        ArrowDataType::Null => ScalarValue::Null,
-        ArrowDataType::Boolean => ScalarValue::Boolean(None),
-        ArrowDataType::Int8 => ScalarValue::Int8(None),
-        ArrowDataType::Int16 => ScalarValue::Int16(None),
-        ArrowDataType::Int32 => ScalarValue::Int32(None),
-        ArrowDataType::Int64 => ScalarValue::Int64(None),
-        ArrowDataType::UInt8 => ScalarValue::UInt8(None),
-        ArrowDataType::UInt16 => ScalarValue::UInt16(None),
-        ArrowDataType::UInt32 => ScalarValue::UInt32(None),
-        ArrowDataType::UInt64 => ScalarValue::UInt64(None),
-        ArrowDataType::Float16 => ScalarValue::Float32(None),
-        ArrowDataType::Float32 => ScalarValue::Float32(None),
-        ArrowDataType::Float64 => ScalarValue::Float64(None),
-        ArrowDataType::Timestamp(TimeUnit::Second, tz) => {
-            ScalarValue::TimestampSecond(None, tz.clone())
+    match t {
+        ArrowDataType::Null => Ok(ScalarValue::Null),
+        ArrowDataType::Boolean => Ok(ScalarValue::Boolean(None)),
+        ArrowDataType::Int8 => Ok(ScalarValue::Int8(None)),
+        ArrowDataType::Int16 => Ok(ScalarValue::Int16(None)),
+        ArrowDataType::Int32 => Ok(ScalarValue::Int32(None)),
+        ArrowDataType::Int64 => Ok(ScalarValue::Int64(None)),
+        ArrowDataType::UInt8 => Ok(ScalarValue::UInt8(None)),
+        ArrowDataType::UInt16 => Ok(ScalarValue::UInt16(None)),
+        ArrowDataType::UInt32 => Ok(ScalarValue::UInt32(None)),
+        ArrowDataType::UInt64 => Ok(ScalarValue::UInt64(None)),
+        ArrowDataType::Float32 => Ok(ScalarValue::Float32(None)),
+        ArrowDataType::Float64 => Ok(ScalarValue::Float64(None)),
+        ArrowDataType::Date32 => Ok(ScalarValue::Date32(None)),
+        ArrowDataType::Date64 => Ok(ScalarValue::Date64(None)),
+        ArrowDataType::Binary => Ok(ScalarValue::Binary(None)),
+        ArrowDataType::FixedSizeBinary(size) => {
+            Ok(ScalarValue::FixedSizeBinary(size.to_owned(), None))
         }
-        ArrowDataType::Timestamp(TimeUnit::Millisecond, tz) => {
-            ScalarValue::TimestampMillisecond(None, tz.clone())
+        ArrowDataType::LargeBinary => Ok(ScalarValue::LargeBinary(None)),
+        ArrowDataType::Utf8 => Ok(ScalarValue::Utf8(None)),
+        ArrowDataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(None)),
+        ArrowDataType::Decimal128(precision, scale) => Ok(ScalarValue::Decimal128(
+            None,
+            precision.to_owned(),
+            scale.to_owned(),
+        )),
+        ArrowDataType::Timestamp(unit, tz) => {
+            let tz = tz.to_owned();
+            Ok(match unit {
+                TimeUnit::Second => ScalarValue::TimestampSecond(None, tz),
+                TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(None, tz),
+                TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(None, tz),
+                TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(None, tz),
+            })
         }
-        ArrowDataType::Timestamp(TimeUnit::Microsecond, tz) => {
-            ScalarValue::TimestampMicrosecond(None, tz.clone())
-        }
-        ArrowDataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-            ScalarValue::TimestampNanosecond(None, tz.clone())
-        }
-        ArrowDataType::Date32 => ScalarValue::Date32(None),
-        ArrowDataType::Date64 => ScalarValue::Date64(None),
-        ArrowDataType::Time32(_) => ScalarValue::Time32Second(None),
-        ArrowDataType::Time64(_) => ScalarValue::Time64Microsecond(None),
-        ArrowDataType::Duration(_) => ScalarValue::DurationSecond(None),
-        ArrowDataType::Interval(_) => ScalarValue::IntervalYearMonth(None),
-        ArrowDataType::Binary => ScalarValue::Binary(None),
-        ArrowDataType::FixedSizeBinary(size) => ScalarValue::FixedSizeBinary(*size, None),
-        ArrowDataType::LargeBinary => ScalarValue::LargeBinary(None),
-        ArrowDataType::Utf8 => ScalarValue::Utf8(None),
-        ArrowDataType::LargeUtf8 => ScalarValue::LargeUtf8(None),
-        ArrowDataType::List(_) => {
-            return Err(DeltaTableError::Generic(
-                "List type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::FixedSizeList(_, _) => {
-            return Err(DeltaTableError::Generic(
-                "FixedSizeList type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::LargeList(_) => {
-            return Err(DeltaTableError::Generic(
-                "LargeList type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::Struct(_) => {
-            return Err(DeltaTableError::Generic(
-                "Struct type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::Union(_, _) => {
-            return Err(DeltaTableError::Generic(
-                "Union type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::Dictionary(_, _) => {
-            return Err(DeltaTableError::Generic(
-                "Dictionary type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::Decimal128(_, _) => ScalarValue::Decimal128(None, 10, 0),
-        ArrowDataType::Decimal256(_, _) => {
-            return Err(DeltaTableError::Generic(
-                "Decimal256 type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::Map(_, _) => {
-            return Err(DeltaTableError::Generic(
-                "Map type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::RunEndEncoded(_, _) => {
-            return Err(DeltaTableError::Generic(
-                "RunEndEncoded type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::ListView(_) => {
-            return Err(DeltaTableError::Generic(
-                "ListView type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::LargeListView(_) => {
-            return Err(DeltaTableError::Generic(
-                "LargeListView type not supported for null values".to_string(),
-            ))
-        }
-        ArrowDataType::Utf8View => ScalarValue::Utf8View(None),
-        ArrowDataType::BinaryView => ScalarValue::BinaryView(None),
-    })
+        ArrowDataType::Dictionary(k, v) => Ok(ScalarValue::Dictionary(
+            k.clone(),
+            Box::new(get_null_of_arrow_type(v).unwrap()),
+        )),
+        //Unsupported types...
+        ArrowDataType::Float16
+        | ArrowDataType::Decimal256(_, _)
+        | ArrowDataType::Union(_, _)
+        | ArrowDataType::LargeList(_)
+        | ArrowDataType::Struct(_)
+        | ArrowDataType::List(_)
+        | ArrowDataType::FixedSizeList(_, _)
+        | ArrowDataType::Time32(_)
+        | ArrowDataType::Time64(_)
+        | ArrowDataType::Duration(_)
+        | ArrowDataType::Interval(_)
+        | ArrowDataType::RunEndEncoded(_, _)
+        | ArrowDataType::BinaryView
+        | ArrowDataType::Utf8View
+        | ArrowDataType::LargeListView(_)
+        | ArrowDataType::ListView(_)
+        | ArrowDataType::Map(_, _) => Err(DeltaTableError::Generic(format!(
+            "Unsupported data type for Delta Lake {t}"
+        ))),
+    }
 }
 
 fn partitioned_file_from_action(
