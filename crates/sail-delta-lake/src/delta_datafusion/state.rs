@@ -85,16 +85,29 @@ impl<'a> AddContainer<'a> {
     /// Expressions are evaluated for file statistics, essentially column-wise min max bounds,
     /// so evaluating expressions is inexact. However, excluded files are guaranteed (for a correct log)
     /// to not contain matches by the predicate expression.
+    #[allow(dead_code)]
     pub fn predicate_matches(&self, predicate: Expr) -> DeltaResult<impl Iterator<Item = &Add>> {
         //let expr = logical_expr_to_physical_expr(predicate, &self.schema);
         let expr = SessionContext::new()
-            .create_physical_expr(predicate, &self.schema.clone().to_dfschema().map_err(crate::delta_datafusion::datafusion_to_delta_error)?)
+            .create_physical_expr(
+                predicate,
+                &self
+                    .schema
+                    .clone()
+                    .to_dfschema()
+                    .map_err(crate::delta_datafusion::datafusion_to_delta_error)?,
+            )
             .map_err(crate::delta_datafusion::datafusion_to_delta_error)?;
-        let pruning_predicate = PruningPredicate::try_new(expr, self.schema.clone()).map_err(crate::delta_datafusion::datafusion_to_delta_error)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, self.schema.clone())
+            .map_err(crate::delta_datafusion::datafusion_to_delta_error)?;
         Ok(self
             .inner
             .iter()
-            .zip(pruning_predicate.prune(self).map_err(crate::delta_datafusion::datafusion_to_delta_error)?)
+            .zip(
+                pruning_predicate
+                    .prune(self)
+                    .map_err(crate::delta_datafusion::datafusion_to_delta_error)?,
+            )
             .filter_map(
                 |(action, keep_file)| {
                     if keep_file {
@@ -125,15 +138,16 @@ impl<'a> AddContainer<'a> {
 
                     let column_stat = if self.partition_columns.contains(column_name) {
                         // For partition columns, we need to handle them specially
-                        let null_count = if let Some(partition_value) = add.partition_values.get(column_name) {
-                            if partition_value.is_some() {
-                                Precision::Exact(0)
+                        let null_count =
+                            if let Some(partition_value) = add.partition_values.get(column_name) {
+                                if partition_value.is_some() {
+                                    Precision::Exact(0)
+                                } else {
+                                    Precision::Exact(stats.num_records as usize)
+                                }
                             } else {
-                                Precision::Exact(stats.num_records as usize)
-                            }
-                        } else {
-                            Precision::Absent
-                        };
+                                Precision::Absent
+                            };
 
                         ColumnStatistics {
                             null_count,
@@ -144,20 +158,30 @@ impl<'a> AddContainer<'a> {
                         }
                     } else {
                         // For data columns, extract statistics from the stats
-                        let null_count = stats.null_count.get(column_name)
+                        let null_count = stats
+                            .null_count
+                            .get(column_name)
                             .and_then(|nc| nc.as_value())
                             .map(|v| Precision::Exact(v as usize))
                             .unwrap_or(Precision::Absent);
 
-                        let min_value = stats.min_values.get(column_name)
+                        let min_value = stats
+                            .min_values
+                            .get(column_name)
                             .and_then(|mv| mv.as_value())
-                            .and_then(|v| to_correct_scalar_value(v, field.data_type()).ok().flatten())
+                            .and_then(|v| {
+                                to_correct_scalar_value(v, field.data_type()).ok().flatten()
+                            })
                             .map(Precision::Exact)
                             .unwrap_or(Precision::Absent);
 
-                        let max_value = stats.max_values.get(column_name)
+                        let max_value = stats
+                            .max_values
+                            .get(column_name)
                             .and_then(|mv| mv.as_value())
-                            .and_then(|v| to_correct_scalar_value(v, field.data_type()).ok().flatten())
+                            .and_then(|v| {
+                                to_correct_scalar_value(v, field.data_type()).ok().flatten()
+                            })
                             .map(Precision::Exact)
                             .unwrap_or(Precision::Absent);
 
@@ -170,8 +194,9 @@ impl<'a> AddContainer<'a> {
                         }
                     };
 
-                    column_stats_map.entry(column_name.clone())
-                        .or_insert_with(Vec::new)
+                    column_stats_map
+                        .entry(column_name.clone())
+                        .or_default()
                         .push(column_stat);
                 }
             } else {
@@ -181,7 +206,9 @@ impl<'a> AddContainer<'a> {
         }
 
         // Aggregate column statistics
-        let column_statistics = self.schema.fields()
+        let column_statistics = self
+            .schema
+            .fields()
             .iter()
             .map(|field| {
                 let column_name = field.name();
@@ -201,7 +228,7 @@ impl<'a> AddContainer<'a> {
                             min_value: acc.min_value.min(&stat.min_value),
                             sum_value: Precision::Absent,
                             distinct_count: Precision::Absent,
-                        }
+                        },
                     )
                 } else {
                     // No statistics available for this column

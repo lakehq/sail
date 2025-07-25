@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::TimeZone;
-use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
@@ -16,7 +15,7 @@ use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::scalar::ScalarValue;
-use datafusion::common::stats::{Precision, Statistics};
+use datafusion::common::stats::Statistics;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{
     Column, DFSchema, DataFusionError, Result as DataFusionResult, ToDFSchema,
@@ -722,9 +721,6 @@ impl<'a> DeltaScanBuilder<'a> {
             })
             .map(|expr| simplify_expr(&context, &df_schema, expr));
 
-        let table_partition_cols = self.snapshot.metadata().partition_columns();
-
-
         let (files, files_scanned, files_pruned, _pruning_mask) = match self.files {
             Some(files) => {
                 let files = files.to_owned();
@@ -742,12 +738,11 @@ impl<'a> DeltaScanBuilder<'a> {
 
                     let files_to_prune = if let Some(predicate) = &logical_filter {
                         let file_actions = self.snapshot.file_actions()?;
-                        let pruning_stats =
-                            crate::delta_datafusion::state::AddContainer::new(
-                                &file_actions,
-                                self.snapshot.metadata().partition_columns(),
-                                logical_schema.clone(),
-                            );
+                        let pruning_stats = crate::delta_datafusion::state::AddContainer::new(
+                            &file_actions,
+                            self.snapshot.metadata().partition_columns(),
+                            logical_schema.clone(),
+                        );
 
                         let pruning_predicate =
                             PruningPredicate::try_new(predicate.clone(), logical_schema.clone())
@@ -830,14 +825,13 @@ impl<'a> DeltaScanBuilder<'a> {
                 .push(part);
         }
 
-
         let file_schema = Arc::new(ArrowSchema::new(
-    schema
-        .fields()
-        .iter()
-        .filter(|f| !table_partition_cols.contains(f.name()))
-        .cloned()
-        .collect::<Vec<_>>(),
+            schema
+                .fields()
+                .iter()
+                .filter(|f| !table_partition_cols.contains(f.name()))
+                .cloned()
+                .collect::<Vec<_>>(),
         ));
 
         let table_partition_cols = &self.snapshot.metadata().partition_columns();
@@ -882,10 +876,12 @@ impl<'a> DeltaScanBuilder<'a> {
         //         .unwrap_or_else(|| Statistics::new_unknown(&schema))
         // };
 
-        let stats = self
-            .snapshot
-            .datafusion_table_statistics()
-            .unwrap_or_else(|| Statistics::new_unknown(&schema));
+        // let stats = self
+        //     .snapshot
+        //     .datafusion_table_statistics()
+        //     .unwrap_or_else(|| Statistics::new_unknown(&schema));
+
+        let stats = Statistics::new_unknown(&schema);
 
         let parquet_options = TableParquetOptions {
             global: self.session.config().options().execution.parquet.clone(),
@@ -968,17 +964,6 @@ fn simplify_expr(
     context
         .create_physical_expr(simplified, df_schema)
         .expect("Failed to create physical expression")
-}
-
-fn prune_file_statistics(
-    record_batches: &[RecordBatch],
-    pruning_mask: Vec<bool>,
-) -> Vec<RecordBatch> {
-    record_batches
-        .iter()
-        .zip(pruning_mask.iter())
-        .filter_map(|(batch, keep)| if *keep { Some(batch.clone()) } else { None })
-        .collect()
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
