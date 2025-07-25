@@ -5,8 +5,9 @@ use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone};
+use chrono::TimeZone;
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit,
@@ -1081,74 +1082,45 @@ fn parse_date(
     stat_val: &serde_json::Value,
     field_dt: &ArrowDataType,
 ) -> DataFusionResult<ScalarValue> {
-    match stat_val {
-        serde_json::Value::String(s) => {
-            let date = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
-                .map_err(|_| DataFusionError::Execution("Failed to parse date".to_string()))?;
-            match field_dt {
-                ArrowDataType::Date32 => Ok(ScalarValue::Date32(Some(
-                    date.signed_duration_since(
-                        chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                            .expect("Failed to create epoch date"),
-                    )
-                    .num_days() as i32,
-                ))),
-                ArrowDataType::Date64 => Ok(ScalarValue::Date64(Some(
-                    date.signed_duration_since(
-                        chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                            .expect("Failed to create epoch date"),
-                    )
-                    .num_milliseconds(),
-                ))),
-                _ => Err(DataFusionError::Execution("Invalid date type".to_string())),
-            }
-        }
-        _ => Err(DataFusionError::Execution(
-            "Date value must be a string".to_string(),
-        )),
-    }
+    let string = match stat_val {
+        serde_json::Value::String(s) => s.to_owned(),
+        _ => stat_val.to_string(),
+    };
+
+    let time_micro = ScalarValue::try_from_string(string, &ArrowDataType::Date32)?;
+    let cast_arr = cast_with_options(
+        &time_micro.to_array()?,
+        field_dt,
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )?;
+    ScalarValue::try_from_array(&cast_arr, 0)
 }
 
 fn parse_timestamp(
     stat_val: &serde_json::Value,
     field_dt: &ArrowDataType,
 ) -> DataFusionResult<ScalarValue> {
-    match stat_val {
-        serde_json::Value::String(s) => {
-            let timestamp = DateTime::parse_from_rfc3339(s)
-                .map_err(|_| DataFusionError::Execution("Failed to parse timestamp".to_string()))?;
-            match field_dt {
-                ArrowDataType::Timestamp(TimeUnit::Second, tz) => Ok(ScalarValue::TimestampSecond(
-                    Some(timestamp.timestamp()),
-                    tz.clone(),
-                )),
-                ArrowDataType::Timestamp(TimeUnit::Millisecond, tz) => {
-                    Ok(ScalarValue::TimestampMillisecond(
-                        Some(timestamp.timestamp_millis()),
-                        tz.clone(),
-                    ))
-                }
-                ArrowDataType::Timestamp(TimeUnit::Microsecond, tz) => {
-                    Ok(ScalarValue::TimestampMicrosecond(
-                        Some(timestamp.timestamp_micros()),
-                        tz.clone(),
-                    ))
-                }
-                ArrowDataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-                    Ok(ScalarValue::TimestampNanosecond(
-                        Some(timestamp.timestamp_nanos_opt().unwrap_or(0)),
-                        tz.clone(),
-                    ))
-                }
-                _ => Err(DataFusionError::Execution(
-                    "Invalid timestamp type".to_string(),
-                )),
-            }
-        }
-        _ => Err(DataFusionError::Execution(
-            "Timestamp value must be a string".to_string(),
-        )),
-    }
+    let string = match stat_val {
+        serde_json::Value::String(s) => s.to_owned(),
+        _ => stat_val.to_string(),
+    };
+
+    let time_micro = ScalarValue::try_from_string(
+        string,
+        &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+    )?;
+    let cast_arr = cast_with_options(
+        &time_micro.to_array()?,
+        field_dt,
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )?;
+    ScalarValue::try_from_array(&cast_arr, 0)
 }
 
 pub(crate) fn to_correct_scalar_value(
