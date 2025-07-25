@@ -741,9 +741,11 @@ impl<'a> DeltaScanBuilder<'a> {
                     let num_containers = self.snapshot.files_count();
 
                     let files_to_prune = if let Some(predicate) = &logical_filter {
+                        let file_actions = self.snapshot.file_actions()?;
                         let pruning_stats =
-                            crate::kernel::log_data::EagerSnapshotPruningStatistics::new(
-                                self.snapshot.snapshot(),
+                            crate::delta_datafusion::state::AddContainer::new(
+                                &file_actions,
+                                self.snapshot.metadata().partition_columns(),
                                 logical_schema.clone(),
                             );
 
