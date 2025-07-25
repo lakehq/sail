@@ -7,6 +7,7 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::Column;
 use datafusion::physical_optimizer::pruning::PruningStatistics;
 use deltalake::kernel::EagerSnapshot;
+use deltalake::kernel::scalars::ScalarExt;
 
 #[derive(Debug)]
 pub struct EagerSnapshotPruningStatistics<'a> {
@@ -31,7 +32,6 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
         }
     }
 
-    /// Extract statistics arrays by iterating through LogicalFile instances directly
     fn extract_stats_array(
         &self,
         column: &Column,
@@ -248,17 +248,38 @@ impl<'a> EagerSnapshotPruningStatistics<'a> {
             return None;
         }
 
+        // Helper function to recursively handle dictionary-encoded ScalarValues
+        fn check_scalar(partition_value: &str, scalar_value: &ScalarValue) -> bool {
+            match scalar_value {
+                ScalarValue::Utf8(Some(v))
+                | ScalarValue::Utf8View(Some(v))
+                | ScalarValue::LargeUtf8(Some(v)) => partition_value == v,
+
+                // Recursively handle dictionary-encoded values
+                ScalarValue::Dictionary(_, inner) => check_scalar(partition_value, inner),
+
+                // For other types, use string comparison as fallback
+                _ => scalar_value.to_string() == partition_value,
+            }
+        }
+
         let log_data = self.snapshot.log_data();
         let contains: Vec<bool> = log_data
             .into_iter()
             .map(|logical_file| {
                 if let Ok(partition_values) = logical_file.partition_values() {
                     if let Some(partition_value) = partition_values.get(column.name.as_str()) {
-                        if let Some(df_scalar) =
-                            self.kernel_scalar_to_datafusion_scalar(partition_value)
-                        {
-                            return values.contains(&df_scalar);
+                        // Handle null partition values
+                        if let delta_kernel::expressions::Scalar::Null(_) = partition_value {
+                            // Check if any of the values in the set is null
+                            return values.iter().any(|v| v.is_null());
                         }
+
+                        // Convert to string for comparison with delta-rs style logic
+                        let partition_str = partition_value.serialize();
+                        return values
+                            .iter()
+                            .any(|scalar| check_scalar(&partition_str, scalar));
                     }
                 }
                 false
