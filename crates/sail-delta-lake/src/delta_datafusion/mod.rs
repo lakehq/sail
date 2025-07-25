@@ -16,7 +16,7 @@ use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::scalar::ScalarValue;
-use datafusion::common::stats::Statistics;
+use datafusion::common::stats::{Precision, Statistics};
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{
     Column, DFSchema, DataFusionError, Result as DataFusionResult, ToDFSchema,
@@ -58,6 +58,7 @@ pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 // pub mod cdf;
 
 mod schema_adapter;
+mod state;
 
 /// Convert DeltaTableError to DataFusionError
 pub fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {
@@ -301,6 +302,8 @@ fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<
     arrow_schema_from_snapshot(snapshot, wrap_partitions)
 }
 
+use crate::delta_datafusion::state::AddContainer;
+
 // Extension trait to add datafusion_table_statistics method to DeltaTableState
 trait DeltaTableStateExt {
     fn datafusion_table_statistics(&self) -> Option<Statistics>;
@@ -308,9 +311,11 @@ trait DeltaTableStateExt {
 
 impl DeltaTableStateExt for DeltaTableState {
     fn datafusion_table_statistics(&self) -> Option<Statistics> {
-        // let log_data = self.snapshot().log_data();
-        // log_data.statistics()
-        unimplemented!();
+        let files: Vec<Add> = self.snapshot().file_actions().ok()?.collect();
+        let schema = self.snapshot().arrow_schema().ok()?;
+        let partition_cols = self.snapshot().metadata().partition_columns();
+        let container = AddContainer::new(&files, partition_cols, schema);
+        container.statistics()
     }
 }
 
@@ -718,14 +723,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .map(|expr| simplify_expr(&context, &df_schema, expr));
 
         let table_partition_cols = self.snapshot.metadata().partition_columns();
-        let file_schema = Arc::new(ArrowSchema::new(
-            schema
-                .fields()
-                .iter()
-                .filter(|f| !table_partition_cols.contains(f.name()))
-                .cloned()
-                .collect::<Vec<_>>(),
-        ));
+
 
         let (files, files_scanned, files_pruned, _pruning_mask) = match self.files {
             Some(files) => {
@@ -809,6 +807,7 @@ impl<'a> DeltaScanBuilder<'a> {
         // TODO we group files together by their partition values. If the table is partitioned
         // we may be able to reduce the number of groups by combining groups with the same partition values
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+
         let table_partition_cols = &self.snapshot.metadata().partition_columns();
 
         for action in files.iter() {
@@ -829,28 +828,23 @@ impl<'a> DeltaScanBuilder<'a> {
                 .push(part);
         }
 
+
+        let file_schema = Arc::new(ArrowSchema::new(
+    schema
+        .fields()
+        .iter()
+        .filter(|f| !table_partition_cols.contains(f.name()))
+        .cloned()
+        .collect::<Vec<_>>(),
+        ));
+
+        let table_partition_cols = &self.snapshot.metadata().partition_columns();
+
+        use datafusion::arrow::error::ArrowError;
         let mut table_partition_cols = table_partition_cols
             .iter()
-            .map(|col| {
-                let field = schema
-                    .field_with_name(col)
-                    .expect("Column should exist in schema");
-                let corrected = if config.wrap_partition_values {
-                    match field.data_type() {
-                        ArrowDataType::Utf8
-                        | ArrowDataType::LargeUtf8
-                        | ArrowDataType::Binary
-                        | ArrowDataType::LargeBinary => {
-                            wrap_partition_type_in_dict(field.data_type().clone())
-                        }
-                        _ => field.data_type().clone(),
-                    }
-                } else {
-                    field.data_type().clone()
-                };
-                Field::new(col.clone(), corrected, true)
-            })
-            .collect::<Vec<_>>();
+            .map(|name| schema.field_with_name(name).map(|f| f.to_owned()))
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         if let Some(file_column_name) = &config.file_column_name {
             let field_name_datatype = if config.wrap_partition_values {
@@ -865,7 +859,31 @@ impl<'a> DeltaScanBuilder<'a> {
             ));
         }
 
-        let stats = Statistics::new_unknown(&schema);
+        // let stats = if let Some(ref mask) = &_pruning_mask {
+        //     use crate::delta_datafusion::state::AddContainer;
+        //     let partition_columns = self.snapshot.metadata().partition_columns();
+        //     let all_files = self.snapshot.file_actions().unwrap();
+        //     let files_after_pruning: Vec<Add> = all_files
+        //         .into_iter()
+        //         .zip(mask.iter())
+        //         .filter(|(_, &keep)| keep)
+        //         .map(|(add, _)| add)
+        //         .collect();
+        //     let add_container =
+        //         AddContainer::new(&files_after_pruning, partition_columns, logical_schema.clone());
+        //     add_container
+        //         .statistics()
+        //         .unwrap_or_else(|| Statistics::new_unknown(&schema))
+        // } else {
+        //     self.snapshot
+        //         .datafusion_table_statistics()
+        //         .unwrap_or_else(|| Statistics::new_unknown(&schema))
+        // };
+
+        let stats = self
+            .snapshot
+            .datafusion_table_statistics()
+            .unwrap_or_else(|| Statistics::new_unknown(&schema));
 
         let parquet_options = TableParquetOptions {
             global: self.session.config().options().execution.parquet.clone(),
@@ -950,7 +968,6 @@ fn simplify_expr(
         .expect("Failed to create physical expression")
 }
 
-#[allow(dead_code)]
 fn prune_file_statistics(
     record_batches: &[RecordBatch],
     pruning_mask: Vec<bool>,
@@ -1071,8 +1088,8 @@ fn partitioned_file_from_action(
                 .expect("Failed to convert action to ObjectMeta")
         },
         partition_values,
-        extensions: None,
         range: None,
+        extensions: None,
         statistics: None,
         metadata_size_hint: None,
     }
