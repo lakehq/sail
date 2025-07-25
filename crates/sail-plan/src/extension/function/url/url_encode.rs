@@ -27,6 +27,17 @@ impl UrlEncode {
             signature: Signature::string(1, Volatility::Immutable),
         }
     }
+
+    /// Encode a string to application/x-www-form-urlencoded format.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The string to encode
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - The encoded string
+    ///
     fn encode(value: &str) -> Result<String> {
         Ok(byte_serialize(value.as_bytes()).collect::<String>())
     }
@@ -66,12 +77,23 @@ impl ScalarUDFImpl for UrlEncode {
     }
 }
 
+/// Core implementation of URL encoding function.
+///
+/// # Arguments
+///
+/// * `args` - A slice containing exactly one ArrayRef with the strings to encode
+///
+/// # Returns
+///
+/// * `Ok(ArrayRef)` - A new array of the same type containing encoded strings
+/// * `Err(DataFusionError)` - If invalid arguments are provided
+///
 fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 {
         return exec_err!("`url_encode` expects 1 argument");
     }
 
-    let result = match &args[0].data_type() {
+    match &args[0].data_type() {
         DataType::Utf8 => as_string_array(&args[0])?
             .iter()
             .map(|x| x.map(UrlEncode::encode).transpose())
@@ -88,8 +110,7 @@ fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
             .collect::<Result<StringViewArray>>()
             .map(|array| Arc::new(array) as ArrayRef),
         other => exec_err!("`url_encode`: Expr must be STRING, got {other:?}"),
-    };
-    result
+    }
 }
 
 #[cfg(test)]
