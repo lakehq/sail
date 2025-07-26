@@ -470,6 +470,37 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 36, f"Expected 36 rows for year NOT BETWEEN 2021 AND 2022, got {result_count}"  # noqa: PLR2004
 
+    def test_delta_partition_pruning_null_handling(self, spark, tmp_path):
+        """Test partition pruning with NULL values and IS NULL/IS NOT NULL"""
+        delta_path = tmp_path / "delta_table"
+        delta_table_path = f"file://{delta_path}"
+
+        partition_data = [
+            Row(id=1, region="US", category="A", value="data1"),
+            Row(id=2, region="EU", category="A", value="data2"),
+            Row(id=3, region=None, category="B", value="data3"),
+            Row(id=4, region="US", category=None, value="data4"),
+            Row(id=5, region=None, category=None, value="data5"),
+            Row(id=6, region="ASIA", category="C", value="data6"),
+        ]
+        df = spark.createDataFrame(partition_data)
+        df.write.format("delta").mode("overwrite").partitionBy("region", "category").save(str(delta_path))
+
+        # Test IS NULL on single column
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NULL")
+        result_count = filtered_df.count()
+        assert result_count == 2, f"Expected 2 rows for region IS NULL, got {result_count}"  # noqa: PLR2004
+
+        # Test IS NOT NULL
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NOT NULL")
+        result_count = filtered_df.count()
+        assert result_count == 4, f"Expected 4 rows for region IS NOT NULL, got {result_count}"  # noqa: PLR2004
+
+        # Test combination of NULL and equality
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NOT NULL AND category = 'A'")
+        result_count = filtered_df.count()
+        assert result_count == 2, f"Expected 2 rows for region IS NOT NULL AND category = 'A', got {result_count}"  # noqa: PLR2004
+
     def test_delta_partition_pruning_complex_expressions(self, spark, tmp_path):
         """Test partition pruning with complex boolean expressions"""
         delta_path = tmp_path / "delta_table"
