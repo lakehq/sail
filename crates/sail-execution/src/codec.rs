@@ -108,6 +108,9 @@ use sail_plan::extension::function::string::spark_mask::SparkMask;
 use sail_plan::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_plan::extension::function::struct_function::StructFunction;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
+use sail_plan::extension::function::url::parse_url::ParseUrl;
+use sail_plan::extension::function::url::url_decode::UrlDecode;
+use sail_plan::extension::function::url::url_encode::UrlEncode;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{
     MapPartitionsExec, RangeExec, SchemaPivotExec, ShowStringExec,
@@ -852,6 +855,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
+            "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
+            "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
+            "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -921,6 +927,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkToUtf8>()
             || node.inner().as_any().is::<SparkToLargeUtf8>()
             || node.inner().as_any().is::<SparkToUtf8View>()
+            || node.inner().as_any().is::<ParseUrl>()
+            || node.inner().as_any().is::<UrlDecode>()
+            || node.inner().as_any().is::<UrlEncode>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"
