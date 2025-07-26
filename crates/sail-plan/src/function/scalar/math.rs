@@ -24,6 +24,10 @@ use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_pmod::SparkPmod;
 use crate::extension::function::math::spark_sec::SparkSec;
 use crate::extension::function::math::spark_signum::SparkSignum;
+use crate::extension::function::math::spark_try_add::SparkTryAdd;
+use crate::extension::function::math::spark_try_div::SparkTryDiv;
+use crate::extension::function::math::spark_try_mult::SparkTryMult;
+use crate::extension::function::math::spark_try_substract::SparkTrySubtract;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
@@ -602,10 +606,10 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("sqrt", F::unary(expr_fn::sqrt)),
         ("tan", F::unary(expr_fn::tan)),
         ("tanh", F::unary(expr_fn::tanh)),
-        ("try_add", F::unknown("try_add")),
-        ("try_divide", F::unknown("try_divide")),
-        ("try_multiply", F::unknown("try_multiply")),
-        ("try_subtract", F::unknown("try_subtract")),
+        ("try_add", F::udf(SparkTryAdd::new())),
+        ("try_divide", F::udf(SparkTryDiv::new())),
+        ("try_multiply", F::udf(SparkTryMult::new())),
+        ("try_subtract", F::udf(SparkTrySubtract::new())),
         ("unhex", F::udf(SparkUnHex::new())),
         ("width_bucket", F::unknown("width_bucket")),
     ]
