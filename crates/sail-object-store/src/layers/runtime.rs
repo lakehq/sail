@@ -24,6 +24,7 @@ pub struct RuntimeAwareObjectStore {
 }
 
 impl RuntimeAwareObjectStore {
+    #[allow(dead_code)]
     pub fn try_new<F>(initializer: F, handle: Handle) -> Result<Self>
     where
         F: FnOnce() -> Result<Arc<dyn ObjectStore>>,

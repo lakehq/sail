@@ -86,7 +86,9 @@ impl SessionManager {
         options: SessionManagerOptions,
     ) -> SparkResult<SessionContext> {
         let job_runner: Box<dyn JobRunner> = match options.config.mode {
-            ExecutionMode::Local => Box::new(LocalJobRunner::new()),
+            ExecutionMode::Local => {
+                Box::new(LocalJobRunner::new_with_runtime(options.runtime.clone()))
+            }
             ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
                 let options = DriverOptions::try_new(&options.config, options.runtime.clone())?;
                 let mut system = system.lock()?;
