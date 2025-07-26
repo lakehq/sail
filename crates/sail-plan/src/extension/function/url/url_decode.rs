@@ -191,7 +191,6 @@ mod tests {
         ]));
         let expected = StringArray::from(vec![
             Some("https://spark.apache.org"),
-            // Some("https://spark.apache.org"),
             Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
             Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
             None,
