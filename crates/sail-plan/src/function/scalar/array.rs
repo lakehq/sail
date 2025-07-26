@@ -3,7 +3,9 @@ use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
 use datafusion::functions_nested::position::array_position as datafusion_array_position;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, is_null, lit, not, or, when, BinaryExpr, ExprSchemable, Operator};
+use datafusion_expr::{
+    cast, expr, is_null, lit, not, or, when, BinaryExpr, ExprSchemable, Operator,
+};
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 
@@ -299,6 +301,10 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_prepend", F::binary(array_prepend)),
         ("array_remove", F::binary(expr_fn::array_remove_all)),
         ("array_repeat", F::binary(array_repeat)),
+        (
+            "array_size",
+            F::unary(|array| cast(expr_fn::array_length(array), DataType::Int32)),
+        ),
         ("array_union", F::binary(expr_fn::array_union)),
         ("arrays_overlap", F::custom(arrays_overlap)),
         ("arrays_zip", F::unknown("arrays_zip")),
