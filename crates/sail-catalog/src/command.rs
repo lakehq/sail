@@ -14,7 +14,7 @@ use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{
     CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use crate::utils::quote_namespace_if_needed;
 
@@ -102,7 +102,7 @@ pub enum CatalogCommand {
     DropTemporaryView {
         view: String,
         is_global: bool,
-        if_exists: bool,
+        options: DropTemporaryViewOptions,
     },
     DropView {
         view: Vec<String>,
@@ -366,11 +366,12 @@ impl CatalogCommand {
             CatalogCommand::DropTemporaryView {
                 view,
                 is_global,
-                if_exists,
+                options,
             } => {
                 if is_global {
+                    manager.drop_global_temporary_view(&view, options).await?;
                 } else {
-                    manager.drop_temporary_view(&view, if_exists).await?;
+                    manager.drop_temporary_view(&view, options).await?;
                 }
                 let rows = vec![SingleValueDisplay { value: true }];
                 build_record_batch(schema, &rows)

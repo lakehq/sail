@@ -10,6 +10,7 @@ too-many-arguments-threshold = 8
 large-error-threshold = 264
 disallowed-types = [
     { path = "datafusion_catalog::table::TableProviderFactory" },
+    { path = "datafusion_datasource::file_format::FileFormatFactory" },
     { path = "datafusion_expr::logical_plan::DdlStatement" },
     { path = "datafusion_expr::logical_plan::DescribeTable" },
     { path = "datafusion_expr::logical_plan::DmlStatement" },

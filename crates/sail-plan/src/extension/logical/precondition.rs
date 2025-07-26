@@ -7,19 +7,21 @@ use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use crate::utils::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
-pub struct WithLogicalExecutionNode {
-    setup: Vec<Arc<LogicalPlan>>,
+pub struct WithPreconditionsNode {
+    preconditions: Vec<Arc<LogicalPlan>>,
     plan: Arc<LogicalPlan>,
 }
 
-#[allow(dead_code)]
-impl WithLogicalExecutionNode {
-    pub fn new(setup: Vec<Arc<LogicalPlan>>, plan: Arc<LogicalPlan>) -> Self {
-        Self { setup, plan }
+impl WithPreconditionsNode {
+    pub fn new(preconditions: Vec<Arc<LogicalPlan>>, plan: Arc<LogicalPlan>) -> Self {
+        Self {
+            preconditions,
+            plan,
+        }
     }
 
-    pub fn setup(&self) -> &[Arc<LogicalPlan>] {
-        &self.setup
+    pub fn preconditions(&self) -> &[Arc<LogicalPlan>] {
+        &self.preconditions
     }
 
     pub fn plan(&self) -> &LogicalPlan {
@@ -27,13 +29,13 @@ impl WithLogicalExecutionNode {
     }
 }
 
-impl UserDefinedLogicalNodeCore for WithLogicalExecutionNode {
+impl UserDefinedLogicalNodeCore for WithPreconditionsNode {
     fn name(&self) -> &str {
-        "WithLogicalExecution"
+        "WithPreconditions"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
-        self.setup
+        self.preconditions
             .iter()
             .map(|x| x.as_ref())
             .chain(std::iter::once(self.plan.as_ref()))
@@ -49,7 +51,7 @@ impl UserDefinedLogicalNodeCore for WithLogicalExecutionNode {
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "WithLogicalExecution")?;
+        write!(f, "{}", self.name())?;
         Ok(())
     }
 
@@ -60,10 +62,10 @@ impl UserDefinedLogicalNodeCore for WithLogicalExecutionNode {
     ) -> datafusion_common::Result<Self> {
         exprs.zero()?;
         let Some(plan) = inputs.pop() else {
-            return plan_err!("WithLogicalExecution requires at least one input");
+            return plan_err!("{} requires at least one input", self.name());
         };
         Ok(Self {
-            setup: inputs.into_iter().map(Arc::new).collect(),
+            preconditions: inputs.into_iter().map(Arc::new).collect(),
             plan: Arc::new(plan),
         })
     }

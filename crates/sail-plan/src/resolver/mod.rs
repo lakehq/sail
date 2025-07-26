@@ -4,6 +4,7 @@ use datafusion::prelude::SessionContext;
 
 use crate::config::PlanConfig;
 
+mod command;
 mod data_type;
 mod ddl;
 mod expression;
@@ -14,7 +15,6 @@ mod schema;
 mod state;
 mod statistic;
 mod tree;
-mod write;
 
 pub struct PlanResolver<'a> {
     ctx: &'a SessionContext,

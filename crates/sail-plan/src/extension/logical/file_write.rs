@@ -4,31 +4,19 @@ use std::sync::Arc;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 
 use crate::utils::ItemTaker;
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum FileWriteMode {
-    Append,
-    Overwrite,
-    OverwriteIf { condition: Expr },
-    OverwritePartitions,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FileWriteOptions {
     pub path: String,
     pub format: String,
-    pub mode: FileWriteMode,
+    pub mode: SinkMode,
     pub partition_by: Vec<String>,
     pub sort_by: Vec<Sort>,
     pub bucket_by: Option<BucketBy>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct BucketBy {
-    pub columns: Vec<String>,
-    pub num_buckets: usize,
+    pub options: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -39,7 +27,6 @@ pub struct FileWriteNode {
 }
 
 impl FileWriteNode {
-    #[allow(dead_code)]
     pub fn new(input: Arc<LogicalPlan>, options: FileWriteOptions) -> Self {
         Self {
             input,

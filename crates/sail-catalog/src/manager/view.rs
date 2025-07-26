@@ -1,7 +1,8 @@
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    CreateTemporaryViewOptions, CreateViewOptions, DropViewOptions, TableKind, TableStatus,
+    CreateTemporaryViewOptions, CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
+    TableKind, TableStatus,
 };
 use crate::temp_view::GLOBAL_TEMPORARY_VIEW_MANAGER;
 use crate::utils::match_pattern;
@@ -86,12 +87,18 @@ impl CatalogManager {
     pub async fn drop_global_temporary_view(
         &self,
         view: &str,
-        if_exists: bool,
+        options: DropTemporaryViewOptions,
     ) -> CatalogResult<()> {
+        let DropTemporaryViewOptions { if_exists } = options;
         GLOBAL_TEMPORARY_VIEW_MANAGER.drop_view(view, if_exists)
     }
 
-    pub async fn drop_temporary_view(&self, view: &str, if_exists: bool) -> CatalogResult<()> {
+    pub async fn drop_temporary_view(
+        &self,
+        view: &str,
+        options: DropTemporaryViewOptions,
+    ) -> CatalogResult<()> {
+        let DropTemporaryViewOptions { if_exists } = options;
         self.temporary_views.drop_view(view, if_exists)
     }
 

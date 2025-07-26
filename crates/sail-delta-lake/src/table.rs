@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
 use deltalake::logstore::{default_logstore, LogStoreRef, StorageConfig};
@@ -83,7 +84,7 @@ pub(crate) async fn create_delta_table_provider_with_object_store(
 }
 
 pub async fn create_delta_provider(
-    ctx: &datafusion::prelude::SessionContext,
+    ctx: &dyn Session,
     table_uri: &str,
     options: &std::collections::HashMap<String, String>,
 ) -> Result<std::sync::Arc<dyn datafusion::catalog::TableProvider>> {

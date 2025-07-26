@@ -110,3 +110,8 @@ pub struct CreateTemporaryViewColumnOptions {
 pub struct DropViewOptions {
     pub if_exists: bool,
 }
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+pub struct DropTemporaryViewOptions {
+    pub if_exists: bool,
+}

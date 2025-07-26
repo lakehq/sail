@@ -3,17 +3,21 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::TableProvider;
-use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
-use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
-use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
-use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
-use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
-use datafusion::datasource::file_format::{FileFormat, FileFormatFactory};
+use datafusion::arrow::datatypes::DataType;
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::datasource::file_format::arrow::ArrowFormat;
+use datafusion::datasource::file_format::avro::AvroFormat;
+use datafusion::datasource::file_format::csv::CsvFormat;
+use datafusion::datasource::file_format::json::JsonFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::prelude::SessionContext;
-use datafusion_common::Result;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+use datafusion::datasource::physical_plan::FileSinkConfig;
+use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::logical_expr::dml::InsertOp;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::{not_impl_err, Result};
+use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
 
 use crate::options::DataSourceOptionsResolver;
 
@@ -22,26 +26,26 @@ use crate::options::DataSourceOptionsResolver;
 /// A trait for defining the specifics of a listing table format.
 pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
     fn name(&self) -> &'static str;
-    fn create_format(
+    fn create_read_format(
         &self,
-        ctx: &SessionContext,
+        ctx: &dyn Session,
         options: HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>>;
-    fn create_format_factory(
+    fn create_write_format(
         &self,
-        ctx: &SessionContext,
+        ctx: &dyn Session,
         options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>>;
+    ) -> Result<Arc<dyn FileFormat>>;
 }
 
 #[derive(Debug)]
 pub(crate) struct ListingTableFormat<T: ListingFormat> {
-    format_def: T,
+    inner: T,
 }
 
 impl<T: ListingFormat> ListingTableFormat<T> {
     pub fn new(format_def: T) -> Self {
-        Self { format_def }
+        Self { inner: format_def }
     }
 }
 
@@ -54,18 +58,21 @@ impl<T: ListingFormat + Default> Default for ListingTableFormat<T> {
 #[async_trait]
 impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
     fn name(&self) -> &str {
-        self.format_def.name()
+        self.inner.name()
     }
 
-    async fn create_provider(&self, info: SourceInfo<'_>) -> Result<Arc<dyn TableProvider>> {
+    async fn create_provider(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
-            ctx,
             paths,
             schema,
             options,
         } = info;
 
-        let file_format = self.format_def.create_format(ctx, options)?;
+        let file_format = self.inner.create_read_format(ctx, options)?;
         let listing_options = ListingOptions::new(file_format);
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
 
@@ -77,15 +84,69 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         let config = ListingTableConfig::new_with_multi_paths(urls)
             .with_listing_options(listing_options)
             .with_schema(schema)
-            .infer_partitions_from_path(&ctx.state())
+            .infer_partitions_from_path(ctx)
             .await?;
         let config = crate::listing::rewrite_listing_partitions(config)?;
         Ok(Arc::new(ListingTable::try_new(config)?))
     }
 
-    fn create_writer(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
-        let SinkInfo { ctx, options, .. } = info;
-        self.format_def.create_format_factory(ctx, options)
+    async fn create_writer(
+        &self,
+        ctx: &dyn Session,
+        info: SinkInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let SinkInfo {
+            input,
+            path,
+            mode,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options,
+        } = info;
+        if bucket_by.is_some() {
+            return not_impl_err!("bucketing for writing listing table format");
+        }
+        // always write multi-file output
+        let path = if path.ends_with(object_store::path::DELIMITER) {
+            path
+        } else {
+            format!("{path}{}", object_store::path::DELIMITER)
+        };
+        let insert_op = match mode {
+            PhysicalSinkMode::Append => InsertOp::Append,
+            PhysicalSinkMode::Overwrite => InsertOp::Overwrite,
+            PhysicalSinkMode::ErrorIfExists
+            | PhysicalSinkMode::IgnoreIfExists
+            | PhysicalSinkMode::OverwriteIf { .. }
+            | PhysicalSinkMode::OverwritePartitions => {
+                return not_impl_err!("unsupported sink mode for listing table format: {mode:?}");
+            }
+        };
+        let object_store_url = ObjectStoreUrl::parse(&path)?;
+        let table_paths = crate::url::resolve_listing_urls(ctx, vec![path.clone()]).await?;
+        // We do not need to specify the exact data type for partition columns,
+        // since the type is inferred from the record batch during writing.
+        // This is how DataFusion handles physical planning for `LogicalPlan::Copy`.
+        let table_partition_cols = partition_by
+            .iter()
+            .map(|s| (s.clone(), DataType::Null))
+            .collect::<Vec<_>>();
+        let format = self.inner.create_write_format(ctx, options)?;
+        let conf = FileSinkConfig {
+            original_url: path,
+            object_store_url,
+            file_group: Default::default(),
+            table_paths,
+            output_schema: input.schema(),
+            table_partition_cols,
+            insert_op,
+            keep_partition_by_columns: false,
+            file_extension: format.get_ext(),
+        };
+        format
+            .create_writer_physical_plan(input, ctx, conf, sort_order)
+            .await
     }
 }
 
@@ -100,20 +161,20 @@ impl ListingFormat for ArrowListingFormat {
         "arrow"
     }
 
-    fn create_format(
+    fn create_read_format(
         &self,
-        _ctx: &SessionContext,
+        _ctx: &dyn Session,
         _options: HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(ArrowFormat))
     }
 
-    fn create_format_factory(
+    fn create_write_format(
         &self,
-        _ctx: &SessionContext,
+        _ctx: &dyn Session,
         _options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>> {
-        Ok(Arc::new(ArrowFormatFactory::new()))
+    ) -> Result<Arc<dyn FileFormat>> {
+        Ok(Arc::new(ArrowFormat))
     }
 }
 
@@ -128,20 +189,20 @@ impl ListingFormat for AvroListingFormat {
         "avro"
     }
 
-    fn create_format(
+    fn create_read_format(
         &self,
-        _ctx: &SessionContext,
+        _ctx: &dyn Session,
         _options: HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(AvroFormat))
     }
 
-    fn create_format_factory(
+    fn create_write_format(
         &self,
-        _ctx: &SessionContext,
+        _ctx: &dyn Session,
         _options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>> {
-        Ok(Arc::new(AvroFormatFactory::new()))
+    ) -> Result<Arc<dyn FileFormat>> {
+        Ok(Arc::new(AvroFormat))
     }
 }
 
@@ -156,9 +217,9 @@ impl ListingFormat for CsvListingFormat {
         "csv"
     }
 
-    fn create_format(
+    fn create_read_format(
         &self,
-        ctx: &SessionContext,
+        ctx: &dyn Session,
         options: HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
@@ -166,14 +227,14 @@ impl ListingFormat for CsvListingFormat {
         Ok(Arc::new(CsvFormat::default().with_options(options)))
     }
 
-    fn create_format_factory(
+    fn create_write_format(
         &self,
-        ctx: &SessionContext,
+        ctx: &dyn Session,
         options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>> {
+    ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_csv_write_options(options)?;
-        Ok(Arc::new(CsvFormatFactory::new_with_options(options)))
+        Ok(Arc::new(CsvFormat::default().with_options(options)))
     }
 }
 
@@ -188,9 +249,9 @@ impl ListingFormat for JsonListingFormat {
         "json"
     }
 
-    fn create_format(
+    fn create_read_format(
         &self,
-        ctx: &SessionContext,
+        ctx: &dyn Session,
         options: HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
@@ -198,14 +259,14 @@ impl ListingFormat for JsonListingFormat {
         Ok(Arc::new(JsonFormat::default().with_options(options)))
     }
 
-    fn create_format_factory(
+    fn create_write_format(
         &self,
-        ctx: &SessionContext,
+        ctx: &dyn Session,
         options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>> {
+    ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_json_write_options(options)?;
-        Ok(Arc::new(JsonFormatFactory::new_with_options(options)))
+        Ok(Arc::new(JsonFormat::default().with_options(options)))
     }
 }
 
@@ -220,9 +281,9 @@ impl ListingFormat for ParquetListingFormat {
         "parquet"
     }
 
-    fn create_format(
+    fn create_read_format(
         &self,
-        ctx: &SessionContext,
+        ctx: &dyn Session,
         options: HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
@@ -230,13 +291,13 @@ impl ListingFormat for ParquetListingFormat {
         Ok(Arc::new(ParquetFormat::default().with_options(options)))
     }
 
-    fn create_format_factory(
+    fn create_write_format(
         &self,
-        ctx: &SessionContext,
+        ctx: &dyn Session,
         options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>> {
+    ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_parquet_write_options(options)?;
-        Ok(Arc::new(ParquetFormatFactory::new_with_options(options)))
+        Ok(Arc::new(ParquetFormat::default().with_options(options)))
     }
 }

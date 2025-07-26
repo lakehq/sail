@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use chumsky::prelude::{any, choice, end, just, none_of, recursive};
 use chumsky::text::whitespace;
 use chumsky::{IterParser, Parser};
+use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::prelude::SessionContext;
 use datafusion_common::{not_impl_err, plan_datafusion_err, plan_err, DataFusionError, Result};
 use glob::Pattern;
 use percent_encoding::percent_decode;
@@ -488,7 +488,7 @@ impl TryFrom<GlobUrl> for ListingTableUrl {
 }
 
 pub async fn resolve_listing_urls(
-    ctx: &SessionContext,
+    ctx: &dyn Session,
     paths: Vec<String>,
 ) -> Result<Vec<ListingTableUrl>> {
     let mut urls = vec![];
@@ -501,7 +501,7 @@ pub async fn resolve_listing_urls(
     Ok(urls)
 }
 
-pub async fn rewrite_directory_url(url: GlobUrl, session: &SessionContext) -> Result<GlobUrl> {
+pub async fn rewrite_directory_url(url: GlobUrl, session: &dyn Session) -> Result<GlobUrl> {
     if url.glob.is_some() || url.base.path().ends_with(object_store::path::DELIMITER) {
         return Ok(url);
     }

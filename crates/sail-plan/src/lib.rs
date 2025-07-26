@@ -12,7 +12,7 @@ use sail_common_datafusion::utils::rename_physical_plan;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
-use crate::extension::logical::WithLogicalExecutionNode;
+use crate::extension::logical::WithPreconditionsNode;
 use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
 
@@ -36,8 +36,8 @@ pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Re
         LogicalPlan::Extension(Extension { node }) => {
             if let Some(n) = node.as_any().downcast_ref::<CatalogCommandNode>() {
                 n.execute(ctx).await?
-            } else if let Some(n) = node.as_any().downcast_ref::<WithLogicalExecutionNode>() {
-                for plan in n.setup() {
+            } else if let Some(n) = node.as_any().downcast_ref::<WithPreconditionsNode>() {
+                for plan in n.preconditions() {
                     let _ = execute_logical_plan(ctx, plan.as_ref().clone()).await?;
                 }
                 n.plan().clone()

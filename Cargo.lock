@@ -5441,6 +5441,7 @@ dependencies = [
  "chumsky",
  "datafusion",
  "datafusion-common",
+ "deltalake",
  "futures",
  "glob",
  "object_store",
@@ -5587,6 +5588,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-json",
  "datafusion-functions-nested",
+ "datafusion-physical-expr",
  "datafusion-spark",
  "either",
  "futures",
@@ -5613,6 +5615,7 @@ dependencies = [
  "tokio-stream",
  "tonic 0.12.3",
  "twox-hash",
+ "uuid",
 ]
 
 [[package]]

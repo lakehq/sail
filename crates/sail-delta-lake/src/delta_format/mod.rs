@@ -1,5 +1,3 @@
-mod factory;
-mod format;
 mod sink;
 
-pub use factory::DeltaFormatFactory;
+pub use sink::DeltaDataSink;

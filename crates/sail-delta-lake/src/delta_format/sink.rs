@@ -24,29 +24,27 @@ use crate::table::{create_delta_table_with_object_store, open_table_with_object_
 
 #[derive(Debug)]
 pub struct DeltaDataSink {
-    mode: sail_common::spec::SaveMode,
+    mode: SaveMode,
+    table_path: String,
+    // TODO: maybe here we should accept parsed options?
+    //   For example, `ParquetSink` accepts `TableParquetOptions`.
     options: HashMap<String, String>,
-    table_paths: Vec<datafusion::datasource::listing::ListingTableUrl>,
     schema: SchemaRef,
 }
 
 impl DeltaDataSink {
     pub fn new(
-        mode: sail_common::spec::SaveMode,
+        mode: SaveMode,
+        table_path: String,
         options: HashMap<String, String>,
-        table_paths: Vec<datafusion::datasource::listing::ListingTableUrl>,
         schema: SchemaRef,
     ) -> Self {
         Self {
             mode,
+            table_path,
             options,
-            table_paths,
             schema,
         }
-    }
-
-    fn table_path(&self) -> Result<String> {
-        Ok(self.table_paths[0].as_str().to_string())
     }
 
     fn extract_storage_config(&self) -> Result<StorageConfig> {
@@ -66,8 +64,7 @@ impl DeltaDataSink {
         &self,
         context: &Arc<TaskContext>,
     ) -> Result<Arc<dyn object_store::ObjectStore>> {
-        let table_path = self.table_path()?;
-        let table_url = url::Url::parse(&table_path)
+        let table_url = url::Url::parse(&self.table_path)
             .map_err(|e| DataFusionError::Plan(format!("Invalid table URI: {e}")))?;
 
         context
@@ -75,16 +72,6 @@ impl DeltaDataSink {
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-
-    /// Parse save mode from options, maybe there is a better way, see sail-plan/src/resolver/plan.rs
-    fn parse_save_mode(&self) -> SaveMode {
-        match self.mode {
-            sail_common::spec::SaveMode::Append => SaveMode::Append,
-            sail_common::spec::SaveMode::Overwrite => SaveMode::Overwrite,
-            sail_common::spec::SaveMode::ErrorIfExists => SaveMode::ErrorIfExists,
-            sail_common::spec::SaveMode::Ignore => SaveMode::Ignore,
-        }
     }
 
     // TODO: The following parsing methods does not make sense, we should find a better way to handle spec::Write.
@@ -132,11 +119,11 @@ impl DisplayAs for DeltaDataSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "DeltaDataSink(table_path={:?})", self.table_path())
+                write!(f, "DeltaDataSink(table_path={})", self.table_path)
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: delta")?;
-                write!(f, "table_path={:?}", self.table_path())
+                write!(f, "table_path={}", self.table_path)
             }
         }
     }
@@ -161,13 +148,11 @@ impl DataSink for DeltaDataSink {
         mut data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let table_path = self.table_path()?;
         let storage_config = self.extract_storage_config()?;
         let object_store = self.get_object_store(context)?;
-        let save_mode = self.parse_save_mode();
 
         let (table, table_exists) = match open_table_with_object_store(
-            &table_path,
+            &self.table_path,
             object_store.clone(),
             storage_config.clone(),
         )
@@ -175,11 +160,11 @@ impl DataSink for DeltaDataSink {
         {
             Ok(table) => (table, true),
             Err(e) => {
-                if save_mode != SaveMode::Overwrite && save_mode != SaveMode::Append {
+                if self.mode != SaveMode::Overwrite && self.mode != SaveMode::Append {
                     return Err(DataFusionError::External(Box::new(e)));
                 }
                 let delta_ops = create_delta_table_with_object_store(
-                    &table_path,
+                    &self.table_path,
                     object_store.clone(),
                     storage_config.clone(),
                 )
@@ -203,7 +188,7 @@ impl DataSink for DeltaDataSink {
         );
 
         // Parse the table path URL and extract the correct path for DeltaWriter
-        let table_url = url::Url::parse(&table_path)
+        let table_url = url::Url::parse(&self.table_path)
             .map_err(|e| DataFusionError::Plan(format!("Invalid table URI: {e}")))?;
 
         let writer_path = if table_url.scheme() == "file" {
@@ -211,7 +196,7 @@ impl DataSink for DeltaDataSink {
             object_store::path::Path::from(filesystem_path)
         } else {
             // For other schemes (s3://, etc.), use the full URL as-is
-            object_store::path::Path::from(table_path.as_str())
+            object_store::path::Path::from(self.table_path.as_str())
         };
 
         let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
@@ -233,7 +218,7 @@ impl DataSink for DeltaDataSink {
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        if add_actions.is_empty() && table_exists && save_mode != SaveMode::Overwrite {
+        if add_actions.is_empty() && table_exists && self.mode != SaveMode::Overwrite {
             return Ok(0);
         }
 
@@ -241,7 +226,7 @@ impl DataSink for DeltaDataSink {
         let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
 
         let operation = if table_exists {
-            if save_mode == SaveMode::Overwrite {
+            if self.mode == SaveMode::Overwrite {
                 // In overwrite mode, delete existing files
                 if let Ok(snapshot) = table.snapshot() {
                     let existing_files = snapshot
@@ -273,7 +258,7 @@ impl DataSink for DeltaDataSink {
                 }
             }
             DeltaOperation::Write {
-                mode: save_mode,
+                mode: self.mode,
                 partition_by: if partition_columns.is_empty() {
                     None
                 } else {
@@ -304,7 +289,7 @@ impl DataSink for DeltaDataSink {
 
             DeltaOperation::Create {
                 mode: SaveMode::ErrorIfExists, // Required for Create operation
-                location: table_path.clone(),
+                location: self.table_path.clone(),
                 protocol,
                 metadata,
             }
