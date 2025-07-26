@@ -305,16 +305,16 @@ use crate::delta_datafusion::state::AddContainer;
 
 // Extension trait to add datafusion_table_statistics method to DeltaTableState
 trait DeltaTableStateExt {
-    fn datafusion_table_statistics(&self) -> Option<Statistics>;
+    fn datafusion_table_statistics(&self, mask: Option<Vec<bool>>) -> Option<Statistics>;
 }
 
 impl DeltaTableStateExt for DeltaTableState {
-    fn datafusion_table_statistics(&self) -> Option<Statistics> {
+    fn datafusion_table_statistics(&self, mask: Option<Vec<bool>>) -> Option<Statistics> {
         let files: Vec<Add> = self.snapshot().file_actions().ok()?.collect();
         let schema = self.snapshot().arrow_schema().ok()?;
         let partition_cols = self.snapshot().metadata().partition_columns();
         let container = AddContainer::new(&files, partition_cols, schema);
-        container.statistics()
+        container.statistics(mask)
     }
 }
 
@@ -855,33 +855,20 @@ impl<'a> DeltaScanBuilder<'a> {
             ));
         }
 
-        // let stats = if let Some(ref mask) = &_pruning_mask {
-        //     use crate::delta_datafusion::state::AddContainer;
-        //     let partition_columns = self.snapshot.metadata().partition_columns();
-        //     let all_files = self.snapshot.file_actions().unwrap();
-        //     let files_after_pruning: Vec<Add> = all_files
-        //         .into_iter()
-        //         .zip(mask.iter())
-        //         .filter(|(_, &keep)| keep)
-        //         .map(|(add, _)| add)
-        //         .collect();
-        //     let add_container =
-        //         AddContainer::new(&files_after_pruning, partition_columns, logical_schema.clone());
-        //     add_container
-        //         .statistics()
-        //         .unwrap_or_else(|| Statistics::new_unknown(&schema))
-        // } else {
-        //     self.snapshot
-        //         .datafusion_table_statistics()
-        //         .unwrap_or_else(|| Statistics::new_unknown(&schema))
-        // };
+        //  Where is the correct place to marry file pruning with statistics pruning?
+        //  Temporarily re-generating the log handler, just so that we can compute the stats.
+        //  Should we update datafusion_table_statistics to optionally take the mask?
 
-        // let stats = self
-        //     .snapshot
-        //     .datafusion_table_statistics()
-        //     .unwrap_or_else(|| Statistics::new_unknown(&schema));
+        // Following https://github.com/delta-io/delta-rs/pull/3377, but re-generating
+        // AddContainer to compute the stats.
 
-        let stats = Statistics::new_unknown(&schema);
+        let stats = if let Some(mask) = _pruning_mask {
+            self.snapshot
+                .datafusion_table_statistics(Some(mask))
+                .unwrap_or_else(|| Statistics::new_unknown(&schema))
+        } else {
+            Statistics::new_unknown(&schema)
+        };
 
         let parquet_options = TableParquetOptions {
             global: self.session.config().options().execution.parquet.clone(),
@@ -1255,7 +1242,7 @@ impl TableProvider for DeltaTableProvider {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        self.snapshot.datafusion_table_statistics()
+        self.snapshot.datafusion_table_statistics(Option::None)
     }
 }
 

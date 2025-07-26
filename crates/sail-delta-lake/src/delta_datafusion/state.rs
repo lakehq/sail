@@ -120,14 +120,23 @@ impl<'a> AddContainer<'a> {
     }
 
     /// Calculate statistics for this set of Add actions
-    pub fn statistics(&self) -> Option<Statistics> {
+    pub fn statistics(&self, mask: Option<Vec<bool>>) -> Option<Statistics> {
         let mut total_rows = 0;
         let mut total_byte_size = 0;
         let mut column_stats_map: std::collections::HashMap<String, Vec<ColumnStatistics>> =
             std::collections::HashMap::new();
 
+        // [Credit]: <https://github.com/delta-io/delta-rs/pull/3377>
+
+        let mask = mask.unwrap_or_else(|| vec![true; self.inner.len()]);
+
         // Collect statistics from all Add actions
-        for add in self.inner {
+        for add in self
+            .inner
+            .iter()
+            .zip(mask.iter())
+            .filter_map(|(add, &keep)| if keep { Some(add) } else { None })
+        {
             if let Ok(Some(stats)) = add.get_stats() {
                 total_rows += stats.num_records;
                 total_byte_size += add.size;
