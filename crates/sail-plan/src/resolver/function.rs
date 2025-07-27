@@ -216,7 +216,7 @@ impl PlanResolver<'_> {
                         args: arguments,
                         distinct,
                         filter: None,
-                        order_by: None,
+                        order_by: vec![],
                         null_treatment: None,
                     },
                 }))

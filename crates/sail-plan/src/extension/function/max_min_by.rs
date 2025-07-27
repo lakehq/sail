@@ -75,7 +75,7 @@ impl AggregateUDFImpl for MaxByFunction {
     }
     fn simplify(&self) -> Option<function::AggregateFunctionSimplification> {
         let simplify = |mut aggr_func: AggregateFunction, _: &dyn SimplifyInfo| {
-            let mut order_by = aggr_func.params.order_by.unwrap_or_default();
+            let mut order_by = aggr_func.params.order_by;
             let (second_arg, first_arg) = (
                 aggr_func.params.args.remove(1),
                 aggr_func.params.args.remove(0),
@@ -88,7 +88,7 @@ impl AggregateUDFImpl for MaxByFunction {
                 vec![first_arg],
                 aggr_func.params.distinct,
                 aggr_func.params.filter,
-                Some(order_by),
+                order_by,
                 aggr_func.params.null_treatment,
             )))
         };
@@ -154,7 +154,7 @@ impl AggregateUDFImpl for MinByFunction {
 
     fn simplify(&self) -> Option<function::AggregateFunctionSimplification> {
         let simplify = |mut aggr_func: AggregateFunction, _: &dyn SimplifyInfo| {
-            let mut order_by = aggr_func.params.order_by.unwrap_or_default();
+            let mut order_by = aggr_func.params.order_by;
             let (second_arg, first_arg) = (
                 aggr_func.params.args.remove(1),
                 aggr_func.params.args.remove(0),
@@ -167,7 +167,7 @@ impl AggregateUDFImpl for MinByFunction {
                 vec![first_arg],
                 aggr_func.params.distinct,
                 aggr_func.params.filter,
-                Some(order_by),
+                order_by,
                 aggr_func.params.null_treatment,
             )))
         };

@@ -14,7 +14,7 @@ use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::core::get_field;
 use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
-use datafusion_expr::expr::{ScalarFunction, WindowFunctionParams};
+use datafusion_expr::expr::{FieldMetadata, ScalarFunction, WindowFunctionParams};
 use datafusion_expr::{
     col, expr, expr_fn, lit, window_frame, AggregateUDF, BinaryExpr, ExprSchemable, Operator,
     ScalarUDF,
@@ -71,7 +71,8 @@ impl NamedExpr {
                 .metadata
                 .as_ref()
                 .map(|x| {
-                    x.iter()
+                    x.inner()
+                        .iter()
                         .map(|(k, v)| (k.to_string(), v.to_string()))
                         .collect()
                 })
@@ -92,7 +93,7 @@ impl NamedExpr {
                 expr: *alias.expr,
                 metadata: alias
                     .metadata
-                    .map(|x| x.into_iter().collect())
+                    .map(|x| x.to_hashmap().into_iter().collect())
                     .unwrap_or(vec![]),
             }),
             _ => Err(PlanError::invalid(
@@ -958,8 +959,8 @@ impl PlanResolver<'_> {
                 None => None,
             };
             let order_by = match order_by {
-                Some(x) => Some(self.resolve_sort_orders(x, true, schema, state).await?),
-                None => None,
+                Some(x) => self.resolve_sort_orders(x, true, schema, state).await?,
+                None => vec![],
             };
             let input = AggFunctionInput {
                 arguments,
@@ -1001,9 +1002,9 @@ impl PlanResolver<'_> {
         let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
         let expr = if let [n] = name.as_slice() {
             if let Some(metadata) = metadata {
-                let metadata_map: Option<HashMap<String, String>> =
-                    Some(metadata.into_iter().collect());
-                expr.alias_with_metadata(n, metadata_map)
+                let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
+                let field_metadata = Some(FieldMetadata::from(metadata_map));
+                expr.alias_with_metadata(n, field_metadata)
             } else {
                 expr.alias(n)
             }

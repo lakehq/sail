@@ -59,7 +59,7 @@ impl PlanResolver<'_> {
                         args: vec![Expr::Column(column.clone())],
                         distinct: false,
                         filter: None,
-                        order_by: None,
+                        order_by: vec![],
                         null_treatment: None,
                     },
                 })
@@ -76,7 +76,7 @@ impl PlanResolver<'_> {
                                 args: vec![Expr::Column(column.clone())],
                                 distinct: false,
                                 filter: None,
-                                order_by: None,
+                                order_by: vec![],
                                 null_treatment: None,
                             },
                         })
@@ -90,7 +90,7 @@ impl PlanResolver<'_> {
                                 args: vec![Expr::Column(column.clone())],
                                 distinct: false,
                                 filter: None,
-                                order_by: None,
+                                order_by: vec![],
                                 null_treatment: None,
                             },
                         })
@@ -107,7 +107,7 @@ impl PlanResolver<'_> {
                                 ],
                                 distinct: false,
                                 filter: None,
-                                order_by: None,
+                                order_by: vec![],
                                 null_treatment: None,
                             },
                         })
@@ -121,7 +121,7 @@ impl PlanResolver<'_> {
                                 args: vec![Expr::Column(column.clone())],
                                 distinct: false,
                                 filter: None,
-                                order_by: None,
+                                order_by: vec![],
                                 null_treatment: None,
                             },
                         })
@@ -138,7 +138,7 @@ impl PlanResolver<'_> {
                                 ],
                                 distinct: false,
                                 filter: None,
-                                order_by: None,
+                                order_by: vec![],
                                 null_treatment: None,
                             },
                         })
@@ -155,7 +155,7 @@ impl PlanResolver<'_> {
                         args: vec![Expr::Column(column.clone())],
                         distinct: false,
                         filter: None,
-                        order_by: None,
+                        order_by: vec![],
                         null_treatment: None,
                     },
                 })
@@ -170,7 +170,7 @@ impl PlanResolver<'_> {
                         args: vec![Expr::Column(column.clone())],
                         distinct: false,
                         filter: None,
-                        order_by: None,
+                        order_by: vec![],
                         null_treatment: None,
                     },
                 })
@@ -356,7 +356,7 @@ impl PlanResolver<'_> {
                         args: vec![col(alias)],
                         distinct: false,
                         filter: None,
-                        order_by: None,
+                        order_by: vec![],
                         null_treatment: None,
                     },
                 })

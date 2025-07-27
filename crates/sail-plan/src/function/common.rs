@@ -190,7 +190,7 @@ pub struct AggFunctionInput<'a> {
     pub distinct: bool,
     pub ignore_nulls: Option<bool>,
     pub filter: Option<Box<expr::Expr>>,
-    pub order_by: Option<Vec<expr::Sort>>,
+    pub order_by: Vec<expr::Sort>,
     pub function_context: FunctionContextInput<'a>,
 }
 
