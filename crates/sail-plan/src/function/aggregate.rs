@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow::datatypes::Field;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
     correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
     variance,
 };
-use datafusion::functions_nested::expr_fn;
+use datafusion::functions_nested::string::array_to_string;
 use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{expr, lit, AggregateUDF};
+use datafusion_expr::{expr, lit, when, AggregateUDF, ExprSchemable};
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
@@ -225,12 +226,71 @@ fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    use crate::function::common::AggFunctionBuilder as F;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: array_agg::array_agg_udaf(),
+        params: AggregateFunctionParams {
+            args: input.arguments.clone(),
+            distinct: true,
+            order_by: input.order_by,
+            filter: input.filter,
+            null_treatment: get_null_treatment(Some(true)),
+        },
+    }))
+}
 
-    Ok(expr_fn::array_remove(
-        expr_fn::array_distinct(F::default(array_agg::array_agg_udaf)(input)?),
-        lit(ScalarValue::Null),
-    ))
+fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: array_agg::array_agg_udaf(),
+        params: AggregateFunctionParams {
+            args: input.arguments.clone(),
+            distinct: input.distinct,
+            order_by: input.order_by,
+            filter: input.filter,
+            null_treatment: get_null_treatment(Some(true)),
+        },
+    }))
+}
+
+fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let (agg_col, other_args) = input.arguments.at_least_one()?;
+    if agg_col.get_type(schema)? == DataType::Null {
+        return Ok(lit(ScalarValue::Null));
+    }
+    let delim = other_args.first().cloned().unwrap_or_else(|| lit(""));
+
+    let agg = expr::Expr::AggregateFunction(AggregateFunction {
+        func: array_agg::array_agg_udaf(),
+        params: AggregateFunctionParams {
+            args: vec![agg_col.clone()],
+            distinct: input.distinct,
+            order_by: if input.distinct {
+                Some(vec![agg_col.clone().sort(true, true)])
+            } else {
+                input.order_by
+            },
+            filter: input.filter,
+            null_treatment: get_null_treatment(Some(true)),
+        },
+    });
+
+    let string_agg = array_to_string(
+        agg.cast_to(
+            &DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            schema,
+        )?,
+        delim.cast_to(&DataType::Utf8, schema)?,
+    );
+
+    let casted_agg = match agg_col.get_type(schema)? {
+        DataType::Binary | DataType::BinaryView => string_agg.cast_to(&DataType::Binary, schema)?,
+        DataType::LargeBinary => string_agg.cast_to(&DataType::LargeBinary, schema)?,
+        _ => string_agg,
+    };
+
+    Ok(when(casted_agg.clone().is_not_null(), casted_agg)
+        .when(lit(true), lit(ScalarValue::Null))
+        .end()?)
 }
 
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
@@ -247,7 +307,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             "approx_percentile",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
-        ("array_agg", F::default(array_agg::array_agg_udaf)),
+        ("array_agg", F::custom(array_agg_compacted)),
         ("avg", F::default(average::avg_udaf)),
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
         ("bit_or", F::default(bit_and_or_xor::bit_or_udaf)),
@@ -275,6 +335,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("kurtosis", F::custom(kurtosis)),
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),
+        ("listagg", F::custom(listagg)),
         ("max", F::default(min_max::max_udaf)),
         ("max_by", F::custom(max_by)),
         ("mean", F::default(average::avg_udaf)),
@@ -302,6 +363,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("stddev", F::default(stddev::stddev_udaf)),
         ("stddev_pop", F::default(stddev::stddev_pop_udaf)),
         ("stddev_samp", F::default(stddev::stddev_udaf)),
+        ("string_agg", F::custom(listagg)),
         ("sum", F::default(sum::sum_udaf)),
         ("try_avg", F::unknown("try_avg")),
         ("try_sum", F::unknown("try_sum")),

@@ -8,6 +8,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{not_impl_err, plan_datafusion_err, plan_err, DataFusionError, Result};
 use glob::Pattern;
+use log::debug;
 use percent_encoding::percent_decode;
 use url::Url;
 
@@ -505,6 +506,7 @@ pub async fn rewrite_directory_url(url: GlobUrl, session: &dyn Session) -> Resul
     if url.glob.is_some() || url.base.path().ends_with(object_store::path::DELIMITER) {
         return Ok(url);
     }
+    debug!("rewrite_directory_url: Checking if URL is a directory: {url:?}");
     let store = session.runtime_env().object_store(&url)?;
     let path =
         object_store::path::Path::from_url_path(url.base.path()).map_err(DataFusionError::from)?;
