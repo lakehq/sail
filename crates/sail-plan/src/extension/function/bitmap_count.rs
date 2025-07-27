@@ -2,7 +2,7 @@ use core::any::type_name;
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Int64Array};
+use arrow::array::Int64Array;
 use datafusion::arrow::array::{ArrayRef, BinaryArray, BinaryViewArray, LargeBinaryArray};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
