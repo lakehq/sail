@@ -302,53 +302,6 @@ fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<
     arrow_schema_from_snapshot(snapshot, wrap_partitions)
 }
 
-pub(crate) async fn files_matching_predicate<'a>(
-    snapshot: &'a EagerSnapshot,
-    log_store: LogStoreRef,
-    filters: &[Expr],
-) -> DeltaResult<Box<dyn Iterator<Item = Add> + 'a>> {
-    if filters.is_empty() {
-        return Ok(Box::new(snapshot.file_actions()?));
-    }
-
-    let log_data = crate::kernel::log_data::SailLogDataHandler::new(
-        log_store,
-        snapshot.load_config().clone(),
-        Some(snapshot.version()),
-    )
-    .await?;
-
-    let arrow_schema = snapshot.arrow_schema()?;
-    let df_schema = arrow_schema
-        .clone()
-        .to_dfschema()
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
-
-    let context = SessionContext::new();
-    let physical_expr = context
-        .create_physical_expr(filters[0].clone(), &df_schema)
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
-
-    let pruning_predicate =
-        PruningPredicate::try_new(physical_expr, arrow_schema).map_err(|e| {
-            DeltaTableError::Generic(format!("Failed to create pruning predicate: {e}"))
-        })?;
-
-    let pruning_results = pruning_predicate
-        .prune(&log_data)
-        .map_err(|e| DeltaTableError::Generic(format!("Failed to prune files: {e}")))?;
-
-    let files: Vec<Add> = snapshot.file_actions()?.collect();
-
-    // Filter files based on pruning results
-    let filtered_files = files
-        .into_iter()
-        .zip(pruning_results.into_iter())
-        .filter_map(|(add, should_keep)| if should_keep { Some(add) } else { None });
-
-    Ok(Box::new(filtered_files))
-}
-
 use crate::delta_datafusion::state::AddContainer;
 
 // Extension trait to add datafusion_table_statistics method to DeltaTableState
@@ -779,37 +732,80 @@ impl<'a> DeltaScanBuilder<'a> {
                 .collect::<Vec<_>>(),
         ));
 
-        let (files, files_scanned, files_pruned, _pruning_mask) = match self.files {
+        let (files, files_scanned, files_pruned, pruning_mask) = match self.files {
             Some(files) => {
                 let files = files.to_owned();
                 let files_scanned = files.len();
-                (files, files_scanned, 0, None::<Vec<bool>>)
+                (files, files_scanned, 0, None)
             }
             None => {
                 // early return in case we have no push down filters or limit
                 if logical_filter.is_none() && self.limit.is_none() {
-                    let files = self.snapshot.file_actions()?;
+                    let files: Vec<Add> = self.snapshot.file_actions_iter()?.collect();
                     let files_scanned = files.len();
-                    (files, files_scanned, 0, None::<Vec<bool>>)
+                    (files, files_scanned, 0, None)
                 } else {
-                    // Use files_matching_predicate to get filtered files
-                    let filters = if let Some(filter) = &self.filter {
-                        vec![filter.clone()]
+                    let snapshot = self.snapshot.snapshot();
+                    let log_data = crate::kernel::log_data::SailLogDataHandler::new(
+                        self.log_store.clone(),
+                        snapshot.load_config().clone(),
+                        Some(snapshot.version()),
+                    )
+                    .await?;
+                    let num_containers = log_data.num_containers();
+
+                    let files_to_prune = if let Some(predicate) = &logical_filter {
+                        let pruning_predicate =
+                            PruningPredicate::try_new(predicate.clone(), logical_schema.clone())
+                                .map_err(datafusion_to_delta_error)?;
+                        pruning_predicate
+                            .prune(&log_data)
+                            .map_err(datafusion_to_delta_error)?
                     } else {
-                        vec![]
+                        vec![true; num_containers]
                     };
 
-                    let files: Vec<Add> = files_matching_predicate(
-                        self.snapshot.snapshot(),
-                        self.log_store.clone(),
-                        &filters,
-                    )
-                    .await?
-                    .collect();
+                    // needed to enforce limit and deal with missing statistics
+                    let mut pruned_without_stats = vec![];
+                    let mut rows_collected = 0;
+                    let mut files = vec![];
+
+                    for (action, keep) in self
+                        .snapshot
+                        .file_actions_iter()?
+                        .zip(files_to_prune.iter().cloned())
+                    {
+                        // prune file based on predicate pushdown
+                        if keep {
+                            // prune file based on limit pushdown
+                            if let Some(limit) = self.limit {
+                                if let Some(stats) = action.get_stats()? {
+                                    if rows_collected <= limit as i64 {
+                                        rows_collected += stats.num_records;
+                                        files.push(action.to_owned());
+                                    } else {
+                                        break;
+                                    }
+                                } else {
+                                    // some files are missing stats; skipping but storing them
+                                    // in a list in case we can't reach the target limit
+                                    pruned_without_stats.push(action.to_owned());
+                                }
+                            } else {
+                                files.push(action.to_owned());
+                            }
+                        }
+                    }
+
+                    if let Some(limit) = self.limit {
+                        if rows_collected < limit as i64 {
+                            files.extend(pruned_without_stats);
+                        }
+                    }
+
                     let files_scanned = files.len();
-                    let total_files = self.snapshot.files_count();
-                    let files_pruned = total_files - files_scanned;
-                    (files, files_scanned, files_pruned, None::<Vec<bool>>)
+                    let files_pruned = num_containers - files_scanned;
+                    (files, files_scanned, files_pruned, Some(files_to_prune))
                 }
             }
         };
@@ -873,12 +869,14 @@ impl<'a> DeltaScanBuilder<'a> {
             ));
         }
 
-        let stats = if let Some(mask) = _pruning_mask {
+        let stats = if let Some(mask) = pruning_mask {
             self.snapshot
                 .datafusion_table_statistics(Some(mask))
                 .unwrap_or_else(|| Statistics::new_unknown(&schema))
         } else {
-            Statistics::new_unknown(&schema)
+            self.snapshot
+                .datafusion_table_statistics(None)
+                .unwrap_or_else(|| Statistics::new_unknown(&schema))
         };
 
         let parquet_options = TableParquetOptions {
