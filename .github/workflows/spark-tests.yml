@@ -101,8 +101,7 @@ jobs:
 
       - name: Run Spark Connect Server
         run: |
-          work_dir="$(hatch run python -c 'import os, pyspark; print(os.path.dirname(pyspark.__file__))')"
-          nohup hatch run sail spark server -C "${work_dir}" > /dev/null 2>&1 < /dev/null &
+          nohup hatch run scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
 
       - name: Wait for Spark Connect Server to Start
         run: |

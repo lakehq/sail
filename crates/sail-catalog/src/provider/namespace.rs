@@ -4,6 +4,8 @@ use std::sync::Arc;
 use crate::error::{CatalogError, CatalogResult};
 use crate::utils::quote_namespace_if_needed;
 
+/// A non-empty, multi-level name.
+/// This is used to refer to a database in the catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct Namespace {
     pub head: Arc<str>,

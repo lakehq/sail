@@ -13,6 +13,8 @@ pub mod function;
 pub mod table;
 pub mod view;
 
+/// A manager for all catalogs registered with the session.
+/// Each catalog has a name and a corresponding [`CatalogProvider`] instance.
 pub struct CatalogManager {
     state: Arc<Mutex<CatalogManagerState>>,
     pub(super) temporary_views: TemporaryViewManager,
