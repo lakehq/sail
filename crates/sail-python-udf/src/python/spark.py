@@ -615,7 +615,10 @@ class PySparkTableUdf:
                 yield ()
 
     def _iter_output_rows(self, args: Iterator[pa.RecordBatch]) -> Iterator[list]:
-        (rows1, rows2) = itertools.tee(self._iter_input_rows(args))
+        args1, args2 = itertools.tee(args)
+        if sum(1 for _ in args2) == 0:
+            return
+        (rows1, rows2) = itertools.tee(self._iter_input_rows(args1))
         inputs = (x[self._passthrough_columns :] for x in rows2)
         outputs = self._udf(None, inputs)
         empty = tuple([None] * len(self._output_schema.names))
@@ -661,7 +664,10 @@ class PySparkArrowTableUdf:
             yield tuple(self._serializer.arrow_to_pandas(x) for x in arrays)
 
     def _iter_output(self, args: Iterator[pa.RecordBatch]) -> Iterator[pd.DataFrame]:
-        (batches1, batches2) = itertools.tee(self._iter_input(args))
+        args1, args2 = itertools.tee(args)
+        if sum(1 for _ in args2) == 0:
+            return
+        (batches1, batches2) = itertools.tee(self._iter_input(args1))
         inputs = (x[self._passthrough_columns :] for x in batches2)
         outputs = self._udf(None, inputs)
         last = None
