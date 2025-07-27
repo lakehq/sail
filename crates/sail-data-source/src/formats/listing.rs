@@ -13,11 +13,10 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::physical_plan::FileSinkConfig;
-use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, Result};
-use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
+use datafusion_common::{internal_err, not_impl_err, Result};
+use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 
 use crate::options::DataSourceOptionsResolver;
 
@@ -98,7 +97,8 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         let SinkInfo {
             input,
             path,
-            mode,
+            // TODO: sink mode is ignored since the file formats only support append operation
+            mode: _,
             partition_by,
             bucket_by,
             sort_order,
@@ -113,18 +113,12 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         } else {
             format!("{path}{}", object_store::path::DELIMITER)
         };
-        let insert_op = match mode {
-            PhysicalSinkMode::Append => InsertOp::Append,
-            PhysicalSinkMode::Overwrite => InsertOp::Overwrite,
-            PhysicalSinkMode::ErrorIfExists
-            | PhysicalSinkMode::IgnoreIfExists
-            | PhysicalSinkMode::OverwriteIf { .. }
-            | PhysicalSinkMode::OverwritePartitions => {
-                return not_impl_err!("unsupported sink mode for listing table format: {mode:?}");
-            }
-        };
-        let object_store_url = ObjectStoreUrl::parse(&path)?;
         let table_paths = crate::url::resolve_listing_urls(ctx, vec![path.clone()]).await?;
+        let object_store_url = if let Some(path) = table_paths.first() {
+            path.object_store()
+        } else {
+            return internal_err!("empty listing table path: {path}");
+        };
         // We do not need to specify the exact data type for partition columns,
         // since the type is inferred from the record batch during writing.
         // This is how DataFusion handles physical planning for `LogicalPlan::Copy`.
@@ -140,7 +134,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             table_paths,
             output_schema: input.schema(),
             table_partition_cols,
-            insert_op,
+            insert_op: InsertOp::Append,
             keep_partition_by_columns: false,
             file_extension: format.get_ext(),
         };

@@ -10,6 +10,7 @@ use sail_catalog::provider::{
 use sail_common::spec;
 use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::utils::rename_logical_plan;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::logical::{FileWriteNode, FileWriteOptions, WithPreconditionsNode};
@@ -197,6 +198,8 @@ impl PlanResolver<'_> {
         }
         let mut preconditions = vec![];
         let input = self.resolve_query_plan(*input, state).await?;
+        let fields = Self::get_field_names(input.schema(), state)?;
+        let input = rename_logical_plan(input, &fields)?;
         let format = if let Some(format) = format {
             format
         } else {

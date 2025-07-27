@@ -18,6 +18,7 @@ use deltalake::logstore::StorageConfig;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::StreamExt;
+use url::Url;
 
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
@@ -25,7 +26,7 @@ use crate::table::{create_delta_table_with_object_store, open_table_with_object_
 #[derive(Debug)]
 pub struct DeltaDataSink {
     mode: SaveMode,
-    table_path: String,
+    table_url: Url,
     // TODO: maybe here we should accept parsed options?
     //   For example, `ParquetSink` accepts `TableParquetOptions`.
     options: HashMap<String, String>,
@@ -35,13 +36,13 @@ pub struct DeltaDataSink {
 impl DeltaDataSink {
     pub fn new(
         mode: SaveMode,
-        table_path: String,
+        table_url: Url,
         options: HashMap<String, String>,
         schema: SchemaRef,
     ) -> Self {
         Self {
             mode,
-            table_path,
+            table_url,
             options,
             schema,
         }
@@ -64,13 +65,10 @@ impl DeltaDataSink {
         &self,
         context: &Arc<TaskContext>,
     ) -> Result<Arc<dyn object_store::ObjectStore>> {
-        let table_url = url::Url::parse(&self.table_path)
-            .map_err(|e| DataFusionError::Plan(format!("Invalid table URI: {e}")))?;
-
         context
             .runtime_env()
             .object_store_registry
-            .get_store(&table_url)
+            .get_store(&self.table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
@@ -119,11 +117,11 @@ impl DisplayAs for DeltaDataSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "DeltaDataSink(table_path={})", self.table_path)
+                write!(f, "DeltaDataSink(table_path={})", self.table_url)
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: delta")?;
-                write!(f, "table_path={}", self.table_path)
+                write!(f, "table_path={}", self.table_url)
             }
         }
     }
@@ -152,7 +150,7 @@ impl DataSink for DeltaDataSink {
         let object_store = self.get_object_store(context)?;
 
         let (table, table_exists) = match open_table_with_object_store(
-            &self.table_path,
+            &self.table_url,
             object_store.clone(),
             storage_config.clone(),
         )
@@ -164,7 +162,7 @@ impl DataSink for DeltaDataSink {
                     return Err(DataFusionError::External(Box::new(e)));
                 }
                 let delta_ops = create_delta_table_with_object_store(
-                    &self.table_path,
+                    &self.table_url,
                     object_store.clone(),
                     storage_config.clone(),
                 )
@@ -187,16 +185,12 @@ impl DataSink for DeltaDataSink {
             None,
         );
 
-        // Parse the table path URL and extract the correct path for DeltaWriter
-        let table_url = url::Url::parse(&self.table_path)
-            .map_err(|e| DataFusionError::Plan(format!("Invalid table URI: {e}")))?;
-
-        let writer_path = if table_url.scheme() == "file" {
-            let filesystem_path = table_url.path();
+        let writer_path = if self.table_url.scheme() == "file" {
+            let filesystem_path = self.table_url.path();
             object_store::path::Path::from(filesystem_path)
         } else {
             // For other schemes (s3://, etc.), use the full URL as-is
-            object_store::path::Path::from(self.table_path.as_str())
+            object_store::path::Path::from(self.table_url.as_str())
         };
 
         let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
@@ -289,7 +283,7 @@ impl DataSink for DeltaDataSink {
 
             DeltaOperation::Create {
                 mode: SaveMode::ErrorIfExists, // Required for Create operation
-                location: self.table_path.clone(),
+                location: self.table_url.to_string(),
                 protocol,
                 metadata,
             }

@@ -480,6 +480,7 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("table options"));
         }
         let plan = match status.kind {
+            // TODO
             TableKind::Table {
                 catalog: _,
                 database: _,
