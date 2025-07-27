@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::TimeZone;
+use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
@@ -299,6 +300,53 @@ fn arrow_type_from_delta_type(
 
 fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
     arrow_schema_from_snapshot(snapshot, wrap_partitions)
+}
+
+pub(crate) async fn files_matching_predicate<'a>(
+    snapshot: &'a EagerSnapshot,
+    log_store: LogStoreRef,
+    filters: &[Expr],
+) -> DeltaResult<Box<dyn Iterator<Item = Add> + 'a>> {
+    if filters.is_empty() {
+        return Ok(Box::new(snapshot.file_actions()?));
+    }
+
+    let log_data = crate::kernel::log_data::SailLogDataHandler::new(
+        log_store,
+        snapshot.load_config().clone(),
+        Some(snapshot.version()),
+    )
+    .await?;
+
+    let arrow_schema = snapshot.arrow_schema()?;
+    let df_schema = arrow_schema
+        .clone()
+        .to_dfschema()
+        .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
+
+    let context = SessionContext::new();
+    let physical_expr = context
+        .create_physical_expr(filters[0].clone(), &df_schema)
+        .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
+
+    let pruning_predicate =
+        PruningPredicate::try_new(physical_expr, arrow_schema).map_err(|e| {
+            DeltaTableError::Generic(format!("Failed to create pruning predicate: {e}"))
+        })?;
+
+    let pruning_results = pruning_predicate
+        .prune(&log_data)
+        .map_err(|e| DeltaTableError::Generic(format!("Failed to prune files: {e}")))?;
+
+    let files: Vec<Add> = snapshot.file_actions()?.collect();
+
+    // Filter files based on pruning results
+    let filtered_files = files
+        .into_iter()
+        .zip(pruning_results.into_iter())
+        .filter_map(|(add, should_keep)| if should_keep { Some(add) } else { None });
+
+    Ok(Box::new(filtered_files))
 }
 
 use crate::delta_datafusion::state::AddContainer;
@@ -721,6 +769,16 @@ impl<'a> DeltaScanBuilder<'a> {
             })
             .map(|expr| simplify_expr(&context, &df_schema, expr));
 
+        let table_partition_cols = self.snapshot.metadata().partition_columns();
+        let file_schema = Arc::new(ArrowSchema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|f| !table_partition_cols.contains(f.name()))
+                .cloned()
+                .collect::<Vec<_>>(),
+        ));
+
         let (files, files_scanned, files_pruned, _pruning_mask) = match self.files {
             Some(files) => {
                 let files = files.to_owned();
@@ -734,69 +792,24 @@ impl<'a> DeltaScanBuilder<'a> {
                     let files_scanned = files.len();
                     (files, files_scanned, 0, None::<Vec<bool>>)
                 } else {
-                    let num_containers = self.snapshot.files_count();
-
-                    let files_to_prune = if let Some(predicate) = &logical_filter {
-                        let file_actions = self.snapshot.file_actions()?;
-                        let pruning_stats = crate::delta_datafusion::state::AddContainer::new(
-                            &file_actions,
-                            self.snapshot.metadata().partition_columns(),
-                            logical_schema.clone(),
-                        );
-
-                        let pruning_predicate =
-                            PruningPredicate::try_new(predicate.clone(), logical_schema.clone())
-                                .map_err(datafusion_to_delta_error)?;
-                        pruning_predicate
-                            .prune(&pruning_stats)
-                            .map_err(datafusion_to_delta_error)?
+                    // Use files_matching_predicate to get filtered files
+                    let filters = if let Some(filter) = &self.filter {
+                        vec![filter.clone()]
                     } else {
-                        vec![true; num_containers]
+                        vec![]
                     };
 
-                    // needed to enforce limit and deal with missing statistics
-                    // rust port of https://github.com/delta-io/delta/pull/1495
-                    let mut pruned_without_stats = vec![];
-                    let mut rows_collected: i64 = 0;
-                    let mut files = vec![];
-
-                    for (action, keep) in self
-                        .snapshot
-                        .file_actions()?
-                        .into_iter()
-                        .zip(files_to_prune.iter().cloned())
-                    {
-                        // prune file based on predicate pushdown
-                        if keep {
-                            // prune file based on limit pushdown
-                            if let Some(limit) = self.limit {
-                                if let Some(stats) = action.get_stats()? {
-                                    if rows_collected <= limit as i64 {
-                                        rows_collected += stats.num_records;
-                                        files.push(action);
-                                    } else {
-                                        break;
-                                    }
-                                } else {
-                                    // some files are missing stats; skipping but storing them
-                                    // in a list in case we can't reach the target limit
-                                    pruned_without_stats.push(action);
-                                }
-                            } else {
-                                files.push(action);
-                            }
-                        }
-                    }
-
-                    if let Some(limit) = self.limit {
-                        if rows_collected < limit as i64 {
-                            files.extend(pruned_without_stats);
-                        }
-                    }
-
+                    let files: Vec<Add> = files_matching_predicate(
+                        self.snapshot.snapshot(),
+                        self.log_store.clone(),
+                        &filters,
+                    )
+                    .await?
+                    .collect();
                     let files_scanned = files.len();
-                    let files_pruned = num_containers - files_scanned;
-                    (files, files_scanned, files_pruned, Some(files_to_prune))
+                    let total_files = self.snapshot.files_count();
+                    let files_pruned = total_files - files_scanned;
+                    (files, files_scanned, files_pruned, None::<Vec<bool>>)
                 }
             }
         };
@@ -804,7 +817,6 @@ impl<'a> DeltaScanBuilder<'a> {
         // TODO we group files together by their partition values. If the table is partitioned
         // we may be able to reduce the number of groups by combining groups with the same partition values
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-
         let table_partition_cols = &self.snapshot.metadata().partition_columns();
 
         for action in files.iter() {
@@ -825,22 +837,28 @@ impl<'a> DeltaScanBuilder<'a> {
                 .push(part);
         }
 
-        let file_schema = Arc::new(ArrowSchema::new(
-            schema
-                .fields()
-                .iter()
-                .filter(|f| !table_partition_cols.contains(f.name()))
-                .cloned()
-                .collect::<Vec<_>>(),
-        ));
-
-        let table_partition_cols = &self.snapshot.metadata().partition_columns();
-
-        use datafusion::arrow::error::ArrowError;
         let mut table_partition_cols = table_partition_cols
             .iter()
-            .map(|name| schema.field_with_name(name).map(|f| f.to_owned()))
-            .collect::<Result<Vec<_>, ArrowError>>()?;
+            .map(|col| {
+                let field = schema
+                    .field_with_name(col)
+                    .expect("Column should exist in schema");
+                let corrected = if config.wrap_partition_values {
+                    match field.data_type() {
+                        ArrowDataType::Utf8
+                        | ArrowDataType::LargeUtf8
+                        | ArrowDataType::Binary
+                        | ArrowDataType::LargeBinary => {
+                            wrap_partition_type_in_dict(field.data_type().clone())
+                        }
+                        _ => field.data_type().clone(),
+                    }
+                } else {
+                    field.data_type().clone()
+                };
+                Field::new(col.clone(), corrected, true)
+            })
+            .collect::<Vec<_>>();
 
         if let Some(file_column_name) = &config.file_column_name {
             let field_name_datatype = if config.wrap_partition_values {
@@ -854,13 +872,6 @@ impl<'a> DeltaScanBuilder<'a> {
                 false,
             ));
         }
-
-        //  Where is the correct place to marry file pruning with statistics pruning?
-        //  Temporarily re-generating the log handler, just so that we can compute the stats.
-        //  Should we update datafusion_table_statistics to optionally take the mask?
-
-        // Following https://github.com/delta-io/delta-rs/pull/3377, but re-generating
-        // AddContainer to compute the stats.
 
         let stats = if let Some(mask) = _pruning_mask {
             self.snapshot
@@ -951,6 +962,18 @@ fn simplify_expr(
     context
         .create_physical_expr(simplified, df_schema)
         .expect("Failed to create physical expression")
+}
+
+#[allow(dead_code)]
+fn prune_file_statistics(
+    record_batches: &[RecordBatch],
+    pruning_mask: Vec<bool>,
+) -> Vec<RecordBatch> {
+    record_batches
+        .iter()
+        .zip(pruning_mask.iter())
+        .filter_map(|(batch, keep)| if *keep { Some(batch.clone()) } else { None })
+        .collect()
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
@@ -1062,8 +1085,8 @@ fn partitioned_file_from_action(
                 .expect("Failed to convert action to ObjectMeta")
         },
         partition_values,
-        range: None,
         extensions: None,
+        range: None,
         statistics: None,
         metadata_size_hint: None,
     }
