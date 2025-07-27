@@ -240,7 +240,7 @@ impl CatalogCommand {
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::SetCurrentDatabase { database } => {
-                manager.set_default_database(database)?;
+                manager.set_default_database(database).await?;
                 let rows: Vec<EmptyDisplay> = vec![];
                 build_record_batch(schema, &rows)
             }

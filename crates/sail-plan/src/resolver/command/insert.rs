@@ -13,7 +13,7 @@ impl PlanResolver<'_> {
         input: spec::QueryPlan,
         table: spec::ObjectName,
         columns: spec::WriteColumns,
-        partition_spec: Vec<(spec::Identifier, spec::Expr)>,
+        partition_spec: Vec<(spec::Identifier, Option<spec::Expr>)>,
         replace: Option<spec::Expr>,
         if_not_exists: bool,
         overwrite: bool,

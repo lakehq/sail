@@ -36,6 +36,8 @@ pub struct BucketBy {
 }
 
 /// Information required to create a data source.
+/// Note that this should contain physical information instead of logical information.
+/// For example, an arrow `Schema` instead of a DataFusion `DFSchema` is expected here.
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
     pub paths: Vec<String>,
@@ -44,6 +46,9 @@ pub struct SourceInfo {
 }
 
 /// Information required to create a data writer.
+/// Note that this should contain physical information instead of logical information.
+/// For example, a physical expression instead of a logical expression is expected
+/// to define the sort order here.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
     pub input: Arc<dyn ExecutionPlan>,

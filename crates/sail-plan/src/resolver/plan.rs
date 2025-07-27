@@ -480,7 +480,7 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("table options"));
         }
         let plan = match status.kind {
-            // TODO
+            // TODO: handle constraints/partitioning/bucketing information
             TableKind::Table {
                 catalog: _,
                 database: _,

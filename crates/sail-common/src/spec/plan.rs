@@ -418,7 +418,7 @@ pub enum CommandNode {
         input: Box<QueryPlan>,
         table: ObjectName,
         columns: WriteColumns,
-        partition_spec: Vec<(Identifier, Expr)>,
+        partition_spec: Vec<(Identifier, Option<Expr>)>,
         replace: Option<Expr>,
         if_not_exists: bool,
         overwrite: bool,

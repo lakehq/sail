@@ -531,16 +531,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             query,
         } => {
             let partition_spec = if let Some(partition) = partition {
-                let kv = from_ast_partition(partition)?;
-                kv.into_iter()
-                    .map(|x| {
-                        if let (k, Some(v)) = x {
-                            Ok((k, v))
-                        } else {
-                            Err(SqlError::invalid("missing value for partition key"))
-                        }
-                    })
-                    .collect::<SqlResult<Vec<_>>>()?
+                from_ast_partition(partition)?
             } else {
                 vec![]
             };

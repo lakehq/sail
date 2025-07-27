@@ -10,6 +10,9 @@ pub struct SingleValueDisplay<T> {
     pub value: T,
 }
 
+/// A trait for displaying catalog information in a structured format.
+/// This is useful for defining output schemas and producing outputs
+/// for various SQL catalog commands.
 pub trait CatalogDisplay {
     type Catalog: Serialize + for<'de> Deserialize<'de>;
     type Database: Serialize + for<'de> Deserialize<'de>;

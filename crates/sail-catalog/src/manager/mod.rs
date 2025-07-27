@@ -41,6 +41,15 @@ impl CatalogManager {
             .into_iter()
             .map(|(name, provider)| (name.into(), provider))
             .collect::<HashMap<_, _>>();
+        if !catalogs.contains_key(options.default_catalog.as_str()) {
+            return Err(CatalogError::NotFound(
+                "catalog",
+                options.default_catalog.clone(),
+            ));
+        }
+        // We do not validate the existence of the default database here,
+        // since it requires an async method call to the catalog provider.
+        // Even if the default database is valid now, it may be dropped externally later.
         let state = CatalogManagerState {
             catalogs,
             default_catalog: options.default_catalog.into(),

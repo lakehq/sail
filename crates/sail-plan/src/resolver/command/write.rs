@@ -36,7 +36,7 @@ pub(super) enum WriteMode {
 /// A unified specification all write or insert operations.
 pub(super) struct WriteSpec {
     pub input: Box<spec::QueryPlan>,
-    pub partition: Vec<(spec::Identifier, spec::Expr)>,
+    pub partition: Vec<(spec::Identifier, Option<spec::Expr>)>,
     pub format: Option<String>,
     pub target: WriteTarget,
     pub mode: WriteMode,
@@ -182,7 +182,8 @@ impl PlanResolver<'_> {
             format,
             target,
             mode,
-            columns: _, // TODO
+            // TODO: rewrite input plan to match columns
+            columns: _,
             partition_by,
             bucket_by,
             sort_by,
@@ -244,6 +245,7 @@ impl PlanResolver<'_> {
                     Create { replace: bool },
                 }
 
+                // TODO: handle column defaults and generated columns
                 let status = match self
                     .ctx
                     .extension::<CatalogManager>()?

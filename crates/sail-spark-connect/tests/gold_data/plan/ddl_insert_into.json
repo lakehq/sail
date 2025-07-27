@@ -3,13 +3,150 @@
     {
       "input": "\nINSERT INTO testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2)\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "invalid argument: missing value for partition key"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "planId": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": "byPosition",
+              "partitionSpec": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ],
+                [
+                  "p2",
+                  null
+                ]
+              ],
+              "replace": null,
+              "ifNotExists": false,
+              "overwrite": false
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "\nINSERT INTO testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) (a, b)\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "invalid argument: missing value for partition key"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "planId": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "columns": {
+                "columns": [
+                  "a",
+                  "b"
+                ]
+              },
+              "partitionSpec": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ],
+                [
+                  "p2",
+                  null
+                ]
+              ],
+              "replace": null,
+              "ifNotExists": false,
+              "overwrite": false
+            },
+            "planId": null
+          }
+        }
       }
     },
     {

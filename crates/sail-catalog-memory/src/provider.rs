@@ -14,6 +14,7 @@ struct MemoryDatabase {
     views: HashMap<String, TableStatus>,
 }
 
+/// An in-memory catalog provider.
 pub struct MemoryCatalogProvider {
     name: String,
     databases: Arc<Mutex<HashMap<Namespace, MemoryDatabase>>>,
