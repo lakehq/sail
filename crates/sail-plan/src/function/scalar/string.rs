@@ -15,6 +15,7 @@ use crate::extension::function::string::spark_base64::{SparkBase64, SparkUnbase6
 use crate::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use crate::extension::function::string::spark_mask::SparkMask;
 use crate::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use crate::extension::function::string::spark_to_number::SparkToNumber;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
@@ -359,7 +360,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("substring_index", F::ternary(expr_fn::substr_index)),
         ("to_binary", F::udf(SparkToBinary::new())),
         ("to_char", F::unknown("to_char")),
-        ("to_number", F::unknown("to_number")),
+        ("to_number", F::udf(SparkToNumber::new())),
         ("to_varchar", F::unknown("to_varchar")),
         ("translate", F::ternary(expr_fn::translate)),
         ("trim", F::var_arg(expr_fn::trim)),
