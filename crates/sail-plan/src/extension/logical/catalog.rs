@@ -183,8 +183,8 @@ impl CatalogDisplay for SparkCatalogDisplay {
         Self::Database {
             name: quote_names_if_needed(&status.database),
             catalog: Some(status.catalog),
-            description: None,
-            location_uri: None,
+            description: status.comment,
+            location_uri: status.location,
         }
     }
 
@@ -199,14 +199,11 @@ impl CatalogDisplay for SparkCatalogDisplay {
             TableKind::Table { .. } | TableKind::View { .. } => false,
             TableKind::TemporaryView { .. } | TableKind::GlobalTemporaryView { .. } => true,
         };
-        let catalog = status.kind.catalog();
-        let namespace = status.kind.database();
-        let description = status.kind.description();
         Self::Table {
             name: status.name,
-            catalog,
-            namespace,
-            description,
+            catalog: status.kind.catalog(),
+            namespace: status.kind.database(),
+            description: status.kind.comment(),
             table_type: table_type.to_string(),
             is_temporary,
         }

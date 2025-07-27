@@ -87,7 +87,7 @@ impl TableKind {
         }
     }
 
-    pub fn description(&self) -> Option<String> {
+    pub fn comment(&self) -> Option<String> {
         match &self {
             TableKind::Table { comment, .. }
             | TableKind::View { comment, .. }

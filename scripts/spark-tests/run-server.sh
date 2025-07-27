@@ -20,6 +20,9 @@ export RUST_BACKTRACE="${RUST_BACKTRACE:-full}"
 # no `pyvenv.cfg` at its required location (one directory above the executable).
 export PYTHONPATH="${VIRTUAL_ENV}/lib/python${python_version}/site-packages"
 export PYARROW_IGNORE_TIMEZONE="1"
+export SAIL_CATALOG__DEFAULT_CATALOG='"spark_catalog"'
+export SAIL_CATALOG__DEFAULT_DATABASE='["default"]'
+export SAIL_CATALOG__LIST='[{name="spark_catalog", type="memory", initial_database=["default"], initial_database_comment="default database"}]'
 
 work_dir="$(python -c 'import os, pyspark; print(os.path.dirname(pyspark.__file__))')"
 cargo run -p sail-cli -- spark server -C "${work_dir}"

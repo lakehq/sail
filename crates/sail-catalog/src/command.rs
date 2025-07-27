@@ -285,7 +285,7 @@ impl CatalogCommand {
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::TableExists { table } => {
-                let value = match manager.get_table(&table).await {
+                let value = match manager.get_table_or_view(&table).await {
                     Ok(_) => true,
                     Err(CatalogError::NotFound(_, _)) => false,
                     Err(e) => return Err(e),

@@ -15,9 +15,16 @@ pub fn create_catalog_manager(config: &AppConfig) -> Result<CatalogManager> {
         .iter()
         .map(|x| -> CatalogResult<(String, Arc<dyn CatalogProvider>)> {
             match x {
-                CatalogKind::Memory { name, database } => {
-                    let provider =
-                        MemoryCatalogProvider::new(name.clone(), database.clone().try_into()?);
+                CatalogKind::Memory {
+                    name,
+                    initial_database,
+                    initial_database_comment,
+                } => {
+                    let provider = MemoryCatalogProvider::new(
+                        name.clone(),
+                        initial_database.clone().try_into()?,
+                        initial_database_comment.clone(),
+                    );
                     Ok((name.clone(), Arc::new(provider)))
                 }
             }

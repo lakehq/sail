@@ -20,15 +20,19 @@ pub struct MemoryCatalogProvider {
 }
 
 impl MemoryCatalogProvider {
-    pub fn new(name: String, database: Namespace) -> Self {
+    pub fn new(
+        name: String,
+        initial_database: Namespace,
+        initial_database_comment: Option<String>,
+    ) -> Self {
         let mut databases = HashMap::new();
         databases.insert(
-            database.clone(),
+            initial_database.clone(),
             MemoryDatabase {
                 status: DatabaseStatus {
                     catalog: name.clone(),
-                    database: database.into(),
-                    comment: None,
+                    database: initial_database.into(),
+                    comment: initial_database_comment,
                     location: None,
                     properties: vec![],
                 },

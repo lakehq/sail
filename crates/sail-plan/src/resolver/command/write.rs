@@ -261,7 +261,10 @@ impl PlanResolver<'_> {
                                 "table already exists: {table:?}"
                             )));
                         }
-                        (SinkMode::ErrorIfExists, WriteTableAction::None)
+                        (
+                            SinkMode::ErrorIfExists,
+                            WriteTableAction::Create { replace: false },
+                        )
                     }
                     WriteMode::IgnoreIfExists => {
                         if status.is_some() {
