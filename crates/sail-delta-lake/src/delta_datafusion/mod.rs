@@ -682,7 +682,7 @@ impl<'a> DeltaScanBuilder<'a> {
         let df_schema = logical_schema
             .clone()
             .to_dfschema()
-            .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
+            .map_err(datafusion_to_delta_error)?;
 
         let logical_filter = self
             .filter

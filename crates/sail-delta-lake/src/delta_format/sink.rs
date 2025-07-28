@@ -282,7 +282,9 @@ impl DataSink for DeltaDataSink {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
             let protocol = Protocol::default();
-            let metadata = crate::kernel::models::actions::new_metadata(
+            // FIXME: Follow upstream changes.
+            #[allow(deprecated)]
+            let metadata = deltalake::kernel::new_metadata(
                 &delta_schema,
                 partition_columns.clone(),
                 HashMap::<String, String>::new(),
