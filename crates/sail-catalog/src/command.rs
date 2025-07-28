@@ -212,6 +212,7 @@ impl CatalogCommand {
         ctx: &SessionContext,
         manager: &CatalogManager,
     ) -> CatalogResult<RecordBatch> {
+        // TODO: make sure we return the same schema as Spark for each command
         // TODO: `ctx` will not be needed if `CatalogManager` manages functions internally.
         let schema = self.schema::<D>()?;
         match self {

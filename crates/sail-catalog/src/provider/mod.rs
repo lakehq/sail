@@ -9,9 +9,9 @@ pub use status::*;
 use crate::error::CatalogResult;
 
 /// A trait that defines the interface for a catalog.
-/// A catalog contains **databases**, where each database has a multi-level name
-/// that represents a **namespace**.
-/// A database contains **objects** such as **tables** and **views**.
+/// A catalog contains *databases*, where each database has a multi-level name
+/// that represents a *namespace*.
+/// A database contains *objects* such as *tables* and *views*.
 #[async_trait::async_trait]
 pub trait CatalogProvider: Send + Sync {
     /// The name of the catalog in the session.

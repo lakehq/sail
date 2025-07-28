@@ -6,6 +6,12 @@ use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 
 use crate::utils::ItemTaker;
 
+/// A logical plan node that represents a plan with "logical preconditions".
+/// The preconditions are logical plans that will be executed before physical planning
+/// of the main plan.
+/// For example, this is useful for executing catalog operations before physical execution
+/// of the main plan. Such catalog operations are not supposed to be executed when
+/// resolving the logical plan since the plan resolver should not have side effects.
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
 pub struct WithPreconditionsNode {
     preconditions: Vec<Arc<LogicalPlan>>,

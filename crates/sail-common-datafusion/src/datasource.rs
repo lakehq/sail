@@ -9,7 +9,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 use datafusion_expr::Expr;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
     ErrorIfExists,
     IgnoreIfExists,
@@ -29,7 +29,7 @@ pub enum PhysicalSinkMode {
     OverwritePartitions,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct BucketBy {
     pub columns: Vec<String>,
     pub num_buckets: usize,

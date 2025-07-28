@@ -143,18 +143,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 clauses: clauses.try_into()?,
                 query: r#as,
             };
+            let table = from_ast_object_name(name)?;
             let (definition, query) = from_ast_table_definition(definition)?;
             let node = if let Some(query) = query {
                 spec::CommandNode::CreateTableAsSelect {
-                    table: from_ast_object_name(name)?,
+                    table,
                     definition,
                     query,
                 }
             } else {
-                spec::CommandNode::CreateTable {
-                    table: from_ast_object_name(name)?,
-                    definition,
-                }
+                spec::CommandNode::CreateTable { table, definition }
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -175,18 +173,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 clauses: clauses.try_into()?,
                 query: r#as,
             };
+            let table = from_ast_object_name(name)?;
             let (definition, query) = from_ast_table_definition(definition)?;
             let node = if let Some(query) = query {
                 spec::CommandNode::CreateTableAsSelect {
-                    table: from_ast_object_name(name)?,
+                    table,
                     definition,
                     query,
                 }
             } else {
-                spec::CommandNode::CreateTable {
-                    table: from_ast_object_name(name)?,
-                    definition,
-                }
+                spec::CommandNode::CreateTable { table, definition }
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }

@@ -164,7 +164,6 @@ mod display {
 
 struct SparkCatalogDisplay;
 
-// TODO: make sure we return the same schema as Spark for each command
 impl CatalogDisplay for SparkCatalogDisplay {
     type Catalog = display::SparkCatalog;
     type Database = display::SparkDatabase;

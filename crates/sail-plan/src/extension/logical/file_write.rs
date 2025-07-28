@@ -8,7 +8,7 @@ use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 
 use crate::utils::ItemTaker;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct FileWriteOptions {
     pub path: String,
     pub format: String,
@@ -43,11 +43,15 @@ impl FileWriteNode {
 #[derive(PartialEq, PartialOrd)]
 struct FileWriteNodeOrd<'a> {
     input: &'a Arc<LogicalPlan>,
+    options: &'a FileWriteOptions,
 }
 
 impl<'a> From<&'a FileWriteNode> for FileWriteNodeOrd<'a> {
     fn from(node: &'a FileWriteNode) -> Self {
-        Self { input: &node.input }
+        Self {
+            input: &node.input,
+            options: &node.options,
+        }
     }
 }
 
