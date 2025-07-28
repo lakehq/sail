@@ -4,7 +4,7 @@ use arrow::array::{
     Array, ArrowPrimitiveType, Date32Array, Date32Builder, DurationMicrosecondArray,
     PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
 };
-use arrow::datatypes::{Date32Type, Int32Type, IntervalMonthDayNanoType, IntervalYearMonthType};
+use arrow::datatypes::{Date32Type, Float64Type, Int32Type, IntervalMonthDayNanoType, IntervalYearMonthType};
 use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -66,6 +66,32 @@ where
     }
     builder.finish()
 }
+
+pub fn try_binary_op_to_float64<T, F>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+    op: F,
+) -> PrimitiveArray<Float64Type>
+where
+    T: ArrowPrimitiveType,
+    F: Fn(T::Native, T::Native) -> Option<f64>,
+{
+    let mut builder = PrimitiveBuilder::<Float64Type>::with_capacity(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            builder.append_null();
+        } else {
+            let a = left.value(i);
+            let b = right.value(i);
+            match op(a, b) {
+                Some(v) => builder.append_value(v),
+                None => builder.append_null(),
+            }
+        }
+    }
+    builder.finish()
+}
+
 
 pub fn try_binary_op_date32_i32<F>(
     date_array: &PrimitiveArray<Date32Type>,
