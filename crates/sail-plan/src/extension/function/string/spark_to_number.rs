@@ -167,7 +167,7 @@ macro_rules! get_capture_group {
 /// Parses a numeric value from a string using a specified format string.
 pub fn parse_number(value: &str, format: &Captures) -> Result<ParsedNumber> {
     // Getting the precision and scale
-    let (_, _, f_precision, f_scale) = extract_numbers_and_decimals(&format)?;
+    let (_, _, f_precision, f_scale) = extract_numbers_and_decimals(format)?;
 
     // Second we need to match the value
     // Matching the raw value pattern weather it's correct or not is not
@@ -175,7 +175,7 @@ pub fn parse_number(value: &str, format: &Captures) -> Result<ParsedNumber> {
     let factor: i8 = get_sign_factor(&value_captures);
 
     // Check if the numbers groupings match the format
-    match_grouping(&value_captures, &format)?;
+    match_grouping(&value_captures, format)?;
 
     // Getting the numbers, decimals, precision and scale from the value captures
     let (v_numbers, v_decimals, v_precision, v_scale): (String, Option<String>, u8, i8) =
@@ -250,11 +250,11 @@ impl PatternExpression {
         }
     }
     pub fn try_from(format: &Captures) -> Result<Self> {
-        let expr: PatternExpression = handle_number(&format)?;
-        let expr: PatternExpression = handle_decimal(&format)?.prepend(expr)?;
-        let expr: PatternExpression = handle_currency(&format, &expr)?;
-        let expr: PatternExpression = handle_sign(&format, &expr)?;
-        handle_brackets(&format, &expr)
+        let expr: PatternExpression = handle_number(format)?;
+        let expr: PatternExpression = handle_decimal(format)?.prepend(expr)?;
+        let expr: PatternExpression = handle_currency(format, &expr)?;
+        let expr: PatternExpression = handle_sign(format, &expr)?;
+        handle_brackets(format, &expr)
     }
 }
 
