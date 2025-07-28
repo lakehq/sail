@@ -220,12 +220,11 @@ impl SailLogDataHandler {
 
             if let Some(arr) = arr {
                 for i in 0..num_rows {
-                    if mask.as_ref().map(|m| m[mask_offset + i]).unwrap_or(true) {
-                        if arr.is_valid(i) {
+                    if mask.as_ref().map(|m| m[mask_offset + i]).unwrap_or(true)
+                        && arr.is_valid(i) {
                             total += arr.value(i) as usize;
                             known = true;
                         }
-                    }
                 }
             }
             mask_offset += num_rows;
@@ -240,7 +239,7 @@ impl SailLogDataHandler {
 
     /// Collects and aggregates column-level statistics.
     fn column_stats(&self, name: &str, mask: &Option<Vec<bool>>) -> Option<ColumnStatistics> {
-        let null_count_col = format!("add.stats_parsed.nullCount.{}", name);
+        let null_count_col = format!("add.stats_parsed.nullCount.{name}");
         let null_count = self.collect_batch_stats(&null_count_col, mask);
 
         let min_value = self.column_bounds("add.stats_parsed.minValues", name, mask, true);
@@ -306,7 +305,9 @@ impl SailLogDataHandler {
             let array_to_update = if let Some(mask) = mask {
                 if mask.len() > mask_offset {
                     let batch_mask = BooleanArray::from_iter(
-                        mask[mask_offset..mask_offset + num_rows].iter().map(|&b| Some(b)),
+                        mask[mask_offset..mask_offset + num_rows]
+                            .iter()
+                            .map(|&b| Some(b)),
                     );
                     datafusion::arrow::compute::filter(array, &batch_mask).ok()
                 } else {
