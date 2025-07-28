@@ -27,7 +27,7 @@ use crate::kernel::ARROW_HANDLER;
 mod ex {
     use arrow_schema::ArrowError;
     use datafusion::arrow::array::{Array, ArrayRef, StructArray};
-
+    // Credit: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/kernel/arrow/extract.rs>
     pub fn extract_and_cast_opt<'a, T: Array + 'static>(
         array: &'a dyn super::ProvidesColumnByName,
         name: &'a str,
@@ -117,6 +117,7 @@ pub struct SailLogDataHandler {
     schema: StructType,
 }
 
+// Credit: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/kernel/snapshot/log_data.rs>
 impl SailLogDataHandler {
     pub async fn new(
         log_store: LogStoreRef,

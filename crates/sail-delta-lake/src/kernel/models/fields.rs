@@ -1,4 +1,4 @@
-//! Schema definitions for action types
+/// Credit: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/kernel/models/fields.rs>
 use std::sync::{Arc, LazyLock};
 
 use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
