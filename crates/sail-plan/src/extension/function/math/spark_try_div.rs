@@ -9,7 +9,10 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
-use crate::extension::function::math::common_try::{binary_op_scalar_or_array, try_binary_op_primitive, try_binary_op_to_float64, try_div_interval_yearmonth_i32};
+use crate::extension::function::math::common_try::{
+    binary_op_scalar_or_array, try_binary_op_primitive, try_binary_op_to_float64,
+    try_div_interval_yearmonth_i32,
+};
 
 #[derive(Debug)]
 pub struct SparkTryDiv {
@@ -90,7 +93,7 @@ impl ScalarUDFImpl for SparkTryDiv {
             (DataType::Int64, DataType::Int64) => {
                 let l = left_arr.as_primitive::<Int64Type>();
                 let r = right_arr.as_primitive::<Int64Type>();
-                let result = try_binary_op_to_float64::<Int64Type, _>(&l, &r, |a, b| {
+                let result = try_binary_op_to_float64::<Int64Type, _>(l, r, |a, b| {
                     if b == 0 {
                         None
                     } else {

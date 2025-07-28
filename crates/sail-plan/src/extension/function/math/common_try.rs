@@ -4,7 +4,9 @@ use arrow::array::{
     Array, ArrowPrimitiveType, Date32Array, Date32Builder, DurationMicrosecondArray,
     PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
 };
-use arrow::datatypes::{Date32Type, Float64Type, Int32Type, IntervalMonthDayNanoType, IntervalYearMonthType};
+use arrow::datatypes::{
+    Date32Type, Float64Type, Int32Type, IntervalMonthDayNanoType, IntervalYearMonthType,
+};
 use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -91,7 +93,6 @@ where
     }
     builder.finish()
 }
-
 
 pub fn try_binary_op_date32_i32<F>(
     date_array: &PrimitiveArray<Date32Type>,
