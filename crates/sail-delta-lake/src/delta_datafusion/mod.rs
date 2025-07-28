@@ -52,6 +52,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
+use crate::kernel::log_data::SailLogDataHandler;
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -723,6 +724,13 @@ impl<'a> DeltaScanBuilder<'a> {
                 .collect::<Vec<_>>(),
         ));
 
+        let log_data = SailLogDataHandler::new(
+            self.log_store.clone(),
+            self.snapshot.load_config().clone(),
+            Some(self.snapshot.version()),
+        )
+        .await?;
+
         let (files, files_scanned, files_pruned, pruning_mask) = match self.files {
             Some(files) => {
                 let files = files.to_owned();
@@ -736,13 +744,6 @@ impl<'a> DeltaScanBuilder<'a> {
                     let files_scanned = files.len();
                     (files, files_scanned, 0, None)
                 } else {
-                    let snapshot = self.snapshot.snapshot();
-                    let log_data = crate::kernel::log_data::SailLogDataHandler::new(
-                        self.log_store.clone(),
-                        snapshot.load_config().clone(),
-                        Some(snapshot.version()),
-                    )
-                    .await?;
                     let num_containers = log_data.num_containers();
 
                     let files_to_prune = if let Some(predicate) = &logical_filter {
@@ -859,12 +860,6 @@ impl<'a> DeltaScanBuilder<'a> {
                 false,
             ));
         }
-        let log_data = crate::kernel::log_data::SailLogDataHandler::new(
-            self.log_store.clone(),
-            self.snapshot.load_config().clone(),
-            Some(self.snapshot.version()),
-        )
-        .await?;
 
         let stats = log_data
             .statistics(pruning_mask)
