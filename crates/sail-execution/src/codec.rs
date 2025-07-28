@@ -48,10 +48,9 @@ use sail_plan::extension::function::array::spark_array_item_with_position::Array
 use sail_plan::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_plan::extension::function::array::spark_map_to_array::MapToArray;
 use sail_plan::extension::function::array::spark_sequence::SparkSequence;
-use sail_plan::extension::function::collection::deep_size::DeepSize;
+use sail_plan::extension::function::bitmap_count::BitmapCount;
 use sail_plan::extension::function::collection::spark_concat::SparkConcat;
 use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
-use sail_plan::extension::function::collection::spark_size::SparkSize;
 use sail_plan::extension::function::csv::spark_from_csv::SparkFromCSV;
 use sail_plan::extension::function::datetime::spark_date::SparkDate;
 use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
@@ -109,6 +108,9 @@ use sail_plan::extension::function::string::spark_to_binary::{SparkToBinary, Spa
 use sail_plan::extension::function::string::spark_to_number::SparkToNumber;
 use sail_plan::extension::function::struct_function::StructFunction;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
+use sail_plan::extension::function::url::parse_url::ParseUrl;
+use sail_plan::extension::function::url::url_decode::UrlDecode;
+use sail_plan::extension::function::url::url_encode::UrlEncode;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{
     MapPartitionsExec, RangeExec, SchemaPivotExec, ShowStringExec,
@@ -752,13 +754,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkFromUtcTimestamp::new(time_unit.into());
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkSize(gen::SparkSizeUdf {
-                is_array_size,
-                is_legacy_cardinality,
-            }) => {
-                let udf = SparkSize::new(is_array_size, is_legacy_cardinality);
-                return Ok(Arc::new(ScalarUDF::from(udf)));
-            }
         };
         match name {
             "array_item_with_position" => {
@@ -767,6 +762,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_empty_to_null" => Ok(Arc::new(ScalarUDF::from(ArrayEmptyToNull::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
+            "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(Greatest::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(Least::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
@@ -776,7 +772,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
-            "deep_size" => Ok(Arc::new(ScalarUDF::from(DeepSize::new()))),
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
             }
@@ -854,6 +849,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
+            "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
+            "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
+            "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -864,7 +862,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ArrayEmptyToNull>()
             || node.inner().as_any().is::<ArrayMin>()
             || node.inner().as_any().is::<ArrayMax>()
-            || node.inner().as_any().is::<DeepSize>()
+            || node.inner().as_any().is::<BitmapCount>()
             || node.inner().as_any().is::<Greatest>()
             || node.inner().as_any().is::<Least>()
             || node.inner().as_any().is::<Levenshtein>()
@@ -874,7 +872,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<Randn>()
             || node.inner().as_any().is::<RandPoisson>()
             || node.inner().as_any().is::<Random>()
-            || node.inner().as_any().is::<SparkSize>()
             || node.inner().as_any().is::<SparkArray>()
             || node.inner().as_any().is::<SparkConcat>()
             || node.inner().as_any().is::<SparkHex>()
@@ -924,6 +921,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkToUtf8>()
             || node.inner().as_any().is::<SparkToLargeUtf8>()
             || node.inner().as_any().is::<SparkToUtf8View>()
+            || node.inner().as_any().is::<ParseUrl>()
+            || node.inner().as_any().is::<UrlDecode>()
+            || node.inner().as_any().is::<UrlEncode>()
             || node.name() == "json_length"
             || node.name() == "json_len"
             || node.name() == "json_as_text"
@@ -1011,11 +1011,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
             let time_unit = time_unit.as_str_name().to_string();
             UdfKind::SparkFromUtcTimestamp(gen::SparkFromUtcTimestampUdf { time_unit })
-        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkSize>() {
-            UdfKind::SparkSize(gen::SparkSizeUdf {
-                is_array_size: func.is_array_size(),
-                is_legacy_cardinality: func.is_legacy_cardinality(),
-            })
         } else {
             return Ok(());
         };
