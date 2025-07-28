@@ -71,6 +71,10 @@ impl ExecutionPlan for MapPartitionsExec {
         &self.properties
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
