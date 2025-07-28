@@ -55,10 +55,7 @@ use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
-// pub mod cdf;
-
 mod schema_adapter;
-mod state;
 
 /// Convert DeltaTableError to DataFusionError
 pub fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {
@@ -302,20 +299,14 @@ fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<
     arrow_schema_from_snapshot(snapshot, wrap_partitions)
 }
 
-use crate::delta_datafusion::state::AddContainer;
-
 // Extension trait to add datafusion_table_statistics method to DeltaTableState
 trait DeltaTableStateExt {
     fn datafusion_table_statistics(&self, mask: Option<Vec<bool>>) -> Option<Statistics>;
 }
 
 impl DeltaTableStateExt for DeltaTableState {
-    fn datafusion_table_statistics(&self, mask: Option<Vec<bool>>) -> Option<Statistics> {
-        let files: Vec<Add> = self.snapshot().file_actions().ok()?.collect();
-        let schema = self.snapshot().arrow_schema().ok()?;
-        let partition_cols = self.snapshot().metadata().partition_columns();
-        let container = AddContainer::new(&files, partition_cols, schema);
-        container.statistics(mask)
+    fn datafusion_table_statistics(&self, _mask: Option<Vec<bool>>) -> Option<Statistics> {
+        unimplemented!("datafusion_table_statistics is not implemented for DeltaTableState");
     }
 }
 

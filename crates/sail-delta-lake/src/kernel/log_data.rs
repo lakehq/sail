@@ -220,11 +220,11 @@ impl SailLogDataHandler {
 
             if let Some(arr) = arr {
                 for i in 0..num_rows {
-                    if mask.as_ref().map(|m| m[mask_offset + i]).unwrap_or(true)
-                        && arr.is_valid(i) {
-                            total += arr.value(i) as usize;
-                            known = true;
-                        }
+                    if mask.as_ref().map(|m| m[mask_offset + i]).unwrap_or(true) && arr.is_valid(i)
+                    {
+                        total += arr.value(i) as usize;
+                        known = true;
+                    }
                 }
             }
             mask_offset += num_rows;
