@@ -1,12 +1,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, MapArray, StructArray};
+use arrow::compute::cast;
+use datafusion::arrow::array::{ArrayRef, MapArray, NullArray, StructArray};
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::interleave;
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
 
 trait KeyValue<T>
 where
@@ -29,12 +32,11 @@ where
     }
 }
 
-fn to_map_array(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn to_map_array(args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     if !args.len().is_multiple_of(2) {
         return exec_err!("map requires an even number of arguments");
     }
     let num_entries = args.len() / 2;
-    let num_rows = args.first().map(|a| a.len()).unwrap_or(0);
     if args.iter().any(|a| a.len() != num_rows) {
         return exec_err!("map requires all arrays to have the same length");
     }
@@ -43,23 +45,45 @@ fn to_map_array(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|a| a.data_type())
         .unwrap_or(&DataType::Null);
     let value_type = args
-        .get(1)
+        .values()
         .map(|a| a.data_type())
+        .find(|dt| *dt != &DataType::Null)
         .unwrap_or(&DataType::Null);
     let keys = args.keys().map(|a| a.as_ref()).collect::<Vec<_>>();
-    let values = args.values().map(|a| a.as_ref()).collect::<Vec<_>>();
+    let arc_values = args
+        .values()
+        .map(|a| match a.data_type() {
+            &DataType::Null => Ok(cast(a, value_type)?),
+            _ => Ok(a.clone()),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let values = arc_values.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
     if keys.iter().any(|a| a.data_type() != key_type) {
         return exec_err!("map requires all key types to be the same");
     }
     if values.iter().any(|a| a.data_type() != value_type) {
         return exec_err!("map requires all value types to be the same");
     }
-    // TODO: avoid materializing the indices
-    let indices = (0..num_rows)
-        .flat_map(|i| (0..num_entries).map(move |j| (j, i)))
-        .collect::<Vec<_>>();
-    let keys = interleave(keys.as_slice(), indices.as_slice())?;
-    let values = interleave(values.as_slice(), indices.as_slice())?;
+
+    let (keys, values) = match (key_type, value_type) {
+        (&DataType::Null, &DataType::Null) => {
+            let keys = Arc::new(NullArray::new(0)) as ArrayRef;
+            let values = Arc::new(NullArray::new(0)) as ArrayRef;
+            (keys, values)
+        }
+        _ => {
+            // TODO: avoid materializing the indices
+            // TODO: implement key deduplication:
+            // https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961
+            let indices = (0..num_rows)
+                .flat_map(|i| (0..num_entries).map(move |j| (j, i)))
+                .collect::<Vec<_>>();
+            let keys = interleave(keys.as_slice(), indices.as_slice())?;
+            let values = interleave(values.as_slice(), indices.as_slice())?;
+            (keys, values)
+        }
+    };
+
     let offsets = (0..num_rows + 1)
         .map(|i| i as i32 * num_entries as i32)
         .collect::<Vec<_>>();
@@ -89,7 +113,10 @@ impl Default for MapFunction {
 impl MapFunction {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::VariadicAny, TypeSignature::Nullary],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -111,13 +138,27 @@ impl ScalarUDFImpl for MapFunction {
         if !arg_types.len().is_multiple_of(2) {
             return exec_err!("map requires an even number of arguments");
         }
+        if arg_types.keys().any(|dt| dt == &DataType::Null) {
+            return exec_err!("map cannot contain null key type");
+        }
         let key_type = arg_types.first().unwrap_or(&DataType::Null);
-        let value_type = arg_types.get(1).unwrap_or(&DataType::Null);
+        let value_type = arg_types
+            .values()
+            .find(|dt| *dt != &DataType::Null)
+            .unwrap_or(&DataType::Null);
         // TODO: support type coercion
         if arg_types.keys().any(|dt| dt != key_type) {
             return exec_err!("map requires all key types to be the same");
         }
-        if arg_types.values().any(|dt| dt != value_type) {
+        if arg_types
+            .values()
+            .any(|dt| (dt != value_type) && (dt != &DataType::Null))
+        {
+            println!(
+                "VALUE_TYPES: CHOSEN: {:?}, ALL: {:?}",
+                value_type,
+                arg_types.values().collect::<Vec<_>>()
+            );
             return exec_err!("map requires all value types to be the same");
         }
         Ok(DataType::Map(
@@ -135,8 +176,13 @@ impl ScalarUDFImpl for MapFunction {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
+        let ScalarFunctionArgs {
+            args, number_rows, ..
+        } = args;
         let arrays = ColumnarValue::values_to_arrays(&args)?;
-        Ok(ColumnarValue::Array(to_map_array(arrays.as_slice())?))
+        Ok(ColumnarValue::Array(to_map_array(
+            arrays.as_slice(),
+            number_rows,
+        )?))
     }
 }
