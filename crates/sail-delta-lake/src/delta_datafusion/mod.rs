@@ -868,16 +868,16 @@ impl<'a> DeltaScanBuilder<'a> {
                 false,
             ));
         }
+        let log_data = crate::kernel::log_data::SailLogDataHandler::new(
+            self.log_store.clone(),
+            self.snapshot.load_config().clone(),
+            Some(self.snapshot.version()),
+        )
+        .await?;
 
-        let stats = if let Some(mask) = pruning_mask {
-            self.snapshot
-                .datafusion_table_statistics(Some(mask))
-                .unwrap_or_else(|| Statistics::new_unknown(&schema))
-        } else {
-            self.snapshot
-                .datafusion_table_statistics(None)
-                .unwrap_or_else(|| Statistics::new_unknown(&schema))
-        };
+        let stats = log_data
+            .statistics(pruning_mask)
+            .unwrap_or_else(|| Statistics::new_unknown(&schema));
 
         let parquet_options = TableParquetOptions {
             global: self.session.config().options().execution.parquet.clone(),

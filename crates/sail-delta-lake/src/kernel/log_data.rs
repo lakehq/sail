@@ -2,20 +2,89 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_schema::DataType as ArrowDataType;
-use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, StringArray, UInt64Array};
+use datafusion::arrow::array::{
+    Array, ArrayRef, BooleanArray, Int64Array, StringArray, StructArray, UInt64Array,
+};
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::scalar::ScalarValue;
+use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::Column;
+use datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion::physical_optimizer::pruning::PruningStatistics;
+use datafusion::physical_plan::Accumulator;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::expressions::Expression;
 use delta_kernel::schema::{DataType, PrimitiveType};
 use delta_kernel::{EngineData, EvaluationHandler, ExpressionEvaluator};
-use deltalake::kernel::{Metadata, StructType};
-use deltalake::{DeltaResult, DeltaTableError};
+use deltalake::kernel::{Metadata, Snapshot, StructType};
+use deltalake::logstore::LogStoreRef;
+use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
+use futures::TryStreamExt;
 
 use crate::kernel::ARROW_HANDLER;
+
+mod ex {
+    use arrow_schema::ArrowError;
+    use datafusion::arrow::array::{Array, ArrayRef, StructArray};
+
+    pub fn extract_and_cast_opt<'a, T: Array + 'static>(
+        array: &'a dyn super::ProvidesColumnByName,
+        name: &'a str,
+    ) -> Option<&'a T> {
+        let mut path_steps = name.split('.');
+        let first = path_steps.next()?;
+        extract_column(array, first, &mut path_steps)
+            .ok()?
+            .as_any()
+            .downcast_ref::<T>()
+    }
+
+    pub fn extract_column<'a>(
+        array: &'a dyn super::ProvidesColumnByName,
+        path_step: &str,
+        remaining_path_steps: &mut impl Iterator<Item = &'a str>,
+    ) -> Result<&'a ArrayRef, ArrowError> {
+        let child = array
+            .column_by_name(path_step)
+            .ok_or(ArrowError::SchemaError(format!(
+                "No such field: {path_step}",
+            )))?;
+
+        if let Some(next_path_step) = remaining_path_steps.next() {
+            extract_column(
+                child
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        ArrowError::SchemaError(format!("'{path_step}' is not a struct"))
+                    })?,
+                next_path_step,
+                remaining_path_steps,
+            )
+        } else {
+            Ok(child)
+        }
+    }
+}
+
+/// A trait for providing columns by name, implemented by RecordBatch and StructArray.
+/// This allows helper functions to work on both.
+trait ProvidesColumnByName {
+    fn column_by_name(&self, name: &str) -> Option<&ArrayRef>;
+}
+
+impl ProvidesColumnByName for RecordBatch {
+    fn column_by_name(&self, name: &str) -> Option<&ArrayRef> {
+        self.column_by_name(name)
+    }
+}
+
+impl ProvidesColumnByName for StructArray {
+    fn column_by_name(&self, name: &str) -> Option<&ArrayRef> {
+        self.column_by_name(name)
+    }
+}
 
 /// Helper function to convert Box<dyn EngineData> back to RecordBatch
 fn engine_data_to_record_batch(engine_data: Box<dyn EngineData>) -> DeltaResult<RecordBatch> {
@@ -47,10 +116,6 @@ pub struct SailLogDataHandler {
     metadata: Metadata,
     schema: StructType,
 }
-use deltalake::kernel::Snapshot;
-use deltalake::logstore::LogStoreRef;
-use deltalake::DeltaTableConfig;
-use futures::TryStreamExt;
 
 impl SailLogDataHandler {
     pub async fn new(
@@ -115,6 +180,155 @@ impl SailLogDataHandler {
     /// Get the number of containers (files) being pruned
     pub fn num_containers(&self) -> usize {
         self.data.iter().map(|batch| batch.num_rows()).sum()
+    }
+
+    /// Calculate statistics for the data in the handler, optionally applying a pruning mask.
+    pub fn statistics(&self, mask: Option<Vec<bool>>) -> Option<Statistics> {
+        let num_rows = self.num_records(&mask);
+        let total_byte_size = self.total_byte_size(&mask);
+        let column_statistics = self
+            .schema
+            .fields()
+            .map(|f| self.column_stats(f.name(), &mask))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Statistics {
+            num_rows,
+            total_byte_size,
+            column_statistics,
+        })
+    }
+
+    /// Helper to get aggregated row counts.
+    fn num_records(&self, mask: &Option<Vec<bool>>) -> Precision<usize> {
+        self.collect_batch_stats("add.stats_parsed.numRecords", mask)
+    }
+
+    /// Helper to get aggregated byte size.
+    fn total_byte_size(&self, mask: &Option<Vec<bool>>) -> Precision<usize> {
+        self.collect_batch_stats("add.size", mask)
+    }
+
+    /// Helper to collect and sum statistics from RecordBatches.
+    fn collect_batch_stats(&self, path: &str, mask: &Option<Vec<bool>>) -> Precision<usize> {
+        let mut total = 0;
+        let mut known = false;
+        let mut mask_offset = 0;
+
+        for batch in self.data.iter() {
+            let num_rows = batch.num_rows();
+            let arr = ex::extract_and_cast_opt::<Int64Array>(batch, path);
+
+            if let Some(arr) = arr {
+                for i in 0..num_rows {
+                    if mask.as_ref().map(|m| m[mask_offset + i]).unwrap_or(true) {
+                        if arr.is_valid(i) {
+                            total += arr.value(i) as usize;
+                            known = true;
+                        }
+                    }
+                }
+            }
+            mask_offset += num_rows;
+        }
+
+        if known {
+            Precision::Exact(total)
+        } else {
+            Precision::Absent
+        }
+    }
+
+    /// Collects and aggregates column-level statistics.
+    fn column_stats(&self, name: &str, mask: &Option<Vec<bool>>) -> Option<ColumnStatistics> {
+        let null_count_col = format!("add.stats_parsed.nullCount.{}", name);
+        let null_count = self.collect_batch_stats(&null_count_col, mask);
+
+        let min_value = self.column_bounds("add.stats_parsed.minValues", name, mask, true);
+        let max_value = self.column_bounds("add.stats_parsed.maxValues", name, mask, false);
+
+        Some(ColumnStatistics {
+            null_count,
+            max_value,
+            min_value,
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+        })
+    }
+
+    /// Helper to get min/max bounds for a column from all batches.
+    fn column_bounds(
+        &self,
+        path_step: &str,
+        name: &str,
+        mask: &Option<Vec<bool>>,
+        is_min: bool,
+    ) -> Precision<ScalarValue> {
+        let mut accumulator: Option<Box<dyn Accumulator>> = None;
+        let mut mask_offset = 0;
+
+        for batch in &self.data {
+            let num_rows = batch.num_rows();
+            let mut path_iter = path_step.split('.');
+            let array = if let Ok(array) =
+                ex::extract_column(batch, path_iter.next().unwrap(), &mut path_iter)
+            {
+                let mut name_iter = name.split('.');
+                if let Ok(array) = ex::extract_column(
+                    array.as_any().downcast_ref::<StructArray>().unwrap(),
+                    name_iter.next().unwrap(),
+                    &mut name_iter,
+                ) {
+                    array
+                } else {
+                    mask_offset += num_rows;
+                    continue;
+                }
+            } else {
+                mask_offset += num_rows;
+                continue;
+            };
+
+            if accumulator.is_none() {
+                if is_min {
+                    accumulator = MinAccumulator::try_new(array.data_type())
+                        .ok()
+                        .map(|a| Box::new(a) as Box<dyn Accumulator>);
+                } else {
+                    accumulator = MaxAccumulator::try_new(array.data_type())
+                        .ok()
+                        .map(|a| Box::new(a) as Box<dyn Accumulator>);
+                }
+                if accumulator.is_none() {
+                    return Precision::Absent;
+                }
+            }
+
+            let array_to_update = if let Some(mask) = mask {
+                if mask.len() > mask_offset {
+                    let batch_mask = BooleanArray::from_iter(
+                        mask[mask_offset..mask_offset + num_rows].iter().map(|&b| Some(b)),
+                    );
+                    datafusion::arrow::compute::filter(array, &batch_mask).ok()
+                } else {
+                    None // Mask is shorter than expected, treat as no data
+                }
+            } else {
+                Some(array.clone())
+            };
+
+            if let Some(arr) = array_to_update {
+                if let Some(acc) = accumulator.as_mut() {
+                    let _ = acc.update_batch(&[arr]);
+                }
+            }
+
+            mask_offset += num_rows;
+        }
+
+        accumulator
+            .and_then(|mut acc| acc.evaluate().ok())
+            .map(Precision::Exact)
+            .unwrap_or(Precision::Absent)
     }
 }
 
