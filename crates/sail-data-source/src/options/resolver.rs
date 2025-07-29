@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use datafusion::catalog::Session;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
-use datafusion::prelude::SessionContext;
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
 use datafusion_common::{plan_err, Result};
 
@@ -286,11 +286,11 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
 }
 
 pub struct DataSourceOptionsResolver<'a> {
-    ctx: &'a SessionContext,
+    ctx: &'a dyn Session,
 }
 
 impl<'a> DataSourceOptionsResolver<'a> {
-    pub fn new(ctx: &'a SessionContext) -> Self {
+    pub fn new(ctx: &'a dyn Session) -> Self {
         Self { ctx }
     }
 
@@ -298,7 +298,7 @@ impl<'a> DataSourceOptionsResolver<'a> {
         &self,
         options: HashMap<String, String>,
     ) -> Result<JsonOptions> {
-        let mut json_options = self.ctx.copied_table_options().json;
+        let mut json_options = self.ctx.default_table_options().json;
         apply_json_read_options(load_default_options()?, &mut json_options)?;
         apply_json_read_options(load_options(options)?, &mut json_options)?;
         Ok(json_options)
@@ -308,14 +308,14 @@ impl<'a> DataSourceOptionsResolver<'a> {
         &self,
         options: HashMap<String, String>,
     ) -> Result<JsonOptions> {
-        let mut json_options = self.ctx.copied_table_options().json;
+        let mut json_options = self.ctx.default_table_options().json;
         apply_json_write_options(load_default_options()?, &mut json_options)?;
         apply_json_write_options(load_options(options)?, &mut json_options)?;
         Ok(json_options)
     }
 
     pub fn resolve_csv_read_options(&self, options: HashMap<String, String>) -> Result<CsvOptions> {
-        let mut csv_options = self.ctx.copied_table_options().csv;
+        let mut csv_options = self.ctx.default_table_options().csv;
         apply_csv_read_options(load_default_options()?, &mut csv_options)?;
         apply_csv_read_options(load_options(options)?, &mut csv_options)?;
         Ok(csv_options)
@@ -325,7 +325,7 @@ impl<'a> DataSourceOptionsResolver<'a> {
         &self,
         options: HashMap<String, String>,
     ) -> Result<CsvOptions> {
-        let mut csv_options = self.ctx.copied_table_options().csv;
+        let mut csv_options = self.ctx.default_table_options().csv;
         apply_csv_write_options(load_default_options()?, &mut csv_options)?;
         apply_csv_write_options(load_options(options)?, &mut csv_options)?;
         Ok(csv_options)
@@ -335,7 +335,7 @@ impl<'a> DataSourceOptionsResolver<'a> {
         &self,
         options: HashMap<String, String>,
     ) -> Result<TableParquetOptions> {
-        let mut parquet_options = self.ctx.copied_table_options().parquet;
+        let mut parquet_options = self.ctx.default_table_options().parquet;
         apply_parquet_read_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_read_options(load_options(options)?, &mut parquet_options)?;
         Ok(parquet_options)
@@ -345,7 +345,7 @@ impl<'a> DataSourceOptionsResolver<'a> {
         &self,
         options: HashMap<String, String>,
     ) -> Result<TableParquetOptions> {
-        let mut parquet_options = self.ctx.copied_table_options().parquet;
+        let mut parquet_options = self.ctx.default_table_options().parquet;
         apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_write_options(load_options(options)?, &mut parquet_options)?;
         Ok(parquet_options)
@@ -391,7 +391,8 @@ mod tests {
     #[test]
     fn test_resolve_json_read_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = DataSourceOptionsResolver::new(&ctx);
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
 
         let options = build_options(&[
             ("schema_infer_max_records", "100"),
@@ -407,7 +408,8 @@ mod tests {
     #[test]
     fn test_resolve_json_write_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = DataSourceOptionsResolver::new(&ctx);
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
 
         let options = build_options(&[("compression", "bzip2")]);
         let options = resolver.resolve_json_write_options(options)?;
@@ -419,7 +421,8 @@ mod tests {
     #[test]
     fn test_resolve_csv_read_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = DataSourceOptionsResolver::new(&ctx);
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
 
         let options = build_options(&[
             ("delimiter", "!"),
@@ -485,7 +488,8 @@ mod tests {
     #[test]
     fn test_resolve_csv_write_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = DataSourceOptionsResolver::new(&ctx);
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
 
         let options = build_options(&[
             ("delimiter", "!"),
@@ -511,7 +515,8 @@ mod tests {
     #[test]
     fn test_resolve_parquet_read_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = DataSourceOptionsResolver::new(&ctx);
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
 
         let options = build_options(&[
             ("enable_page_index", "true"),
@@ -543,8 +548,6 @@ mod tests {
     #[test]
     fn test_resolve_parquet_read_options_with_global_default() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = DataSourceOptionsResolver::new(&ctx);
-
         let state = ctx.state_ref();
         state
             .write()
@@ -553,6 +556,8 @@ mod tests {
             .execution
             .parquet
             .metadata_size_hint = Some(123);
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
         let options = build_options(&[]);
         let options = resolver.resolve_parquet_read_options(options)?;
         assert_eq!(options.global.metadata_size_hint, Some(123));
@@ -563,7 +568,8 @@ mod tests {
     #[test]
     fn test_resolve_parquet_write_options() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = DataSourceOptionsResolver::new(&ctx);
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
 
         let options = build_options(&[
             ("data_page_size_limit", "1024"),
@@ -619,8 +625,6 @@ mod tests {
     #[test]
     fn test_resolve_parquet_write_options_with_global_default() -> Result<()> {
         let ctx = SessionContext::default();
-        let resolver = DataSourceOptionsResolver::new(&ctx);
-
         let state = ctx.state_ref();
         state
             .write()
@@ -629,6 +633,9 @@ mod tests {
             .execution
             .parquet
             .max_row_group_size = 1234;
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
+
         let options = build_options(&[]);
         let options = resolver.resolve_parquet_read_options(options)?;
         assert_eq!(options.global.max_row_group_size, 1234);

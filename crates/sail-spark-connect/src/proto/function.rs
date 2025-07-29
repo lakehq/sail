@@ -8,6 +8,7 @@ mod tests {
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
     use sail_common::config::AppConfig;
     use sail_common::tests::test_gold_set;
+    use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_plan::resolve_and_execute_plan;
     use sail_runtime::RuntimeManager;
     use sail_server::actor::ActorSystem;
@@ -16,7 +17,7 @@ mod tests {
     use crate::error::{SparkError, SparkResult};
     use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
-    use crate::session::SparkExtension;
+    use crate::session::SparkSession;
     use crate::session_manager::{SessionKey, SessionManager, SessionManagerOptions};
     use crate::spark::connect::relation::RelType;
     use crate::spark::connect::{Relation, Sql};
@@ -90,7 +91,7 @@ mod tests {
                 };
                 let plan = relation.try_into()?;
                 let result = handle.primary().block_on(async {
-                    let spark = SparkExtension::get(&context)?;
+                    let spark = context.extension::<SparkSession>()?;
                     let runtime_handle = spark.job_runner().runtime_handle();
                     let plan = resolve_and_execute_plan(
                         Arc::clone(&context),

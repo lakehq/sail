@@ -48,6 +48,7 @@ use sail_plan::extension::function::array::spark_array_item_with_position::Array
 use sail_plan::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_plan::extension::function::array::spark_map_to_array::MapToArray;
 use sail_plan::extension::function::array::spark_sequence::SparkSequence;
+use sail_plan::extension::function::bitmap_count::BitmapCount;
 use sail_plan::extension::function::collection::spark_concat::SparkConcat;
 use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
 use sail_plan::extension::function::csv::spark_from_csv::SparkFromCSV;
@@ -104,6 +105,7 @@ use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnb
 use sail_plan::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_plan::extension::function::string::spark_mask::SparkMask;
 use sail_plan::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use sail_plan::extension::function::string::spark_to_number::SparkToNumber;
 use sail_plan::extension::function::struct_function::StructFunction;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::function::url::parse_url::ParseUrl;
@@ -760,6 +762,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_empty_to_null" => Ok(Arc::new(ScalarUDF::from(ArrayEmptyToNull::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
+            "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(Greatest::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(Least::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
@@ -774,6 +777,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_concat" | "concat" => Ok(Arc::new(ScalarUDF::from(SparkConcat::new()))),
             "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::new()))),
+            "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
             "spark_csc" | "csc" => Ok(Arc::new(ScalarUDF::from(SparkCsc::new()))),
             "spark_hex" | "hex" => Ok(Arc::new(ScalarUDF::from(SparkHex::new()))),
             "spark_unhex" | "unhex" => Ok(Arc::new(ScalarUDF::from(SparkUnHex::new()))),
@@ -858,6 +862,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ArrayEmptyToNull>()
             || node.inner().as_any().is::<ArrayMin>()
             || node.inner().as_any().is::<ArrayMax>()
+            || node.inner().as_any().is::<BitmapCount>()
             || node.inner().as_any().is::<Greatest>()
             || node.inner().as_any().is::<Least>()
             || node.inner().as_any().is::<Levenshtein>()
@@ -871,6 +876,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkConcat>()
             || node.inner().as_any().is::<SparkHex>()
             || node.inner().as_any().is::<SparkFromCSV>()
+            || node.inner().as_any().is::<SparkToNumber>()
             || node.inner().as_any().is::<SparkUnHex>()
             || node.inner().as_any().is::<SparkMurmur3Hash>()
             || node.inner().as_any().is::<SparkReverse>()

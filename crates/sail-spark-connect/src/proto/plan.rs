@@ -1221,14 +1221,14 @@ impl TryFrom<Catalog> for spec::CommandNode {
             CatType::SetCurrentDatabase(x) => {
                 let sc::SetCurrentDatabase { db_name } = x;
                 Ok(spec::CommandNode::SetCurrentDatabase {
-                    database_name: db_name.into(),
+                    database: from_ast_object_name(parse_object_name(&db_name)?)?,
                 })
             }
             CatType::ListDatabases(x) => {
                 let sc::ListDatabases { pattern } = x;
                 Ok(spec::CommandNode::ListDatabases {
-                    catalog: None,
-                    database_pattern: pattern,
+                    qualifier: None,
+                    pattern,
                 })
             }
             CatType::ListTables(x) => {
@@ -1237,7 +1237,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     database: db_name
                         .map(|x| from_ast_object_name(parse_object_name(x.as_str())?))
                         .transpose()?,
-                    table_pattern: pattern,
+                    pattern,
                 })
             }
             CatType::ListFunctions(x) => {
@@ -1246,7 +1246,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     database: db_name
                         .map(|x| from_ast_object_name(parse_object_name(x.as_str())?))
                         .transpose()?,
-                    function_pattern: pattern,
+                    pattern,
                 })
             }
             CatType::ListColumns(x) => {
@@ -1337,24 +1337,34 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 let schema = schema.required("create external table schema")?;
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
+                let columns = schema
+                    .fields
+                    .into_iter()
+                    .map(|field| spec::TableColumnDefinition {
+                        name: field.name.clone(),
+                        data_type: field.data_type.clone(),
+                        nullable: field.nullable,
+                        default: None,
+                        comment: None,
+                        generated_always_as: None,
+                    })
+                    .collect();
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
-                        schema,
+                        columns,
                         comment: None,
-                        column_defaults: Default::default(),
                         constraints: vec![],
                         location: path,
                         file_format: source.map(|x| spec::TableFileFormat::General { format: x }),
                         row_format: None,
-                        table_partition_cols: vec![],
-                        file_sort_order: vec![],
+                        partition_by: vec![],
+                        sort_by: vec![],
+                        bucket_by: None,
                         if_not_exists: false,
-                        or_replace: false,
-                        unbounded: false,
+                        replace: false,
                         options: options.into_iter().collect(),
-                        query: None,
-                        definition: None,
+                        properties: vec![],
                     },
                 })
             }
@@ -1370,40 +1380,50 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 let schema = schema.required("create external table schema")?;
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
+                let columns = schema
+                    .fields
+                    .into_iter()
+                    .map(|field| spec::TableColumnDefinition {
+                        name: field.name.clone(),
+                        data_type: field.data_type.clone(),
+                        nullable: field.nullable,
+                        default: None,
+                        comment: None,
+                        generated_always_as: None,
+                    })
+                    .collect();
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
-                        schema,
+                        columns,
                         comment: description,
-                        column_defaults: Default::default(),
                         constraints: vec![],
                         location: path,
                         file_format: source.map(|x| spec::TableFileFormat::General { format: x }),
                         row_format: None,
-                        table_partition_cols: vec![],
-                        file_sort_order: vec![],
+                        partition_by: vec![],
+                        sort_by: vec![],
+                        bucket_by: None,
                         if_not_exists: false,
-                        or_replace: false,
-                        unbounded: false,
+                        replace: false,
                         options: options.into_iter().collect(),
-                        query: None,
-                        definition: None,
+                        properties: vec![],
                     },
                 })
             }
             CatType::DropTempView(x) => {
                 let sc::DropTempView { view_name } = x;
-                Ok(spec::CommandNode::DropView {
-                    view: from_ast_object_name(parse_object_name(view_name.as_str())?)?,
-                    kind: Some(spec::ViewKind::Temporary),
+                Ok(spec::CommandNode::DropTemporaryView {
+                    view: view_name.into(),
+                    is_global: false,
                     if_exists: false,
                 })
             }
             CatType::DropGlobalTempView(x) => {
                 let sc::DropGlobalTempView { view_name } = x;
-                Ok(spec::CommandNode::DropView {
-                    view: from_ast_object_name(parse_object_name(view_name.as_str())?)?,
-                    kind: Some(spec::ViewKind::GlobalTemporary),
+                Ok(spec::CommandNode::DropTemporaryView {
+                    view: view_name.into(),
+                    is_global: true,
                     if_exists: true,
                 })
             }
@@ -1461,14 +1481,12 @@ impl TryFrom<Catalog> for spec::CommandNode {
             CatType::SetCurrentCatalog(x) => {
                 let sc::SetCurrentCatalog { catalog_name } = x;
                 Ok(spec::CommandNode::SetCurrentCatalog {
-                    catalog_name: catalog_name.into(),
+                    catalog: catalog_name.into(),
                 })
             }
             CatType::ListCatalogs(x) => {
                 let sc::ListCatalogs { pattern } = x;
-                Ok(spec::CommandNode::ListCatalogs {
-                    catalog_pattern: pattern,
-                })
+                Ok(spec::CommandNode::ListCatalogs { pattern })
             }
         }
     }
@@ -1560,16 +1578,14 @@ impl TryFrom<WriteOperation> for spec::Write {
             clustering_columns,
             bucket_by,
             options,
-            table_properties: vec![],
-            overwrite_condition: None,
         })
     }
 }
 
-impl TryFrom<WriteOperationV2> for spec::Write {
+impl TryFrom<WriteOperationV2> for spec::WriteTo {
     type Error = SparkError;
 
-    fn try_from(write: WriteOperationV2) -> SparkResult<spec::Write> {
+    fn try_from(write: WriteOperationV2) -> SparkResult<spec::WriteTo> {
         use crate::spark::connect::write_operation_v2::Mode;
 
         let WriteOperationV2 {
@@ -1587,50 +1603,30 @@ impl TryFrom<WriteOperationV2> for spec::Write {
         let table = from_ast_object_name(parse_object_name(table_name.as_str())?)?;
         let partitioning_columns = partitioning_columns
             .into_iter()
-            .map(|x| {
-                let expr: spec::Expr = x.try_into()?;
-                match expr {
-                    spec::Expr::UnresolvedAttribute {
-                        name,
-                        plan_id: _,
-                        is_metadata_column: _,
-                    } => {
-                        let mut name: Vec<String> = name.into();
-                        if name.len() > 1 {
-                            return Err(SparkError::invalid("multiple partitioning column"));
-                        }
-                        let name = name.pop().required("partitioning column")?;
-                        Ok(name.into())
-                    }
-                    _ => Err(SparkError::invalid("partitioning column")),
-                }
-            })
+            .map(|x| x.try_into())
             .collect::<SparkResult<_>>()?;
         let clustering_columns = clustering_columns.into_iter().map(|x| x.into()).collect();
         let options = options.into_iter().collect();
         let table_properties = table_properties.into_iter().collect();
         let mode = match Mode::try_from(mode).required("write operation v2 mode")? {
-            Mode::Unspecified => spec::SaveMode::ErrorIfExists,
-            Mode::Create => spec::SaveMode::Create,
-            Mode::Overwrite => spec::SaveMode::Overwrite,
-            Mode::OverwritePartitions => spec::SaveMode::OverwritePartitions,
-            Mode::Append => spec::SaveMode::Append,
-            Mode::Replace => spec::SaveMode::Replace,
-            Mode::CreateOrReplace => spec::SaveMode::CreateOrReplace,
+            Mode::Unspecified => {
+                return Err(SparkError::invalid("unspecified write operation v2 method"));
+            }
+            Mode::Create => spec::WriteToMode::Create,
+            Mode::Overwrite => spec::WriteToMode::Overwrite,
+            Mode::OverwritePartitions => spec::WriteToMode::OverwritePartitions,
+            Mode::Append => spec::WriteToMode::Append,
+            Mode::Replace => spec::WriteToMode::Replace,
+            Mode::CreateOrReplace => spec::WriteToMode::CreateOrReplace,
         };
         let overwrite_condition = overwrite_condition.map(|x| x.try_into()).transpose()?;
-        Ok(spec::Write {
+        Ok(spec::WriteTo {
             input: Box::new(input),
-            source: provider,
-            save_type: spec::SaveType::Table {
-                table,
-                save_method: spec::TableSaveMethod::SaveAsTable,
-            },
+            provider,
+            table,
             mode,
-            sort_columns: vec![],
             partitioning_columns,
             clustering_columns,
-            bucket_by: None,
             options,
             table_properties,
             overwrite_condition,
@@ -1649,20 +1645,16 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
             replace,
         } = command;
         let input = input.required("input relation")?.try_into()?;
-        let view = from_ast_object_name(parse_object_name(name.as_str())?)?;
-        let kind = if is_global {
-            spec::ViewKind::GlobalTemporary
-        } else {
-            spec::ViewKind::Temporary
-        };
-        Ok(spec::CommandNode::CreateView {
-            view,
-            definition: spec::ViewDefinition {
+        Ok(spec::CommandNode::CreateTemporaryView {
+            view: name.into(),
+            is_global,
+            definition: spec::TemporaryViewDefinition {
                 input: Box::new(input),
                 columns: None,
-                kind,
+                if_not_exists: false,
                 replace,
-                definition: None,
+                comment: None,
+                properties: vec![],
             },
         })
     }

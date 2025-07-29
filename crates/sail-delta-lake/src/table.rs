@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
 use deltalake::logstore::{default_logstore, LogStoreRef, StorageConfig};
@@ -8,6 +9,9 @@ use object_store::ObjectStore;
 use url::Url;
 
 use crate::delta_datafusion::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
+
+// TODO: We can accept parsed URL instead of a string when creating Delta tables
+//   since `DeltaTableFormat` already handles URL parsing.
 
 pub(crate) async fn open_table_with_object_store(
     table_uri: impl AsRef<str>,
@@ -83,7 +87,7 @@ pub(crate) async fn create_delta_table_provider_with_object_store(
 }
 
 pub async fn create_delta_provider(
-    ctx: &datafusion::prelude::SessionContext,
+    ctx: &dyn Session,
     table_uri: &str,
     options: &std::collections::HashMap<String, String>,
 ) -> Result<std::sync::Arc<dyn datafusion::catalog::TableProvider>> {
