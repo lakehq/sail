@@ -154,11 +154,6 @@ impl ScalarUDFImpl for MapFunction {
             .values()
             .any(|dt| (dt != value_type) && (dt != &DataType::Null))
         {
-            println!(
-                "VALUE_TYPES: CHOSEN: {:?}, ALL: {:?}",
-                value_type,
-                arg_types.values().collect::<Vec<_>>()
-            );
             return exec_err!("map requires all value types to be the same");
         }
         Ok(DataType::Map(
