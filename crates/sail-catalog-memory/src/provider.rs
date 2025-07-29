@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
 
+use dashmap::{DashMap, Entry};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
@@ -17,7 +17,7 @@ struct MemoryDatabase {
 /// An in-memory catalog provider.
 pub struct MemoryCatalogProvider {
     name: String,
-    databases: Arc<Mutex<HashMap<Namespace, MemoryDatabase>>>,
+    databases: DashMap<Namespace, MemoryDatabase>,
 }
 
 impl MemoryCatalogProvider {
@@ -26,7 +26,7 @@ impl MemoryCatalogProvider {
         initial_database: Namespace,
         initial_database_comment: Option<String>,
     ) -> Self {
-        let mut databases = HashMap::new();
+        let databases = DashMap::new();
         databases.insert(
             initial_database.clone(),
             MemoryDatabase {
@@ -41,16 +41,7 @@ impl MemoryCatalogProvider {
                 views: HashMap::new(),
             },
         );
-        Self {
-            name,
-            databases: Arc::new(Mutex::new(databases)),
-        }
-    }
-
-    fn databases(&self) -> CatalogResult<MutexGuard<'_, HashMap<Namespace, MemoryDatabase>>> {
-        self.databases
-            .lock()
-            .map_err(|e| CatalogError::Internal(e.to_string()))
+        Self { name, databases }
     }
 }
 
@@ -71,31 +62,34 @@ impl CatalogProvider for MemoryCatalogProvider {
             location,
             properties,
         } = options;
-        let mut databases = self.databases()?;
-        if let Some(db) = databases.get(database) {
-            if if_not_exists {
-                Ok(db.status.clone())
-            } else {
-                Err(CatalogError::AlreadyExists(
-                    "database",
-                    database.to_string(),
-                ))
+        let entry = self.databases.entry(database.clone());
+        match entry {
+            Entry::Occupied(entry) => {
+                if if_not_exists {
+                    Ok(entry.get().status.clone())
+                } else {
+                    Err(CatalogError::AlreadyExists(
+                        "database",
+                        database.to_string(),
+                    ))
+                }
             }
-        } else {
-            let status = DatabaseStatus {
-                catalog: self.name.clone(),
-                database: database.clone().into(),
-                comment,
-                location,
-                properties,
-            };
-            let db = MemoryDatabase {
-                status: status.clone(),
-                tables: HashMap::new(),
-                views: HashMap::new(),
-            };
-            databases.insert(database.clone(), db);
-            Ok(status)
+            Entry::Vacant(entry) => {
+                let status = DatabaseStatus {
+                    catalog: self.name.clone(),
+                    database: database.clone().into(),
+                    comment,
+                    location,
+                    properties,
+                };
+                let db = MemoryDatabase {
+                    status: status.clone(),
+                    tables: HashMap::new(),
+                    views: HashMap::new(),
+                };
+                entry.insert(db);
+                Ok(status)
+            }
         }
     }
 
@@ -108,8 +102,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             if_exists,
             cascade: _,
         } = options;
-        let mut databases = self.databases()?;
-        if databases.remove(database).is_none() {
+        if self.databases.remove(database).is_none() {
             if if_exists {
                 Ok(())
             } else {
@@ -121,8 +114,7 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
-        let databases = self.databases()?;
-        if let Some(db) = databases.get(database) {
+        if let Some(db) = self.databases.get(database) {
             Ok(db.status.clone())
         } else {
             Err(CatalogError::NotFound("database", database.to_string()))
@@ -133,17 +125,17 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self,
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
-        let databases = self.databases()?;
-        Ok(databases
+        Ok(self
+            .databases
             .iter()
-            .filter(|(database, _)| {
+            .filter(|item| {
                 if let Some(prefix) = prefix {
-                    prefix.is_parent_of(database)
+                    prefix.is_parent_of(item.key())
                 } else {
-                    database.tail.is_empty()
+                    item.key().tail.is_empty()
                 }
             })
-            .map(|(_, db)| db.status.clone())
+            .map(|item| item.value().status.clone())
             .collect())
     }
 
@@ -167,8 +159,8 @@ impl CatalogProvider for MemoryCatalogProvider {
             options,
             properties,
         } = options;
-        let mut databases = self.databases()?;
-        let db = databases
+        let mut db = self
+            .databases
             .get_mut(database)
             .ok_or_else(|| CatalogError::NotFound("database", database.to_string()))?;
         if let Some(status) = db.tables.get(table) {
@@ -230,8 +222,7 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        let databases = self.databases()?;
-        if let Some(db) = databases.get(database) {
+        if let Some(db) = self.databases.get(database) {
             if let Some(status) = db.tables.get(table) {
                 return Ok(status.clone());
             }
@@ -240,8 +231,7 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let databases = self.databases()?;
-        if let Some(db) = databases.get(database) {
+        if let Some(db) = self.databases.get(database) {
             Ok(db.tables.values().cloned().collect())
         } else {
             Err(CatalogError::NotFound("database", database.to_string()))
@@ -254,12 +244,12 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: DropTableOptions,
     ) -> CatalogResult<()> {
+        // TODO: purge data if requested
         let DropTableOptions {
             if_exists,
             purge: _,
         } = options;
-        let mut databases = self.databases()?;
-        if let Some(db) = databases.get_mut(database) {
+        if let Some(mut db) = self.databases.get_mut(database) {
             if db.tables.remove(table).is_some() || if_exists {
                 Ok(())
             } else {
@@ -286,8 +276,8 @@ impl CatalogProvider for MemoryCatalogProvider {
             comment,
             properties,
         } = options;
-        let mut databases = self.databases()?;
-        let db = databases
+        let mut db = self
+            .databases
             .get_mut(database)
             .ok_or_else(|| CatalogError::NotFound("database", database.to_string()))?;
         if let Some(status) = db.views.get(view) {
@@ -337,8 +327,7 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
-        let databases = self.databases()?;
-        if let Some(db) = databases.get(database) {
+        if let Some(db) = self.databases.get(database) {
             if let Some(status) = db.views.get(view) {
                 return Ok(status.clone());
             }
@@ -347,8 +336,7 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let databases = self.databases()?;
-        if let Some(db) = databases.get(database) {
+        if let Some(db) = self.databases.get(database) {
             Ok(db.views.values().cloned().collect())
         } else {
             Err(CatalogError::NotFound("database", database.to_string()))
@@ -362,8 +350,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         options: DropViewOptions,
     ) -> CatalogResult<()> {
         let DropViewOptions { if_exists } = options;
-        let mut databases = self.databases()?;
-        if let Some(db) = databases.get_mut(database) {
+        if let Some(mut db) = self.databases.get_mut(database) {
             if db.views.remove(view).is_some() || if_exists {
                 Ok(())
             } else {

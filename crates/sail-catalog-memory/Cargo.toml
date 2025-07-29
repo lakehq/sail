@@ -10,3 +10,4 @@ workspace = true
 sail-catalog = { path = "../sail-catalog" }
 
 async-trait = { workspace = true }
+dashmap = { workspace = true }

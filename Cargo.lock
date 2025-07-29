@@ -5375,6 +5375,7 @@ name = "sail-catalog-memory"
 version = "0.3.1"
 dependencies = [
  "async-trait",
+ "dashmap",
  "sail-catalog",
 ]
 
