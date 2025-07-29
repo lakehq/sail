@@ -1,47 +1,33 @@
-use datafusion_common::Result;
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-use crate::manager::utils::match_pattern;
+use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
+use crate::utils::match_pattern;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CatalogMetadata {
-    pub name: String,
-    pub description: Option<String>,
-}
+impl CatalogManager {
+    pub fn default_catalog(&self) -> CatalogResult<Arc<str>> {
+        Ok(self.state()?.default_catalog.clone())
+    }
 
-impl CatalogMetadata {
-    pub fn new(name: String) -> Self {
-        Self {
-            name,
-            description: None, // Spark code sets all descriptions to None
+    /// Sets the default catalog for the current session.
+    /// An error is returned if the catalog does not exist.
+    pub fn set_default_catalog(&self, catalog: impl Into<Arc<str>>) -> CatalogResult<()> {
+        let catalog = catalog.into();
+        let mut state = self.state()?;
+        if !state.catalogs.contains_key(&catalog) {
+            return Err(CatalogError::NotFound("catalog", catalog.to_string()));
         }
-    }
-}
-
-impl CatalogManager<'_> {
-    pub fn default_catalog(&self) -> Result<String> {
-        let state = self.ctx.state_ref();
-        let state = state.read();
-        Ok(state.config().options().catalog.default_catalog.clone())
-    }
-
-    pub fn set_default_catalog(&self, catalog_name: String) -> Result<()> {
-        let state = self.ctx.state_ref();
-        let mut state = state.write();
-        state.config_mut().options_mut().catalog.default_catalog = catalog_name;
+        state.default_catalog = catalog;
         Ok(())
     }
 
-    pub fn list_catalogs(&self, catalog_pattern: Option<&str>) -> Result<Vec<CatalogMetadata>> {
-        let state = self.ctx.state_ref();
-        let state = state.read();
-        Ok(state
-            .catalog_list()
-            .catalog_names()
-            .into_iter()
-            .filter(|name| match_pattern(name.as_str(), catalog_pattern))
-            .map(CatalogMetadata::new)
+    pub fn list_catalogs(&self, pattern: Option<&str>) -> CatalogResult<Vec<Arc<str>>> {
+        Ok(self
+            .state()?
+            .catalogs
+            .keys()
+            .filter(|name| match_pattern(name.as_ref(), pattern))
+            .cloned()
             .collect::<Vec<_>>())
     }
 }

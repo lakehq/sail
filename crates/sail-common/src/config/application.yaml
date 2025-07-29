@@ -482,6 +482,39 @@
   default: "default"
   description: The name of the service account to use for the worker pods.
 
+- key: catalog.list
+  type: array
+  default: '[{name="sail", type="memory", initial_database=["default"], initial_database_comment="default database"}]'
+  description: |
+    The list of catalogs to use. Each catalog is defined by a name and a type, along with optional parameters.
+    `name` is used to refer to the catalog name, and `type` defines the catalog implementation.
+  experimental: true
+
+- key: catalog.default_catalog
+  type: string
+  default: "sail"
+  description: |
+    The name of the default catalog to use.
+  experimental: true
+
+- key: catalog.default_database
+  type: array
+  default: '["default"]'
+  description: |
+    The name of the default database (namespace) to use.
+    This is a list of strings, where each string is a part of the namespace.
+  experimental: true
+
+- key: catalog.global_temporary_database
+  type: array
+  default: '["global_temp"]'
+  description: |
+    The name of the global temporary database (namespace) to use.
+    This is a list of strings, where each string is a part of the namespace.
+    The global temporary database cannot be changed at runtime,
+    so setting the Spark configuration `spark.sql.globalTempDatabase` has no effect.
+  experimental: true
+
 - key: spark.session_timeout_secs
   type: number
   default: "120"

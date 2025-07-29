@@ -2,24 +2,23 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::catalog::Session;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
-use datafusion::prelude::SessionContext;
 use datafusion_common::{internal_err, plan_err, Result};
 use futures::{StreamExt, TryStreamExt};
 
 pub async fn resolve_listing_schema(
-    ctx: &SessionContext,
+    ctx: &dyn Session,
     urls: &[ListingTableUrl],
     options: &ListingOptions,
 ) -> Result<Arc<Schema>> {
     // The logic is similar to `ListingOptions::infer_schema()`
     // but here we also check for the existence of files.
-    let session_state = ctx.state();
     let mut file_groups = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
         let files: Vec<_> = url
-            .list_all_files(&session_state, &store, &options.file_extension)
+            .list_all_files(ctx, &store, &options.file_extension)
             .await?
             // Here we sample up to 10 files to infer the schema.
             // The value is hard-coded here since DataFusion uses the same hard-coded value
@@ -45,7 +44,7 @@ pub async fn resolve_listing_schema(
     for (store, files) in file_groups.iter() {
         let mut schema = options
             .format
-            .infer_schema(&session_state, store, files)
+            .infer_schema(ctx, store, files)
             .await?
             .as_ref()
             .clone();
