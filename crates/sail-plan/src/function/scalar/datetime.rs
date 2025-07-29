@@ -10,7 +10,7 @@ use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::datetime::spark_date_part::SparkDatePart;
-use crate::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
+use crate::extension::function::datetime::spark_from_to_utc_timestamp::SparkFromToUtcTimestamp;
 use crate::extension::function::datetime::spark_last_day::SparkLastDay;
 use crate::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use crate::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
@@ -361,10 +361,11 @@ fn current_localtimestamp_microseconds(input: ScalarFunctionInput) -> PlanResult
     Ok(expr_fn::to_local_time(vec![expr]))
 }
 
-fn from_utc_timestamp(timestamp: Expr, timezone: Expr) -> Expr {
+fn from_to_utc_timestamp(timestamp: Expr, timezone: Expr, is_to: bool) -> Expr {
     Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(SparkFromUtcTimestamp::new(
+        func: Arc::new(ScalarUDF::from(SparkFromToUtcTimestamp::new(
             TimeUnit::Microsecond,
+            is_to,
         ))),
         args: vec![timestamp, timezone],
     })
@@ -475,7 +476,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("dayofyear", F::unary(|arg| integer_part(arg, "DOY"))),
         ("extract", F::binary(date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
-        ("from_utc_timestamp", F::binary(from_utc_timestamp)),
+        (
+            "from_utc_timestamp",
+            F::binary(|ts, tz| from_to_utc_timestamp(ts, tz, false)),
+        ),
         ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),
         ("last_day", F::udf(SparkLastDay::new())),
         (
@@ -539,7 +543,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("to_timestamp_ltz", F::custom(to_timestamp)),
         ("to_timestamp_ntz", F::custom(to_timestamp)),
         ("to_unix_timestamp", F::unknown("to_unix_timestamp")),
-        ("to_utc_timestamp", F::unknown("to_utc_timestamp")),
+        (
+            "to_utc_timestamp",
+            F::binary(|ts, tz| from_to_utc_timestamp(ts, tz, true)),
+        ),
         ("trunc", F::custom(trunc)),
         ("try_to_timestamp", F::custom(try_to_timestamp)),
         (
