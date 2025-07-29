@@ -8,9 +8,10 @@ use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_common::spec;
 use sail_common_datafusion::utils::rename_physical_plan;
+use sail_runtime::RuntimeHandle;
 
 use crate::config::PlanConfig;
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
 
@@ -44,18 +45,34 @@ pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Re
 }
 
 pub async fn resolve_and_execute_plan(
-    ctx: &SessionContext,
+    ctx: Arc<SessionContext>,
     config: Arc<PlanConfig>,
     plan: spec::Plan,
+    runtime_handle: Option<&RuntimeHandle>,
 ) -> PlanResult<Arc<dyn ExecutionPlan>> {
-    let resolver = PlanResolver::new(ctx, config);
-    let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
-    let df = execute_logical_plan(ctx, plan).await?;
-    let plan = df.create_physical_plan().await?;
-    if let Some(fields) = fields {
-        Ok(rename_physical_plan(plan, fields.as_slice())?)
+    if let Some(handle) = runtime_handle {
+        let executor = handle.dedicated_executor().clone();
+        executor
+            .spawn(async move {
+                let resolver = PlanResolver::new(&ctx, config);
+                let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+                let df = execute_logical_plan(&ctx, plan).await?;
+                let plan = df.create_physical_plan().await?;
+                if let Some(fields) = fields {
+                    Ok(rename_physical_plan(plan, fields.as_slice())?)
+                } else {
+                    Ok(plan)
+                }
+            })
+            .await
+            .map_err(|e| {
+                PlanError::InternalError(format!("failed to execute on CPU runtime: {e}"))
+            })?
     } else {
-        Ok(plan)
+        // CHECK HERE: DO NOT MERGE CODE IF THIS COMMENT IS HERE!!
+        Err(PlanError::InternalError(
+            "runtime handle is required for plan execution".to_string(),
+        ))
     }
 }
 

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::prelude::SessionContext;
 use sail_common::spec;
@@ -59,10 +61,10 @@ pub(crate) async fn handle_analyze_schema(
 }
 
 pub(crate) async fn handle_analyze_explain(
-    ctx: &SessionContext,
+    ctx: Arc<SessionContext>,
     request: ExplainRequest,
 ) -> SparkResult<ExplainResponse> {
-    let spark = SparkExtension::get(ctx)?;
+    let spark = SparkExtension::get(&ctx)?;
     let ExplainRequest { plan, explain_mode } = request;
     let plan = plan.required("plan")?;
     let explain_mode = ExplainMode::try_from(explain_mode)?;
@@ -70,8 +72,15 @@ pub(crate) async fn handle_analyze_explain(
         mode: explain_mode.try_into()?,
         input: Box::new(plan.try_into()?),
     }));
-    let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, explain).await?;
-    let stream = spark.job_runner().execute(ctx, plan).await?;
+    let runtime_handle = spark.job_runner().runtime_handle();
+    let plan = resolve_and_execute_plan(
+        Arc::clone(&ctx),
+        spark.plan_config()?,
+        explain,
+        runtime_handle,
+    )
+    .await?;
+    let stream = spark.job_runner().execute(&ctx, plan).await?;
     let batches = read_stream(stream).await?;
     Ok(ExplainResponse {
         // FIXME: The explain output should not be formatted as a table.

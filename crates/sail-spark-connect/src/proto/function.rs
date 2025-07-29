@@ -9,7 +9,7 @@ mod tests {
     use sail_common::config::AppConfig;
     use sail_common::tests::test_gold_set;
     use sail_plan::resolve_and_execute_plan;
-    use sail_runtime::{runtime_builder, RuntimeManager};
+    use sail_runtime::RuntimeManager;
     use sail_server::actor::ActorSystem;
     use serde::{Deserialize, Serialize};
 
@@ -61,7 +61,7 @@ mod tests {
             session_id: "test".to_string(),
         };
         let handle = runtime.handle();
-        let context = handle.primary().block_on(async {
+        let context = Arc::new(handle.primary().block_on(async {
             // We create the session inside an async context, even though the
             // `create_session_context` function itself is sync. This is because the actor system
             // may need to spawn actors when the session runs in cluster mode.
@@ -73,7 +73,7 @@ mod tests {
                     runtime: runtime.handle(),
                 },
             )
-        })?;
+        })?);
         test_gold_set(
             "tests/gold_data/function/*.json",
             |example: FunctionExample| -> SparkResult<String> {
@@ -91,8 +91,14 @@ mod tests {
                 let plan = relation.try_into()?;
                 let result = handle.primary().block_on(async {
                     let spark = SparkExtension::get(&context)?;
-                    let plan =
-                        resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
+                    let runtime_handle = spark.job_runner().runtime_handle();
+                    let plan = resolve_and_execute_plan(
+                        Arc::clone(&context),
+                        spark.plan_config()?,
+                        plan,
+                        runtime_handle,
+                    )
+                    .await?;
                     let stream = spark.job_runner().execute(&context, plan).await?;
                     read_stream(stream).await
                 });

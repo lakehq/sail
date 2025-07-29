@@ -5598,6 +5598,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "sail-python-udf",
+ "sail-runtime",
  "sail-sql-analyzer",
  "sha1",
  "thiserror 2.0.12",

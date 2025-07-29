@@ -20,6 +20,8 @@ pub trait JobRunner: Send + Sync + 'static {
     ) -> ExecutionResult<SendableRecordBatchStream>;
 
     async fn stop(&self);
+
+    fn runtime_handle(&self) -> Option<&RuntimeHandle>;
 }
 
 pub struct LocalJobRunner {
@@ -67,6 +69,10 @@ impl JobRunner for LocalJobRunner {
     async fn stop(&self) {
         self.stopped.store(true, Ordering::Relaxed);
     }
+
+    fn runtime_handle(&self) -> Option<&RuntimeHandle> {
+        Some(&self.runtime)
+    }
 }
 
 pub struct ClusterJobRunner {
@@ -99,5 +105,10 @@ impl JobRunner for ClusterJobRunner {
 
     async fn stop(&self) {
         let _ = self.driver.send(DriverEvent::Shutdown).await;
+    }
+
+    fn runtime_handle(&self) -> Option<&RuntimeHandle> {
+        // CHECK HERE: DO NOT MERGE CODE IF THIS COMMENT IS HERE!!
+        None
     }
 }

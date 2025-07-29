@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
@@ -101,15 +102,18 @@ enum ExecutePlanMode {
 }
 
 async fn handle_execute_plan(
-    ctx: &SessionContext,
+    ctx: Arc<SessionContext>,
     plan: spec::Plan,
     metadata: ExecutorMetadata,
     mode: ExecutePlanMode,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    let spark = SparkExtension::get(ctx)?;
+    let spark = SparkExtension::get(&ctx)?;
     let operation_id = metadata.operation_id.clone();
-    let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
-    let stream = spark.job_runner().execute(ctx, plan).await?;
+    let runtime_handle = spark.job_runner().runtime_handle();
+    let plan =
+        resolve_and_execute_plan(Arc::clone(&ctx), spark.plan_config()?, plan, runtime_handle)
+            .await?;
+    let stream = spark.job_runner().execute(&ctx, plan).await?;
     let rx = match mode {
         ExecutePlanMode::Lazy => {
             let executor = Executor::new(metadata, stream);
@@ -134,7 +138,7 @@ async fn handle_execute_plan(
 }
 
 pub(crate) async fn handle_execute_relation(
-    ctx: &SessionContext,
+    ctx: Arc<SessionContext>,
     relation: Relation,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -143,7 +147,7 @@ pub(crate) async fn handle_execute_relation(
 }
 
 pub(crate) async fn handle_execute_register_function(
-    ctx: &SessionContext,
+    ctx: Arc<SessionContext>,
     udf: CommonInlineUserDefinedFunction,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -154,7 +158,7 @@ pub(crate) async fn handle_execute_register_function(
 }
 
 pub(crate) async fn handle_execute_write_operation(
-    ctx: &SessionContext,
+    ctx: Arc<SessionContext>,
     write: WriteOperation,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -165,7 +169,7 @@ pub(crate) async fn handle_execute_write_operation(
 }
 
 pub(crate) async fn handle_execute_create_dataframe_view(
-    ctx: &SessionContext,
+    ctx: Arc<SessionContext>,
     view: CreateDataFrameViewCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -174,7 +178,7 @@ pub(crate) async fn handle_execute_create_dataframe_view(
 }
 
 pub(crate) async fn handle_execute_write_operation_v2(
-    ctx: &SessionContext,
+    ctx: Arc<SessionContext>,
     write: WriteOperationV2,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -185,11 +189,11 @@ pub(crate) async fn handle_execute_write_operation_v2(
 }
 
 pub(crate) async fn handle_execute_sql_command(
-    ctx: &SessionContext,
+    ctx: Arc<SessionContext>,
     sql: SqlCommand,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    let spark = SparkExtension::get(ctx)?;
+    let spark = SparkExtension::get(&ctx)?;
     let relation = if let Some(input) = sql.input {
         input
     } else {
@@ -209,8 +213,15 @@ pub(crate) async fn handle_execute_sql_command(
     let relation = match plan {
         spec::Plan::Query(_) => relation,
         command @ spec::Plan::Command(_) => {
-            let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, command).await?;
-            let stream = spark.job_runner().execute(ctx, plan).await?;
+            let runtime_handle = spark.job_runner().runtime_handle();
+            let plan = resolve_and_execute_plan(
+                Arc::clone(&ctx),
+                spark.plan_config()?,
+                command,
+                runtime_handle,
+            )
+            .await?;
+            let stream = spark.job_runner().execute(&ctx, plan).await?;
             let schema = stream.schema();
             let data = read_stream(stream).await?;
             let data = concat_batches(&schema, data.iter())?;
@@ -239,7 +250,7 @@ pub(crate) async fn handle_execute_sql_command(
 }
 
 pub(crate) async fn handle_execute_write_stream_operation_start(
-    _ctx: &SessionContext,
+    _ctx: Arc<SessionContext>,
     _start: WriteStreamOperationStart,
     _metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -247,7 +258,7 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
 }
 
 pub(crate) async fn handle_execute_streaming_query_command(
-    _ctx: &SessionContext,
+    _ctx: Arc<SessionContext>,
     _stream: StreamingQueryCommand,
     _metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -255,7 +266,7 @@ pub(crate) async fn handle_execute_streaming_query_command(
 }
 
 pub(crate) async fn handle_execute_get_resources_command(
-    _ctx: &SessionContext,
+    _ctx: Arc<SessionContext>,
     _resource: GetResourcesCommand,
     _metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -263,7 +274,7 @@ pub(crate) async fn handle_execute_get_resources_command(
 }
 
 pub(crate) async fn handle_execute_streaming_query_manager_command(
-    _ctx: &SessionContext,
+    _ctx: Arc<SessionContext>,
     _manager: StreamingQueryManagerCommand,
     _metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
@@ -271,7 +282,7 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
 }
 
 pub(crate) async fn handle_execute_register_table_function(
-    ctx: &SessionContext,
+    ctx: Arc<SessionContext>,
     udtf: CommonInlineUserDefinedTableFunction,
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
