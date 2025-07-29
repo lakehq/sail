@@ -13,7 +13,7 @@ use object_store::http::{HttpBuilder, HttpStore};
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::{ObjectStore, ObjectStoreScheme};
-use sail_common::runtime::RuntimeHandle;
+use sail_runtime::RuntimeHandle;
 use tokio::runtime::Handle;
 use url::Url;
 

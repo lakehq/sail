@@ -119,3 +119,72 @@ pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         },
     }
 }
+
+// pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+//     let cli = Cli::parse_from(args);
+//     let config = Arc::new(AppConfig::load()?);
+//     let primary_runtime = runtime_builder(&config.runtime)
+//         .build()
+//         .map_err(|e| CommonError::internal(e.to_string()))?;
+//
+//     primary_runtime.block_on(async move {
+//         match cli.command {
+//             Command::Worker => {
+//                 let runtime_manager =
+//                     RuntimeManager::new(primary_runtime, &config.runtime, "Sail Worker");
+//                 run_worker().await?
+//             }
+//             Command::Spark(command) => match command {
+//                 SparkCommand::Server {
+//                     ip,
+//                     port,
+//                     directory,
+//                 } => {
+//                     if let Some(directory) = directory {
+//                         std::env::set_current_dir(directory)?;
+//                     }
+//                     let runtime_manager = RuntimeManager::new(
+//                         primary_runtime,
+//                         &config.runtime,
+//                         "Sail Spark Connect Server",
+//                     );
+//                     run_spark_connect_server(ip.parse()?, port, runtime_manager, config).await?
+//                 }
+//                 SparkCommand::Shell => {
+//                     let runtime_manager =
+//                         RuntimeManager::new(primary_runtime, &config.runtime, "Sail PySpark Shell");
+//                     // TODO: Why is there warning about leaked semaphore objects
+//                     //   according to the Python multiprocessing resource tracker?
+//                     run_pyspark_shell(runtime_manager, config).await?
+//                 }
+//                 SparkCommand::McpServer {
+//                     host,
+//                     port,
+//                     transport,
+//                     spark_remote,
+//                     directory,
+//                 } => {
+//                     if let Some(directory) = directory {
+//                         std::env::set_current_dir(directory)?;
+//                     }
+//                     let runtime_manager =
+//                         RuntimeManager::new(primary_runtime, &config.runtime, "Sail MCP Server");
+//                     run_spark_mcp_server(
+//                         McpSettings {
+//                             transport,
+//                             host,
+//                             port,
+//                             spark_remote,
+//                         },
+//                         runtime_manager,
+//                         config,
+//                     )
+//                     .await?
+//                 }
+//             },
+//         }
+//         <Result<(), Box<dyn std::error::Error>>>::Ok(())
+//     })?;
+//
+//     Ok(())
+// }

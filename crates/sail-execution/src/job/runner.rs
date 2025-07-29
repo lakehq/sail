@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
+use sail_runtime::RuntimeHandle;
 use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
 
@@ -23,28 +24,15 @@ pub trait JobRunner: Send + Sync + 'static {
 
 pub struct LocalJobRunner {
     stopped: AtomicBool,
-    runtime: Option<sail_common::runtime::RuntimeHandle>,
+    runtime: RuntimeHandle,
 }
 
 impl LocalJobRunner {
-    pub fn new() -> Self {
+    pub fn new(runtime: RuntimeHandle) -> Self {
         Self {
             stopped: AtomicBool::new(false),
-            runtime: None,
+            runtime,
         }
-    }
-
-    pub fn new_with_runtime(runtime: sail_common::runtime::RuntimeHandle) -> Self {
-        Self {
-            stopped: AtomicBool::new(false),
-            runtime: Some(runtime),
-        }
-    }
-}
-
-impl Default for LocalJobRunner {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -61,19 +49,19 @@ impl JobRunner for LocalJobRunner {
             ));
         }
 
-        if let Some(runtime) = &self.runtime {
-            let task_ctx = ctx.task_ctx();
-            let result = runtime
-                .cpu()
-                .spawn(async move { execute_stream(plan, task_ctx) })
-                .await
-                .map_err(|e| {
-                    ExecutionError::InternalError(format!("failed to execute on CPU runtime: {e}"))
-                })?;
-            Ok(result?)
-        } else {
-            Ok(execute_stream(plan, ctx.task_ctx())?)
-        }
+        let task_ctx = ctx.task_ctx();
+        let executor = self.runtime.dedicated_executor().clone();
+        let result = executor
+            .spawn(async move {
+                let result = execute_stream(plan, task_ctx)?;
+                Ok(result)
+            })
+            .await
+            .map_err(|e| {
+                ExecutionError::InternalError(format!("failed to execute on CPU runtime: {e}"))
+            })?;
+
+        result
     }
 
     async fn stop(&self) {

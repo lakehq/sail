@@ -11,7 +11,6 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use log::info;
 use sail_catalog::temp_view::TemporaryViewManager;
 use sail_common::config::{AppConfig, ExecutionMode};
-use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
 use sail_object_store::DynamicObjectStoreRegistry;
@@ -21,6 +20,7 @@ use sail_plan::function::{
     BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
 };
 use sail_plan::new_query_planner;
+use sail_runtime::RuntimeHandle;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -86,9 +86,7 @@ impl SessionManager {
         options: SessionManagerOptions,
     ) -> SparkResult<SessionContext> {
         let job_runner: Box<dyn JobRunner> = match options.config.mode {
-            ExecutionMode::Local => {
-                Box::new(LocalJobRunner::new_with_runtime(options.runtime.clone()))
-            }
+            ExecutionMode::Local => Box::new(LocalJobRunner::new(options.runtime.clone())),
             ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
                 let options = DriverOptions::try_new(&options.config, options.runtime.clone())?;
                 let mut system = system.lock()?;
@@ -162,7 +160,7 @@ impl SessionManager {
         }
 
         let runtime = {
-            let registry = DynamicObjectStoreRegistry::new(options.runtime.clone());
+            let registry = DynamicObjectStoreRegistry::new(options.runtime);
             let builder =
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)

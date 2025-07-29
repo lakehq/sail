@@ -4,7 +4,7 @@ use std::sync::Arc;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{PyResult, Python};
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeManager;
+use sail_runtime::RuntimeManager;
 use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -13,14 +13,14 @@ use crate::python::Modules;
 
 pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(AppConfig::load()?);
-    let runtime = RuntimeManager::try_new(&config.runtime)?;
+    let runtime_manager = RuntimeManager::try_new(&config.runtime, "Sail PySpark Shell")?;
     let options = SessionManagerOptions {
         config,
-        runtime: runtime.handle(),
+        runtime: runtime_manager.handle(),
     };
     let (_tx, rx) = oneshot::channel::<()>();
-    let handle = runtime.handle().primary().clone();
-    let (server_port, server_task) = handle.block_on(async move {
+    let handle = runtime_manager.handle();
+    let (server_port, server_task) = handle.primary().block_on(async move {
         // Listen on only the loopback interface for security.
         let listener = TcpListener::bind((Ipv4Addr::new(127, 0, 0, 1), 0)).await?;
         let port = listener.local_addr()?.port();
@@ -36,7 +36,7 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
         };
         <Result<_, Box<dyn std::error::Error>>>::Ok((port, task))
     })?;
-    handle.spawn(server_task);
+    handle.primary().spawn(server_task);
     Python::with_gil(|py| -> PyResult<_> {
         let shell = Modules::SPARK_SHELL.load(py)?;
         shell

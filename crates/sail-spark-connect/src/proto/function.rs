@@ -7,9 +7,9 @@ mod tests {
     use datafusion::arrow::error::ArrowError;
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
     use sail_common::config::AppConfig;
-    use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
     use sail_plan::resolve_and_execute_plan;
+    use sail_runtime::{runtime_builder, RuntimeManager};
     use sail_server::actor::ActorSystem;
     use serde::{Deserialize, Serialize};
 
@@ -54,7 +54,7 @@ mod tests {
     #[test]
     fn test_sql_function() -> Result<(), Box<dyn std::error::Error>> {
         let config = Arc::new(AppConfig::load()?);
-        let runtime = RuntimeManager::try_new(&config.runtime)?;
+        let runtime = RuntimeManager::try_new(&config.runtime, "Sail Spark Connect Test")?;
         let system = Arc::new(Mutex::new(ActorSystem::new()));
         let session_key = SessionKey {
             user_id: None,

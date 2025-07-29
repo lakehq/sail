@@ -17,6 +17,7 @@ sail-execution = { path = "../sail-execution" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 sail-object-store = { path = "../sail-object-store" }
 sail-catalog = { path = "../sail-catalog" }
+sail-runtime = { path = "../sail-runtime" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
