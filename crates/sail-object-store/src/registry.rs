@@ -20,6 +20,7 @@ use url::Url;
 use crate::hugging_face::HuggingFaceObjectStore;
 use crate::layers::lazy::LazyObjectStore;
 use crate::layers::logging::LoggingObjectStore;
+use crate::layers::runtime::RuntimeAwareObjectStore;
 use crate::s3::get_s3_object_store;
 
 #[derive(Debug, Eq, PartialEq, Hash)]
@@ -76,7 +77,12 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
         let store = self
             .stores
             .entry(key)
-            .or_try_insert_with(|| get_dynamic_object_store(url, self.runtime.primary()))?
+            .or_try_insert_with(|| -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+                Ok(Arc::new(RuntimeAwareObjectStore::try_new(
+                    || get_dynamic_object_store(url, self.runtime.primary()),
+                    self.runtime.primary().clone(),
+                )?))
+            })?
             .clone();
 
         Ok(store)
@@ -110,40 +116,40 @@ fn get_dynamic_object_store(
                 ObjectStoreScheme::Memory => Arc::new(InMemory::new()),
                 ObjectStoreScheme::AmazonS3 => {
                     let url = url.clone();
-                    let handle = handle.clone();
+                    let handle_for_closure = handle.clone();
                     let store = LazyObjectStore::new(move || {
                         let url = url.clone();
-                        let handle = handle.clone();
+                        let handle = handle_for_closure.clone();
                         async move { get_s3_object_store(&url, handle).await }
                     });
                     Arc::new(store)
                 }
                 ObjectStoreScheme::MicrosoftAzure => {
                     let url = url.clone();
-                    let handle = handle.clone();
+                    let handle_for_closure = handle.clone();
                     let store = LazyObjectStore::new(move || {
                         let url = url.clone();
-                        let handle = handle.clone();
+                        let handle = handle_for_closure.clone();
                         async move { get_azure_object_store(&url, handle).await }
                     });
                     Arc::new(store)
                 }
                 ObjectStoreScheme::GoogleCloudStorage => {
                     let url = url.clone();
-                    let handle = handle.clone();
+                    let handle_for_closure = handle.clone();
                     let store = LazyObjectStore::new(move || {
                         let url = url.clone();
-                        let handle = handle.clone();
+                        let handle = handle_for_closure.clone();
                         async move { get_gcs_object_store(&url, handle).await }
                     });
                     Arc::new(store)
                 }
                 ObjectStoreScheme::Http => {
                     let url = url[..url::Position::BeforePath].to_string();
-                    let handle = handle.clone();
+                    let handle_for_closure = handle.clone();
                     let store = LazyObjectStore::new(move || {
                         let url = url.to_string();
-                        let handle = handle.clone();
+                        let handle = handle_for_closure.clone();
                         async move { get_http_object_store(url, handle).await }
                     });
                     Arc::new(store)
