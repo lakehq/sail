@@ -597,7 +597,7 @@ impl PlanFormatter for DefaultPlanFormatter {
             "count" => {
                 let arguments = arguments.join(", ");
                 if is_distinct {
-                    Ok(format!("{name}(DISTINCT {})", arguments))
+                    Ok(format!("{name}(DISTINCT {arguments})"))
                 } else if arguments.as_str() == "*" {
                     Ok("count(1)".to_string())
                 } else {
