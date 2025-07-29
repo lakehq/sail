@@ -967,74 +967,6 @@ fn prune_file_statistics(
         .collect()
 }
 
-pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
-    match t {
-        ArrowDataType::Null => Ok(ScalarValue::Null),
-        ArrowDataType::Boolean => Ok(ScalarValue::Boolean(None)),
-        ArrowDataType::Int8 => Ok(ScalarValue::Int8(None)),
-        ArrowDataType::Int16 => Ok(ScalarValue::Int16(None)),
-        ArrowDataType::Int32 => Ok(ScalarValue::Int32(None)),
-        ArrowDataType::Int64 => Ok(ScalarValue::Int64(None)),
-        ArrowDataType::UInt8 => Ok(ScalarValue::UInt8(None)),
-        ArrowDataType::UInt16 => Ok(ScalarValue::UInt16(None)),
-        ArrowDataType::UInt32 => Ok(ScalarValue::UInt32(None)),
-        ArrowDataType::UInt64 => Ok(ScalarValue::UInt64(None)),
-        ArrowDataType::Float32 => Ok(ScalarValue::Float32(None)),
-        ArrowDataType::Float64 => Ok(ScalarValue::Float64(None)),
-        ArrowDataType::Date32 => Ok(ScalarValue::Date32(None)),
-        ArrowDataType::Date64 => Ok(ScalarValue::Date64(None)),
-        ArrowDataType::Binary => Ok(ScalarValue::Binary(None)),
-        ArrowDataType::FixedSizeBinary(size) => {
-            Ok(ScalarValue::FixedSizeBinary(size.to_owned(), None))
-        }
-        ArrowDataType::LargeBinary => Ok(ScalarValue::LargeBinary(None)),
-        ArrowDataType::Utf8 => Ok(ScalarValue::Utf8(None)),
-        ArrowDataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(None)),
-        ArrowDataType::Decimal128(precision, scale) => Ok(ScalarValue::Decimal128(
-            None,
-            precision.to_owned(),
-            scale.to_owned(),
-        )),
-        ArrowDataType::Timestamp(unit, tz) => {
-            let tz = tz.to_owned();
-            Ok(match unit {
-                TimeUnit::Second => ScalarValue::TimestampSecond(None, tz),
-                TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(None, tz),
-                TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(None, tz),
-                TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(None, tz),
-            })
-        }
-        ArrowDataType::Dictionary(k, v) =>
-        {
-            #[allow(clippy::unwrap_used)]
-            Ok(ScalarValue::Dictionary(
-                k.clone(),
-                Box::new(get_null_of_arrow_type(v).unwrap()),
-            ))
-        }
-        //Unsupported types...
-        ArrowDataType::Float16
-        | ArrowDataType::Decimal256(_, _)
-        | ArrowDataType::Union(_, _)
-        | ArrowDataType::LargeList(_)
-        | ArrowDataType::Struct(_)
-        | ArrowDataType::List(_)
-        | ArrowDataType::FixedSizeList(_, _)
-        | ArrowDataType::Time32(_)
-        | ArrowDataType::Time64(_)
-        | ArrowDataType::Duration(_)
-        | ArrowDataType::Interval(_)
-        | ArrowDataType::RunEndEncoded(_, _)
-        | ArrowDataType::BinaryView
-        | ArrowDataType::Utf8View
-        | ArrowDataType::LargeListView(_)
-        | ArrowDataType::ListView(_)
-        | ArrowDataType::Map(_, _) => Err(DeltaTableError::Generic(format!(
-            "Unsupported data type for Delta Lake {t}"
-        ))),
-    }
-}
-
 fn partitioned_file_from_action(
     action: &Add,
     partition_columns: &[String],
@@ -1056,7 +988,7 @@ fn partitioned_file_from_action(
                             )
                             .unwrap_or(Some(ScalarValue::Null))
                             .unwrap_or(ScalarValue::Null),
-                            None => get_null_of_arrow_type(field.data_type())
+                            None => ScalarValue::try_new_null(field.data_type())
                                 .unwrap_or(ScalarValue::Null),
                         })
                         .unwrap_or(ScalarValue::Null)
@@ -1142,7 +1074,8 @@ pub(crate) fn to_correct_scalar_value(
         serde_json::Value::Array(_) => Ok(None),
         serde_json::Value::Object(_) => Ok(None),
         serde_json::Value::Null => Ok(Some(
-            get_null_of_arrow_type(field_dt).map_err(|e| DataFusionError::External(Box::new(e)))?,
+            ScalarValue::try_new_null(field_dt)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
         )),
         serde_json::Value::String(string_val) => match field_dt {
             ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(stat_val, field_dt)?)),
