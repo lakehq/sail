@@ -216,6 +216,7 @@ impl DataSink for DeltaDataSink {
                     let existing_files = snapshot
                         .file_actions()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    #[allow(clippy::expect_used)]
                     let current_timestamp = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .expect("System time before Unix epoch")

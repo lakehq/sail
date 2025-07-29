@@ -103,6 +103,7 @@ pub fn create_add(
         .map_err(|e| DeltaTableError::generic(format!("Failed to serialize stats: {e}")))?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
+    #[allow(clippy::expect_used)]
     let modification_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("System time before Unix epoch")
@@ -310,6 +311,7 @@ impl StatsScalar {
         match (stats, logical_type) {
             (Statistics::Boolean(v), _) => Ok(Self::Boolean(get_stat!(v))),
             (Statistics::Int32(v), Some(LogicalType::Date)) => {
+                #[allow(clippy::unwrap_used)]
                 let epoch_start = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let date = epoch_start + chrono::Duration::days(get_stat!(v) as i64);
                 Ok(Self::Date(date))
@@ -448,6 +450,7 @@ impl From<StatsScalar> for serde_json::Value {
                     .into_iter()
                     .flat_map(std::ascii::escape_default)
                     .collect::<Vec<u8>>();
+                #[allow(clippy::unwrap_used)]
                 let escaped_string = String::from_utf8(escaped_bytes).unwrap();
                 serde_json::Value::from(escaped_string)
             }

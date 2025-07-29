@@ -82,6 +82,7 @@ pub fn datafusion_to_delta_error(err: DataFusionError) -> DeltaTableError {
 
 fn create_object_store_url(location: &Url) -> ObjectStoreUrl {
     use object_store::path::DELIMITER;
+    #[allow(clippy::expect_used)]
     ObjectStoreUrl::parse(format!(
         "delta-rs://{}-{}{}",
         location.scheme(),
@@ -146,6 +147,7 @@ fn arrow_schema_from_snapshot(
             Ok(Field::new(field_name, field_type, f.is_nullable()))
         })
         .chain(meta.partition_columns().iter().map(|partition_col| {
+            #[allow(clippy::expect_used)]
             let f = schema
                 .field(partition_col)
                 .expect("Partition column should exist in schema");
@@ -192,6 +194,7 @@ fn arrow_schema_from_struct_type(
             // We need stable order between logical and physical schemas, but the order of
             // partitioning columns is not always the same in the json schema and the array
             partition_columns.iter().map(|partition_col| {
+                #[allow(clippy::expect_used)]
                 let f = schema
                     .field(partition_col)
                     .expect("Partition column should exist in schema");
@@ -333,6 +336,7 @@ pub(crate) fn df_logical_schema(
         .collect();
 
     for partition_col in table_partition_cols.iter() {
+        #[allow(clippy::expect_used)]
         fields.push(Arc::new(
             input_schema
                 .field_with_name(partition_col)
@@ -828,6 +832,7 @@ impl<'a> DeltaScanBuilder<'a> {
         let mut table_partition_cols = table_partition_cols
             .iter()
             .map(|col| {
+                #[allow(clippy::expect_used)]
                 let field = schema
                     .field_with_name(col)
                     .expect("Column should exist in schema");
@@ -939,10 +944,12 @@ fn simplify_expr(
     let props = ExecutionProps::new();
     let simplify_context = SimplifyContext::new(&props).with_schema(df_schema.clone().into());
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
+    #[allow(clippy::expect_used)]
     let simplified = simplifier
         .simplify(expr)
         .expect("Failed to simplify expression");
 
+    #[allow(clippy::expect_used)]
     context
         .create_physical_expr(simplified, df_schema)
         .expect("Failed to create physical expression")
@@ -997,10 +1004,14 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
                 TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(None, tz),
             })
         }
-        ArrowDataType::Dictionary(k, v) => Ok(ScalarValue::Dictionary(
-            k.clone(),
-            Box::new(get_null_of_arrow_type(v).unwrap()),
-        )),
+        ArrowDataType::Dictionary(k, v) =>
+        {
+            #[allow(clippy::unwrap_used)]
+            Ok(ScalarValue::Dictionary(
+                k.clone(),
+                Box::new(get_null_of_arrow_type(v).unwrap()),
+            ))
+        }
         //Unsupported types...
         ArrowDataType::Float16
         | ArrowDataType::Decimal256(_, _)
@@ -1056,12 +1067,14 @@ fn partitioned_file_from_action(
 
     let ts_secs = action.modification_time / 1000;
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
+    #[allow(clippy::expect_used)]
     let last_modified = chrono::Utc.from_utc_datetime(
         &chrono::DateTime::from_timestamp(ts_secs, ts_ns as u32)
             .expect("Failed to create timestamp from seconds and nanoseconds")
             .naive_utc(),
     );
     PartitionedFile {
+        #[allow(clippy::expect_used)]
         object_meta: ObjectMeta {
             last_modified,
             ..action
@@ -1274,6 +1287,7 @@ fn get_pushdown_filters(
 // inspired from datafusion::listing::helpers, but adapted to only stats based pruning
 fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
+    #[allow(clippy::expect_used)]
     expr.apply(|expr| match expr {
         Expr::Column(Column { ref name, .. }) => {
             is_applicable &= partition_cols.contains(name);

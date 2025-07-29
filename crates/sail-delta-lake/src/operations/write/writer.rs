@@ -518,6 +518,7 @@ pub(crate) fn divide_by_partition_values(
     let sorted_partition_columns = partition_columns
         .iter()
         .map(|c| {
+            #[allow(clippy::unwrap_used)]
             let col = values.column(schema.index_of(c).unwrap());
             compute::take(col, &indices, None).map_err(|e| DeltaTableError::generic(e.to_string()))
         })
@@ -550,6 +551,7 @@ pub(crate) fn divide_by_partition_values(
             .fields()
             .iter()
             .map(|f| {
+                #[allow(clippy::unwrap_used)]
                 let col = values.column(schema.index_of(f.name()).unwrap());
                 compute::take(col.as_ref(), &idx, None)
                     .map_err(|e| DeltaTableError::generic(e.to_string()))
@@ -571,7 +573,9 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
         .iter()
         .map(|a| SortField::new(a.data_type().clone()))
         .collect();
+    #[allow(clippy::unwrap_used)]
     let converter = RowConverter::new(fields).unwrap();
+    #[allow(clippy::unwrap_used)]
     let rows = converter.convert_columns(arrays).unwrap();
     let mut sort: Vec<_> = rows.iter().enumerate().collect();
     sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));

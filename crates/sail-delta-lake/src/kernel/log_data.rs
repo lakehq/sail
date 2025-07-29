@@ -269,12 +269,17 @@ impl SailLogDataHandler {
         for batch in &self.data {
             let num_rows = batch.num_rows();
             let mut path_iter = path_step.split('.');
-            let array = if let Ok(array) =
-                ex::extract_column(batch, path_iter.next().unwrap(), &mut path_iter)
-            {
+            let array = if let Ok(array) = ex::extract_column(
+                batch,
+                #[allow(clippy::unwrap_used)]
+                path_iter.next().unwrap(),
+                &mut path_iter,
+            ) {
                 let mut name_iter = name.split('.');
                 if let Ok(array) = ex::extract_column(
+                    #[allow(clippy::unwrap_used)]
                     array.as_any().downcast_ref::<StructArray>().unwrap(),
+                    #[allow(clippy::unwrap_used)]
                     name_iter.next().unwrap(),
                     &mut name_iter,
                 ) {
