@@ -9,7 +9,7 @@ use crate::spec::expression::{
     SortOrder,
 };
 use crate::spec::literal::Literal;
-use crate::spec::Identifier;
+use crate::spec::{DataType, Identifier};
 
 /// Unresolved logical plan node for Sail.
 /// As a starting point, the definition matches the structure of the `Relation` message
@@ -274,23 +274,23 @@ pub enum CommandNode {
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {
-        database_name: Identifier,
+        database: ObjectName,
     },
     ListDatabases {
-        catalog: Option<Identifier>,
-        database_pattern: Option<String>,
+        qualifier: Option<ObjectName>,
+        pattern: Option<String>,
     },
     ListTables {
         database: Option<ObjectName>,
-        table_pattern: Option<String>,
+        pattern: Option<String>,
     },
     ListViews {
         database: Option<ObjectName>,
-        view_pattern: Option<String>,
+        pattern: Option<String>,
     },
     ListFunctions {
         database: Option<ObjectName>,
-        function_pattern: Option<String>,
+        pattern: Option<String>,
     },
     ListColumns {
         table: ObjectName,
@@ -318,6 +318,13 @@ pub enum CommandNode {
         #[serde(flatten)]
         definition: TableDefinition,
     },
+    CreateTableAsSelect {
+        table: ObjectName,
+        #[serde(flatten)]
+        definition: TableDefinition,
+        /// The query for `CREATE TABLE ... AS SELECT ...` (CTAS) statements.
+        query: Box<QueryPlan>,
+    },
     RecoverPartitions {
         table: ObjectName,
     },
@@ -343,10 +350,10 @@ pub enum CommandNode {
     },
     CurrentCatalog,
     SetCurrentCatalog {
-        catalog_name: Identifier,
+        catalog: Identifier,
     },
     ListCatalogs {
-        catalog_pattern: Option<String>,
+        pattern: Option<String>,
     },
     CreateCatalog {
         catalog: Identifier,
@@ -384,13 +391,24 @@ pub enum CommandNode {
         #[serde(flatten)]
         definition: ViewDefinition,
     },
+    /// Drop a view or a temporary view.
     DropView {
         view: ObjectName,
-        /// An optional view kind to match the view name.
-        kind: Option<ViewKind>,
+        if_exists: bool,
+    },
+    CreateTemporaryView {
+        view: Identifier,
+        is_global: bool,
+        #[serde(flatten)]
+        definition: TemporaryViewDefinition,
+    },
+    DropTemporaryView {
+        view: Identifier,
+        is_global: bool,
         if_exists: bool,
     },
     Write(Write),
+    WriteTo(WriteTo),
     Explain {
         // TODO: Support stringified_plans
         mode: ExplainMode,
@@ -399,7 +417,7 @@ pub enum CommandNode {
     InsertInto {
         input: Box<QueryPlan>,
         table: ObjectName,
-        columns: Vec<Identifier>,
+        columns: WriteColumns,
         partition_spec: Vec<(Identifier, Option<Expr>)>,
         replace: Option<Expr>,
         if_not_exists: bool,
@@ -742,22 +760,32 @@ pub struct HtmlString {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableDefinition {
-    pub schema: Schema,
+    pub columns: Vec<TableColumnDefinition>,
     pub comment: Option<String>,
-    pub column_defaults: Vec<(Identifier, Expr)>,
     pub constraints: Vec<TableConstraint>,
     pub location: Option<String>,
     pub file_format: Option<TableFileFormat>,
     pub row_format: Option<TableRowFormat>,
-    pub table_partition_cols: Vec<Identifier>,
-    pub file_sort_order: Vec<Vec<SortOrder>>,
+    pub partition_by: Vec<Identifier>,
+    pub sort_by: Vec<SortOrder>,
+    pub bucket_by: Option<SaveBucketBy>,
     pub if_not_exists: bool,
-    pub or_replace: bool,
-    pub unbounded: bool,
+    pub replace: bool,
     pub options: Vec<(String, String)>,
-    /// The query for `CREATE TABLE ... AS SELECT ...` (CTAS) statements.
-    pub query: Option<Box<QueryPlan>>,
-    pub definition: Option<String>,
+    pub properties: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableColumnDefinition {
+    pub name: String,
+    pub data_type: DataType,
+    pub nullable: bool,
+    pub comment: Option<String>,
+    /// An optional SQL expression string for the default value.
+    pub default: Option<String>,
+    /// An optional SQL expression string to calculate the generated value.
+    pub generated_always_as: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -777,31 +805,39 @@ pub struct CatalogDefinition {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ViewKind {
-    /// A view that is stored in the catalog.
-    Default,
-    /// A temporary view that is tied to the session.
-    Temporary,
-    /// A temporary view that is available for all sessions in the same Spark application.
-    /// See also: <https://spark.apache.org/docs/latest/sql-getting-started.html#global-temporary-view>
-    GlobalTemporary,
+pub struct ViewDefinition {
+    /// The corresponding SQL query that defines the view.
+    pub definition: String,
+    pub columns: Option<Vec<ViewColumnDefinition>>,
+    pub if_not_exists: bool,
+    pub replace: bool,
+    pub comment: Option<String>,
+    pub properties: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ViewDefinition {
+pub struct ViewColumnDefinition {
+    pub name: String,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemporaryViewDefinition {
     pub input: Box<QueryPlan>,
-    pub columns: Option<Vec<Identifier>>,
-    pub kind: ViewKind,
+    pub columns: Option<Vec<ViewColumnDefinition>>,
+    pub if_not_exists: bool,
     pub replace: bool,
-    pub definition: Option<String>,
+    pub comment: Option<String>,
+    pub properties: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Write {
     pub input: Box<QueryPlan>,
-    pub source: Option<String>, // TODO: is this the same as "provider" in `WriteOperationV2`?
+    pub source: Option<String>,
     pub save_type: SaveType,
     pub mode: SaveMode,
     pub sort_columns: Vec<SortOrder>,
@@ -809,8 +845,6 @@ pub struct Write {
     pub clustering_columns: Vec<Identifier>,
     pub bucket_by: Option<SaveBucketBy>,
     pub options: Vec<(String, String)>,
-    pub table_properties: Vec<(String, String)>,
-    pub overwrite_condition: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -840,22 +874,49 @@ pub struct SaveBucketBy {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SaveMode {
-    // TODO: understand the difference between save modes in
-    //  `WriteOperation` and `WriteOperationV2`
     Append,
-    Create,
-    CreateOrReplace,
+    Overwrite,
     ErrorIfExists,
     Ignore,
-    Overwrite,
-    OverwritePartitions,
-    Replace,
 }
 
 impl Default for SaveMode {
     fn default() -> Self {
         Self::ErrorIfExists
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteTo {
+    pub input: Box<QueryPlan>,
+    pub provider: Option<String>,
+    pub table: ObjectName,
+    pub mode: WriteToMode,
+    pub partitioning_columns: Vec<Expr>,
+    pub clustering_columns: Vec<Identifier>,
+    pub options: Vec<(String, String)>,
+    pub table_properties: Vec<(String, String)>,
+    pub overwrite_condition: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WriteToMode {
+    Append,
+    Create,
+    CreateOrReplace,
+    Overwrite,
+    OverwritePartitions,
+    Replace,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum WriteColumns {
+    ByPosition,
+    ByName,
+    Columns(Vec<Identifier>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

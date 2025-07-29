@@ -1,101 +1,91 @@
-use std::cmp::Ordering;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
-use datafusion::catalog::MemTable;
-use datafusion::datasource::provider_as_source;
-use datafusion_common::{
-    exec_datafusion_err, not_impl_err, plan_err, Constraints, DFSchemaRef, Result, SchemaReference,
-    TableReference,
-};
-use datafusion_expr::expr::Sort;
-use datafusion_expr::{Expr, LogicalPlan, ScalarUDF, TableScan, UNNAMED_TABLE};
+use datafusion::prelude::SessionContext;
+use datafusion_expr::ScalarUDF;
 use serde::Serialize;
 use serde_arrow::schema::{SchemaLike, TracingOptions};
 use serde_arrow::to_arrow;
 
-use crate::manager::catalog::CatalogMetadata;
-use crate::manager::column::TableColumnMetadata;
-use crate::manager::database::DatabaseMetadata;
-use crate::manager::function::FunctionMetadata;
-use crate::manager::table::TableMetadata;
-use crate::manager::{CatalogManager, EmptyMetadata, SingleValueMetadata};
+use crate::display::{CatalogDisplay, EmptyDisplay, SingleValueDisplay};
+use crate::error::{CatalogError, CatalogResult};
+use crate::manager::CatalogManager;
+use crate::provider::{
+    CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
+};
+use crate::utils::quote_namespace_if_needed;
 
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
 pub enum CatalogCommand {
     CurrentCatalog,
     SetCurrentCatalog {
-        catalog_name: String,
+        catalog: String,
     },
     ListCatalogs {
-        catalog_pattern: Option<String>,
+        pattern: Option<String>,
     },
     CurrentDatabase,
     SetCurrentDatabase {
-        database_name: String,
+        database: Vec<String>,
     },
     CreateDatabase {
-        database: SchemaReference,
-        if_not_exists: bool,
-        comment: Option<String>,
-        location: Option<String>,
-        properties: Vec<(String, String)>,
+        database: Vec<String>,
+        options: CreateDatabaseOptions,
     },
     DatabaseExists {
-        database: SchemaReference,
+        database: Vec<String>,
     },
     GetDatabase {
-        database: SchemaReference,
+        database: Vec<String>,
     },
     ListDatabases {
-        catalog: Option<String>,
-        database_pattern: Option<String>,
+        qualifier: Vec<String>,
+        pattern: Option<String>,
     },
     DropDatabase {
-        database: SchemaReference,
-        if_exists: bool,
-        cascade: bool,
+        database: Vec<String>,
+        options: DropDatabaseOptions,
     },
     CreateTable {
-        table: TableReference,
-        definition: CatalogTableDefinition,
+        table: Vec<String>,
+        options: CreateTableOptions,
     },
     TableExists {
-        table: TableReference,
+        table: Vec<String>,
     },
     GetTable {
-        table: TableReference,
+        table: Vec<String>,
     },
     ListTables {
-        database: Option<SchemaReference>,
-        table_pattern: Option<String>,
+        database: Vec<String>,
+        pattern: Option<String>,
     },
     ListViews {
-        database: Option<SchemaReference>,
-        view_pattern: Option<String>,
+        database: Vec<String>,
+        pattern: Option<String>,
     },
     DropTable {
-        table: TableReference,
-        if_exists: bool,
-        purge: bool,
+        table: Vec<String>,
+        options: DropTableOptions,
     },
     ListColumns {
-        table: TableReference,
+        table: Vec<String>,
     },
     FunctionExists {
-        function: TableReference,
+        function: Vec<String>,
     },
     GetFunction {
-        function: TableReference,
+        function: Vec<String>,
     },
     ListFunctions {
-        database: Option<SchemaReference>,
-        function_pattern: Option<String>,
+        database: Vec<String>,
+        pattern: Option<String>,
     },
     DropFunction {
-        function: TableReference,
+        function: Vec<String>,
         if_exists: bool,
         is_temporary: bool,
     },
@@ -110,107 +100,29 @@ pub enum CatalogCommand {
         udtf: CatalogTableFunction,
     },
     DropTemporaryView {
-        view_name: String,
+        view: String,
         is_global: bool,
-        if_exists: bool,
+        options: DropTemporaryViewOptions,
     },
     DropView {
-        view: TableReference,
-        if_exists: bool,
+        view: Vec<String>,
+        options: DropViewOptions,
     },
     CreateTemporaryView {
-        input: Arc<LogicalPlan>,
-        view_name: String,
+        view: String,
         is_global: bool,
-        replace: bool,
-        definition: Option<String>,
+        options: CreateTemporaryViewOptions,
     },
     CreateView {
-        input: Arc<LogicalPlan>,
-        view: TableReference,
-        replace: bool,
-        definition: Option<String>,
+        view: Vec<String>,
+        options: CreateViewOptions,
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub enum CatalogTableFunction {
     // We do not support any kind of table functions yet.
     // PySpark UDTF is registered as a scalar UDF.
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct CatalogTableDefinition {
-    pub schema: DFSchemaRef,
-    pub comment: Option<String>,
-    pub column_defaults: Vec<(String, Expr)>,
-    pub constraints: Constraints,
-    pub location: String,
-    pub file_format: String,
-    pub table_partition_cols: Vec<String>,
-    pub file_sort_order: Vec<Vec<Sort>>,
-    pub if_not_exists: bool,
-    pub or_replace: bool,
-    pub unbounded: bool,
-    pub options: Vec<(String, String)>,
-    pub definition: Option<String>,
-}
-
-#[derive(PartialEq, PartialOrd)]
-struct CatalogTableDefinitionOrd<'a> {
-    comment: &'a Option<String>,
-    column_defaults: &'a Vec<(String, Expr)>,
-    constraints: &'a Constraints,
-    location: &'a String,
-    file_format: &'a String,
-    table_partition_cols: &'a Vec<String>,
-    file_sort_order: &'a Vec<Vec<Sort>>,
-    if_not_exists: bool,
-    or_replace: bool,
-    unbounded: bool,
-    options: &'a Vec<(String, String)>,
-    definition: &'a Option<String>,
-}
-
-impl<'a> From<&'a CatalogTableDefinition> for CatalogTableDefinitionOrd<'a> {
-    fn from(definition: &'a CatalogTableDefinition) -> Self {
-        let CatalogTableDefinition {
-            // ignore schema in comparison
-            schema: _,
-            comment,
-            column_defaults,
-            constraints,
-            location,
-            file_format,
-            table_partition_cols,
-            file_sort_order,
-            if_not_exists,
-            or_replace,
-            unbounded,
-            options,
-            definition,
-        } = definition;
-        CatalogTableDefinitionOrd {
-            comment,
-            column_defaults,
-            constraints,
-            location,
-            file_format,
-            table_partition_cols,
-            file_sort_order,
-            if_not_exists: *if_not_exists,
-            or_replace: *or_replace,
-            unbounded: *unbounded,
-            options,
-            definition,
-        }
-    }
-}
-
-impl PartialOrd for CatalogTableDefinition {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        CatalogTableDefinitionOrd::from(self).partial_cmp(&other.into())
-    }
 }
 
 impl CatalogCommand {
@@ -246,34 +158,33 @@ impl CatalogCommand {
         }
     }
 
-    pub fn schema(&self) -> Result<SchemaRef> {
-        // TODO: make sure we return the same schema as Spark for each command
+    pub fn schema<D: CatalogDisplay>(&self) -> CatalogResult<SchemaRef> {
         let fields = match self {
             CatalogCommand::ListCatalogs { .. } => {
-                Vec::<FieldRef>::from_type::<CatalogMetadata>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<D::Catalog>(TracingOptions::default())
             }
             CatalogCommand::GetDatabase { .. } | CatalogCommand::ListDatabases { .. } => {
-                Vec::<FieldRef>::from_type::<DatabaseMetadata>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<D::Database>(TracingOptions::default())
             }
             CatalogCommand::GetTable { .. }
             | CatalogCommand::ListTables { .. }
             | CatalogCommand::ListViews { .. } => {
-                Vec::<FieldRef>::from_type::<TableMetadata>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<D::Table>(TracingOptions::default())
             }
             CatalogCommand::ListColumns { .. } => {
-                Vec::<FieldRef>::from_type::<TableColumnMetadata>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<D::TableColumn>(TracingOptions::default())
             }
             CatalogCommand::GetFunction { .. } | CatalogCommand::ListFunctions { .. } => {
-                Vec::<FieldRef>::from_type::<FunctionMetadata>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<D::Function>(TracingOptions::default())
             }
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
             | CatalogCommand::RegisterFunction { .. }
             | CatalogCommand::RegisterTableFunction { .. } => {
-                Vec::<FieldRef>::from_type::<EmptyMetadata>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<EmptyDisplay>(TracingOptions::default())
             }
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
-                Vec::<FieldRef>::from_type::<SingleValueMetadata<String>>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<SingleValueDisplay<String>>(TracingOptions::default())
             }
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
@@ -287,209 +198,218 @@ impl CatalogCommand {
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
             | CatalogCommand::DropView { .. } => {
-                Vec::<FieldRef>::from_type::<SingleValueMetadata<bool>>(TracingOptions::default())
+                Vec::<FieldRef>::from_type::<SingleValueDisplay<bool>>(TracingOptions::default())
             }
         }
-        .map_err(|e| exec_datafusion_err!("failed to build catalog command schema: {}", e))?;
+        .map_err(|e| {
+            CatalogError::Internal(format!("failed to build catalog command schema: {e}"))
+        })?;
         Ok(Arc::new(Schema::new(fields)))
     }
 
-    pub async fn execute(self, manager: CatalogManager<'_>) -> Result<LogicalPlan> {
-        let command_schema = self.schema()?;
-        let batch = match self {
+    pub async fn execute<D: CatalogDisplay>(
+        self,
+        ctx: &SessionContext,
+        manager: &CatalogManager,
+    ) -> CatalogResult<RecordBatch> {
+        // TODO: make sure we return the same schema as Spark for each command
+        // TODO: `ctx` will not be needed if `CatalogManager` manages functions internally.
+        let schema = self.schema::<D>()?;
+        match self {
             CatalogCommand::CurrentCatalog => {
                 let value = manager.default_catalog()?;
-                let rows = vec![SingleValueMetadata { value }];
-                build_record_batch(command_schema, &rows)?
+                let rows = vec![SingleValueDisplay { value }];
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::SetCurrentCatalog { catalog_name } => {
-                manager.set_default_catalog(catalog_name)?;
-                let rows: Vec<EmptyMetadata> = vec![];
-                build_record_batch(command_schema, &rows)?
+            CatalogCommand::SetCurrentCatalog { catalog } => {
+                manager.set_default_catalog(catalog)?;
+                let rows: Vec<EmptyDisplay> = vec![];
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::ListCatalogs { catalog_pattern } => {
-                let rows = manager.list_catalogs(catalog_pattern.as_deref())?;
-                build_record_batch(command_schema, &rows)?
+            CatalogCommand::ListCatalogs { pattern } => {
+                let rows = manager
+                    .list_catalogs(pattern.as_deref())?
+                    .into_iter()
+                    .map(|x| D::catalog(x.to_string()))
+                    .collect::<Vec<_>>();
+                build_record_batch(schema, &rows)
             }
             CatalogCommand::CurrentDatabase => {
                 let value = manager.default_database()?;
-                let rows = vec![SingleValueMetadata { value }];
-                build_record_batch(command_schema, &rows)?
+                let value = quote_namespace_if_needed(&value);
+                let rows = vec![SingleValueDisplay { value }];
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::SetCurrentDatabase { database_name } => {
-                manager.set_default_database(database_name)?;
-                let rows: Vec<EmptyMetadata> = vec![];
-                build_record_batch(command_schema, &rows)?
+            CatalogCommand::SetCurrentDatabase { database } => {
+                manager.set_default_database(database).await?;
+                let rows: Vec<EmptyDisplay> = vec![];
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::CreateDatabase {
-                database,
-                if_not_exists,
-                comment,
-                location,
-                properties,
-            } => {
-                manager
-                    .create_database(database, if_not_exists, comment, location, properties)
-                    .await?;
-                let rows = vec![SingleValueMetadata { value: true }];
-                build_record_batch(command_schema, &rows)?
+            CatalogCommand::CreateDatabase { database, options } => {
+                manager.create_database(&database, options).await?;
+                let rows = vec![SingleValueDisplay { value: true }];
+                build_record_batch(schema, &rows)
             }
             CatalogCommand::DatabaseExists { database } => {
-                let value = manager.get_database(database)?.is_some();
-                let rows = vec![SingleValueMetadata { value }];
-                build_record_batch(command_schema, &rows)?
+                let value = match manager.get_database(&database).await {
+                    Ok(_) => true,
+                    Err(CatalogError::NotFound(_, _)) => false,
+                    Err(e) => return Err(e),
+                };
+                let rows = vec![SingleValueDisplay { value }];
+                build_record_batch(schema, &rows)
             }
             CatalogCommand::GetDatabase { database } => {
-                let rows = match manager.get_database(database)? {
-                    Some(x) => vec![x],
-                    None => vec![],
+                let rows = match manager.get_database(&database).await {
+                    Ok(x) => vec![D::database(x)],
+                    Err(CatalogError::NotFound(_, _)) => vec![],
+                    Err(e) => return Err(e),
                 };
-                build_record_batch(command_schema, &rows)?
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::ListDatabases {
-                catalog,
-                database_pattern,
-            } => {
-                let rows = manager.list_databases(catalog, database_pattern.as_deref())?;
-                build_record_batch(command_schema, &rows)?
+            CatalogCommand::ListDatabases { qualifier, pattern } => {
+                let rows = match manager.list_databases(&qualifier, pattern.as_deref()).await {
+                    Ok(rows) => rows.into_iter().map(D::database).collect::<Vec<_>>(),
+                    Err(CatalogError::NotFound(_, _)) => vec![],
+                    Err(e) => return Err(e),
+                };
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::DropDatabase {
-                database,
-                if_exists,
-                cascade,
-            } => {
-                manager.drop_database(database, if_exists, cascade).await?;
-                let rows = vec![SingleValueMetadata { value: true }];
-                build_record_batch(command_schema, &rows)?
+            CatalogCommand::DropDatabase { database, options } => {
+                manager.drop_database(&database, options).await?;
+                let rows = vec![SingleValueDisplay { value: true }];
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::CreateTable { table, definition } => {
-                manager.create_table(table, definition).await?;
-                let rows = vec![SingleValueMetadata { value: true }];
-                build_record_batch(command_schema, &rows)?
+            CatalogCommand::CreateTable { table, options } => {
+                manager.create_table(&table, options).await?;
+                let rows = vec![SingleValueDisplay { value: true }];
+                build_record_batch(schema, &rows)
             }
             CatalogCommand::TableExists { table } => {
-                let value = manager.get_table(table).await?.is_some();
-                let rows = vec![SingleValueMetadata { value }];
-                build_record_batch(command_schema, &rows)?
+                let value = match manager.get_table_or_view(&table).await {
+                    Ok(_) => true,
+                    Err(CatalogError::NotFound(_, _)) => false,
+                    Err(e) => return Err(e),
+                };
+                let rows = vec![SingleValueDisplay { value }];
+                build_record_batch(schema, &rows)
             }
             CatalogCommand::GetTable { table } => {
-                let Some(table) = manager.get_table(table.clone()).await? else {
-                    return plan_err!("table not found: {table}");
-                };
-                build_record_batch(command_schema, &[table])?
+                // We are supposed to return an error if the table does not exist.
+                let table = manager.get_table(&table).await?;
+                let table = D::table(table);
+                build_record_batch(schema, &[table])
             }
-            CatalogCommand::ListTables {
-                database,
-                table_pattern,
-            } => {
+            CatalogCommand::ListTables { database, pattern } => {
                 let rows = manager
-                    .list_tables(database, table_pattern.as_deref())
-                    .await?;
-                build_record_batch(command_schema, &rows)?
+                    .list_tables_and_temporary_views(&database, pattern.as_deref())
+                    .await?
+                    .into_iter()
+                    .map(D::table)
+                    .collect::<Vec<_>>();
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::ListViews {
-                database,
-                view_pattern,
-            } => {
+            CatalogCommand::ListViews { database, pattern } => {
                 let rows = manager
-                    .list_views(database, view_pattern.as_deref())
-                    .await?;
-                build_record_batch(command_schema, &rows)?
+                    .list_views_and_temporary_views(&database, pattern.as_deref())
+                    .await?
+                    .into_iter()
+                    .map(D::table)
+                    .collect::<Vec<_>>();
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::DropTable {
-                table,
-                if_exists,
-                purge,
-            } => {
-                manager.drop_table(table, if_exists, purge).await?;
-                let rows = vec![SingleValueMetadata { value: true }];
-                build_record_batch(command_schema, &rows)?
+            CatalogCommand::DropTable { table, options } => {
+                manager.drop_table(&table, options).await?;
+                let rows = vec![SingleValueDisplay { value: true }];
+                build_record_batch(schema, &rows)
             }
             CatalogCommand::ListColumns { table } => {
-                let rows = manager.list_table_columns(table).await?;
-                build_record_batch(command_schema, &rows)?
+                let rows = manager
+                    .get_table_or_view(&table)
+                    .await?
+                    .kind
+                    .columns()
+                    .into_iter()
+                    .map(D::table_column)
+                    .collect::<Vec<_>>();
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::FunctionExists { .. } => return not_impl_err!("function exists"),
-            CatalogCommand::GetFunction { .. } => return not_impl_err!("get function"),
-            CatalogCommand::ListFunctions { .. } => return not_impl_err!("list functions"),
+            CatalogCommand::FunctionExists { .. } => {
+                Err(CatalogError::NotSupported("function exists".to_string()))
+            }
+            CatalogCommand::GetFunction { .. } => {
+                Err(CatalogError::NotSupported("get function".to_string()))
+            }
+            CatalogCommand::ListFunctions { .. } => {
+                Err(CatalogError::NotSupported("list functions".to_string()))
+            }
             CatalogCommand::DropFunction {
                 function,
                 if_exists,
                 is_temporary,
             } => {
                 manager
-                    .drop_function(function, if_exists, is_temporary)
+                    .deregister_function(ctx, &function, if_exists, is_temporary)
                     .await?;
-                let rows = vec![SingleValueMetadata { value: true }];
-                build_record_batch(command_schema, &rows)?
+                let rows = vec![SingleValueDisplay { value: true }];
+                build_record_batch(schema, &rows)
             }
             CatalogCommand::RegisterFunction { udf } => {
-                manager.register_function(udf)?;
-                let rows: Vec<EmptyMetadata> = vec![];
-                build_record_batch(command_schema, &rows)?
+                manager.register_function(ctx, udf)?;
+                let rows: Vec<EmptyDisplay> = vec![];
+                build_record_batch(schema, &rows)
             }
             CatalogCommand::RegisterTableFunction { name, udtf } => {
-                manager.register_table_function(name, udtf)?;
-                let rows: Vec<EmptyMetadata> = vec![];
-                build_record_batch(command_schema, &rows)?
+                manager.register_table_function(ctx, name, udtf)?;
+                let rows: Vec<EmptyDisplay> = vec![];
+                build_record_batch(schema, &rows)
             }
             CatalogCommand::DropTemporaryView {
-                view_name,
+                view,
                 is_global,
-                if_exists,
+                options,
             } => {
-                manager
-                    .drop_temporary_view(&view_name, is_global, if_exists)
-                    .await?;
-                let rows = vec![SingleValueMetadata { value: true }];
-                build_record_batch(command_schema, &rows)?
+                if is_global {
+                    manager.drop_global_temporary_view(&view, options).await?;
+                } else {
+                    manager.drop_temporary_view(&view, options).await?;
+                }
+                let rows = vec![SingleValueDisplay { value: true }];
+                build_record_batch(schema, &rows)
             }
-            CatalogCommand::DropView { view, if_exists } => {
-                manager.drop_view(view, if_exists).await?;
-                let rows = vec![SingleValueMetadata { value: true }];
-                build_record_batch(command_schema, &rows)?
+            CatalogCommand::DropView { view, options } => {
+                manager.drop_maybe_temporary_view(&view, options).await?;
+                let rows = vec![SingleValueDisplay { value: true }];
+                build_record_batch(schema, &rows)
             }
             CatalogCommand::CreateTemporaryView {
-                input,
-                view_name,
-                is_global,
-                replace,
-                definition: _,
-            } => {
-                manager
-                    .create_temporary_view(input, &view_name, is_global, replace)
-                    .await?;
-                let rows = vec![SingleValueMetadata { value: true }];
-                build_record_batch(command_schema, &rows)?
-            }
-            CatalogCommand::CreateView {
-                input,
                 view,
-                replace,
-                definition,
+                is_global,
+                options,
             } => {
-                manager
-                    .create_view(input, view, replace, definition)
-                    .await?;
-                let rows = vec![SingleValueMetadata { value: true }];
-                build_record_batch(command_schema, &rows)?
+                if is_global {
+                    manager.create_global_temporary_view(&view, options).await?;
+                } else {
+                    manager.create_temporary_view(&view, options).await?;
+                }
+                let rows = vec![SingleValueDisplay { value: true }];
+                build_record_batch(schema, &rows)
             }
-        };
-        let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        Ok(LogicalPlan::TableScan(TableScan::try_new(
-            UNNAMED_TABLE,
-            provider_as_source(Arc::new(provider)),
-            None,
-            vec![],
-            None,
-        )?))
+            CatalogCommand::CreateView { view, options } => {
+                manager.create_view(&view, options).await?;
+                let rows = vec![SingleValueDisplay { value: true }];
+                build_record_batch(schema, &rows)
+            }
+        }
     }
 }
 
-fn build_record_batch<T: Serialize>(schema: SchemaRef, items: &[T]) -> Result<RecordBatch> {
+fn build_record_batch<T: Serialize>(schema: SchemaRef, items: &[T]) -> CatalogResult<RecordBatch> {
     let arrays = to_arrow(schema.fields().deref(), items)
-        .map_err(|e| exec_datafusion_err!("failed to create record batch: {}", e))?;
+        .map_err(|e| CatalogError::Internal(format!("failed to create record batch: {e}")))?;
     // We must specify the row count if the schema has no fields.
     let options = RecordBatchOptions::new().with_row_count(Some(items.len()));
-    Ok(RecordBatch::try_new_with_options(schema, arrays, &options)?)
+    let batch = RecordBatch::try_new_with_options(schema, arrays, &options)
+        .map_err(|e| CatalogError::Internal(format!("failed to create record batch: {e}")))?;
+    Ok(batch)
 }

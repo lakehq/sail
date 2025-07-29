@@ -1,4 +1,5 @@
 pub mod array;
+pub mod bitmap_count;
 pub mod collection;
 pub mod csv;
 pub mod datetime;

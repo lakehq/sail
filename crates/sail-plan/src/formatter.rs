@@ -41,9 +41,9 @@ pub trait PlanFormatter: DynObject + Debug + Send + Sync {
 impl_dyn_object_traits!(PlanFormatter);
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
-pub struct DefaultPlanFormatter;
+pub struct SparkPlanFormatter;
 
-impl DefaultPlanFormatter {
+impl SparkPlanFormatter {
     fn time_unit_to_simple_string(unit: &TimeUnit) -> &'static str {
         match unit {
             TimeUnit::Second => "second",
@@ -54,7 +54,7 @@ impl DefaultPlanFormatter {
     }
 }
 
-impl PlanFormatter for DefaultPlanFormatter {
+impl PlanFormatter for SparkPlanFormatter {
     fn data_type_to_simple_string(&self, data_type: &DataType) -> Result<String> {
         match data_type {
             DataType::Null => Ok("void".to_string()),
@@ -422,7 +422,8 @@ impl PlanFormatter for DefaultPlanFormatter {
         is_distinct: bool,
     ) -> Result<String> {
         match name.to_lowercase().as_str() {
-            "!" | "~" => Ok(format!("({name} {})", arguments.one()?)),
+            "!" | "not" => Ok(format!("(NOT {})", arguments.one()?)),
+            "~" => Ok(format!("{name}{}", arguments.one()?)),
             "+" | "-" => {
                 if arguments.len() < 2 {
                     Ok(format!("({name} {})", arguments.one()?))
@@ -443,7 +444,6 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let (left, right) = arguments.two()?;
                 Ok(format!("({left} {} {right})", name.to_uppercase()))
             }
-            "not" => Ok(format!("(NOT {})", arguments.one()?)),
             "isnull" => Ok(format!("({} IS NULL)", arguments.one()?)),
             "isnotnull" => Ok(format!("({} IS NOT NULL)", arguments.one()?)),
             "in" => {
@@ -532,16 +532,60 @@ impl PlanFormatter for DefaultPlanFormatter {
                     .join(", ");
                 Ok(format!("{name}({args})"))
             }
-            // This case is only reached when both conditions are true:
-            //   1. The `explode` operation is `ExplodeKind::ExplodeOuter`
-            //   2. The data type being exploded is `ExplodeDataType::List`
-            // In this specific scenario, we always use "col" as the column name.
-            "explode_outer" => Ok("col".to_string()),
-            "current_schema" => Ok("current_database()".to_string()),
+            "cast" => {
+                let (left, right) = arguments.two()?;
+                Ok(format!(
+                    "{}({left} AS {})",
+                    name.to_uppercase(),
+                    right.to_uppercase()
+                ))
+            }
+            "listagg" | "string_agg" => {
+                let (value, list) = arguments.at_least_one()?;
+                let mut arg = value.to_string();
+                if is_distinct {
+                    arg = format!("DISTINCT {arg}");
+                }
+                let sep = *list.first().unwrap_or(&"NULL");
+                Ok(format!("{name}({arg}, {sep})"))
+            }
+            "ltrim" | "rtrim" | "trim" => {
+                let (value, list) = arguments.at_least_one()?;
+                let what = if name == "ltrim" {
+                    "LEADING"
+                } else if name == "rtrim" {
+                    "TRAILING"
+                } else {
+                    "BOTH"
+                };
+                let res_format = list
+                    .first()
+                    .map(|s| format!("TRIM({what} {value} FROM {s})"))
+                    .unwrap_or(format!("{name}({value})"));
+
+                Ok(res_format)
+            }
+            "round" | "bround" => {
+                let (value, list) = arguments.at_least_one()?;
+                let sep = *list.first().unwrap_or(&"0");
+                Ok(format!("{name}({value}, {sep})"))
+            }
+            "startsWith" | "endsWith" => {
+                let arguments = arguments.join(", ");
+                Ok(format!("{}({arguments})", name.to_lowercase()))
+            }
+            "regexp_replace" => {
+                let default_arg = if arguments.len() == 3 { ", 1" } else { "" };
+                let arguments = arguments.join(", ");
+                Ok(format!("{name}({arguments}{default_arg})"))
+            }
+            // When the data type being exploded is `ExplodeDataType::List`, use "col" as the column name.
+            "explode" | "explode_outer" => Ok("col".to_string()),
+            "current_database" => Ok("current_schema()".to_string()),
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "exp"
-            | "log10" | "regexp" | "regexp_like" | "signum" | "sqrt" | "cos" | "cosh" | "cot"
-            | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan" | "tanh" | "pi"
-            | "expm1" | "hypot" | "log1p" | "e" => {
+            | "log" | "log10" | "log1p" | "log2" | "regexp" | "regexp_like" | "signum" | "sqrt"
+            | "cos" | "cosh" | "cot" | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan"
+            | "tanh" | "pi" | "expm1" | "hypot" | "e" => {
                 let name = name.to_uppercase();
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))
@@ -550,7 +594,16 @@ impl PlanFormatter for DefaultPlanFormatter {
             //   ```
             //   SELECT count(`*`) FROM VALUES 1 AS t(`*`)
             //   ```
-            "count" if matches!(arguments.as_slice(), ["*"]) => Ok("count(1)".to_string()),
+            "count" => {
+                let arguments = arguments.join(", ");
+                if is_distinct {
+                    Ok(format!("{name}(DISTINCT {arguments})"))
+                } else if arguments.as_str() == "*" {
+                    Ok("count(1)".to_string())
+                } else {
+                    Ok(format!("{name}({arguments})"))
+                }
+            }
             _ => {
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))
@@ -611,7 +664,7 @@ mod tests {
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {
         let plan_config = PlanConfig::new()?;
-        let formatter = DefaultPlanFormatter;
+        let formatter = SparkPlanFormatter;
         let to_string = |literal| formatter.literal_to_string(&literal, &plan_config);
 
         assert_eq!(to_string(ScalarValue::Null)?, "NULL");
