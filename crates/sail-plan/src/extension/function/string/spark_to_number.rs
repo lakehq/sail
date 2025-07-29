@@ -188,14 +188,16 @@ pub fn parse_number(value: &str, format: &Captures) -> Result<ParsedNumber> {
         );
     }
 
+    let right_zeros: String = Vec::from_iter(0..f_scale - v_scale)
+        .into_iter()
+        .map(|_| '0')
+        .collect::<String>();
+
     // Format the value with the decimals if present
     let value: String = if let Some(decimals) = v_decimals {
-        format!("{v_numbers}{decimals}")
+        format!("{v_numbers}{decimals}{right_zeros}")
     } else {
-        let decimals: String = Vec::from_iter(0..f_scale)
-            .into_iter()
-            .map(|_| '0')
-            .collect::<String>();
+        let decimals: String = right_zeros;
         format!("{v_numbers}{decimals}")
     };
 
@@ -219,7 +221,8 @@ pub fn parse_number(value: &str, format: &Captures) -> Result<ParsedNumber> {
 
 #[derive(Debug, Clone)]
 pub enum PatternExpression {
-    Sign(bool),                       // only_negative
+    LeftSign(bool),                       // only_negative
+    RightSign(bool),                       // only_negative
     Currency(String),                 // currency character
     Brackets(Box<PatternExpression>), // repr: <expression>
     Number,
@@ -261,11 +264,18 @@ impl PatternExpression {
 impl Display for PatternExpression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PatternExpression::Sign(only_negative) => {
+            PatternExpression::LeftSign(only_negative) => {
                 if *only_negative {
-                    write!(f, "(?<sign>[-])")
+                    write!(f, "(?<sign_left>[-])?")
                 } else {
-                    write!(f, "(?<sign>[+-])?")
+                    write!(f, "(?<sign_left>[+-])?")
+                }
+            }
+            PatternExpression::RightSign(only_negative) => {
+                if *only_negative {
+                    write!(f, "(?<sign_right>[-])?")
+                } else {
+                    write!(f, "(?<sign_right>[+-])?")
                 }
             }
             PatternExpression::Currency(currency) => write!(f, "(?<currency>[{currency}])"),
@@ -302,11 +312,18 @@ fn handle_brackets(captures: &Captures, expr: &PatternExpression) -> Result<Patt
 /// Modifies a `PatternExpression` to incorporate sign information based on regex captures.
 fn handle_sign(captures: &Captures, expr: &PatternExpression) -> Result<PatternExpression> {
     match (captures.name("sign_left"), captures.name("sign_right")) {
-        (Some(sign_left), Some(sign)) if sign.as_str() == "PR" => {
-            Ok(PatternExpression::Sign(sign_left.as_str() == "MI").append(expr.clone())?)
+        (Some(left_sign), Some(right_sign)) if right_sign.as_str() == "PR" => {
+            Ok(PatternExpression::LeftSign(left_sign.as_str() == "MI").append(expr.clone())?)
         }
-        (Some(sign), None) | (None, Some(sign)) if sign.as_str() != "PR" => {
-            Ok(PatternExpression::Sign(sign.as_str() == "MI").append(expr.clone())?)
+        (Some(left_sign), Some(right_sign)) => {
+            let expr: PatternExpression = PatternExpression::RightSign(right_sign.as_str() == "MI").prepend(expr.clone())?;
+            Ok(PatternExpression::LeftSign(left_sign.as_str() == "MI").append(expr.clone())?)
+        }
+        (Some(sign), None) => {
+            Ok(PatternExpression::LeftSign(sign.as_str() == "MI").append(expr.clone())?)
+        }
+        (None, Some(sign)) if sign.as_str() != "PR" => {
+            Ok(PatternExpression::RightSign(sign.as_str() == "MI").prepend(expr.clone())?)
         }
         _ => Ok(expr.clone()),
     }
@@ -368,9 +385,11 @@ fn get_grouping_positions(numbers: &str) -> Vec<(usize, char)> {
 /// Computes the sign factor based on captured sign information.
 fn get_sign_factor(captures: &Captures) -> i8 {
     let angle_factor = get_opt_capture_group!(captures, "angled_left").map_or(1, |_| -1);
-    let sign_factor =
-        get_opt_capture_group!(captures, "sign").map_or(1, |s| if s == "-" { -1 } else { 1 });
-    angle_factor * sign_factor
+    let sign_left_factor =
+        get_opt_capture_group!(captures, "sign_left").map_or(1, |s| if s == "-" { -1 } else { 1 });
+    let sign_right_factor =
+        get_opt_capture_group!(captures, "sign_right").map_or(1, |s| if s == "-" { -1 } else { 1 });
+    angle_factor * sign_left_factor * sign_right_factor
 }
 
 /// Validates the grouping of numbers against the specified format to ensure conformity.
