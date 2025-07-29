@@ -2153,7 +2153,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'optimize_projections' failed\ncaused by\nCheck optimizer-specific invariants after optimizer rule: optimize_projections\ncaused by\nInternal error: Failed due to a difference in schemas: original schema: DFSchema { inner: Schema { fields: [Field { name: \"#0\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }, new schema: DFSchema { inner: Schema { fields: [Field { name: \"#0\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "success": "ok"
       }
     },
     {
@@ -2197,7 +2197,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'optimize_projections' failed\ncaused by\nCheck optimizer-specific invariants after optimizer rule: optimize_projections\ncaused by\nInternal error: Failed due to a difference in schemas: original schema: DFSchema { inner: Schema { fields: [Field { name: \"#0\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }, new schema: DFSchema { inner: Schema { fields: [Field { name: \"#0\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+        "success": "ok"
       }
     },
     {
