@@ -222,10 +222,6 @@ impl ScalarUDFImpl for SparkFromToUtcTimestamp {
             ("SST", "Pacific/Guadalcanal"),
             ("VST", "Asia/Saigon"),
         ]);
-        //let error_strs = [
-        //    ,
-        //];
-        //let err = || exec_err!("{:?} {:?} {:?}", error_strs[0], tz_str, error_strs[1])
 
         let from_to_utc_timestamp_func = |inputs: (Option<i64>, Option<&str>)| match inputs {
             (Some(ts_nanos), Some(tz_str)) => {
