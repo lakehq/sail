@@ -1,11 +1,7 @@
 /// [Credit]: <https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs>
-use core::any::type_name;
-
-use datafusion::arrow::array::{Array, ArrayRef, ListArray};
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion::arrow::array::{Array, ArrayRef};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
-
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
@@ -44,28 +40,6 @@ where
             result.map(ColumnarValue::Scalar)
         } else {
             result.map(ColumnarValue::Array)
-        }
-    }
-}
-
-/// Returns the length of each array dimension
-pub(crate) fn compute_array_dims(arr: Option<ArrayRef>) -> Result<Option<Vec<Option<u64>>>> {
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
-    if value.is_empty() {
-        return Ok(None);
-    }
-    let mut res = vec![Some(value.len() as u64)];
-
-    loop {
-        match value.data_type() {
-            DataType::List(..) => {
-                value = downcast_arg!(value, ListArray).value(0);
-                res.push(Some(value.len() as u64));
-            }
-            _ => return Ok(Some(res)),
         }
     }
 }

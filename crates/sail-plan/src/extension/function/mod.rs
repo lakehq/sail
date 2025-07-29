@@ -1,4 +1,5 @@
 pub mod array;
+pub mod bitmap_count;
 pub mod collection;
 pub mod csv;
 pub mod datetime;
@@ -26,3 +27,4 @@ pub mod string;
 pub mod struct_function;
 pub mod table_input;
 pub mod update_struct_field;
+pub mod url;

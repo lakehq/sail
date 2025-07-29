@@ -1,0 +1,14 @@
+[package]
+name = "sail-session"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+sail-catalog = { path = "../sail-catalog" }
+sail-catalog-memory = { path = "../sail-catalog-memory" }
+
+datafusion = { workspace = true }
