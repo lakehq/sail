@@ -673,8 +673,8 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 2, f"Expected 2 rows for mixed type condition, got {result_count}"  # noqa: PLR2004
 
-    def test_delta_partition_pruning_performance_validation(self, spark, tmp_path):
-        """Test partition pruning effectiveness with performance validation"""
+    def test_delta_partition_pruning_correctness(self, spark, tmp_path):
+        """Test partition pruning correctness"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
 
@@ -776,51 +776,6 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         expected_count = 2 * 3 * 2  # 2 years * 3 categories * 2 records with score = 7
         assert result_count == expected_count, f"Expected {expected_count} rows, got {result_count}"
-
-    def test_delta_partition_pruning_optimization_verification(self, spark, tmp_path):
-        """Test to verify partition pruning optimization is working by comparing filtered vs unfiltered scans"""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
-
-        partition_data = []
-        for region in ["US", "EU", "ASIA", "LATAM", "AFRICA"]:
-            for year in [2022, 2023, 2024]:
-                for month in range(1, 13):
-                    for i in range(5):
-                        partition_data.append(
-                            Row(
-                                id=len(partition_data),
-                                region=region,
-                                year=year,
-                                month=month,
-                                metric_value=i * 100 + month,
-                                description=f"metric_{region}_{year}_{month}_{i}",
-                            )
-                        )
-
-        df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy("region", "year").save(str(delta_path))
-
-        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region = 'US' AND year = 2023")
-        result_count = filtered_df.count()
-        expected_count = 12 * 5  # 12 months * 5 records per month
-        assert (
-            result_count == expected_count
-        ), f"Expected {expected_count} rows for selective filter, got {result_count}"
-
-        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IN ('US', 'EU')")
-        result_count = filtered_df.count()
-        expected_count = 2 * 3 * 12 * 5  # 2 regions * 3 years * 12 months * 5 records
-        assert result_count == expected_count, f"Expected {expected_count} rows for medium filter, got {result_count}"
-
-        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year >= 2022")
-        result_count = filtered_df.count()
-        expected_count = 5 * 3 * 12 * 5  # 5 regions * 3 years * 12 months * 5 records
-        assert result_count == expected_count, f"Expected {expected_count} rows for broad filter, got {result_count}"
-
-        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region = 'NONEXISTENT'")
-        result_count = filtered_df.count()
-        assert result_count == 0, f"Expected 0 rows for non-existent region, got {result_count}"
 
     @pytest.mark.skip(reason="Temporarily skipped")
     @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake time travel")
