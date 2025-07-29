@@ -5073,9 +5073,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.5.15"
+version = "0.5.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e8af0dde094006011e6a740d4879319439489813bd0bcdc7d821beaeeff48ec"
+checksum = "7251471db004e509f4e75a62cca9435365b5ec7bcdff530d612ac7c87c44a792"
 dependencies = [
  "bitflags",
 ]
@@ -5357,15 +5357,26 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 name = "sail-catalog"
 version = "0.3.1"
 dependencies = [
+ "async-trait",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
  "lazy_static",
  "regex",
+ "sail-common",
  "sail-common-datafusion",
- "sail-data-source",
  "serde",
  "serde_arrow",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "sail-catalog-memory"
+version = "0.3.1"
+dependencies = [
+ "async-trait",
+ "dashmap",
+ "sail-catalog",
 ]
 
 [[package]]
@@ -5431,6 +5442,7 @@ dependencies = [
  "chumsky",
  "datafusion",
  "datafusion-common",
+ "deltalake",
  "futures",
  "glob",
  "log",
@@ -5578,6 +5590,7 @@ dependencies = [
  "datafusion-functions",
  "datafusion-functions-json",
  "datafusion-functions-nested",
+ "datafusion-physical-expr",
  "datafusion-spark",
  "either",
  "futures",
@@ -5598,6 +5611,7 @@ dependencies = [
  "sail-data-source",
  "sail-python-udf",
  "sail-sql-analyzer",
+ "serde",
  "sha1",
  "thiserror 2.0.12",
  "tokio",
@@ -5605,6 +5619,7 @@ dependencies = [
  "tonic 0.12.3",
  "twox-hash",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -5655,6 +5670,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-session"
+version = "0.3.1"
+dependencies = [
+ "datafusion",
+ "sail-catalog",
+ "sail-catalog-memory",
+ "sail-common",
+]
+
+[[package]]
 name = "sail-spark-connect"
 version = "0.3.1"
 dependencies = [
@@ -5672,15 +5697,14 @@ dependencies = [
  "prost-build",
  "quote",
  "regex",
- "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
- "sail-delta-lake",
  "sail-execution",
  "sail-object-store",
  "sail-plan",
  "sail-python-udf",
  "sail-server",
+ "sail-session",
  "sail-sql-analyzer",
  "serde",
  "serde_json",

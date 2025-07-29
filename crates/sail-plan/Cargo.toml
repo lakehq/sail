@@ -20,6 +20,7 @@ datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 datafusion-spark = { workspace = true }
 datafusion-functions-json = { workspace = true }
 thiserror = { workspace = true }
@@ -51,5 +52,7 @@ half = { workspace = true }
 crc32fast = { workspace = true }
 num = { workspace = true }
 arrow = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
 url = { workspace = true }
 percent-encoding = { workspace = true }

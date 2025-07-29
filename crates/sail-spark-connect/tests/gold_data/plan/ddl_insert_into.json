@@ -46,7 +46,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "p1",
@@ -118,10 +118,12 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [
-                "a",
-                "b"
-              ],
+              "columns": {
+                "columns": [
+                  "a",
+                  "b"
+                ]
+              },
               "partitionSpec": [
                 [
                   "p1",
@@ -201,7 +203,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "p1",
@@ -269,10 +271,12 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [
-                "a",
-                "b"
-              ],
+              "columns": {
+                "columns": [
+                  "a",
+                  "b"
+                ]
+              },
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -329,7 +333,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byName",
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -386,7 +390,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -445,7 +449,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -479,7 +483,7 @@
               "table": [
                 "t"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "part",
@@ -543,7 +547,7 @@
               "table": [
                 "t"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "part",
@@ -586,7 +590,7 @@
               "table": [
                 "t"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "part",
@@ -629,7 +633,7 @@
               "table": [
                 "t"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "part",
@@ -674,7 +678,7 @@
               "table": [
                 "t"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "part",
@@ -719,7 +723,7 @@
               "table": [
                 "t"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "part",
@@ -768,7 +772,7 @@
               "table": [
                 "t"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [
                 [
                   "part",
@@ -835,10 +839,12 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [
-                "a",
-                "b"
-              ],
+              "columns": {
+                "columns": [
+                  "a",
+                  "b"
+                ]
+              },
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -895,7 +901,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byName",
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
@@ -952,7 +958,7 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
+              "columns": "byPosition",
               "partitionSpec": [],
               "replace": null,
               "ifNotExists": false,
