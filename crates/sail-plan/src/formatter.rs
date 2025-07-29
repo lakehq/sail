@@ -549,17 +549,21 @@ impl PlanFormatter for DefaultPlanFormatter {
                 let sep = *list.first().unwrap_or(&"NULL");
                 Ok(format!("{name}({arg}, {sep})"))
             }
-            "ltrim" => {
-                let (value, tr) = arguments.two()?;
-                Ok(format!("TRIM(LEADING {tr} FROM {value})"))
-            }
-            "rtrim" => {
-                let (value, tr) = arguments.two()?;
-                Ok(format!("TRIM(TRAILING {tr} FROM {value})"))
-            }
-            "trim" => {
-                let (value, tr) = arguments.two()?;
-                Ok(format!("TRIM(BOTH {tr} FROM {value})"))
+            "ltrim" | "rtrim" | "trim" => {
+                let (value, list) = arguments.at_least_one()?;
+                let what = if name == "ltrim" {
+                    "LEADING"
+                } else if name == "rtrim" {
+                    "TRAILING"
+                } else {
+                    "BOTH"
+                };
+                let res_format = list
+                    .first()
+                    .map(|s| format!("TRIM({what} {value} FROM {s})"))
+                    .unwrap_or(format!("{name}({value})"));
+
+                Ok(res_format)
             }
             "round" | "bround" => {
                 let (value, list) = arguments.at_least_one()?;
