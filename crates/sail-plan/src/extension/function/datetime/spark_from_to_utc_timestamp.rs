@@ -247,23 +247,13 @@ impl ScalarUDFImpl for SparkFromToUtcTimestamp {
                 }?;
 
                 if self.is_to {
-                    (*local_offset)
-                        .timestamp_nanos(ts_nanos)
-                        .naive_local()
-                        .and_local_timezone(to_zone)
-                        .single()
-                        .map(|ts| ts.to_utc())
+                    tz_shifted_utc_micros(ts_nanos, local_offset, &to_zone)
                 } else {
-                    to_zone
-                        .timestamp_nanos(ts_nanos)
-                        .naive_local()
-                        .and_local_timezone(*local_offset)
-                        .single()
-                        .map(|ts| ts.to_utc())
+                    tz_shifted_utc_micros(ts_nanos, &to_zone, local_offset)
                 }
                 .map_or_else(
                     || exec_err!("`{}`: failed to set local timezone offset", self.name()),
-                    |ts| Ok(Some(ts.timestamp_micros())),
+                    |ts| Ok(Some(ts)),
                 )
             }
             _ => Ok(None),
@@ -327,6 +317,19 @@ impl ScalarUDFImpl for SparkFromToUtcTimestamp {
             },
         })
     }
+}
+
+fn tz_shifted_utc_micros<T1: TimeZone + Clone, T2: TimeZone + Clone>(
+    ts_nanos: i64,
+    from_zone: &T1,
+    to_zone: &T2,
+) -> Option<i64> {
+    from_zone
+        .timestamp_nanos(ts_nanos)
+        .naive_local()
+        .and_local_timezone(to_zone.clone())
+        .single()
+        .map(|ts| ts.to_utc().timestamp_micros())
 }
 
 fn _timestamp_to_nanoseconds(
