@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use arrow::array::{Array, Int64Array, PrimitiveArray};
 use arrow::datatypes::TimestampMicrosecondType;
-use chrono::offset::LocalResult;
 use chrono::{Local, TimeZone};
 use chrono_tz::Tz;
 use datafusion::arrow::array::AsArray;
@@ -223,51 +222,54 @@ impl ScalarUDFImpl for SparkFromToUtcTimestamp {
             ("SST", "Pacific/Guadalcanal"),
             ("VST", "Asia/Saigon"),
         ]);
-        let error_strs = [
-            "[INVALID_TIMEZONE] The timezone:",
-            "is invalid. \
-            The timezone must be either a region-based zone ID or a zone offset. \
-            Region IDs must have the form 'area/city', such as 'America/Los_Angeles'. \
-            Zone offsets must be in the format '(+|-)HH', '(+|-)HH:mm’ or '(+|-)HH:mm:ss', \
-            e.g '-08' , '+01:00' or '-13:33:33', and must be in the range from -18:00 to +18:00. \
-            'Z' and 'UTC' are accepted as synonyms for '+00:00'.",
-        ];
+        //let error_strs = [
+        //    ,
+        //];
+        //let err = || exec_err!("{:?} {:?} {:?}", error_strs[0], tz_str, error_strs[1])
 
-        let is_to = self.is_to;
         let from_to_utc_timestamp_func = |inputs: (Option<i64>, Option<&str>)| match inputs {
-            (Some(ts_nanos), Some(tz_str)) => match tz_str.parse::<Tz>() {
-                Ok(to_zone) => Ok(to_zone),
-                Err(_) => match legacy_timezones.get(tz_str).cloned() {
-                    Some(tz_str) => match tz_str.parse::<Tz>() {
-                        Ok(to_zone) => Ok(to_zone),
-                        Err(_) => exec_err!("{:?} {:?} {:?}", error_strs[0], tz_str, error_strs[1]),
+            (Some(ts_nanos), Some(tz_str)) => {
+                let tz_err = |tz_str| {
+                    exec_err!(
+                "[INVALID_TIMEZONE] The timezone: {tz_str:?} is invalid. \
+                The timezone must be either a region-based zone ID or a zone offset. \
+                Region IDs must have the form 'area/city', such as 'America/Los_Angeles'. \
+                Zone offsets must be in the format '(+|-)HH', '(+|-)HH:mm’ or '(+|-)HH:mm:ss', \
+                e.g '-08' , '+01:00' or '-13:33:33', and must be in the range from -18:00 to +18:00. \
+                'Z' and 'UTC' are accepted as synonyms for '+00:00'.")
+                };
+
+                let to_zone = match tz_str.parse::<Tz>() {
+                    Ok(to_zone) => Ok(to_zone),
+                    Err(_) => match legacy_timezones.get(tz_str).cloned() {
+                        Some(tz_str) => match tz_str.parse::<Tz>() {
+                            Ok(to_zone) => Ok(to_zone),
+                            Err(_) => tz_err(tz_str),
+                        },
+                        None => tz_err(tz_str),
                     },
-                    None => exec_err!("{:?} {:?} {:?}", error_strs[0], tz_str, error_strs[1]),
-                },
-            }
-            .and_then(|to_zone| {
-                if is_to {
-                    let ts = (*local_offset).timestamp_nanos(ts_nanos);
-                    match ts.naive_local().and_local_timezone(to_zone) {
-                        LocalResult::Single(result_ts) => {
-                            Ok(Some(result_ts.to_utc().timestamp_micros()))
-                        }
-                        LocalResult::Ambiguous(_, _) | LocalResult::None => {
-                            exec_err!("`{}`: failed to set local timezone offset", self.name())
-                        }
-                    }
+                }?;
+
+                if self.is_to {
+                    (*local_offset)
+                        .timestamp_nanos(ts_nanos)
+                        .naive_local()
+                        .and_local_timezone(to_zone)
+                        .single()
+                        .map(|ts| ts.to_utc())
                 } else {
-                    let ts = to_zone.timestamp_nanos(ts_nanos);
-                    match ts.naive_local().and_local_timezone(*local_offset) {
-                        LocalResult::Single(result_ts) => {
-                            Ok(Some(result_ts.to_utc().timestamp_micros()))
-                        }
-                        LocalResult::Ambiguous(_, _) | LocalResult::None => {
-                            exec_err!("`{}`: failed to set local timezone offset", self.name())
-                        }
-                    }
+                    to_zone
+                        .timestamp_nanos(ts_nanos)
+                        .naive_local()
+                        .and_local_timezone(*local_offset)
+                        .single()
+                        .map(|ts| ts.to_utc())
                 }
-            }),
+                .map_or_else(
+                    || exec_err!("`{}`: failed to set local timezone offset", self.name()),
+                    |ts| Ok(Some(ts.timestamp_micros())),
+                )
+            }
             _ => Ok(None),
         };
 
