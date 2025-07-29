@@ -221,8 +221,8 @@ pub fn parse_number(value: &str, format: &Captures) -> Result<ParsedNumber> {
 
 #[derive(Debug, Clone)]
 pub enum PatternExpression {
-    LeftSign(bool),                       // only_negative
-    RightSign(bool),                       // only_negative
+    LeftSign(bool),                   // only_negative
+    RightSign(bool),                  // only_negative
     Currency(String),                 // currency character
     Brackets(Box<PatternExpression>), // repr: <expression>
     Number,
@@ -316,7 +316,8 @@ fn handle_sign(captures: &Captures, expr: &PatternExpression) -> Result<PatternE
             Ok(PatternExpression::LeftSign(left_sign.as_str() == "MI").append(expr.clone())?)
         }
         (Some(left_sign), Some(right_sign)) => {
-            let expr: PatternExpression = PatternExpression::RightSign(right_sign.as_str() == "MI").prepend(expr.clone())?;
+            let expr: PatternExpression =
+                PatternExpression::RightSign(right_sign.as_str() == "MI").prepend(expr.clone())?;
             Ok(PatternExpression::LeftSign(left_sign.as_str() == "MI").append(expr.clone())?)
         }
         (Some(sign), None) => {
