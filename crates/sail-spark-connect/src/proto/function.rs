@@ -7,10 +7,10 @@ mod tests {
     use datafusion::arrow::error::ArrowError;
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
     use sail_common::config::AppConfig;
-    use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_plan::resolve_and_execute_plan;
+    use sail_runtime::RuntimeManager;
     use sail_server::actor::ActorSystem;
     use serde::{Deserialize, Serialize};
 

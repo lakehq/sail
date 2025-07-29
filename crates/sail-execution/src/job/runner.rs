@@ -23,7 +23,7 @@ pub trait JobRunner: Send + Sync + 'static {
 
 pub struct LocalJobRunner {
     stopped: AtomicBool,
-    runtime: Option<sail_common::runtime::RuntimeHandle>,
+    runtime: Option<sail_runtime::RuntimeHandle>,
 }
 
 impl LocalJobRunner {
@@ -34,7 +34,7 @@ impl LocalJobRunner {
         }
     }
 
-    pub fn new_with_runtime(runtime: sail_common::runtime::RuntimeHandle) -> Self {
+    pub fn new_with_runtime(runtime: sail_runtime::RuntimeHandle) -> Self {
         Self {
             stopped: AtomicBool::new(false),
             runtime: Some(runtime),

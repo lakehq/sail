@@ -1,5 +1,5 @@
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeManager;
+use sail_runtime::RuntimeManager;
 use sail_telemetry::telemetry::init_telemetry;
 
 pub fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
