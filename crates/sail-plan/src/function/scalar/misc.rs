@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, ExprSchemable, Operator, ScalarUDF};
+use datafusion_expr::{expr, lit, when, ExprSchemable, Operator, ScalarUDF};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::bitmap_count::BitmapCount;
 use crate::extension::function::raise_error::RaiseError;
 use crate::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
@@ -92,6 +93,30 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(lit(type_of))
 }
 
+fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let value = arguments.one()?;
+    let num_bits = 8 * 4 * 1024;
+    Ok(when(
+        value.clone().gt(lit(0)),
+        (value.clone() - lit(1)) % lit(num_bits),
+    )
+    .when(lit(true), (-value) % lit(num_bits))
+    .end()?)
+}
+
+fn bitmap_bucket_number(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let value = arguments.one()?;
+    let num_bits = 8 * 4 * 1024;
+    Ok(when(
+        value.clone().gt(lit(0)),
+        lit(1) + (value.clone() - lit(1)) / lit(num_bits),
+    )
+    .when(lit(true), value / lit(num_bits))
+    .end()?)
+}
+
 pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -99,9 +124,9 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("aes_decrypt", F::udf(SparkAESDecrypt::new())),
         ("aes_encrypt", F::udf(SparkAESEncrypt::new())),
         ("assert_true", F::custom(assert_true)),
-        ("bitmap_bit_position", F::unknown("bitmap_bit_position")),
-        ("bitmap_bucket_number", F::unknown("bitmap_bucket_number")),
-        ("bitmap_count", F::unknown("bitmap_count")),
+        ("bitmap_bit_position", F::custom(bitmap_bit_position)),
+        ("bitmap_bucket_number", F::custom(bitmap_bucket_number)),
+        ("bitmap_count", F::udf(BitmapCount::new())),
         ("current_catalog", F::custom(current_catalog)),
         ("current_database", F::custom(current_database)),
         ("current_schema", F::custom(current_database)),
