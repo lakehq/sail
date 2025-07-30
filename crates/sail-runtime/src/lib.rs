@@ -1,7 +1,6 @@
 mod error;
 
 use sail_common::config::RuntimeConfig;
-use std::str::FromStr;
 use tokio::runtime::{Handle, Runtime};
 
 use crate::error::{RuntimeError, RuntimeResult};
