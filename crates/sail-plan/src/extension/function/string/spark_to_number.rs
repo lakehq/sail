@@ -79,9 +79,11 @@ impl ScalarUDFImpl for SparkToNumber {
                 SparkToNumber::NAME
             );
         };
-        let ParsedNumber {
+
+        let format_spec: RegexSpec = RegexSpec::try_from(format)?;
+        let NumberComponents {
             precision, scale, ..
-        } = ParsedNumber::try_from_format(format)?;
+        } = NumberComponents::try_from(&format_spec)?;
         let return_type = DataType::Decimal256(precision, scale);
         Ok(Arc::new(Field::new(self.name(), return_type, true)))
     }
@@ -100,22 +102,30 @@ pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             args.len()
         );
     }
-    let values: &StringArray = downcast_arg!(&args[0], StringArray);
+    // Parsing the format string
     let format: &str = downcast_arg!(&args[1], StringArray).value(0);
-    let format_captures: Captures = match_format_regex(format)?;
-    let ParsedNumber {
+    let format_spec: RegexSpec = RegexSpec::try_from(format)?;
+    let number_components: NumberComponents = NumberComponents::try_from(&format_spec)?;
+    let NumberComponents {
         precision, scale, ..
-    } = ParsedNumber::try_from_format(format)?;
+    } = number_components;
 
+    // Getting the regex expression according to the format for the value
+    let value_regex: Regex = create_regex_expression(&format_spec)?;
+
+    // Parsing the values
+    let values: &StringArray = downcast_arg!(&args[0], StringArray);
     let scalars: Result<Vec<ScalarValue>> = values
         .iter()
         .map(|value| match value {
             None => Ok(ScalarValue::Decimal256(None, precision, scale)),
-            Some(value) => ParsedNumber::try_from(value, &format_captures)
-                .map(|parsed| {
-                    ScalarValue::Decimal256(Some(parsed.value), parsed.precision, parsed.scale)
-                })
-                .map_err(|e| exec_datafusion_err!("{}", e)),
+            Some(value) => {
+                ParsedNumber::try_from_value(value, &format_spec, &value_regex, &number_components)
+                    .map(|parsed| {
+                        ScalarValue::Decimal256(Some(parsed.value), parsed.precision, parsed.scale)
+                    })
+                    .map_err(|e| exec_datafusion_err!("{}", e))
+            }
         })
         .collect::<Result<Vec<ScalarValue>>>();
 
@@ -125,6 +135,46 @@ pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(decimal_array)
 }
 
+#[derive(Debug)]
+pub struct NumberComponents {
+    pub numbers: String,
+    pub decimals: Option<String>,
+    pub precision: u8,
+    pub scale: i8,
+}
+
+impl TryFrom<&RegexSpec> for NumberComponents {
+    type Error = DataFusionError;
+
+    fn try_from(format_spec: &RegexSpec) -> Result<Self, Self::Error> {
+        let numbers: String = format_spec.numbers.replace(",", "").replace("G", "");
+        let decimals: Option<String> = format_spec.decimals.clone();
+        let scale = decimals.as_ref().map_or(0, |d| d.len()) as i8;
+        let precision = numbers.len() as u8 + scale as u8;
+
+        Ok(Self {
+            numbers,
+            decimals,
+            precision,
+            scale,
+        })
+    }
+}
+
+impl TryFrom<&Captures<'_>> for NumberComponents {
+    type Error = DataFusionError;
+
+    fn try_from(captures: &Captures<'_>) -> Result<Self, Self::Error> {
+        // This is semantically incorrect, because captures can be from a different regex than the format pattern.
+        // And RegexSpec is a struct assumed to be used with the format pattern.
+        // However, in this case, we will use just numbers and decimals parts. So, it's ok.
+        // Just keep in mind this in the future.
+        let spec = RegexSpec::try_from(captures)?;
+        let spec: NumberComponents = NumberComponents::try_from(&spec)?;
+        Ok(spec)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParsedNumber {
     pub value: i256,
@@ -132,19 +182,28 @@ pub struct ParsedNumber {
     pub scale: i8,
 }
 
-impl ParsedNumber {
-    pub fn try_from_format(format: &str) -> Result<Self> {
-        let format: Captures = match_format_regex(format)?;
-        let (_, _, f_precision, f_scale) = extract_numbers_and_decimals(&format)?;
+impl TryFrom<&RegexSpec> for ParsedNumber {
+    type Error = DataFusionError;
+
+    fn try_from(format_spec: &RegexSpec) -> Result<Self, Self::Error> {
+        let NumberComponents {
+            precision, scale, ..
+        } = NumberComponents::try_from(format_spec)?;
         Ok(Self {
             value: i256::from(0),
-            precision: f_precision,
-            scale: f_scale,
+            precision,
+            scale,
         })
     }
-
-    pub fn try_from(value: &str, format: &Captures) -> Result<Self> {
-        parse_number(value, format)
+}
+impl ParsedNumber {
+    pub fn try_from_value(
+        value: &str,
+        format_spec: &RegexSpec,
+        value_regex: &Regex,
+        number_components: &NumberComponents,
+    ) -> Result<Self> {
+        parse_number(value, format_spec, value_regex, number_components)
     }
 }
 
@@ -159,30 +218,79 @@ macro_rules! get_opt_capture_group {
 macro_rules! get_capture_group {
     ($captures:expr, $group_name:expr) => {
         get_opt_capture_group!($captures, $group_name).ok_or_else(|| {
-            exec_datafusion_err!("Missing '{}' group in the format regex", $group_name)
+            exec_datafusion_err!(
+                "Missing '{}' group in the format regex or not well formed.",
+                $group_name
+            )
         })
     };
 }
 
-/// Parses a numeric value from a string using a specified format string.
-pub fn parse_number(value: &str, format: &Captures) -> Result<ParsedNumber> {
-    // Getting the precision and scale
-    let (_, _, f_precision, f_scale) = extract_numbers_and_decimals(format)?;
+#[derive(Debug)]
+pub struct RegexSpec {
+    left_sign: Option<String>,
+    currency_left: Option<String>,
+    numbers: String,
+    dot: Option<String>,
+    decimals: Option<String>,
+    currency_right: Option<String>,
+    right_sign: Option<String>,
+}
+impl TryFrom<&str> for RegexSpec {
+    type Error = DataFusionError;
 
-    // Second we need to match the value
+    fn try_from(format: &str) -> Result<Self, Self::Error> {
+        let captures: Captures = match_format_regex(format)?;
+        RegexSpec::try_from(&captures)
+    }
+}
+
+impl TryFrom<&Captures<'_>> for RegexSpec {
+    type Error = DataFusionError;
+
+    fn try_from(captures: &Captures<'_>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            left_sign: get_opt_capture_group!(captures, "sign_left"),
+            currency_left: get_opt_capture_group!(captures, "currency_left"),
+            numbers: get_capture_group!(captures, "numbers")?,
+            dot: get_opt_capture_group!(captures, "dot"),
+            decimals: get_opt_capture_group!(captures, "decimals"),
+            currency_right: get_opt_capture_group!(captures, "currency_right"),
+            right_sign: get_opt_capture_group!(captures, "sign_right"),
+        })
+    }
+}
+
+/// Parses a numeric value from a string using a specified format string.
+pub fn parse_number(
+    value: &str,
+    format_spec: &RegexSpec,
+    value_regex: &Regex,
+    number_components: &NumberComponents,
+) -> Result<ParsedNumber> {
+    let NumberComponents {
+        precision: f_precision,
+        scale: f_scale,
+        ..
+    } = number_components;
+
     // Matching the raw value pattern weather it's correct or not is not
-    let value_captures: Captures = match_value_format_regex(value, format)?;
+    let value_captures: Captures = match_regex(value, value_regex)?;
     let factor: i8 = get_sign_factor(&value_captures);
 
     // Check if the numbers groupings match the format
-    match_grouping(&value_captures, format)?;
+    match_grouping(&value_captures, format_spec)?;
 
     // Getting the numbers, decimals, precision and scale from the value captures
-    let (v_numbers, v_decimals, v_precision, v_scale): (String, Option<String>, u8, i8) =
-        extract_numbers_and_decimals(&value_captures)?;
+    let NumberComponents {
+        numbers: v_numbers,
+        decimals: v_decimals,
+        precision: v_precision,
+        scale: v_scale,
+    } = NumberComponents::try_from(&value_captures)?;
 
     // Check if the value's precision and scale are greater than the format's
-    if f_precision < v_precision || f_scale < v_scale {
+    if f_precision < &v_precision || f_scale < &v_scale {
         return exec_err!(
             "Value's precision and scale are greater than the format's: Value ({v_precision}, {v_scale}) vs Format ({f_precision}, {f_scale})"
         );
@@ -210,8 +318,8 @@ pub fn parse_number(value: &str, format: &Captures) -> Result<ParsedNumber> {
 
     Ok(ParsedNumber {
         value,
-        precision: f_precision,
-        scale: f_scale,
+        precision: *f_precision,
+        scale: *f_scale,
     })
 }
 
@@ -252,8 +360,8 @@ impl PatternExpression {
             _ => Ok(PatternExpression::Group(vec![expr, self])),
         }
     }
-    pub fn try_from(format: &Captures) -> Result<Self> {
-        let expr: PatternExpression = handle_number(format)?;
+    pub fn try_from(format: &RegexSpec) -> Result<Self> {
+        let expr: PatternExpression = PatternExpression::Number;
         let expr: PatternExpression = handle_decimal(format)?.prepend(expr)?;
         let expr: PatternExpression = handle_currency(format, &expr)?;
         let expr: PatternExpression = handle_sign(format, &expr)?;
@@ -300,8 +408,8 @@ impl Display for PatternExpression {
 }
 
 /// Validates and adjusts a `PatternExpression` to include brackets if applicable.
-fn handle_brackets(captures: &Captures, expr: &PatternExpression) -> Result<PatternExpression> {
-    match captures.name("sign_right") {
+fn handle_brackets(format_spec: &RegexSpec, expr: &PatternExpression) -> Result<PatternExpression> {
+    match format_spec.right_sign.clone() {
         Some(sign) if sign.as_str() == "PR" => {
             Ok(PatternExpression::Brackets(Box::new(expr.clone())))
         }
@@ -310,8 +418,11 @@ fn handle_brackets(captures: &Captures, expr: &PatternExpression) -> Result<Patt
 }
 
 /// Modifies a `PatternExpression` to incorporate sign information based on regex captures.
-fn handle_sign(captures: &Captures, expr: &PatternExpression) -> Result<PatternExpression> {
-    match (captures.name("sign_left"), captures.name("sign_right")) {
+fn handle_sign(format_spec: &RegexSpec, expr: &PatternExpression) -> Result<PatternExpression> {
+    match (
+        format_spec.left_sign.clone(),
+        format_spec.right_sign.clone(),
+    ) {
         (Some(left_sign), Some(right_sign)) if right_sign.as_str() == "PR" => {
             Ok(PatternExpression::LeftSign(left_sign.as_str() == "MI").append(expr.clone())?)
         }
@@ -330,20 +441,10 @@ fn handle_sign(captures: &Captures, expr: &PatternExpression) -> Result<PatternE
     }
 }
 
-/// Generates a `PatternExpression` for numeric values based on regex capture presence.
-pub fn handle_number(captures: &Captures) -> Result<PatternExpression> {
-    match captures.name("numbers") {
-        Some(_) => Ok(PatternExpression::Number),
-        None => exec_err!("{}", "Number group is not well formed".to_string()),
-    }
-}
-
 /// Appends decimal handling to a `PatternExpression` based on regex information.
-pub fn handle_decimal(captures: &Captures) -> Result<PatternExpression> {
-    match (captures.name("dot"), captures.name("decimals")) {
-        (Some(dot), Some(_)) => {
-            PatternExpression::Dot(dot.as_str().to_string()).append(PatternExpression::Decimal)
-        }
+pub fn handle_decimal(format_spec: &RegexSpec) -> Result<PatternExpression> {
+    match (format_spec.dot.clone(), format_spec.decimals.clone()) {
+        (Some(dot), Some(_)) => PatternExpression::Dot(dot).append(PatternExpression::Decimal),
         (None, None) => Ok(PatternExpression::Empty),
         _ => exec_err!(
             "{}",
@@ -353,18 +454,17 @@ pub fn handle_decimal(captures: &Captures) -> Result<PatternExpression> {
 }
 
 /// Modifies a `PatternExpression` to include currency information based on regex match.
-pub fn handle_currency(captures: &Captures, expr: &PatternExpression) -> Result<PatternExpression> {
+pub fn handle_currency(
+    format_spec: &RegexSpec,
+    expr: &PatternExpression,
+) -> Result<PatternExpression> {
     match (
-        captures.name("currency_left"),
-        captures.name("currency_right"),
+        format_spec.currency_left.clone(),
+        format_spec.currency_right.clone(),
     ) {
         (Some(_), Some(_)) => exec_err!("{}", "Currency group is not well formed".to_string()),
-        (Some(currency), None) => {
-            PatternExpression::Currency(currency.as_str().to_string()).append(expr.clone())
-        }
-        (None, Some(currency)) => {
-            PatternExpression::Currency(currency.as_str().to_string()).prepend(expr.clone())
-        }
+        (Some(currency), None) => PatternExpression::Currency(currency).append(expr.clone()),
+        (None, Some(currency)) => PatternExpression::Currency(currency).prepend(expr.clone()),
         _ => Ok(expr.clone()),
     }
 }
@@ -394,12 +494,12 @@ fn get_sign_factor(captures: &Captures) -> i8 {
 }
 
 /// Validates the grouping of numbers against the specified format to ensure conformity.
-fn match_grouping(value_captures: &Captures, format_captures: &Captures) -> Result<()> {
+fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<()> {
     let numbers = get_capture_group!(value_captures, "numbers")?;
-    let format = get_capture_group!(format_captures, "numbers")?;
+    let format_numbers = format_spec.numbers.clone();
 
     // Get the positions of the groupings in the format
-    let format_positions = get_grouping_positions(&format);
+    let format_positions = get_grouping_positions(&format_numbers);
     let number_positions = get_grouping_positions(&numbers);
 
     //Check if format has only ',' or 'G' characters
@@ -408,14 +508,14 @@ fn match_grouping(value_captures: &Captures, format_captures: &Captures) -> Resu
         .any(|c| format_positions.iter().all(|(_, d)| *d == *c));
     if !all_character_same {
         return exec_err!(
-            "Malformed integer format related groupings: {format}. Use only ',' or 'G', not both"
+            "Malformed integer format related groupings: {format_numbers}. Use only ',' or 'G', not both"
         );
     };
 
     // Check if the number groupings match the format
     if format_positions < number_positions {
         return exec_err!(
-            "Integer numbers's groupings do not match the integer format's groupings: {numbers} vs {format}"
+            "Integer numbers's groupings do not match the integer format's groupings: {numbers} vs {format_numbers}"
         );
     }
     Ok(())
@@ -430,13 +530,12 @@ fn match_format_regex(format: &str) -> Result<Captures> {
 }
 
 /// Validates a value against a regex pattern generated from a format string.
-fn match_value_format_regex<'a>(value: &'a str, format: &'a Captures<'a>) -> Result<Captures<'a>> {
-    let format_pattern: PatternExpression = PatternExpression::try_from(format)?;
+fn create_regex_expression(format_spec: &RegexSpec) -> Result<Regex> {
+    let format_pattern: PatternExpression = PatternExpression::try_from(format_spec)?;
     let pattern_string: String = format!("^{format_pattern}$");
     // Create a Regex instance
-    let regex: Regex = Regex::new(pattern_string.as_str())
-        .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))?;
-    match_regex(value, &regex)
+    Regex::new(pattern_string.as_str())
+        .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))
 }
 
 /// Compiles a regex pattern and matches it against a given string, capturing groups.
@@ -449,16 +548,4 @@ fn match_regex<'a>(value: &'a str, regex: &Regex) -> Result<Captures<'a>> {
     } else {
         exec_err!("String '{value}' does not match the expected regex pattern.")
     }
-}
-
-/// Extracts numbers and decimals from regex captures to determine precision and scale.
-fn extract_numbers_and_decimals(captures: &Captures) -> Result<(String, Option<String>, u8, i8)> {
-    let numbers = get_capture_group!(captures, "numbers")?;
-    let numbers = numbers.replace(",", "").replace("G", "");
-
-    let decimals = get_opt_capture_group!(captures, "decimals");
-    let scale = decimals.as_ref().map_or(0, |d| d.len()) as i8;
-    let precision = numbers.len() as u8 + scale as u8;
-
-    Ok((numbers, decimals, precision, scale))
 }
