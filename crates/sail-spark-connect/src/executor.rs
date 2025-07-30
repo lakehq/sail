@@ -19,6 +19,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
+use tracing::Instrument;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -200,6 +201,7 @@ impl Executor {
         tx: mpsc::Sender<ExecutorOutput>,
     ) -> ExecutorTaskResult {
         let out = tokio::select! {
+            biased;
             x = Executor::run_internal(&mut context, tx) => x,
             _ = listener => return ExecutorTaskResult::Paused(context),
         };
@@ -238,7 +240,10 @@ impl Executor {
         let buffer = Arc::clone(&context.buffer);
         // let handle = self.runtime.primary().clone();
         let handle = self.runtime.cpu().clone();
-        let handle = handle.spawn(async move { Executor::run(context, listener, tx).await });
+        let handle = handle.spawn(
+            async move { Executor::run(context, listener, tx).await }
+                .instrument(tracing::info_span!("executor_run")),
+        );
         // let handle = tokio::spawn(async move { Executor::run(context, listener, tx).await });
         *state = ExecutorState::Running(ExecutorTask {
             notifier,

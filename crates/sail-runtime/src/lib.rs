@@ -1,6 +1,7 @@
 mod error;
 
 use sail_common::config::RuntimeConfig;
+use std::str::FromStr;
 use tokio::runtime::{Handle, Runtime};
 
 use crate::error::{RuntimeError, RuntimeResult};
@@ -15,11 +16,49 @@ impl RuntimeManager {
     pub fn try_new(config: &RuntimeConfig, name: &str) -> RuntimeResult<Self> {
         let primary = Self::build_runtime(config.stack_size, name)?;
         let cpu = Self::build_cpu_runtime(config.stack_size, name)?;
-        // let secondary = if config.enable_secondary {
-        //     Some(Self::build_cpu_runtime(config.stack_size)?)
-        // } else {
-        //     None
-        // };
+
+        // use std::str::FromStr;
+        // if std::env::var("SAIL_USE_CONSOLE_SUBSCRIBER")
+        //     .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
+        // {
+        //     println!("[sail_cli::runner] Initializing runtime logging");
+        //     let cpu_handle = cpu.handle().clone();
+        //     let primary_handle = primary.handle().clone();
+        //
+        //     primary.spawn(async move {
+        //         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        //         loop {
+        //             interval.tick().await;
+        //
+        //             let cpu_metrics = cpu_handle.metrics();
+        //             let primary_metrics = primary_handle.metrics();
+        //
+        //             let cpu_busy: std::time::Duration = (0..cpu_metrics.num_workers())
+        //                 .map(|i| cpu_metrics.worker_total_busy_duration(i))
+        //                 .sum();
+        //
+        //             let primary_busy: std::time::Duration = (0..primary_metrics.num_workers())
+        //                 .map(|i| primary_metrics.worker_total_busy_duration(i))
+        //                 .sum();
+        //
+        //             println!("=== Runtime Metrics ===");
+        //             println!(
+        //                 "CPU Runtime - Tasks: {}, Workers: {}, Total Busy: {:?}",
+        //                 cpu_metrics.num_alive_tasks(),
+        //                 cpu_metrics.num_workers(),
+        //                 cpu_busy
+        //             );
+        //
+        //             println!(
+        //                 "Primary Runtime - Tasks: {}, Workers: {}, Total Busy: {:?}",
+        //                 primary_metrics.num_alive_tasks(),
+        //                 primary_metrics.num_workers(),
+        //                 primary_busy
+        //             );
+        //             println!("===================\n");
+        //         }
+        //     });
+        // }
 
         Ok(Self { primary, cpu })
     }
