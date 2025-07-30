@@ -277,45 +277,25 @@ pub fn add_months(date: NaiveDate, months: i32) -> Option<NaiveDate> {
     }
 }
 
-pub fn try_mult_interval_yearmonth_i32(
+pub fn try_op_interval_yearmonth_i32<F>(
     intervals: &PrimitiveArray<IntervalYearMonthType>,
     scalars: &PrimitiveArray<Int32Type>,
-) -> PrimitiveArray<IntervalYearMonthType> {
+    op: F,
+) -> PrimitiveArray<IntervalYearMonthType>
+where
+    F: Fn(i32, i32) -> Option<i32>,
+{
     let mut builder = PrimitiveBuilder::<IntervalYearMonthType>::with_capacity(intervals.len());
 
     for i in 0..intervals.len() {
         if intervals.is_null(i) || scalars.is_null(i) {
             builder.append_null();
         } else {
-            let interval = intervals.value(i);
-            let multiplier = scalars.value(i);
-
-            match interval.checked_mul(multiplier) {
+            let a = intervals.value(i);
+            let b = scalars.value(i);
+            match op(a, b) {
                 Some(v) => builder.append_value(v),
-                None => builder.append_null(), // overflow
-            }
-        }
-    }
-
-    builder.finish()
-}
-
-pub fn try_div_interval_yearmonth_i32(
-    intervals: &PrimitiveArray<IntervalYearMonthType>,
-    scalars: &PrimitiveArray<Int32Type>,
-) -> PrimitiveArray<IntervalYearMonthType> {
-    let mut builder = PrimitiveBuilder::<IntervalYearMonthType>::with_capacity(intervals.len());
-
-    for i in 0..intervals.len() {
-        if intervals.is_null(i) || scalars.is_null(i) {
-            builder.append_null();
-        } else {
-            let dividend = intervals.value(i);
-            let divisor = scalars.value(i);
-
-            match dividend.checked_div(divisor) {
-                Some(v) => builder.append_value(v),
-                None => builder.append_null(), // overflow
+                None => builder.append_null(),
             }
         }
     }
@@ -774,7 +754,7 @@ mod tests {
             let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(6), Some(0)]);
             let scalars = Int32Array::from(vec![Some(2), Some(4), Some(5)]);
 
-            let result = try_mult_interval_yearmonth_i32(&intervals, &scalars);
+            let result = try_op_interval_yearmonth_i32(&intervals, &scalars, i32::checked_mul);
             let expected = IntervalYearMonthArray::from(vec![Some(24), Some(24), Some(0)]);
 
             assert_eq!(result, expected);
@@ -785,7 +765,7 @@ mod tests {
             let intervals = IntervalYearMonthArray::from(vec![Some(12), None, Some(30)]);
             let scalars = Int32Array::from(vec![Some(2), Some(4), None]);
 
-            let result = try_mult_interval_yearmonth_i32(&intervals, &scalars);
+            let result = try_op_interval_yearmonth_i32(&intervals, &scalars, i32::checked_mul);
             let expected = IntervalYearMonthArray::from(vec![Some(24), None, None]);
 
             assert_eq!(result, expected);
@@ -796,7 +776,7 @@ mod tests {
             let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(24)]);
             let scalars = Int32Array::from(vec![Some(0), Some(0)]);
 
-            let result = try_mult_interval_yearmonth_i32(&intervals, &scalars);
+            let result = try_op_interval_yearmonth_i32(&intervals, &scalars, i32::checked_mul);
             let expected = IntervalYearMonthArray::from(vec![Some(0), Some(0)]);
 
             assert_eq!(result, expected);
@@ -807,7 +787,7 @@ mod tests {
             let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(-24)]);
             let scalars = Int32Array::from(vec![Some(-2), Some(3)]);
 
-            let result = try_mult_interval_yearmonth_i32(&intervals, &scalars);
+            let result = try_op_interval_yearmonth_i32(&intervals, &scalars, i32::checked_mul);
             let expected = IntervalYearMonthArray::from(vec![Some(-24), Some(-72)]);
 
             assert_eq!(result, expected);
@@ -818,7 +798,7 @@ mod tests {
             let intervals = IntervalYearMonthArray::from(vec![Some(i32::MAX), Some(i32::MIN)]);
             let scalars = Int32Array::from(vec![Some(2), Some(2)]);
 
-            let result = try_mult_interval_yearmonth_i32(&intervals, &scalars);
+            let result = try_op_interval_yearmonth_i32(&intervals, &scalars, i32::checked_mul);
             let expected = IntervalYearMonthArray::from(vec![None, None]); // overflow
 
             assert_eq!(result, expected);
@@ -891,7 +871,7 @@ mod tests {
             let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(24), Some(30)]);
             let divisors = Int32Array::from(vec![Some(3), Some(4), Some(5)]);
 
-            let result = try_div_interval_yearmonth_i32(&intervals, &divisors);
+            let result = try_op_interval_yearmonth_i32(&intervals, &divisors, i32::checked_div);
             let expected = IntervalYearMonthArray::from(vec![Some(4), Some(6), Some(6)]);
 
             assert_eq!(result, expected);
@@ -902,7 +882,7 @@ mod tests {
             let intervals = IntervalYearMonthArray::from(vec![Some(12), None, Some(30)]);
             let divisors = Int32Array::from(vec![Some(3), Some(4), None]);
 
-            let result = try_div_interval_yearmonth_i32(&intervals, &divisors);
+            let result = try_op_interval_yearmonth_i32(&intervals, &divisors, i32::checked_div);
             let expected = IntervalYearMonthArray::from(vec![Some(4), None, None]);
 
             assert_eq!(result, expected);
@@ -913,7 +893,7 @@ mod tests {
             let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(24)]);
             let divisors = Int32Array::from(vec![Some(0), Some(6)]);
 
-            let result = try_div_interval_yearmonth_i32(&intervals, &divisors);
+            let result = try_op_interval_yearmonth_i32(&intervals, &divisors, i32::checked_div);
             let expected = IntervalYearMonthArray::from(vec![None, Some(4)]);
 
             assert_eq!(result, expected);
@@ -924,7 +904,7 @@ mod tests {
             let intervals = IntervalYearMonthArray::from(vec![Some(-12), Some(24)]);
             let divisors = Int32Array::from(vec![Some(3), Some(-6)]);
 
-            let result = try_div_interval_yearmonth_i32(&intervals, &divisors);
+            let result = try_op_interval_yearmonth_i32(&intervals, &divisors, i32::checked_div);
             let expected = IntervalYearMonthArray::from(vec![Some(-4), Some(-4)]);
 
             assert_eq!(result, expected);
@@ -935,7 +915,7 @@ mod tests {
             let intervals = IntervalYearMonthArray::from(vec![Some(0), Some(0)]);
             let divisors = Int32Array::from(vec![Some(1), Some(-1)]);
 
-            let result = try_div_interval_yearmonth_i32(&intervals, &divisors);
+            let result = try_op_interval_yearmonth_i32(&intervals, &divisors, i32::checked_div);
             let expected = IntervalYearMonthArray::from(vec![Some(0), Some(0)]);
 
             assert_eq!(result, expected);

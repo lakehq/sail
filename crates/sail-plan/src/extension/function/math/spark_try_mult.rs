@@ -10,7 +10,7 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_binary_op_primitive, try_mult_interval_yearmonth_i32,
+    binary_op_scalar_or_array, try_binary_op_primitive, try_op_interval_yearmonth_i32,
 };
 
 #[derive(Debug)]
@@ -102,7 +102,7 @@ impl ScalarUDFImpl for SparkTryMult {
             (DataType::Interval(YearMonth), DataType::Int32) => {
                 let l = left_arr.as_primitive::<IntervalYearMonthType>();
                 let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_mult_interval_yearmonth_i32(l, r);
+                let result = try_op_interval_yearmonth_i32(l, r, i32::checked_div);
                 binary_op_scalar_or_array(left, right, result)
             }
             (l, r) => Err(unsupported_data_types_exec_err(

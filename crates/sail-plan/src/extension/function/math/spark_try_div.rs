@@ -11,7 +11,7 @@ use crate::extension::function::error_utils::{
 };
 use crate::extension::function::math::common_try::{
     binary_op_scalar_or_array, try_binary_op_to_float64, try_div_int32_to_f64,
-    try_div_interval_yearmonth_i32,
+    try_op_interval_yearmonth_i32,
 };
 
 #[derive(Debug)]
@@ -112,7 +112,7 @@ impl ScalarUDFImpl for SparkTryDiv {
             (DataType::Interval(YearMonth), DataType::Int32) => {
                 let l = left_arr.as_primitive::<IntervalYearMonthType>();
                 let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_div_interval_yearmonth_i32(l, r);
+                let result = try_op_interval_yearmonth_i32(l, r, i32::checked_div);
                 binary_op_scalar_or_array(left, right, result)
             }
             (l, r) => Err(unsupported_data_types_exec_err(
@@ -144,7 +144,7 @@ impl ScalarUDFImpl for SparkTryDiv {
         if matches!(
             (left, right),
             (DataType::Interval(YearMonth), DataType::Int32)
-                |  (DataType::Int32,DataType::Interval(YearMonth)) 
+                | (DataType::Int32, DataType::Interval(YearMonth))
         ) {
             return Ok(vec![DataType::Interval(YearMonth), DataType::Int32]);
         }
