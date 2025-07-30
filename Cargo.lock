@@ -2307,8 +2307,8 @@ dependencies = [
 
 [[package]]
 name = "deltalake"
-version = "0.27.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=3607c31#3607c314cbdd2ad06c6ee0677b92a29f695c71f3"
+version = "0.28.0"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=9a2c8ea#9a2c8eab19f5a121b807461168ff3cad5fec6707"
 dependencies = [
  "delta_kernel",
  "deltalake-core",
@@ -2316,8 +2316,8 @@ dependencies = [
 
 [[package]]
 name = "deltalake-core"
-version = "0.27.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=3607c31#3607c314cbdd2ad06c6ee0677b92a29f695c71f3"
+version = "0.28.0"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=9a2c8ea#9a2c8eab19f5a121b807461168ff3cad5fec6707"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -2368,8 +2368,8 @@ dependencies = [
 
 [[package]]
 name = "deltalake-derive"
-version = "0.27.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=3607c31#3607c314cbdd2ad06c6ee0677b92a29f695c71f3"
+version = "0.28.0"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=9a2c8ea#9a2c8eab19f5a121b807461168ff3cad5fec6707"
 dependencies = [
  "convert_case",
  "itertools 0.14.0",
@@ -5476,12 +5476,14 @@ dependencies = [
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-physical-optimizer",
  "delta_kernel",
  "deltalake",
  "either",
  "futures",
  "indexmap 2.10.0",
  "itertools 0.14.0",
+ "log",
  "object_store",
  "parquet",
  "percent-encoding",

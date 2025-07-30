@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt32Array};
+use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use datafusion::arrow::row::{RowConverter, SortField};
 use delta_kernel::expressions::Scalar;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
@@ -19,6 +20,7 @@ use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
 use super::async_utils::AsyncShareableBuffer;
+use super::stats::create_add;
 
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 const DEFAULT_TARGET_FILE_SIZE: usize = 104_857_600; // 100MB
@@ -27,25 +29,25 @@ const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
     fn hive_partition_path(&self) -> String;
+    fn hive_partition_segments(&self) -> Vec<String>;
 }
 
 impl PartitionsExt for IndexMap<String, Scalar> {
     fn hive_partition_path(&self) -> String {
+        self.hive_partition_segments().join("/")
+    }
+
+    fn hive_partition_segments(&self) -> Vec<String> {
         if self.is_empty() {
-            return String::new();
+            return vec![];
         }
 
         self.iter()
             .map(|(k, v)| {
-                let value_str = if v.is_null() {
-                    "__HIVE_DEFAULT_PARTITION__".to_string()
-                } else {
-                    v.serialize()
-                };
+                let value_str = v.serialize_encoded();
                 format!("{k}={value_str}")
             })
-            .collect::<Vec<_>>()
-            .join("/")
+            .collect()
     }
 }
 
@@ -181,12 +183,14 @@ impl DeltaWriter {
         &self,
         batch: &RecordBatch,
     ) -> Result<Vec<PartitionResult>, DeltaTableError> {
-        // For now, implement a simple non-partitioned case
-        // TODO: Implement proper partitioning logic
-        Ok(vec![PartitionResult {
-            record_batch: batch.clone(),
-            partition_values: IndexMap::new(),
-        }])
+        divide_by_partition_values(
+            arrow_schema_without_partitions(
+                &self.config.table_schema,
+                &self.config.partition_columns,
+            ),
+            self.config.partition_columns.clone(),
+            batch,
+        )
     }
 
     /// Close the writer and get the Add actions
@@ -216,8 +220,8 @@ pub struct PartitionWriterConfig {
     pub table_path: Path,
     /// Schema of the data written to disk
     pub file_schema: ArrowSchemaRef,
-    /// Partition path prefix
-    pub prefix: Path,
+    /// Partition path segments
+    pub partition_segments: Vec<String>,
     /// Values for all partition columns
     pub partition_values: IndexMap<String, Scalar>,
     /// Properties passed to underlying parquet writer
@@ -237,13 +241,12 @@ impl PartitionWriterConfig {
         target_file_size: usize,
         write_batch_size: usize,
     ) -> Self {
-        let part_path = partition_values.hive_partition_path();
-        let prefix = Path::parse(part_path).unwrap_or_else(|_| Path::from(""));
+        let partition_segments = partition_values.hive_partition_segments();
 
         Self {
             table_path,
             file_schema,
-            prefix,
+            partition_segments,
             partition_values,
             writer_properties,
             target_file_size,
@@ -365,8 +368,8 @@ impl PartitionWriter {
             .await
             .map_err(|e| DeltaTableError::generic(format!("Failed to write file: {e}")))?;
 
-        // Create Add action
-        let add_action = self.create_add_action(relative_path.as_ref(), file_size, &metadata)?;
+        // Create Add action with statistics
+        let add_action = self.create_add_action(&relative_path, file_size, &metadata)?;
         self.files_written.push(add_action);
 
         self.reset_writer()?;
@@ -375,7 +378,7 @@ impl PartitionWriter {
     }
 
     /// Generate the next data file path, returning both relative and full paths
-    fn next_data_path(&mut self) -> (Path, Path) {
+    fn next_data_path(&mut self) -> (String, Path) {
         self.part_counter += 1;
 
         let column_path = ColumnPath::new(Vec::new());
@@ -395,15 +398,18 @@ impl PartitionWriter {
             self.part_counter, self.writer_id, compression_suffix
         );
 
-        let relative_path = if self.config.prefix.as_ref().is_empty() {
-            // For non-partitioned tables, put files directly in table root
-            Path::from(file_name)
+        let mut full_path = self.config.table_path.clone();
+        for segment in &self.config.partition_segments {
+            full_path = full_path.child(segment.as_str());
+        }
+        full_path = full_path.child(file_name.as_str());
+
+        let relative_path = if self.config.partition_segments.is_empty() {
+            file_name
         } else {
-            // For partitioned tables, include the partition path
-            self.config.prefix.child(file_name)
+            format!("{}/{}", self.config.partition_segments.join("/"), file_name)
         };
 
-        let full_path = self.config.table_path.child(relative_path.to_string());
         (relative_path, full_path)
     }
 
@@ -412,44 +418,16 @@ impl PartitionWriter {
         &self,
         path: &str,
         file_size: i64,
-        _metadata: &parquet::format::FileMetaData,
+        metadata: &parquet::format::FileMetaData,
     ) -> Result<Add, DeltaTableError> {
-        // Get current timestamp
-        let modification_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("System time before Unix epoch")
-            .as_millis() as i64;
-
-        // Convert partition values to the format expected by Add
-        let partition_values = self
-            .config
-            .partition_values
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    if v.is_null() {
-                        None
-                    } else {
-                        Some(v.serialize())
-                    },
-                )
-            })
-            .collect();
-
-        Ok(Add {
-            path: path.to_string(),
-            size: file_size,
-            partition_values,
-            modification_time,
-            data_change: true,
-            stats: None, // TODO: Implement statistics collection
-            tags: None,
-            deletion_vector: None,
-            base_row_id: None,
-            default_row_commit_version: None,
-            clustering_provider: None,
-        })
+        create_add(
+            &self.config.partition_values,
+            path.to_string(),
+            file_size,
+            metadata,
+            self.num_indexed_cols,
+            &self.stats_columns,
+        )
     }
 
     /// Reset the writer for the next file
@@ -504,4 +482,103 @@ fn arrow_schema_without_partitions(
             .cloned()
             .collect::<Vec<_>>(),
     ))
+}
+
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
+/// Partition a RecordBatch along partition columns
+pub(crate) fn divide_by_partition_values(
+    arrow_schema: ArrowSchemaRef,
+    partition_columns: Vec<String>,
+    values: &RecordBatch,
+) -> Result<Vec<PartitionResult>, DeltaTableError> {
+    let mut partitions = Vec::new();
+
+    if partition_columns.is_empty() {
+        partitions.push(PartitionResult {
+            partition_values: IndexMap::new(),
+            record_batch: values.clone(),
+        });
+        return Ok(partitions);
+    }
+
+    let schema = values.schema();
+
+    let projection = partition_columns
+        .iter()
+        .map(|n| {
+            schema
+                .index_of(n)
+                .map_err(|e| DeltaTableError::generic(e.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let sort_columns = values
+        .project(&projection)
+        .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+
+    let indices = lexsort_to_indices(sort_columns.columns());
+    let sorted_partition_columns = partition_columns
+        .iter()
+        .map(|c| {
+            #[allow(clippy::unwrap_used)]
+            let col = values.column(schema.index_of(c).unwrap());
+            compute::take(col, &indices, None).map_err(|e| DeltaTableError::generic(e.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let partition_ranges =
+        datafusion::arrow::compute::partition(sorted_partition_columns.as_slice())
+            .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+
+    for range in partition_ranges.ranges().iter() {
+        // get row indices for current partition
+        let idx: UInt32Array = (range.start..range.end)
+            .map(|i| Some(indices.value(i)))
+            .collect();
+
+        let partition_key_iter = sorted_partition_columns
+            .iter()
+            .map(|col| {
+                Scalar::from_array(&col.slice(range.start, range.end - range.start), 0)
+                    .ok_or_else(|| DeltaTableError::generic("failed to parse partition value"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let partition_values = partition_columns
+            .clone()
+            .into_iter()
+            .zip(partition_key_iter)
+            .collect();
+        let batch_data = arrow_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                #[allow(clippy::unwrap_used)]
+                let col = values.column(schema.index_of(f.name()).unwrap());
+                compute::take(col.as_ref(), &idx, None)
+                    .map_err(|e| DeltaTableError::generic(e.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        partitions.push(PartitionResult {
+            partition_values,
+            record_batch: RecordBatch::try_new(arrow_schema.clone(), batch_data)
+                .map_err(|e| DeltaTableError::generic(e.to_string()))?,
+        });
+    }
+
+    Ok(partitions)
+}
+
+fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
+    let fields = arrays
+        .iter()
+        .map(|a| SortField::new(a.data_type().clone()))
+        .collect();
+    #[allow(clippy::unwrap_used)]
+    let converter = RowConverter::new(fields).unwrap();
+    #[allow(clippy::unwrap_used)]
+    let rows = converter.convert_columns(arrays).unwrap();
+    let mut sort: Vec<_> = rows.iter().enumerate().collect();
+    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+    UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
 }

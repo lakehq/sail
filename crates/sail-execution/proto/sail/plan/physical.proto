@@ -43,7 +43,7 @@ message ExtendedScalarUdf {
     SparkWeekOfYearUdf spark_week_of_year = 10;
     TimestampNowUdf timestamp_now = 11;
     SparkTimestampUdf spark_timestamp = 12;
-    SparkFromUtcTimestampUdf spark_from_utc_timestamp = 13;
+    SparkFromToUtcTimestampUdf spark_from_to_utc_timestamp = 13;
   }
 }
 
@@ -124,8 +124,9 @@ message SparkTimestampUdf {
   optional string timezone = 1;
 }
 
-message SparkFromUtcTimestampUdf {
+message SparkFromToUtcTimestampUdf {
   string time_unit = 1;
+  bool is_to = 2;
 }
 
 message StandardUdaf {}

@@ -2526,7 +2526,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_utc_timestamp"
+        "success": "ok"
       }
     },
     {
