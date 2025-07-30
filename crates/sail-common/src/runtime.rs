@@ -13,6 +13,10 @@ impl RuntimeManager {
     pub fn try_new(config: &RuntimeConfig) -> CommonResult<Self> {
         let primary = Self::build_runtime(config.stack_size)?;
         let secondary = if config.enable_secondary {
+            println!(
+                "Secondary runtime enabled with stack size: {}",
+                config.stack_size
+            );
             Some(Self::build_runtime(config.stack_size)?)
         } else {
             None

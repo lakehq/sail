@@ -23,6 +23,7 @@ sail-spark-connect = { path = "../sail-spark-connect" }
 mimalloc = { workspace = true, optional = true }
 clap = { workspace = true }
 tokio = { workspace = true }
+console-subscriber = { workspace = true }
 log = { workspace = true }
 fastrace = { workspace = true }
 pyo3 = { workspace = true }
