@@ -36,7 +36,6 @@ regex = { workspace = true }
 phf = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
-tracing = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
