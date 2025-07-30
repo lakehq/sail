@@ -10,8 +10,7 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_binary_op_to_float64, try_div_int32_to_f64,
-    try_op_interval_yearmonth_i32,
+    binary_op_scalar_or_array, try_binary_op_to_float64, try_op_interval_yearmonth_i32,
 };
 
 #[derive(Debug)]
@@ -87,7 +86,7 @@ impl ScalarUDFImpl for SparkTryDiv {
             (DataType::Int32, DataType::Int32) => {
                 let l = left_arr.as_primitive::<Int32Type>();
                 let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_div_int32_to_f64::<Int32Type, _>(l, r, |a, b| {
+                let result = try_binary_op_to_float64::<Int32Type, _>(l, r, |a, b| {
                     if b == 0 {
                         None
                     } else {
