@@ -7,12 +7,14 @@ use datafusion_common::{plan_datafusion_err, Result};
 use hdfs_native_object_store::HdfsObjectStore;
 use log::debug;
 use object_store::azure::{MicrosoftAzure, MicrosoftAzureBuilder};
+use object_store::client::SpawnedReqwestConnector;
 use object_store::gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder};
 use object_store::http::{HttpBuilder, HttpStore};
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::{ObjectStore, ObjectStoreScheme};
-use sail_common::runtime::RuntimeHandle;
+use sail_runtime::RuntimeHandle;
+use tokio::runtime::Handle;
 use url::Url;
 
 use crate::hugging_face::HuggingFaceObjectStore;
@@ -75,15 +77,11 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
         let store = self
             .stores
             .entry(key)
-            .or_try_insert_with(|| {
-                if let Some(handle) = self.runtime.secondary() {
-                    Ok(Arc::new(RuntimeAwareObjectStore::try_new(
-                        || get_dynamic_object_store(url),
-                        handle.clone(),
-                    )?))
-                } else {
-                    get_dynamic_object_store(url)
-                }
+            .or_try_insert_with(|| -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+                Ok(Arc::new(RuntimeAwareObjectStore::try_new(
+                    || get_dynamic_object_store(url, self.runtime.primary()),
+                    self.runtime.primary().clone(),
+                )?))
             })?
             .clone();
 
@@ -91,7 +89,10 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
     }
 }
 
-fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectStore>> {
+fn get_dynamic_object_store(
+    url: &Url,
+    handle: &Handle,
+) -> object_store::Result<Arc<dyn ObjectStore>> {
     let key = ObjectStoreKey::new(url);
     let store: Arc<dyn ObjectStore> = match key.scheme.as_str() {
         #[cfg(feature = "hdfs")]
@@ -115,33 +116,41 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
                 ObjectStoreScheme::Memory => Arc::new(InMemory::new()),
                 ObjectStoreScheme::AmazonS3 => {
                     let url = url.clone();
+                    let handle_for_closure = handle.clone();
                     let store = LazyObjectStore::new(move || {
                         let url = url.clone();
-                        async move { get_s3_object_store(&url).await }
+                        let handle = handle_for_closure.clone();
+                        async move { get_s3_object_store(&url, handle).await }
                     });
                     Arc::new(store)
                 }
                 ObjectStoreScheme::MicrosoftAzure => {
                     let url = url.clone();
+                    let handle_for_closure = handle.clone();
                     let store = LazyObjectStore::new(move || {
                         let url = url.clone();
-                        async move { get_azure_object_store(&url).await }
+                        let handle = handle_for_closure.clone();
+                        async move { get_azure_object_store(&url, handle).await }
                     });
                     Arc::new(store)
                 }
                 ObjectStoreScheme::GoogleCloudStorage => {
                     let url = url.clone();
+                    let handle_for_closure = handle.clone();
                     let store = LazyObjectStore::new(move || {
                         let url = url.clone();
-                        async move { get_gcs_object_store(&url).await }
+                        let handle = handle_for_closure.clone();
+                        async move { get_gcs_object_store(&url, handle).await }
                     });
                     Arc::new(store)
                 }
                 ObjectStoreScheme::Http => {
                     let url = url[..url::Position::BeforePath].to_string();
+                    let handle_for_closure = handle.clone();
                     let store = LazyObjectStore::new(move || {
                         let url = url.to_string();
-                        async move { get_http_object_store(url).await }
+                        let handle = handle_for_closure.clone();
+                        async move { get_http_object_store(url, handle).await }
                     });
                     Arc::new(store)
                 }
@@ -161,19 +170,27 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
 }
 
 // The following implementations are basic for now just to get preliminary functionality.
-pub async fn get_azure_object_store(url: &Url) -> object_store::Result<MicrosoftAzure> {
+pub async fn get_azure_object_store(
+    url: &Url,
+    handle: Handle,
+) -> object_store::Result<MicrosoftAzure> {
     MicrosoftAzureBuilder::from_env()
         .with_url(url.to_string())
+        .with_http_connector(SpawnedReqwestConnector::new(handle))
         .build()
 }
 
-pub async fn get_gcs_object_store(url: &Url) -> object_store::Result<GoogleCloudStorage> {
+pub async fn get_gcs_object_store(
+    url: &Url,
+    handle: Handle,
+) -> object_store::Result<GoogleCloudStorage> {
     GoogleCloudStorageBuilder::from_env()
         .with_url(url.to_string())
+        .with_http_connector(SpawnedReqwestConnector::new(handle))
         .build()
 }
 
-pub async fn get_http_object_store(url: String) -> object_store::Result<HttpStore> {
+pub async fn get_http_object_store(url: String, handle: Handle) -> object_store::Result<HttpStore> {
     let options: Vec<(String, String)> = std::env::vars().collect();
     let builder = options.into_iter().fold(
         HttpBuilder::new().with_url(url),
@@ -182,5 +199,7 @@ pub async fn get_http_object_store(url: String) -> object_store::Result<HttpStor
             Err(_) => builder,
         },
     );
-    builder.build()
+    builder
+        .with_http_connector(SpawnedReqwestConnector::new(handle))
+        .build()
 }

@@ -13,6 +13,7 @@ sail-server = { path = "../sail-server" }
 sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-object-store = { path = "../sail-object-store" }
+sail-runtime = { path = "../sail-runtime" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }

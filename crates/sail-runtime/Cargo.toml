@@ -1,0 +1,21 @@
+[package]
+name = "sail-runtime"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+log = { workspace = true }

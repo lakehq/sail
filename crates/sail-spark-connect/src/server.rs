@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_stream;
 use log::debug;
 use tonic::codegen::tokio_stream::StreamExt;
@@ -70,15 +72,16 @@ impl SparkConnectService for SparkConnectServer {
             tags: request.tags,
             reattachable: is_reattachable(&request.request_options),
         };
-        let ctx = self
-            .session_manager
-            .get_or_create_session_context(session_key)
-            .await?;
+        let ctx = Arc::new(
+            self.session_manager
+                .get_or_create_session_context(session_key)
+                .await?,
+        );
         let Plan { op_type: op } = request.plan.required("plan")?;
         let op = op.required("plan op")?;
         let stream = match op {
             plan::OpType::Root(relation) => {
-                service::handle_execute_relation(&ctx, relation, metadata).await?
+                service::handle_execute_relation(ctx, relation, metadata).await?
             }
             plan::OpType::Command(Command {
                 command_type: command,
@@ -86,41 +89,40 @@ impl SparkConnectService for SparkConnectServer {
                 let command = command.required("command")?;
                 match command {
                     CommandType::RegisterFunction(udf) => {
-                        service::handle_execute_register_function(&ctx, udf, metadata).await?
+                        service::handle_execute_register_function(ctx, udf, metadata).await?
                     }
                     CommandType::WriteOperation(write) => {
-                        service::handle_execute_write_operation(&ctx, write, metadata).await?
+                        service::handle_execute_write_operation(ctx, write, metadata).await?
                     }
                     CommandType::CreateDataframeView(view) => {
-                        service::handle_execute_create_dataframe_view(&ctx, view, metadata).await?
+                        service::handle_execute_create_dataframe_view(ctx, view, metadata).await?
                     }
                     CommandType::WriteOperationV2(write) => {
-                        service::handle_execute_write_operation_v2(&ctx, write, metadata).await?
+                        service::handle_execute_write_operation_v2(ctx, write, metadata).await?
                     }
                     CommandType::SqlCommand(sql) => {
-                        service::handle_execute_sql_command(&ctx, sql, metadata).await?
+                        service::handle_execute_sql_command(ctx, sql, metadata).await?
                     }
                     CommandType::WriteStreamOperationStart(start) => {
-                        service::handle_execute_write_stream_operation_start(&ctx, start, metadata)
+                        service::handle_execute_write_stream_operation_start(ctx, start, metadata)
                             .await?
                     }
                     CommandType::StreamingQueryCommand(stream) => {
-                        service::handle_execute_streaming_query_command(&ctx, stream, metadata)
+                        service::handle_execute_streaming_query_command(ctx, stream, metadata)
                             .await?
                     }
                     CommandType::GetResourcesCommand(resource) => {
-                        service::handle_execute_get_resources_command(&ctx, resource, metadata)
+                        service::handle_execute_get_resources_command(ctx, resource, metadata)
                             .await?
                     }
                     CommandType::StreamingQueryManagerCommand(manager) => {
                         service::handle_execute_streaming_query_manager_command(
-                            &ctx, manager, metadata,
+                            ctx, manager, metadata,
                         )
                         .await?
                     }
                     CommandType::RegisterTableFunction(udtf) => {
-                        service::handle_execute_register_table_function(&ctx, udtf, metadata)
-                            .await?
+                        service::handle_execute_register_table_function(ctx, udtf, metadata).await?
                     }
                     CommandType::StreamingQueryListenerBusCommand(_) => {
                         return Err(Status::unimplemented(
@@ -169,10 +171,11 @@ impl SparkConnectService for SparkConnectServer {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
         };
-        let ctx = self
-            .session_manager
-            .get_or_create_session_context(session_key)
-            .await?;
+        let ctx = Arc::new(
+            self.session_manager
+                .get_or_create_session_context(session_key)
+                .await?,
+        );
         let analyze = request.analyze.required("analyze")?;
         let result = match analyze {
             Analyze::Schema(schema) => {
@@ -180,7 +183,7 @@ impl SparkConnectService for SparkConnectServer {
                 Some(AnalyzeResult::Schema(schema))
             }
             Analyze::Explain(explain) => {
-                let explain = service::handle_analyze_explain(&ctx, explain).await?;
+                let explain = service::handle_analyze_explain(ctx, explain).await?;
                 Some(AnalyzeResult::Explain(explain))
             }
             Analyze::TreeString(tree) => {
