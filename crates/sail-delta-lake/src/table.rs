@@ -72,7 +72,7 @@ pub(crate) async fn create_delta_table_provider_with_object_store(
 
 pub async fn create_delta_provider(
     ctx: &dyn Session,
-    table_url: &Url,
+    table_url: Url,
     options: &std::collections::HashMap<String, String>,
 ) -> Result<std::sync::Arc<dyn datafusion::catalog::TableProvider>> {
     // TODO: Parse options when needed
@@ -94,7 +94,7 @@ pub async fn create_delta_provider(
     };
 
     let table_provider = create_delta_table_provider_with_object_store(
-        table_url.clone(),
+        table_url,
         object_store,
         storage_config,
         Some(scan_config),
