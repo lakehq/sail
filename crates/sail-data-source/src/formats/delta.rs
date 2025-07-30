@@ -45,8 +45,7 @@ impl TableFormat for DeltaTableFormat {
             input,
             path,
             mode,
-            // TODO: support partitioning
-            partition_by: _,
+            partition_by,
             bucket_by,
             sort_order,
             options,
@@ -65,7 +64,13 @@ impl TableFormat for DeltaTableFormat {
                 return not_impl_err!("unsupported sink mode for Delta: {mode:?}")
             }
         };
-        let sink = Arc::new(DeltaDataSink::new(mode, table_url, options, input.schema()));
+        let sink = Arc::new(DeltaDataSink::new(
+            mode,
+            table_url,
+            options,
+            input.schema(),
+            partition_by,
+        ));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, sort_order)))
     }

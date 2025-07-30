@@ -19,6 +19,7 @@ datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-execution = { workspace = true }
+datafusion-physical-optimizer = { workspace = true }
 
 # Arrow dependencies
 arrow-buffer = { workspace = true }
@@ -41,3 +42,7 @@ parquet = { workspace = true }
 bytes = { workspace = true }
 indexmap = { workspace = true }
 percent-encoding = { workspace = true }
+log = { workspace = true }
+
+[lints]
+workspace = true
