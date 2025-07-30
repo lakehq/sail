@@ -50,6 +50,7 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
+        // Ok(execute_stream(plan, ctx.task_ctx())?)
         let task_ctx = ctx.task_ctx();
         let result = self
             .runtime

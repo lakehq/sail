@@ -214,23 +214,30 @@ pub(crate) async fn handle_execute_sql_command(
             let stream = spark.job_runner().execute(ctx, plan).await?;
             let schema = stream.schema();
             let data = read_stream(stream).await?;
-
-            let runtime = spark.job_runner().runtime().cpu();
-            let arrow_batch = runtime
-                .spawn(async move {
-                    let record_batch = concat_batches(&schema, data.iter())?;
-                    let arrow_batch = to_arrow_batch(&record_batch)?;
-                    Ok::<_, SparkError>(arrow_batch)
-                })
-                .await??;
-
+            let data = concat_batches(&schema, data.iter())?;
             Relation {
                 common: None,
                 rel_type: Some(relation::RelType::LocalRelation(LocalRelation {
-                    data: Some(arrow_batch.data),
+                    data: Some(to_arrow_batch(&data)?.data),
                     schema: None,
                 })),
             }
+
+            // let runtime = spark.job_runner().runtime().cpu();
+            // let arrow_batch = runtime
+            //     .spawn(async move {
+            //         let record_batch = concat_batches(&schema, data.iter())?;
+            //         let arrow_batch = to_arrow_batch(&record_batch)?;
+            //         Ok::<_, SparkError>(arrow_batch)
+            //     })
+            //     .await??;
+            // Relation {
+            //     common: None,
+            //     rel_type: Some(relation::RelType::LocalRelation(LocalRelation {
+            //         data: Some(arrow_batch.data),
+            //         schema: None,
+            //     })),
+            // }
         }
     };
     let result = ExecutorBatch::SqlCommandResult(SqlCommandResult {

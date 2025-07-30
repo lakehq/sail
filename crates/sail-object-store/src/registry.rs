@@ -109,17 +109,15 @@ fn get_dynamic_object_store(
                 ObjectStoreScheme::Local => Arc::new(LocalFileSystem::new()),
                 ObjectStoreScheme::Memory => Arc::new(InMemory::new()),
                 ObjectStoreScheme::AmazonS3 => {
-                    // let url = url.clone();
-                    // let handle = handle.clone();
-                    // let store = LazyObjectStore::new(move || {
-                    //     let url = url.clone();
-                    //     let handle = handle.clone();
-                    //     async move { get_s3_object_store(&url, handle).await }
-                    // });
-                    // Arc::new(store)
+                    let url = url.clone();
+                    let handle = handle.clone();
+                    let store = LazyObjectStore::new(move || {
+                        let url = url.clone();
+                        let handle = handle.clone();
+                        async move { get_s3_object_store(&url, handle).await }
+                    });
+                    Arc::new(store)
 
-                    // 39 SEC
-                    //
                     // use std::sync::mpsc;
                     // let (tx, rx) = mpsc::channel();
                     // let url = url.clone();
@@ -136,19 +134,19 @@ fn get_dynamic_object_store(
                     // })??;
                     // Arc::new(store)
 
-                    use std::sync::mpsc;
-                    let (tx, rx) = mpsc::channel();
-                    let url = url.clone();
-                    let handle_clone = handle.clone();
-                    handle.spawn(async move {
-                        let result = get_s3_object_store(&url, handle_clone).await;
-                        let _ = tx.send(result);
-                    });
-                    let store = rx.recv().map_err(|_| object_store::Error::Generic {
-                        store: "s3",
-                        source: "Failed to receive from channel".into(),
-                    })??;
-                    Arc::new(store)
+                    // use std::sync::mpsc;
+                    // let (tx, rx) = mpsc::channel();
+                    // let url = url.clone();
+                    // let handle_clone = handle.clone();
+                    // handle.spawn(async move {
+                    //     let result = get_s3_object_store(&url, handle_clone).await;
+                    //     let _ = tx.send(result);
+                    // });
+                    // let store = rx.recv().map_err(|_| object_store::Error::Generic {
+                    //     store: "s3",
+                    //     source: "Failed to receive from channel".into(),
+                    // })??;
+                    // Arc::new(store)
                 }
                 ObjectStoreScheme::MicrosoftAzure => {
                     let url = url.clone();
