@@ -6,8 +6,8 @@ use arrow::array::{Array, AsArray, Date32Array, TimestampMicrosecondArray};
 use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{
-    Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNanoType,
-    IntervalYearMonthType, TimestampMicrosecondType,
+    Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNano,
+    IntervalMonthDayNanoType, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
@@ -17,9 +17,9 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_date32_monthdaynano,
-    try_add_interval_monthdaynano, try_add_interval_yearmonth, try_add_timestamp_duration,
-    try_binary_op_date32_i32, try_binary_op_primitive,
+    binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_interval_monthdaynano,
+    try_add_timestamp_duration, try_binary_op_date32_i32, try_binary_op_primitive,
+    try_op_date32_monthdaynano, try_op_interval_yearmonth,
 };
 
 #[derive(Debug)]
@@ -146,8 +146,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
             (DataType::Interval(YearMonth), DataType::Interval(YearMonth)) => {
                 let l= left_arr.as_primitive::<IntervalYearMonthType>();
                 let r = right_arr.as_primitive::<IntervalYearMonthType>();
-                let negated_r = r.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
-                let result = try_add_interval_yearmonth(l, &negated_r);
+                let result = try_op_interval_yearmonth(l, r, i32::checked_sub);
 
                 binary_op_scalar_or_array(left, right, result)
             }
@@ -155,8 +154,13 @@ impl ScalarUDFImpl for SparkTrySubtract {
             (DataType::Date32, DataType::Interval(MonthDayNano)) => {
                 let l= left_arr.as_primitive::<Date32Type>();
                 let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let negated_r = r.iter().map(|opt| opt.map(|v| v.neg())).collect();
-                let result: Date32Array = try_add_date32_monthdaynano(l, &negated_r);
+                let result = try_op_date32_monthdaynano(l, r, |x| {
+                    IntervalMonthDayNano::new(
+                        -x.months,
+                        -x.days,
+                        -x.nanoseconds,
+                    )
+                });
 
                 binary_op_scalar_or_array(left, right, result)
             }

@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use arrow::array::{Array, AsArray, PrimitiveArray, PrimitiveBuilder};
+use arrow::array::{Array, AsArray};
 use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use arrow::datatypes::{
     Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNanoType,
@@ -14,9 +14,9 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_date32_monthdaynano,
-    try_add_interval_monthdaynano, try_add_timestamp_duration, try_binary_op_date32_i32,
-    try_binary_op_primitive,
+    binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_interval_monthdaynano,
+    try_add_timestamp_duration, try_binary_op_date32_i32, try_binary_op_primitive,
+    try_op_date32_monthdaynano, try_op_interval_yearmonth,
 };
 
 #[derive(Debug)]
@@ -141,30 +141,13 @@ impl ScalarUDFImpl for SparkTryAdd {
             (DataType::Interval(YearMonth), DataType::Interval(YearMonth)) => {
                 let l = left_arr.as_primitive::<IntervalYearMonthType>();
                 let r = right_arr.as_primitive::<IntervalYearMonthType>();
-
-                let len: usize = l.len();
-                let mut builder: PrimitiveBuilder<IntervalYearMonthType> =
-                    PrimitiveBuilder::<IntervalYearMonthType>::with_capacity(len);
-
-                for i in 0..len {
-                    if l.is_null(i) || r.is_null(i) {
-                        builder.append_null();
-                    } else {
-                        let sum = l.value(i).checked_add(r.value(i));
-                        match sum {
-                            Some(v) => builder.append_value(v),
-                            None => builder.append_null(), // unlikely for i32 but por seguridad
-                        }
-                    }
-                }
-
-                let result: PrimitiveArray<IntervalYearMonthType> = builder.finish();
+                let result = try_op_interval_yearmonth(l, r, i32::checked_add);
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Date32, DataType::Interval(MonthDayNano)) => {
                 let dates = left_arr.as_primitive::<Date32Type>();
                 let intervals = right_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let result = try_add_date32_monthdaynano(dates, intervals);
+                let result = try_op_date32_monthdaynano(dates, intervals, |x| x);
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)) => {

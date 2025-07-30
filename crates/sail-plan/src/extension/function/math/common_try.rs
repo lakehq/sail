@@ -5,7 +5,8 @@ use arrow::array::{
     PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
 };
 use arrow::datatypes::{
-    Date32Type, Float64Type, Int32Type, IntervalMonthDayNanoType, IntervalYearMonthType,
+    Date32Type, Float64Type, Int32Type, IntervalMonthDayNano, IntervalMonthDayNanoType,
+    IntervalYearMonthType,
 };
 use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::ScalarValue;
@@ -25,17 +26,24 @@ pub fn binary_op_scalar_or_array<T: ArrowPrimitiveType>(
     }
 }
 
-pub fn try_add_interval_yearmonth(
-    l: &PrimitiveArray<IntervalYearMonthType>,
-    r: &PrimitiveArray<IntervalYearMonthType>,
-) -> PrimitiveArray<IntervalYearMonthType> {
-    let mut builder = PrimitiveBuilder::<IntervalYearMonthType>::with_capacity(l.len());
-    for i in 0..l.len() {
-        if l.is_null(i) || r.is_null(i) {
+pub fn try_op_interval_yearmonth<F>(
+    left: &PrimitiveArray<IntervalYearMonthType>,
+    right: &PrimitiveArray<IntervalYearMonthType>,
+    op: F,
+) -> PrimitiveArray<IntervalYearMonthType>
+where
+    F: Fn(i32, i32) -> Option<i32>,
+{
+    let mut builder = PrimitiveBuilder::<IntervalYearMonthType>::with_capacity(left.len());
+
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
             builder.append_null();
         } else {
-            let sum = l.value(i).checked_add(r.value(i));
-            match sum {
+            let a = left.value(i);
+            let b = right.value(i);
+
+            match op(a, b) {
                 Some(v) => builder.append_value(v),
                 None => builder.append_null(),
             }
@@ -157,15 +165,20 @@ pub fn try_add_date32_interval_yearmonth(
     builder.finish()
 }
 
-pub fn try_add_date32_monthdaynano(
+pub fn try_op_date32_monthdaynano<F>(
     dates: &PrimitiveArray<Date32Type>,
     intervals: &PrimitiveArray<IntervalMonthDayNanoType>,
-) -> Date32Array {
+    transform: F,
+) -> Date32Array
+where
+    F: Fn(IntervalMonthDayNano) -> IntervalMonthDayNano,
+{
     let mut builder = PrimitiveBuilder::<Date32Type>::with_capacity(dates.len());
     let Some(base) = NaiveDate::from_ymd_opt(1970, 1, 1) else {
         builder.append_nulls(dates.len());
         return builder.finish();
     };
+
     for i in 0..dates.len() {
         if dates.is_null(i) || intervals.is_null(i) {
             builder.append_null();
@@ -178,7 +191,7 @@ pub fn try_add_date32_monthdaynano(
             continue;
         };
 
-        let interval = intervals.value(i);
+        let interval = transform(intervals.value(i));
         let date_with_months = add_months(date, interval.months);
 
         let final_date = date_with_months
@@ -480,7 +493,7 @@ mod tests {
                 Some(IntervalMonthDayNano::new(0, 365, 0)),
                 None,
             ]);
-            let result = try_add_date32_monthdaynano(&dates, &intervals);
+            let result = try_op_date32_monthdaynano(&dates, &intervals, |x| x);
             let expected = to_date32_array(&[
                 Some("2023-01-02"),
                 Some("2011-02-01"),
@@ -496,7 +509,7 @@ mod tests {
             let dates = Date32Array::from(vec![Some(i32::MAX)]);
             let intervals =
                 IntervalMonthDayNanoArray::from(vec![Some(IntervalMonthDayNano::new(0, 1, 0))]);
-            let result = try_add_date32_monthdaynano(&dates, &intervals);
+            let result = try_op_date32_monthdaynano(&dates, &intervals, |x| x);
             let expected = Date32Array::from(vec![None]);
             assert_eq!(result, expected);
             Ok(())
