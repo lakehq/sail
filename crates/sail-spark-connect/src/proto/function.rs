@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn test_sql_function() -> Result<(), Box<dyn std::error::Error>> {
         let config = Arc::new(AppConfig::load()?);
-        let runtime = RuntimeManager::try_new(&config.runtime)?;
+        let runtime = RuntimeManager::try_new(&config.runtime, "Test")?;
         let system = Arc::new(Mutex::new(ActorSystem::new()));
         let session_key = SessionKey {
             user_id: None,
@@ -95,7 +95,7 @@ mod tests {
                     let plan =
                         resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
                     let stream = spark.job_runner().execute(&context, plan).await?;
-                    read_stream(stream).await
+                    read_stream(stream, handle.cpu().clone()).await
                 });
                 // TODO: validate the result against the expected output
                 // TODO: handle non-deterministic results and error messages

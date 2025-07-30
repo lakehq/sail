@@ -1,9 +1,9 @@
-use clap::{Parser, Subcommand};
-
 use crate::spark::{
     run_pyspark_shell, run_spark_connect_server, run_spark_mcp_server, McpSettings, McpTransport,
 };
 use crate::worker::run_worker;
+use clap::{Parser, Subcommand};
+use std::str::FromStr;
 
 #[derive(Parser)]
 #[command(version, name = "sail", about = "Sail CLI")]
@@ -79,6 +79,13 @@ enum SparkCommand {
 }
 
 pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    // uf env set and true start console sub`
+    if std::env::var("SAIL_USE_CONSOLE_SUBSCRIBER")
+        .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
+    {
+        println!("[sail_cli::runner] Initializing console subscriber for logging");
+        console_subscriber::init();
+    }
     let cli = Cli::parse_from(args);
 
     match cli.command {

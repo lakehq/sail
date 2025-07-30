@@ -30,7 +30,7 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
     init_telemetry()?;
 
     let config = Arc::new(AppConfig::load()?);
-    let runtime = RuntimeManager::try_new(&config.runtime)?;
+    let runtime = RuntimeManager::try_new(&config.runtime, "CLI-Spark-Connect")?;
     let options = SessionManagerOptions {
         config: Arc::clone(&config),
         runtime: runtime.handle(),

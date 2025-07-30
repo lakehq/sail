@@ -12,9 +12,9 @@ pub struct RuntimeManager {
 }
 
 impl RuntimeManager {
-    pub fn try_new(config: &RuntimeConfig) -> RuntimeResult<Self> {
-        let primary = Self::build_runtime(config.stack_size)?;
-        let cpu = Self::build_cpu_runtime(config.stack_size)?;
+    pub fn try_new(config: &RuntimeConfig, name: &str) -> RuntimeResult<Self> {
+        let primary = Self::build_runtime(config.stack_size, name)?;
+        let cpu = Self::build_cpu_runtime(config.stack_size, name)?;
         // let secondary = if config.enable_secondary {
         //     Some(Self::build_cpu_runtime(config.stack_size)?)
         // } else {
@@ -30,16 +30,18 @@ impl RuntimeManager {
         RuntimeHandle { primary, cpu }
     }
 
-    fn build_runtime(stack_size: usize) -> RuntimeResult<Runtime> {
+    fn build_runtime(stack_size: usize, name: &str) -> RuntimeResult<Runtime> {
         tokio::runtime::Builder::new_multi_thread()
+            .thread_name(format!("Primary-{}", name))
             .thread_stack_size(stack_size)
             .enable_all()
             .build()
             .map_err(|e| RuntimeError::internal(e.to_string()))
     }
 
-    fn build_cpu_runtime(stack_size: usize) -> RuntimeResult<Runtime> {
+    fn build_cpu_runtime(stack_size: usize, name: &str) -> RuntimeResult<Runtime> {
         tokio::runtime::Builder::new_multi_thread()
+            .thread_name(format!("CPU-{}", name))
             .thread_stack_size(stack_size)
             .enable_all()
             .build()

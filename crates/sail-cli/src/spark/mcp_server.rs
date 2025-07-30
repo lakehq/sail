@@ -67,7 +67,7 @@ pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::er
     init_telemetry()?;
 
     let config = Arc::new(AppConfig::load()?);
-    let runtime = RuntimeManager::try_new(&config.runtime)?;
+    let runtime = RuntimeManager::try_new(&config.runtime, "CLI-MCP")?;
 
     let spark_remote = match settings.spark_remote {
         None => {

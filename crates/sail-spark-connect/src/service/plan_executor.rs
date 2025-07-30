@@ -111,15 +111,16 @@ async fn handle_execute_plan(
     let operation_id = metadata.operation_id.clone();
     let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
     let stream = spark.job_runner().execute(ctx, plan).await?;
+    let runtime = spark.job_runner().runtime().clone();
     let rx = match mode {
         ExecutePlanMode::Lazy => {
-            let executor = Executor::new(metadata, stream);
+            let executor = Executor::new(metadata, stream, runtime);
             let rx = executor.start()?;
             spark.add_executor(executor)?;
             rx
         }
         ExecutePlanMode::EagerSilent => {
-            let _ = read_stream(stream).await?;
+            let _ = read_stream(stream, runtime.cpu().clone()).await?;
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             if metadata.reattachable {
                 tx.send(ExecutorOutput::complete()).await?;
@@ -213,7 +214,7 @@ pub(crate) async fn handle_execute_sql_command(
             let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, command).await?;
             let stream = spark.job_runner().execute(ctx, plan).await?;
             let schema = stream.schema();
-            let data = read_stream(stream).await?;
+            let data = read_stream(stream, spark.job_runner().runtime().cpu().clone()).await?;
             let data = concat_batches(&schema, data.iter())?;
             Relation {
                 common: None,

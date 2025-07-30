@@ -13,7 +13,7 @@ use crate::python::Modules;
 
 pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(AppConfig::load()?);
-    let runtime = RuntimeManager::try_new(&config.runtime)?;
+    let runtime = RuntimeManager::try_new(&config.runtime, "CLI-PySpark-Shell")?;
     let options = SessionManagerOptions {
         config,
         runtime: runtime.handle(),

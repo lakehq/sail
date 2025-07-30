@@ -6,7 +6,7 @@ pub fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry()?;
 
     let config = AppConfig::load()?;
-    let runtime = RuntimeManager::try_new(&config.runtime)?;
+    let runtime = RuntimeManager::try_new(&config.runtime, "CLI-Worker")?;
     runtime
         .handle()
         .primary()
