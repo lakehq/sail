@@ -15,6 +15,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use lazy_static::lazy_static;
 use regex::{Captures, Regex};
 
 use crate::extension::function::functions_nested_utils::downcast_arg;
@@ -25,10 +26,17 @@ pub struct SparkToNumber {
     signature: Signature,
 }
 
+lazy_static! {
+    static ref FORMAT_REGEX: Regex = {
+        #[allow(clippy::unwrap_used)]
+        Regex::new(r"^(?<sign_left>MI|S)?(?<currency_left>L|\$)?(?<numbers>[09G,]+)(?<dot>[.D])?(?<decimals>[09]+)?(?<currency_right>L|\$)?(?<sign_right>PR|MI|S)?$")
+            .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))
+            .unwrap()
+    };
+}
+
 impl SparkToNumber {
     pub const NAME: &'static str = "to_number";
-
-    pub const FORMAT_REGEX: &'static str = r"^(?<sign_left>MI|S)?(?<currency_left>L|\$)?(?<numbers>[09G,]+)(?<dot>[.D])?(?<decimals>[09]+)?(?<currency_right>L|\$)?(?<sign_right>PR|MI|S)?$";
 
     pub fn new() -> Self {
         Self {
@@ -240,7 +248,7 @@ impl TryFrom<&str> for RegexSpec {
     type Error = DataFusionError;
 
     fn try_from(format: &str) -> Result<Self, Self::Error> {
-        let captures: Captures = match_format_regex(format)?;
+        let captures: Captures = match_regex(format, &FORMAT_REGEX)?;
         RegexSpec::try_from(&captures)
     }
 }
@@ -519,14 +527,6 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
         );
     }
     Ok(())
-}
-
-/// Matches the format string against a predefined regex to ensure validity.
-fn match_format_regex(format: &str) -> Result<Captures> {
-    // Create a Regex instance
-    let regex: Regex = Regex::new(SparkToNumber::FORMAT_REGEX)
-        .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))?;
-    match_regex(format, &regex)
 }
 
 /// Validates a value against a regex pattern generated from a format string.
