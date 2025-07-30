@@ -53,7 +53,7 @@ use sail_plan::extension::function::collection::spark_concat::SparkConcat;
 use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
 use sail_plan::extension::function::csv::spark_from_csv::SparkFromCSV;
 use sail_plan::extension::function::datetime::spark_date::SparkDate;
-use sail_plan::extension::function::datetime::spark_from_utc_timestamp::SparkFromUtcTimestamp;
+use sail_plan::extension::function::datetime::spark_from_to_utc_timestamp::SparkFromToUtcTimestamp;
 use sail_plan::extension::function::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
@@ -748,10 +748,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkTimestamp::try_new(timezone.map(Arc::from))?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkFromUtcTimestamp(gen::SparkFromUtcTimestampUdf { time_unit }) => {
+            UdfKind::SparkFromToUtcTimestamp(gen::SparkFromToUtcTimestampUdf {
+                time_unit,
+                is_to,
+            }) => {
                 let time_unit = gen_datafusion_common::TimeUnit::from_str_name(time_unit.as_str())
                     .ok_or_else(|| plan_datafusion_err!("invalid time unit: {time_unit}"))?;
-                let udf = SparkFromUtcTimestamp::new(time_unit.into());
+                let udf = SparkFromToUtcTimestamp::new(time_unit.into(), is_to);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
         };
@@ -1006,11 +1009,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node
             .inner()
             .as_any()
-            .downcast_ref::<SparkFromUtcTimestamp>()
+            .downcast_ref::<SparkFromToUtcTimestamp>()
         {
             let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
             let time_unit = time_unit.as_str_name().to_string();
-            UdfKind::SparkFromUtcTimestamp(gen::SparkFromUtcTimestampUdf { time_unit })
+            UdfKind::SparkFromToUtcTimestamp(gen::SparkFromToUtcTimestampUdf {
+                time_unit,
+                is_to: func.is_to(),
+            })
         } else {
             return Ok(());
         };
