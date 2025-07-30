@@ -109,13 +109,14 @@ fn get_dynamic_object_store(
                 ObjectStoreScheme::Local => Arc::new(LocalFileSystem::new()),
                 ObjectStoreScheme::Memory => Arc::new(InMemory::new()),
                 ObjectStoreScheme::AmazonS3 => {
-                    let url = url.clone();
-                    let handle = handle.clone();
-                    let store = LazyObjectStore::new(move || {
-                        let url = url.clone();
-                        let handle = handle.clone();
-                        async move { get_s3_object_store(&url, handle).await }
-                    });
+                    // let url = url.clone();
+                    // let handle = handle.clone();
+                    // let store = LazyObjectStore::new(move || {
+                    //     let url = url.clone();
+                    //     let handle = handle.clone();
+                    //     async move { get_s3_object_store(&url, handle).await }
+                    // });
+                    let store = handle.block_on(get_s3_object_store(url, handle.clone()))?;
                     Arc::new(store)
                 }
                 ObjectStoreScheme::MicrosoftAzure => {

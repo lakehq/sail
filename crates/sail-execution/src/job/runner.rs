@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
+use sail_runtime::RuntimeHandle;
 use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
 
@@ -19,32 +20,21 @@ pub trait JobRunner: Send + Sync + 'static {
     ) -> ExecutionResult<SendableRecordBatchStream>;
 
     async fn stop(&self);
+
+    fn runtime(&self) -> &RuntimeHandle;
 }
 
 pub struct LocalJobRunner {
     stopped: AtomicBool,
-    runtime: Option<sail_runtime::RuntimeHandle>,
+    runtime: RuntimeHandle,
 }
 
 impl LocalJobRunner {
-    pub fn new() -> Self {
+    pub fn new(runtime: RuntimeHandle) -> Self {
         Self {
             stopped: AtomicBool::new(false),
-            runtime: None,
+            runtime,
         }
-    }
-
-    pub fn new_with_runtime(runtime: sail_runtime::RuntimeHandle) -> Self {
-        Self {
-            stopped: AtomicBool::new(false),
-            runtime: Some(runtime),
-        }
-    }
-}
-
-impl Default for LocalJobRunner {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -60,35 +50,37 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
-
-        if let Some(runtime) = &self.runtime {
-            let task_ctx = ctx.task_ctx();
-            let result = runtime
-                .cpu()
-                .spawn(async move { execute_stream(plan, task_ctx) })
-                .await
-                .map_err(|e| {
-                    ExecutionError::InternalError(format!("failed to execute on CPU runtime: {e}"))
-                })?;
-            Ok(result?)
-        } else {
-            Ok(execute_stream(plan, ctx.task_ctx())?)
-        }
+        let task_ctx = ctx.task_ctx();
+        let result = self
+            .runtime
+            .cpu()
+            .spawn(async move { execute_stream(plan, task_ctx) })
+            .await
+            .map_err(|e| {
+                ExecutionError::InternalError(format!("failed to execute on CPU runtime: {e}"))
+            })?;
+        Ok(result?)
     }
 
     async fn stop(&self) {
         self.stopped.store(true, Ordering::Relaxed);
     }
+
+    fn runtime(&self) -> &RuntimeHandle {
+        &self.runtime
+    }
 }
 
 pub struct ClusterJobRunner {
     driver: ActorHandle<DriverActor>,
+    runtime: RuntimeHandle,
 }
 
 impl ClusterJobRunner {
     pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
+        let runtime = options.runtime.clone();
         let driver = system.spawn(options);
-        Self { driver }
+        Self { driver, runtime }
     }
 }
 
@@ -111,5 +103,9 @@ impl JobRunner for ClusterJobRunner {
 
     async fn stop(&self) {
         let _ = self.driver.send(DriverEvent::Shutdown).await;
+    }
+
+    fn runtime(&self) -> &RuntimeHandle {
+        &self.runtime
     }
 }
