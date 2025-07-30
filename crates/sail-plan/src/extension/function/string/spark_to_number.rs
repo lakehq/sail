@@ -423,29 +423,31 @@ fn match_grouping(value_captures: &Captures, format_captures: &Captures) -> Resu
 
 /// Matches the format string against a predefined regex to ensure validity.
 fn match_format_regex(format: &str) -> Result<Captures> {
-    match_regex(format, SparkToNumber::FORMAT_REGEX)
+    // Create a Regex instance
+    let regex: Regex = Regex::new(SparkToNumber::FORMAT_REGEX)
+        .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))?;
+    match_regex(format, &regex)
 }
 
 /// Validates a value against a regex pattern generated from a format string.
 fn match_value_format_regex<'a>(value: &'a str, format: &'a Captures<'a>) -> Result<Captures<'a>> {
-    let format_pattern = PatternExpression::try_from(format)?;
-    let pattern_string = format!("^{format_pattern}$");
-    match_regex(value, &pattern_string)
+    let format_pattern: PatternExpression = PatternExpression::try_from(format)?;
+    let pattern_string: String = format!("^{format_pattern}$");
+    // Create a Regex instance
+    let regex: Regex = Regex::new(pattern_string.as_str())
+        .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))?;
+    match_regex(value, &regex)
 }
 
 /// Compiles a regex pattern and matches it against a given string, capturing groups.
-fn match_regex<'a>(value: &'a str, regex_pattern: &str) -> Result<Captures<'a>> {
-    // Create a Regex instance
-    let regex = Regex::new(regex_pattern)
-        .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))?;
-
+fn match_regex<'a>(value: &'a str, regex: &Regex) -> Result<Captures<'a>> {
     // Check if the format matches the regex pattern
     if regex.is_match(value) {
         regex
             .captures(value)
             .ok_or_else(|| exec_datafusion_err!("Value '{value}' does not match the format"))
     } else {
-        exec_err!("String '{value}' does not match the expected regex pattern {regex_pattern}")
+        exec_err!("String '{value}' does not match the expected regex pattern.")
     }
 }
 
