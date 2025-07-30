@@ -17,8 +17,8 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_interval_monthdaynano,
-    try_binary_op_date32_i32, try_binary_op_primitive, try_op_date32_monthdaynano,
+    add_months, binary_op_scalar_or_array, try_add_interval_monthdaynano, try_binary_op_date32_i32,
+    try_binary_op_primitive, try_op_date32_interval_yearmonth, try_op_date32_monthdaynano,
     try_op_interval_yearmonth, try_op_timestamp_duration,
 };
 
@@ -137,9 +137,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
             (DataType::Date32, DataType::Interval(YearMonth)) => {
                 let l = left_arr.as_primitive::<Date32Type>();
                 let r = right_arr.as_primitive::<IntervalYearMonthType>();
-                let negated_r =
-                    r.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
-                let result: Date32Array = try_add_date32_interval_yearmonth(l, &negated_r);
+                let result: Date32Array = try_op_date32_interval_yearmonth(l, r, |d, m| add_months(d, -m));
 
                 binary_op_scalar_or_array(left, right, result)
             }

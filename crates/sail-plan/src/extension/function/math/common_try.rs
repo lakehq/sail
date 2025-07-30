@@ -130,10 +130,14 @@ where
     builder.finish()
 }
 
-pub fn try_add_date32_interval_yearmonth(
+pub fn try_op_date32_interval_yearmonth<F>(
     dates: &PrimitiveArray<Date32Type>,
     intervals: &PrimitiveArray<IntervalYearMonthType>,
-) -> Date32Array {
+    op: F,
+) -> Date32Array
+where
+    F: Fn(NaiveDate, i32) -> Option<NaiveDate>,
+{
     let mut builder = Date32Builder::with_capacity(dates.len());
     let Some(base) = NaiveDate::from_ymd_opt(1970, 1, 1) else {
         builder.append_nulls(dates.len());
@@ -153,7 +157,7 @@ pub fn try_add_date32_interval_yearmonth(
         };
 
         let interval_months = intervals.value(i);
-        let Some(new_date) = add_months(date, interval_months) else {
+        let Some(new_date) = op(date, interval_months) else {
             builder.append_null();
             continue;
         };
@@ -425,7 +429,7 @@ mod tests {
         fn test_add_yearmonth_interval_basic() -> datafusion_common::Result<()> {
             let dates = to_date32_array(&[Some("2015-01-31"), Some("2020-02-29"), None])?;
             let intervals = IntervalYearMonthArray::from(vec![Some(1), Some(12), Some(3)]);
-            let result = try_add_date32_interval_yearmonth(&dates, &intervals);
+            let result = try_op_date32_interval_yearmonth(&dates, &intervals, add_months);
             let expected = to_date32_array(&[Some("2015-02-28"), Some("2021-02-28"), None])?;
             assert_eq!(result, expected);
             Ok(())
@@ -435,7 +439,7 @@ mod tests {
         fn test_add_yearmonth_interval_negative() -> datafusion_common::Result<()> {
             let dates = to_date32_array(&[Some("2000-07-31"), Some("2021-01-31")])?;
             let intervals = IntervalYearMonthArray::from(vec![Some(-1), Some(-1)]);
-            let result = try_add_date32_interval_yearmonth(&dates, &intervals);
+            let result = try_op_date32_interval_yearmonth(&dates, &intervals, add_months);
             let expected = to_date32_array(&[Some("2000-06-30"), Some("2020-12-31")])?;
             assert_eq!(result, expected);
             Ok(())
@@ -445,7 +449,7 @@ mod tests {
         fn test_add_yearmonth_interval_nulls() -> datafusion_common::Result<()> {
             let dates = to_date32_array(&[Some("2010-06-15"), None])?;
             let intervals = IntervalYearMonthArray::from(vec![None, Some(5)]);
-            let result = try_add_date32_interval_yearmonth(&dates, &intervals);
+            let result = try_op_date32_interval_yearmonth(&dates, &intervals, add_months);
             let expected = to_date32_array(&[None, None])?;
             assert_eq!(result, expected);
             Ok(())
@@ -455,7 +459,7 @@ mod tests {
         fn test_add_date32_interval_years() -> datafusion_common::Result<()> {
             let dates = to_date32_array(&[Some("2020-02-29"), Some("2019-06-30")])?;
             let intervals = IntervalYearMonthArray::from(vec![Some(12), Some(24)]);
-            let result = try_add_date32_interval_yearmonth(&dates, &intervals);
+            let result = try_op_date32_interval_yearmonth(&dates, &intervals, add_months);
             let expected = to_date32_array(&[Some("2021-02-28"), Some("2021-06-30")])?;
             assert_eq!(result, expected);
             Ok(())

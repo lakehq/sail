@@ -14,8 +14,8 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_interval_monthdaynano,
-    try_binary_op_date32_i32, try_binary_op_primitive, try_op_date32_monthdaynano,
+    add_months, binary_op_scalar_or_array, try_add_interval_monthdaynano, try_binary_op_date32_i32,
+    try_binary_op_primitive, try_op_date32_interval_yearmonth, try_op_date32_monthdaynano,
     try_op_interval_yearmonth, try_op_timestamp_duration,
 };
 
@@ -134,7 +134,7 @@ impl ScalarUDFImpl for SparkTryAdd {
             (DataType::Date32, DataType::Interval(YearMonth)) => {
                 let l = left_arr.as_primitive::<Date32Type>();
                 let r = right_arr.as_primitive::<IntervalYearMonthType>();
-                let result = try_add_date32_interval_yearmonth(l, r);
+                let result = try_op_date32_interval_yearmonth(l, r, add_months);
 
                 binary_op_scalar_or_array(left, right, result)
             }
@@ -142,18 +142,21 @@ impl ScalarUDFImpl for SparkTryAdd {
                 let l = left_arr.as_primitive::<IntervalYearMonthType>();
                 let r = right_arr.as_primitive::<IntervalYearMonthType>();
                 let result = try_op_interval_yearmonth(l, r, i32::checked_add);
+
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Date32, DataType::Interval(MonthDayNano)) => {
                 let dates = left_arr.as_primitive::<Date32Type>();
                 let intervals = right_arr.as_primitive::<IntervalMonthDayNanoType>();
                 let result = try_op_date32_monthdaynano(dates, intervals, |x| x);
+
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)) => {
                 let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
                 let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
                 let result = try_add_interval_monthdaynano(l, r);
+
                 binary_op_scalar_or_array(left, right, result)
             }
             (
