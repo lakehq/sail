@@ -10,8 +10,8 @@ use datafusion::datasource::sink::DataSink;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
 use datafusion_common::{DataFusionError, Result};
-use delta_kernel::engine::arrow_conversion::TryIntoKernel;
-use delta_kernel::schema::StructType;
+use deltalake::kernel::engine::arrow_conversion::TryIntoKernel;
+use deltalake::kernel::schema::StructType;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{Action, Protocol, Remove};
 use deltalake::logstore::StorageConfig;
@@ -31,6 +31,7 @@ pub struct DeltaDataSink {
     //   For example, `ParquetSink` accepts `TableParquetOptions`.
     options: HashMap<String, String>,
     schema: SchemaRef,
+    partition_columns: Vec<String>,
 }
 
 impl DeltaDataSink {
@@ -39,12 +40,14 @@ impl DeltaDataSink {
         table_url: Url,
         options: HashMap<String, String>,
         schema: SchemaRef,
+        partition_columns: Vec<String>,
     ) -> Self {
         Self {
             mode,
             table_url,
             options,
             schema,
+            partition_columns,
         }
     }
 
@@ -74,19 +77,6 @@ impl DeltaDataSink {
 
     // TODO: The following parsing methods does not make sense, we should find a better way to handle spec::Write.
     // Maybe datafusion has handled it already.
-    /// Parse partition columns from options
-    fn parse_partition_columns(&self) -> Vec<String> {
-        self.options
-            .get("partition_columns")
-            .or(self.options.get("partitionBy"))
-            .map(|cols| {
-                cols.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
 
     /// Parse target file size from options
     fn parse_target_file_size(&self) -> Option<usize> {
@@ -172,7 +162,7 @@ impl DataSink for DeltaDataSink {
             }
         };
 
-        let partition_columns = self.parse_partition_columns();
+        let partition_columns = self.partition_columns.clone();
         let writer_properties = WriterProperties::builder().build();
 
         let writer_config = WriterConfig::new(
@@ -226,6 +216,7 @@ impl DataSink for DeltaDataSink {
                     let existing_files = snapshot
                         .file_actions()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    #[allow(clippy::expect_used)]
                     let current_timestamp = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .expect("System time before Unix epoch")
@@ -270,7 +261,9 @@ impl DataSink for DeltaDataSink {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
             let protocol = Protocol::default();
-            let metadata = crate::kernel::models::actions::new_metadata(
+            // FIXME: Follow upstream changes.
+            #[allow(deprecated)]
+            let metadata = deltalake::kernel::new_metadata(
                 &delta_schema,
                 partition_columns.clone(),
                 HashMap::<String, String>::new(),

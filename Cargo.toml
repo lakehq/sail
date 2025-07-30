@@ -119,6 +119,7 @@ datafusion-common = { version = "48.0.1", features = ["object_store", "avro"] }
 datafusion-expr = { version = "48.0.1" }
 datafusion-expr-common = { version = "48.0.1" }
 datafusion-execution = { version = "48.0.1" }
+datafusion-physical-optimizer = { version = "48.0.1" }
 datafusion-proto = { version = "48.0.1" }
 datafusion-functions = { version = "48.0.1" }
 datafusion-functions-nested = { version = "48.0.1" }
@@ -140,7 +141,7 @@ object_store = { version = "0.12.3", features = ["aws", "gcp", "azure", "http"] 
 hdfs-native-object-store = "0.14.2"
 
 # Lakehouse
-deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "3607c31", default-features = false, features = ["rustls"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "9a2c8ea", default-features = false, features = ["rustls"] }
 delta_kernel = { version = "0.13.0", features = ["arrow-55", "internal-api", "default-engine"] }
 parquet = { version = "55.2.0" }
 bytes = "1.9.0"
