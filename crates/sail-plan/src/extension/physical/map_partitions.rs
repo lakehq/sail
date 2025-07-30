@@ -71,6 +71,10 @@ impl ExecutionPlan for MapPartitionsExec {
         &self.properties
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
@@ -82,10 +86,11 @@ impl ExecutionPlan for MapPartitionsExec {
         let input = children.one().map_err(|_| {
             internal_datafusion_err!("MapPartitionsExec must have exactly one child")
         })?;
-        Ok(Arc::new(Self {
+        Ok(Arc::new(Self::new(
             input,
-            ..self.as_ref().clone()
-        }))
+            self.udf.clone(),
+            self.properties.eq_properties.schema().clone(),
+        )))
     }
 
     fn execute(
