@@ -109,13 +109,29 @@ fn get_dynamic_object_store(
                 ObjectStoreScheme::Local => Arc::new(LocalFileSystem::new()),
                 ObjectStoreScheme::Memory => Arc::new(InMemory::new()),
                 ObjectStoreScheme::AmazonS3 => {
+                    // let url = url.clone();
+                    // let handle = handle.clone();
+                    // let store = LazyObjectStore::new(move || {
+                    //     let url = url.clone();
+                    //     let handle = handle.clone();
+                    //     async move { get_s3_object_store(&url, handle).await }
+                    // });
+                    // Arc::new(store)
+
+                    use std::sync::mpsc;
+                    let (tx, rx) = mpsc::channel();
                     let url = url.clone();
                     let handle = handle.clone();
-                    let store = LazyObjectStore::new(move || {
-                        let url = url.clone();
-                        let handle = handle.clone();
-                        async move { get_s3_object_store(&url, handle).await }
+                    std::thread::spawn(move || {
+                        let handle_for_function = handle.clone();
+                        let result =
+                            handle.block_on(get_s3_object_store(&url, handle_for_function));
+                        tx.send(result).unwrap();
                     });
+                    let store = rx.recv().map_err(|_| object_store::Error::Generic {
+                        store: "s3",
+                        source: "Failed to receive from channel".into(),
+                    })??;
                     Arc::new(store)
                 }
                 ObjectStoreScheme::MicrosoftAzure => {
