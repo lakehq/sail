@@ -79,7 +79,6 @@ enum SparkCommand {
 }
 
 pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
-    // uf env set and true start console sub`
     if std::env::var("SAIL_USE_CONSOLE_SUBSCRIBER")
         .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
     {
