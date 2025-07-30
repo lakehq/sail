@@ -173,6 +173,7 @@ impl Executor {
 
         let mut empty = true;
         while let Some(batch) = context.stream.next().await {
+            // tokio::task::yield_now().await;
             let batch = batch?;
             let batch = to_arrow_batch(&batch)?;
             let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
@@ -238,9 +239,9 @@ impl Executor {
         let (notifier, listener) = oneshot::channel();
         let buffer = Arc::clone(&context.buffer);
         // let handle = self.runtime.primary().clone();
-        let handle = self.runtime.cpu().clone();
-        let handle = handle.spawn(async move { Executor::run(context, listener, tx).await });
-        // let handle = tokio::spawn(async move { Executor::run(context, listener, tx).await });
+        // let handle = self.runtime.cpu().clone();
+        // let handle = handle.spawn(async move { Executor::run(context, listener, tx).await });
+        let handle = tokio::spawn(async move { Executor::run(context, listener, tx).await });
         *state = ExecutorState::Running(ExecutorTask {
             notifier,
             handle,
