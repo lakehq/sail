@@ -15,8 +15,8 @@ use crate::extension::function::error_utils::{
 };
 use crate::extension::function::math::common_try::{
     binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_interval_monthdaynano,
-    try_add_timestamp_duration, try_binary_op_date32_i32, try_binary_op_primitive,
-    try_op_date32_monthdaynano, try_op_interval_yearmonth,
+    try_binary_op_date32_i32, try_binary_op_primitive, try_op_date32_monthdaynano,
+    try_op_interval_yearmonth, try_op_timestamp_duration,
 };
 
 #[derive(Debug)]
@@ -162,7 +162,7 @@ impl ScalarUDFImpl for SparkTryAdd {
             ) => {
                 let l = left_arr.as_primitive::<TimestampMicrosecondType>();
                 let r = right_arr.as_primitive::<DurationMicrosecondType>();
-                let result = try_add_timestamp_duration(l, r);
+                let result = try_op_timestamp_duration(l, r, i64::checked_add);
 
                 binary_op_scalar_or_array(left, right, result)
             }

@@ -2,7 +2,7 @@ use std::any::Any;
 use std::ops::Neg;
 use std::sync::Arc;
 
-use arrow::array::{Array, AsArray, Date32Array, TimestampMicrosecondArray};
+use arrow::array::{Array, AsArray, Date32Array};
 use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{
@@ -18,8 +18,8 @@ use crate::extension::function::error_utils::{
 };
 use crate::extension::function::math::common_try::{
     binary_op_scalar_or_array, try_add_date32_interval_yearmonth, try_add_interval_monthdaynano,
-    try_add_timestamp_duration, try_binary_op_date32_i32, try_binary_op_primitive,
-    try_op_date32_monthdaynano, try_op_interval_yearmonth,
+    try_binary_op_date32_i32, try_binary_op_primitive, try_op_date32_monthdaynano,
+    try_op_interval_yearmonth, try_op_timestamp_duration,
 };
 
 #[derive(Debug)]
@@ -178,9 +178,8 @@ impl ScalarUDFImpl for SparkTrySubtract {
 
                 let l = left_arr.as_primitive::<TimestampMicrosecondType>();
                 let r = right_arr.as_primitive::<DurationMicrosecondType>();
-                let negated_r = r.iter().map(|opt| opt.map(|v| v.wrapping_neg())).collect();
+                let result = try_op_timestamp_duration(l, r, i64::checked_sub);
 
-                let result: TimestampMicrosecondArray = try_add_timestamp_duration(l, &negated_r);
 
                 if matches!(left, ColumnarValue::Scalar(_))
                     && matches!(right, ColumnarValue::Scalar(_))

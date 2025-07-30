@@ -209,10 +209,14 @@ where
     builder.finish()
 }
 
-pub fn try_add_timestamp_duration(
+pub fn try_op_timestamp_duration<F>(
     timestamps: &TimestampMicrosecondArray,
     durations: &DurationMicrosecondArray,
-) -> TimestampMicrosecondArray {
+    op: F,
+) -> TimestampMicrosecondArray
+where
+    F: Fn(i64, i64) -> Option<i64>,
+{
     let len = timestamps.len();
     let mut builder = TimestampMicrosecondBuilder::with_capacity(len);
 
@@ -222,8 +226,8 @@ pub fn try_add_timestamp_duration(
         } else {
             let ts = timestamps.value(i);
             let dur = durations.value(i);
-            match ts.checked_add(dur) {
-                Some(sum) => builder.append_value(sum),
+            match op(ts, dur) {
+                Some(result) => builder.append_value(result),
                 None => builder.append_null(),
             }
         }
@@ -469,7 +473,7 @@ mod tests {
                 Some(-86_400_000_000),
                 Some(1_000),
             ]);
-            let result = try_add_timestamp_duration(&ts, &dur);
+            let result = try_op_timestamp_duration(&ts, &dur, i64::checked_add);
             let expected = TimestampMicrosecondArray::from(vec![
                 Some(1_609_545_600_000_000),
                 Some(1_609_459_200_000_000),
