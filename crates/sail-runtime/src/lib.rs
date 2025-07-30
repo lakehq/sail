@@ -41,7 +41,7 @@ impl RuntimeManager {
     fn build_cpu_runtime(stack_size: usize) -> RuntimeResult<Runtime> {
         tokio::runtime::Builder::new_multi_thread()
             .thread_stack_size(stack_size)
-            .enable_time()
+            .enable_all()
             .build()
             .map_err(|e| RuntimeError::internal(e.to_string()))
     }
