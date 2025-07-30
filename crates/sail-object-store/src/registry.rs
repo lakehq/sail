@@ -118,15 +118,31 @@ fn get_dynamic_object_store(
                     // });
                     // Arc::new(store)
 
+                    // 39 SEC
+                    //
+                    // use std::sync::mpsc;
+                    // let (tx, rx) = mpsc::channel();
+                    // let url = url.clone();
+                    // let handle = handle.clone();
+                    // std::thread::spawn(move || {
+                    //     let handle_for_function = handle.clone();
+                    //     let result =
+                    //         handle.block_on(get_s3_object_store(&url, handle_for_function));
+                    //     tx.send(result).unwrap();
+                    // });
+                    // let store = rx.recv().map_err(|_| object_store::Error::Generic {
+                    //     store: "s3",
+                    //     source: "Failed to receive from channel".into(),
+                    // })??;
+                    // Arc::new(store)
+
                     use std::sync::mpsc;
                     let (tx, rx) = mpsc::channel();
                     let url = url.clone();
-                    let handle = handle.clone();
-                    std::thread::spawn(move || {
-                        let handle_for_function = handle.clone();
-                        let result =
-                            handle.block_on(get_s3_object_store(&url, handle_for_function));
-                        tx.send(result).unwrap();
+                    let handle_clone = handle.clone();
+                    handle.spawn(async move {
+                        let result = get_s3_object_store(&url, handle_clone).await;
+                        let _ = tx.send(result);
                     });
                     let store = rx.recv().map_err(|_| object_store::Error::Generic {
                         store: "s3",
