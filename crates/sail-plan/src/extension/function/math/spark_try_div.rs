@@ -115,12 +115,6 @@ impl ScalarUDFImpl for SparkTryDiv {
                 let result = try_div_interval_yearmonth_i32(l, r);
                 binary_op_scalar_or_array(left, right, result)
             }
-            (DataType::Int32, DataType::Interval(YearMonth)) => {
-                let l = left_arr.as_primitive::<Int32Type>();
-                let r = right_arr.as_primitive::<IntervalYearMonthType>();
-                let result = try_div_interval_yearmonth_i32(r, l);
-                binary_op_scalar_or_array(left, right, result)
-            }
             (l, r) => Err(unsupported_data_types_exec_err(
                 "try_divide",
                 "Int32, Int64 o Interval(YearMonth) / Int32",
@@ -150,6 +144,7 @@ impl ScalarUDFImpl for SparkTryDiv {
         if matches!(
             (left, right),
             (DataType::Interval(YearMonth), DataType::Int32)
+                |  (DataType::Int32,DataType::Interval(YearMonth)) 
         ) {
             return Ok(vec![DataType::Interval(YearMonth), DataType::Int32]);
         }
