@@ -140,7 +140,7 @@ impl DataSink for DeltaDataSink {
         let object_store = self.get_object_store(context)?;
 
         let (table, table_exists) = match open_table_with_object_store(
-            &self.table_url,
+            self.table_url.clone(),
             object_store.clone(),
             storage_config.clone(),
         )
@@ -152,7 +152,7 @@ impl DataSink for DeltaDataSink {
                     return Err(DataFusionError::External(Box::new(e)));
                 }
                 let delta_ops = create_delta_table_with_object_store(
-                    &self.table_url,
+                    self.table_url.clone(),
                     object_store.clone(),
                     storage_config.clone(),
                 )
