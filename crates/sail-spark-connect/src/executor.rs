@@ -239,9 +239,9 @@ impl Executor {
         let (notifier, listener) = oneshot::channel();
         let buffer = Arc::clone(&context.buffer);
         // let handle = self.runtime.primary().clone();
-        // let handle = self.runtime.cpu().clone();
-        // let handle = handle.spawn(async move { Executor::run(context, listener, tx).await });
-        let handle = tokio::spawn(async move { Executor::run(context, listener, tx).await });
+        let handle = self.runtime.cpu().clone();
+        let handle = handle.spawn(async move { Executor::run(context, listener, tx).await });
+        // let handle = tokio::spawn(async move { Executor::run(context, listener, tx).await });
         *state = ExecutorState::Running(ExecutorTask {
             notifier,
             handle,
