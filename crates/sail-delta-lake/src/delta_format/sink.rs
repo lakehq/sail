@@ -18,6 +18,7 @@ use deltalake::logstore::StorageConfig;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::StreamExt;
+use sail_common_datafusion::datasource::TableDeltaOptions;
 use url::Url;
 
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
@@ -27,9 +28,7 @@ use crate::table::{create_delta_table_with_object_store, open_table_with_object_
 pub struct DeltaDataSink {
     mode: SaveMode,
     table_url: Url,
-    // TODO: maybe here we should accept parsed options?
-    //   For example, `ParquetSink` accepts `TableParquetOptions`.
-    options: HashMap<String, String>,
+    options: TableDeltaOptions,
     schema: SchemaRef,
     partition_columns: Vec<String>,
 }
@@ -38,7 +37,7 @@ impl DeltaDataSink {
     pub fn new(
         mode: SaveMode,
         table_url: Url,
-        options: HashMap<String, String>,
+        options: TableDeltaOptions,
         schema: SchemaRef,
         partition_columns: Vec<String>,
     ) -> Self {
@@ -51,18 +50,6 @@ impl DeltaDataSink {
         }
     }
 
-    fn extract_storage_config(&self) -> Result<StorageConfig> {
-        let mut storage_options = HashMap::new();
-        for (key, value) in &self.options {
-            if key.starts_with("storage.") {
-                storage_options.insert(key.clone(), value.clone());
-            }
-        }
-
-        StorageConfig::parse_options(storage_options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-
     /// Get object store from TaskContext
     fn get_object_store(
         &self,
@@ -73,33 +60,6 @@ impl DeltaDataSink {
             .object_store_registry
             .get_store(&self.table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-
-    // TODO: The following parsing methods does not make sense, we should find a better way to handle spec::Write.
-    // Maybe datafusion has handled it already.
-
-    /// Parse target file size from options
-    fn parse_target_file_size(&self) -> Option<usize> {
-        self.options
-            .get("target_file_size")
-            .or(self.options.get("targetFileSize"))
-            .and_then(|s| s.parse().ok())
-    }
-
-    /// Parse write batch size from options
-    fn parse_write_batch_size(&self) -> Option<usize> {
-        self.options
-            .get("write_batch_size")
-            .or(self.options.get("writeBatchSize"))
-            .and_then(|s| s.parse().ok())
-    }
-
-    /// Create storage config from options
-    #[allow(dead_code)]
-    fn create_storage_config(&self) -> StorageConfig {
-        // For now, use default configuration
-        // TODO: Parse additional storage options if needed
-        StorageConfig::default()
     }
 }
 
@@ -136,7 +96,16 @@ impl DataSink for DeltaDataSink {
         mut data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let storage_config = self.extract_storage_config()?;
+        let TableDeltaOptions {
+            replace_where,
+            merge_schema: _,
+            overwrite_schema: _,
+            target_file_size,
+            write_batch_size,
+            ..
+        } = &self.options;
+
+        let storage_config = StorageConfig::default();
         let object_store = self.get_object_store(context)?;
 
         let (table, table_exists) = match open_table_with_object_store(
@@ -169,8 +138,8 @@ impl DataSink for DeltaDataSink {
             self.schema.clone(),
             partition_columns.clone(),
             Some(writer_properties),
-            self.parse_target_file_size(),
-            self.parse_write_batch_size(),
+            *target_file_size,
+            *write_batch_size,
             32, // TODO: Default num_indexed_cols for now
             None,
         );
@@ -249,7 +218,7 @@ impl DataSink for DeltaDataSink {
                 } else {
                     Some(partition_columns)
                 },
-                predicate: self.options.get("replaceWhere").cloned(),
+                predicate: replace_where.clone(),
             }
         } else {
             // For new tables, we need to create Protocol and Metadata actions
