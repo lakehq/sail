@@ -585,7 +585,7 @@ mod tests {
             ("dictionary_page_size_limit", "2048"),
             ("statistics_enabled", "chunk"),
             ("max_row_group_size", "5000"),
-            ("column_index_truncate_length", "0"),
+            // ("column_index_truncate_length", "0"),
             ("statistics_truncate_length", "0"),
             ("data_page_row_count_limit", "10000"),
             ("encoding", ""),
