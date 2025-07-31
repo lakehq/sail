@@ -367,7 +367,7 @@
 
 - key: parquet.column_index_truncate_length
   type: number
-  default: "32"
+  default: "64"
   description: |
     (Writing) The column index truncate length for the Parquet writer.
   experimental: true

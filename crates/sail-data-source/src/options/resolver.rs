@@ -346,11 +346,7 @@ impl<'a> DataSourceOptionsResolver<'a> {
         options: HashMap<String, String>,
     ) -> Result<TableParquetOptions> {
         let mut parquet_options = self.ctx.default_table_options().parquet;
-        // apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
-        apply_parquet_write_options(
-            crate::options::print_default_options()?,
-            &mut parquet_options,
-        )?;
+        apply_parquet_write_options(load_default_options()?, &mut parquet_options)?;
         apply_parquet_write_options(load_options(options)?, &mut parquet_options)?;
         Ok(parquet_options)
     }
@@ -522,11 +518,11 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
-        let options = build_options(&[
+        let mut options_map = build_options(&[
             ("enable_page_index", "true"),
             ("pruning", "true"),
             ("skip_metadata", "false"),
-            ("metadata_size_hint", "0"),
+            ("metadata_size_hint", "1024"),
             ("pushdown_filters", "true"),
             ("reorder_filters", "false"),
             ("schema_force_view_types", "true"),
@@ -534,17 +530,25 @@ mod tests {
             ("coerce_int96", "ms"),
             ("bloom_filter_on_read", "true"),
         ]);
-        let options = resolver.resolve_parquet_read_options(options)?;
+        let options = resolver.resolve_parquet_read_options(options_map.clone())?;
         assert!(options.global.enable_page_index);
         assert!(options.global.pruning);
         assert!(!options.global.skip_metadata);
-        assert_eq!(options.global.metadata_size_hint, None);
+        assert_eq!(options.global.metadata_size_hint, Some(1024));
         assert!(options.global.pushdown_filters);
         assert!(!options.global.reorder_filters);
         assert!(options.global.schema_force_view_types);
         assert!(options.global.binary_as_string);
         assert_eq!(options.global.coerce_int96, Some("ms".to_string()));
         assert!(options.global.bloom_filter_on_read);
+
+        options_map.insert("metadata_size_hint".to_string(), "0".to_string());
+        let options = resolver.resolve_parquet_read_options(options_map.clone())?;
+        assert_eq!(options.global.statistics_truncate_length, None);
+        
+        options_map.insert("metadata_size_hint".to_string(), "".to_string());
+        let options = resolver.resolve_parquet_read_options(options_map)?;
+        assert_eq!(options.global.statistics_truncate_length, None);
 
         Ok(())
     }
@@ -563,6 +567,14 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
         let options = build_options(&[]);
+        let options = resolver.resolve_parquet_read_options(options)?;
+        assert_eq!(options.global.metadata_size_hint, Some(123));
+
+        let options = build_options(&[("metadata_size_hint", "0")]);
+        let options = resolver.resolve_parquet_read_options(options)?;
+        assert_eq!(options.global.metadata_size_hint, Some(123));
+
+        let options = build_options(&[("metadata_size_hint", "")]);
         let options = resolver.resolve_parquet_read_options(options)?;
         assert_eq!(options.global.metadata_size_hint, Some(123));
 
@@ -585,10 +597,10 @@ mod tests {
             ("dictionary_page_size_limit", "2048"),
             ("statistics_enabled", "chunk"),
             ("max_row_group_size", "5000"),
-            // ("column_index_truncate_length", "0"),
-            ("statistics_truncate_length", "0"),
+            ("column_index_truncate_length", "100"),
+            ("statistics_truncate_length", "200"),
             ("data_page_row_count_limit", "10000"),
-            ("encoding", ""),
+            ("encoding", "delta_binary_packed"),
             ("bloom_filter_on_write", "true"),
             ("bloom_filter_fpp", "0.01"),
             ("bloom_filter_ndv", "1000"),
@@ -606,10 +618,13 @@ mod tests {
         assert_eq!(options.global.dictionary_page_size_limit, 2048);
         assert_eq!(options.global.statistics_enabled, Some("chunk".to_string()));
         assert_eq!(options.global.max_row_group_size, 5000);
-        assert_eq!(options.global.column_index_truncate_length, Some(32)); // Default value in application.yaml
-        assert_eq!(options.global.statistics_truncate_length, None);
+        assert_eq!(options.global.column_index_truncate_length, Some(100));
+        assert_eq!(options.global.statistics_truncate_length, Some(200));
         assert_eq!(options.global.data_page_row_count_limit, 10000);
-        assert_eq!(options.global.encoding, None);
+        assert_eq!(
+            options.global.encoding,
+            Some("delta_binary_packed".to_string())
+        );
         assert!(options.global.bloom_filter_on_write);
         assert_eq!(options.global.bloom_filter_fpp, Some(0.01));
         assert_eq!(options.global.bloom_filter_ndv, Some(1000));
@@ -620,12 +635,19 @@ mod tests {
             10
         );
 
-        options_map.insert("encoding".to_string(), "delta_binary_packed".to_string());
+        options_map.insert("column_index_truncate_length".to_string(), "0".to_string());
+        options_map.insert("statistics_truncate_length".to_string(), "0".to_string());
+        options_map.insert("encoding".to_string(), "".to_string());
+        let options = resolver.resolve_parquet_write_options(options_map.clone())?;
+        assert_eq!(options.global.column_index_truncate_length, Some(64));
+        assert_eq!(options.global.statistics_truncate_length, None);
+        assert_eq!(options.global.encoding, None,);
+
+        options_map.insert("column_index_truncate_length".to_string(), "".to_string());
+        options_map.insert("statistics_truncate_length".to_string(), "".to_string());
         let options = resolver.resolve_parquet_write_options(options_map)?;
-        assert_eq!(
-            options.global.encoding,
-            Some("delta_binary_packed".to_string())
-        );
+        assert_eq!(options.global.column_index_truncate_length, Some(64));
+        assert_eq!(options.global.statistics_truncate_length, None);
 
         Ok(())
     }
@@ -641,12 +663,50 @@ mod tests {
             .execution
             .parquet
             .max_row_group_size = 1234;
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .column_index_truncate_length = Some(32);
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .statistics_truncate_length = Some(99);
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .encoding = Some("bit_packed".to_string());
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
         let options = build_options(&[]);
         let options = resolver.resolve_parquet_write_options(options)?;
         assert_eq!(options.global.max_row_group_size, 1234);
+        assert_eq!(options.global.column_index_truncate_length, Some(32));
+        assert_eq!(options.global.statistics_truncate_length, Some(99));
+        assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
+
+        let options = build_options(&[("column_index_truncate_length", "0"), ("statistics_truncate_length", "0"), ("encoding", "")]);
+        let options = resolver.resolve_parquet_write_options(options)?;
+        assert_eq!(options.global.max_row_group_size, 1234);
+        assert_eq!(options.global.column_index_truncate_length, Some(32));
+        assert_eq!(options.global.statistics_truncate_length, Some(99));
+        assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
+
+        let options = build_options(&[("column_index_truncate_length", ""), ("statistics_truncate_length", "")]);
+        let options = resolver.resolve_parquet_write_options(options)?;
+        assert_eq!(options.global.max_row_group_size, 1234);
+        assert_eq!(options.global.column_index_truncate_length, Some(32));
+        assert_eq!(options.global.statistics_truncate_length, Some(99));
+        assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
 
         Ok(())
     }
