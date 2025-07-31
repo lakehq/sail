@@ -13,7 +13,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/lakehq/sail"
 # Define Minimum Supported Rust Version (MSRV) the same as DataFusion
-rust-version = "1.82.0"
+rust-version = "1.85.1"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
@@ -66,7 +66,7 @@ aws-credential-types = "1.2.4"
 aws-smithy-runtime-api = "1.8.5"
 aws-smithy-types = "1.3.2"
 aws-smithy-async = "1.2.5"
-clap = { version = "4.5.41", features = ["derive"] }
+clap = { version = "4.5.42", features = ["derive"] }
 num_enum = "0.7.4"
 num-traits = "0.2.19"
 log = "0.4.27"
@@ -113,19 +113,18 @@ tonic-types = "0.12.3"
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 prost-build = "0.13.5"
 prost = "0.13.5"
-
-datafusion = { version = "48.0.1", features = ["serde", "avro"] }
-datafusion-common = { version = "48.0.1", features = ["object_store", "avro"] }
-datafusion-expr = { version = "48.0.1" }
-datafusion-expr-common = { version = "48.0.1" }
-datafusion-execution = { version = "48.0.1" }
-datafusion-physical-optimizer = { version = "48.0.1" }
-datafusion-proto = { version = "48.0.1" }
-datafusion-functions = { version = "48.0.1" }
-datafusion-functions-nested = { version = "48.0.1" }
-datafusion-physical-expr = { version = "48.0.1" }
-datafusion-spark = { version = "48.0.1" }
-datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "bdf221e" }
+datafusion = { version = "49.0.0", features = ["serde", "avro"] }
+datafusion-common = { version = "49.0.0", features = ["object_store", "avro"] }
+datafusion-expr = { version = "49.0.0" }
+datafusion-expr-common = { version = "49.0.0" }
+datafusion-execution = { version = "49.0.0" }
+datafusion-physical-optimizer = { version = "49.0.0" }
+datafusion-proto = { version = "49.0.0" }
+datafusion-functions = { version = "49.0.0" }
+datafusion-functions-nested = { version = "49.0.0" }
+datafusion-physical-expr = { version = "49.0.0" }
+datafusion-spark = { version = "49.0.0" }
+datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "d199e09" }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
