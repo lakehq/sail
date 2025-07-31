@@ -69,6 +69,7 @@ impl ScalarUDFImpl for SparkMakeInterval {
             ));
         }
 
+        // copy structure from sail/crates/sail-plan/src/extension/function/datetime/spark_make_timestamp.rs
         let mut args = args;
         while args.len() < 7 {
             if args.len() == 6 {
@@ -112,57 +113,43 @@ impl ScalarUDFImpl for SparkMakeInterval {
         let years = match years {
             Ok(years) => years,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                    None, None,
-                )))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
             }
         };
         let months = match months {
             Ok(months) => months,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                    None, None,
-                )))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
             }
         };
         let weeks = match weeks {
             Ok(weeks) => weeks,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                    None, None,
-                )))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
             }
         };
         let days = match days {
             Ok(days) => days,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                    None, None,
-                )))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
             }
         };
         let hours = match hours {
             Ok(hours) => hours,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                    None, None,
-                )))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
             }
         };
         let mins = match mins {
             Ok(mins) => mins,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                    None, None,
-                )))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
             }
         };
         let secs = match secs {
             Ok(secs) => secs,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                    None, None,
-                )))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
             }
         };
         let mut builder = IntervalMonthDayNanoBuilder::with_capacity(number_rows);
