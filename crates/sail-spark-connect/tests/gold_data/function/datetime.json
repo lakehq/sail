@@ -1624,7 +1624,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_interval"
+        "success": "ok"
       }
     },
     {
@@ -1646,7 +1646,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_interval"
+        "success": "ok"
       }
     },
     {
@@ -1668,7 +1668,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_interval"
+        "failure": "error in DataFusion: Optimizer rule 'optimize_projections' failed\ncaused by\nCheck optimizer-specific invariants after optimizer rule: optimize_projections\ncaused by\nInternal error: Failed due to a difference in schemas: original schema: DFSchema { inner: Schema { fields: [Field { name: \"#0\", data_type: Interval(MonthDayNano), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }, new schema: DFSchema { inner: Schema { fields: [Field { name: \"#0\", data_type: Timestamp(Microsecond, None), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues"
       }
     },
     {

@@ -1,9 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{
-    AsArray, Float32Array, Int32Array, IntervalMonthDayNanoBuilder, 
-    };
+use arrow::array::{AsArray, Float32Array, Int32Array, IntervalMonthDayNanoBuilder};
 use arrow::datatypes::IntervalUnit::MonthDayNano;
 use arrow::datatypes::{Float32Type, Int32Type, IntervalMonthDayNano};
 use datafusion::arrow::datatypes::DataType;
@@ -69,6 +67,15 @@ impl ScalarUDFImpl for SparkMakeInterval {
                 (1, 7),
                 args.len(),
             ));
+        }
+
+        let mut args = args;
+        while args.len() < 7 {
+            if args.len() == 6 {
+                args.push(ColumnarValue::Scalar(ScalarValue::Float32(Some(0.0))));
+            } else {
+                args.push(ColumnarValue::Scalar(ScalarValue::Int32(Some(0))));
+            }
         }
 
         let to_int32_array_fn = |col: &ColumnarValue| -> Result<Int32Array> {
