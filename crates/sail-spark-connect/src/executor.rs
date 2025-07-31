@@ -348,14 +348,28 @@ pub(crate) async fn read_stream(
 //     Ok(batches)
 // }
 
+// pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
+//     let mut output = ArrowBatch::default();
+//     {
+//         let cursor = Cursor::new(&mut output.data);
+//         let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
+//         writer.write(batch)?;
+//         output.row_count += batch.num_rows() as i64;
+//         writer.finish()?;
+//     }
+//     Ok(output)
+// }
+
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
-    let mut output = ArrowBatch::default();
-    {
-        let cursor = Cursor::new(&mut output.data);
-        let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
-        writer.write(batch)?;
-        output.row_count += batch.num_rows() as i64;
-        writer.finish()?;
-    }
+    let estimated_size = batch.get_array_memory_size() + 4096; // Add buffer for Arrow IPC overhead
+    let mut output = ArrowBatch {
+        data: Vec::with_capacity(estimated_size),
+        row_count: batch.num_rows() as i64,
+        ..Default::default()
+    };
+    let cursor = Cursor::new(&mut output.data);
+    let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
+    writer.write(batch)?;
+    writer.finish()?;
     Ok(output)
 }

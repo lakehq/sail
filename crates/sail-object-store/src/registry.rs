@@ -20,6 +20,7 @@ use url::Url;
 use crate::hugging_face::HuggingFaceObjectStore;
 use crate::layers::lazy::LazyObjectStore;
 use crate::layers::logging::LoggingObjectStore;
+use crate::layers::runtime::RuntimeAwareObjectStore;
 use crate::s3::get_s3_object_store;
 
 #[derive(Debug, Eq, PartialEq, Hash)]
@@ -72,12 +73,44 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let key = ObjectStoreKey::new(url);
 
+        // // Use entry API for atomic get-or-insert
+        // let store = self
+        //     .stores
+        //     .entry(key)
+        //     .or_try_insert_with(|| {
+        //         if let Some(handle) = self.runtime.secondary() {
+        //             Ok(Arc::new(RuntimeAwareObjectStore::try_new(
+        //                 || get_dynamic_object_store(url),
+        //                 handle.clone(),
+        //             )?))
+        //         } else {
+        //             get_dynamic_object_store(url)
+        //         }
+        //     })?
+        //     .clone();
+
         // Use entry API for atomic get-or-insert
         let store = self
             .stores
             .entry(key)
-            .or_try_insert_with(|| get_dynamic_object_store(url, self.runtime.primary()))?
+            .or_try_insert_with(|| {
+                if self.runtime.use_aware_object_store() {
+                    Ok(Arc::new(RuntimeAwareObjectStore::try_new(
+                        || get_dynamic_object_store(url, self.runtime.primary()),
+                        self.runtime.primary().clone(),
+                    )?))
+                } else {
+                    get_dynamic_object_store(url, self.runtime.primary())
+                }
+            })?
             .clone();
+
+        // // Use entry API for atomic get-or-insert
+        // let store = self
+        //     .stores
+        //     .entry(key)
+        //     .or_try_insert_with(|| get_dynamic_object_store(url, self.runtime.primary()))?
+        //     .clone();
 
         Ok(store)
     }

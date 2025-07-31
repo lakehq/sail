@@ -9,6 +9,7 @@ use crate::error::{RuntimeError, RuntimeResult};
 pub struct RuntimeManager {
     primary: Runtime,
     cpu: Runtime,
+    use_aware_object_store: bool,
 }
 
 impl RuntimeManager {
@@ -67,14 +68,22 @@ impl RuntimeManager {
         //         }
         //     });
         // }
-
-        Ok(Self { primary, cpu })
+        Ok(Self {
+            primary,
+            cpu,
+            use_aware_object_store: config.enable_secondary,
+        })
     }
 
     pub fn handle(&self) -> RuntimeHandle {
         let primary = self.primary.handle().clone();
         let cpu = self.cpu.handle().clone();
-        RuntimeHandle { primary, cpu }
+
+        RuntimeHandle {
+            primary,
+            cpu,
+            use_aware_object_store: self.use_aware_object_store,
+        }
     }
 
     fn build_runtime(stack_size: usize, name: &str) -> RuntimeResult<Runtime> {
@@ -100,6 +109,7 @@ impl RuntimeManager {
 pub struct RuntimeHandle {
     primary: Handle,
     cpu: Handle,
+    use_aware_object_store: bool,
 }
 
 impl RuntimeHandle {
@@ -109,5 +119,9 @@ impl RuntimeHandle {
 
     pub fn cpu(&self) -> &Handle {
         &self.cpu
+    }
+
+    pub fn use_aware_object_store(&self) -> bool {
+        self.use_aware_object_store
     }
 }

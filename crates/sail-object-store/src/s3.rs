@@ -144,6 +144,13 @@ pub async fn get_s3_object_store(url: &Url, handle: Handle) -> object_store::Res
         builder = builder.with_region(region);
     }
 
+    // use object_store::limit::LimitStore;
+    // let s3 = builder
+    //     .with_http_connector(SpawnedReqwestConnector::new(handle))
+    //     .build()?;
+    // let limited_store = LimitStore::new(s3, 16);
+    // Ok(limited_store)
+
     builder
         .with_http_connector(SpawnedReqwestConnector::new(handle))
         .build()
