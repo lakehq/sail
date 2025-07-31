@@ -2021,7 +2021,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "success": "ok"
       }
     },
     {
@@ -2043,7 +2043,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "success": "ok"
       }
     },
     {
@@ -2065,7 +2065,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "success": "ok"
       }
     },
     {
@@ -2087,7 +2087,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "success": "ok"
       }
     },
     {
@@ -2109,7 +2109,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "success": "ok"
       }
     },
     {
@@ -2131,7 +2131,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_add"
+        "success": "ok"
       }
     },
     {
@@ -2153,7 +2153,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_divide"
+        "success": "ok"
       }
     },
     {
@@ -2175,7 +2175,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_divide"
+        "success": "ok"
       }
     },
     {
@@ -2197,7 +2197,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_divide"
+        "success": "ok"
       }
     },
     {
@@ -2219,7 +2219,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_divide"
+        "success": "ok"
       }
     },
     {
@@ -2241,7 +2241,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_divide"
+        "success": "ok"
       }
     },
     {
@@ -2351,7 +2351,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_multiply"
+        "success": "ok"
       }
     },
     {
@@ -2373,7 +2373,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_multiply"
+        "success": "ok"
       }
     },
     {
@@ -2395,7 +2395,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_multiply"
+        "success": "ok"
       }
     },
     {
@@ -2417,7 +2417,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {
@@ -2439,7 +2439,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {
@@ -2461,7 +2461,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {
@@ -2483,7 +2483,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {
@@ -2505,7 +2505,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {
@@ -2527,7 +2527,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_subtract"
+        "success": "ok"
       }
     },
     {

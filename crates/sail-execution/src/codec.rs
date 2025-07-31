@@ -85,6 +85,10 @@ use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex
 use sail_plan::extension::function::math::spark_pmod::SparkPmod;
 use sail_plan::extension::function::math::spark_sec::SparkSec;
 use sail_plan::extension::function::math::spark_signum::SparkSignum;
+use sail_plan::extension::function::math::spark_try_add::SparkTryAdd;
+use sail_plan::extension::function::math::spark_try_div::SparkTryDiv;
+use sail_plan::extension::function::math::spark_try_mult::SparkTryMult;
+use sail_plan::extension::function::math::spark_try_substract::SparkTrySubtract;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
@@ -401,6 +405,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         nulls_first: opt.nulls_first,
                     })
                     .collect();
+                let null_equality = if null_equals_null {
+                    datafusion::common::NullEquality::NullEqualsNull
+                } else {
+                    datafusion::common::NullEquality::NullEqualsNothing
+                };
                 Ok(Arc::new(SortMergeJoinExec::try_new(
                     left,
                     right,
@@ -408,7 +417,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     filter,
                     join_type,
                     sort_options,
-                    null_equals_null,
+                    null_equality,
                 )?))
             }
             // TODO: StreamingTableExec?
@@ -550,6 +559,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     nulls_first: x.nulls_first,
                 })
                 .collect();
+            let null_equals_null = match sort_merge_join.null_equality() {
+                datafusion::common::NullEquality::NullEqualsNull => true,
+                datafusion::common::NullEquality::NullEqualsNothing => false,
+            };
             NodeKind::SortMergeJoin(gen::SortMergeJoinExecNode {
                 left,
                 right,
@@ -557,7 +570,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 filter,
                 join_type,
                 sort_options,
-                null_equals_null: sort_merge_join.null_equals_null(),
+                null_equals_null,
             })
         } else if let Some(partial_sort) = node.as_any().downcast_ref::<PartialSortExec>() {
             let expr = Some(self.try_encode_lex_ordering(partial_sort.expr())?);
@@ -852,6 +865,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
+            "spark_try_add" | "try_add" => Ok(Arc::new(ScalarUDF::from(SparkTryAdd::new()))),
+            "spark_try_divide" | "try_divide" => Ok(Arc::new(ScalarUDF::from(SparkTryDiv::new()))),
+            "spark_try_multiply" | "try_multiply" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryMult::new())))
+            }
+            "spark_try_subtract" | "try_subtract" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
+            }
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
@@ -924,6 +945,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkToUtf8>()
             || node.inner().as_any().is::<SparkToLargeUtf8>()
             || node.inner().as_any().is::<SparkToUtf8View>()
+            || node.inner().as_any().is::<SparkTryAdd>()
+            || node.inner().as_any().is::<SparkTryDiv>()
+            || node.inner().as_any().is::<SparkTryMult>()
+            || node.inner().as_any().is::<SparkTrySubtract>()
             || node.inner().as_any().is::<ParseUrl>()
             || node.inner().as_any().is::<UrlDecode>()
             || node.inner().as_any().is::<UrlEncode>()
@@ -1323,7 +1348,14 @@ impl RemoteExecutionCodec {
             .iter()
             .map(|x| self.try_decode_message(x))
             .collect::<Result<_>>()?;
-        parse_physical_sort_exprs(&lex_ordering, registry, schema, self)
+        let lex_ordering = LexOrdering::new(
+            parse_physical_sort_exprs(&lex_ordering, registry, schema, self)
+                .map_err(|e| plan_datafusion_err!("failed to decode lex ordering: {e}"))?,
+        );
+        match lex_ordering {
+            Some(lex_ordering) => Ok(lex_ordering),
+            None => plan_err!("failed to decode lex ordering: invalid sort expressions"),
+        }
     }
 
     fn try_encode_lex_ordering(&self, lex_ordering: &LexOrdering) -> Result<gen::LexOrdering> {

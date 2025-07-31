@@ -16,10 +16,13 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, JoinType, ParamValues, ScalarValue, TableReference, ToDFSchema,
+    Column, DFSchema, DFSchemaRef, JoinType, NullEquality, ParamValues, ScalarValue,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::builder::project;
-use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction, Sort, WindowFunctionParams};
+use datafusion_expr::expr::{
+    AggregateFunctionParams, FieldMetadata, ScalarFunction, Sort, WindowFunctionParams,
+};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::select_expr::SelectExpr;
@@ -818,7 +821,7 @@ impl PlanResolver<'_> {
             join_type,
             (left_columns.clone(), right_columns.clone()),
             None,
-            false,
+            NullEquality::NullEqualsNothing,
         )?;
         let builder = match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
@@ -854,7 +857,8 @@ impl PlanResolver<'_> {
             | JoinType::RightSemi
             | JoinType::LeftAnti
             | JoinType::RightAnti
-            | JoinType::LeftMark => builder,
+            | JoinType::LeftMark
+            | JoinType::RightMark => builder,
         };
         Ok(builder.build()?)
     }
@@ -1038,7 +1042,7 @@ impl PlanResolver<'_> {
                             JoinType::LeftAnti,
                             join_keys.into_iter().unzip(),
                             None,
-                            true,
+                            NullEquality::NullEqualsNull,
                         )?
                         .project(left_join_columns)?
                         .build()
@@ -1050,7 +1054,7 @@ impl PlanResolver<'_> {
                             JoinType::LeftAnti,
                             join_keys.into_iter().unzip(),
                             None,
-                            true,
+                            NullEquality::NullEqualsNull,
                         )?
                         .build()
                 }?;
@@ -1695,7 +1699,7 @@ impl PlanResolver<'_> {
                 args: vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
                 distinct: false,
                 filter: None,
-                order_by: None,
+                order_by: vec![],
                 null_treatment: None,
             },
         })
@@ -2083,7 +2087,7 @@ impl PlanResolver<'_> {
                 args,
                 distinct: is_distinct,
                 filter: None,
-                order_by: None,
+                order_by: vec![],
                 null_treatment: None,
             },
         });
@@ -2276,7 +2280,7 @@ impl PlanResolver<'_> {
                 args,
                 distinct: false,
                 filter: None,
-                order_by: None,
+                order_by: vec![],
                 null_treatment: None,
             },
         });
@@ -3071,7 +3075,7 @@ impl PlanResolver<'_> {
                 ],
                 distinct: false,
                 filter: None,
-                order_by: None,
+                order_by: vec![],
                 null_treatment: None,
             },
         })
@@ -3112,7 +3116,7 @@ impl PlanResolver<'_> {
                 ],
                 distinct: false,
                 filter: None,
-                order_by: None,
+                order_by: vec![],
                 null_treatment: None,
             },
         })
@@ -3466,7 +3470,9 @@ impl PlanResolver<'_> {
                     state.register_plan_id_for_field(&field_id, plan_id)?;
                 }
                 if !metadata.is_empty() {
-                    Ok(expr.alias_with_metadata(field_id, Some(metadata.into_iter().collect())))
+                    let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
+                    let field_metadata = Some(FieldMetadata::from(metadata_map));
+                    Ok(expr.alias_with_metadata(field_id, field_metadata))
                 } else {
                     Ok(expr.alias(field_id))
                 }
