@@ -4,9 +4,10 @@ use async_trait::async_trait;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_planner::{create_physical_sort_exprs, ExtensionPlanner, PhysicalPlanner};
+use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
+use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
 
 use crate::extension::logical::{
     FileWriteNode, MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode,
@@ -59,7 +60,10 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.schema(),
                     session_state.execution_props(),
                 )?;
-                let sort = SortExec::new(expr, physical_inputs.one()?)
+                let Some(ordering) = LexOrdering::new(expr) else {
+                    return internal_err!("SortExec requires at least one sort expression");
+                };
+                let sort = SortExec::new(ordering, physical_inputs.one()?)
                     .with_fetch(node.fetch())
                     .with_preserve_partitioning(true);
                 Arc::new(sort)

@@ -1,0 +1,11 @@
+>>> from pyspark.sql import functions as sf
+
+>>> df = spark.createDataFrame([(6000, 15), (1990, 2)], ["a", "b"])
+>>> df.select(sf.try_divide(df.a, df.b).alias('r')).show()
++-----+
+|    r|
++-----+
+|400.0|
+|995.0|
++-----+
+

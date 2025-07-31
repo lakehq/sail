@@ -1,9 +1,19 @@
-use futures::stream::{StreamExt, TryStreamExt};
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
+
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::ipc::writer::StreamWriter;
+use datafusion::execution::SendableRecordBatchStream;
+use futures::stream::{StreamExt, TryStreamExt};
+use sail_runtime::RuntimeHandle;
+use tokio::runtime::Handle;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
+use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
+use uuid::Uuid;
 
 use crate::error::{SparkError, SparkResult};
 use crate::schema::to_spark_schema;
@@ -11,15 +21,6 @@ use crate::spark::connect::execute_plan_response::{
     ArrowBatch, Metrics, ObservedMetrics, SqlCommandResult,
 };
 use crate::spark::connect::DataType;
-use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::execution::SendableRecordBatchStream;
-use sail_runtime::RuntimeHandle;
-use tokio::runtime::Handle;
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
-use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]

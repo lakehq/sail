@@ -47,7 +47,7 @@ pub async fn create_file_write_physical_plan(
     let sort_order = if sort_by.is_empty() {
         None
     } else {
-        Some(create_sort_order(sort_by, &physical_input.schema())?)
+        create_sort_order(sort_by, &physical_input.schema())?
     };
     let info = SinkInfo {
         input: physical_input,
@@ -64,8 +64,8 @@ pub async fn create_file_write_physical_plan(
         .await
 }
 
-fn create_sort_order(sort_by: Vec<Sort>, schema: &Schema) -> Result<LexRequirement> {
-    let mut ordering = LexOrdering::default();
+fn create_sort_order(sort_by: Vec<Sort>, schema: &Schema) -> Result<Option<LexRequirement>> {
+    let mut ordering = Vec::with_capacity(sort_by.len());
     for sort in sort_by.iter() {
         match &sort.expr {
             Expr::Column(c) => {
@@ -81,10 +81,15 @@ fn create_sort_order(sort_by: Vec<Sort>, schema: &Schema) -> Result<LexRequireme
             _ => return plan_err!("expected column expression in sort order: {sort_by:?}"),
         }
     }
-    Ok(LexRequirement::new(
-        ordering
-            .into_iter()
-            .map(PhysicalSortRequirement::from)
-            .collect::<Vec<_>>(),
-    ))
+    let ordering = LexOrdering::new(ordering);
+    if let Some(ordering) = ordering {
+        Ok(LexRequirement::new(
+            ordering
+                .into_iter()
+                .map(PhysicalSortRequirement::from)
+                .collect::<Vec<_>>(),
+        ))
+    } else {
+        Ok(None)
+    }
 }

@@ -1,8 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::driver::{DriverActor, DriverEvent, DriverOptions};
-use crate::error::{ExecutionError, ExecutionResult};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -11,6 +9,9 @@ use datafusion::prelude::SessionContext;
 use sail_runtime::RuntimeHandle;
 use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
+
+use crate::driver::{DriverActor, DriverEvent, DriverOptions};
+use crate::error::{ExecutionError, ExecutionResult};
 
 #[tonic::async_trait]
 pub trait JobRunner: Send + Sync + 'static {

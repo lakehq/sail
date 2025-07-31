@@ -1,9 +1,11 @@
+use std::str::FromStr;
+
+use clap::{Parser, Subcommand};
+
 use crate::spark::{
     run_pyspark_shell, run_spark_connect_server, run_spark_mcp_server, McpSettings, McpTransport,
 };
 use crate::worker::run_worker;
-use clap::{Parser, Subcommand};
-use std::str::FromStr;
 
 #[derive(Parser)]
 #[command(version, name = "sail", about = "Sail CLI")]
