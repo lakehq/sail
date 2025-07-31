@@ -896,18 +896,20 @@ class TestDeltaLake:
         delta_table_path = f"file://{delta_path}"
 
         # User-defined schema
-        schema = StructType([
-            StructField("id", IntegerType(), False),
-            StructField("name", StringType(), True),
-            StructField("score", IntegerType(), True),
-        ])
+        schema = StructType(
+            [
+                StructField("id", IntegerType(), False),
+                StructField("name", StringType(), True),
+                StructField("score", IntegerType(), True),
+            ]
+        )
 
         data = [(1, "Alice", 90), (2, "Bob", None), (3, "Charlie", 85)]
         spark.createDataFrame(data, schema=schema).write.format("delta").mode("overwrite").save(str(delta_path))
 
         result_df = spark.read.format("delta").load(delta_table_path).filter("name IS NOT NULL AND score > 80")
         result = result_df.collect()
-        assert len(result) == 2 # noqa: PLR2004
+        assert len(result) == 2  # noqa: PLR2004
         assert {row.name for row in result} == {"Alice", "Charlie"}
 
         loaded_schema = result_df.schema
