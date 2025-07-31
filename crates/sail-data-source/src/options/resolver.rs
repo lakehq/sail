@@ -544,11 +544,11 @@ mod tests {
 
         options_map.insert("metadata_size_hint".to_string(), "0".to_string());
         let options = resolver.resolve_parquet_read_options(options_map.clone())?;
-        assert_eq!(options.global.statistics_truncate_length, None);
+        assert_eq!(options.global.metadata_size_hint, None);
 
         options_map.insert("metadata_size_hint".to_string(), "".to_string());
         let options = resolver.resolve_parquet_read_options(options_map)?;
-        assert_eq!(options.global.statistics_truncate_length, None);
+        assert_eq!(options.global.metadata_size_hint, None);
 
         Ok(())
     }
