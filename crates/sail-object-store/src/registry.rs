@@ -5,7 +5,7 @@ use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{plan_datafusion_err, Result};
 #[cfg(feature = "hdfs")]
 use hdfs_native_object_store::HdfsObjectStore;
-use log::debug;
+use log::{debug, info};
 use object_store::azure::{MicrosoftAzure, MicrosoftAzureBuilder};
 use object_store::client::SpawnedReqwestConnector;
 use object_store::gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder};
@@ -95,11 +95,13 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
             .entry(key)
             .or_try_insert_with(|| {
                 if self.runtime.use_aware_object_store() {
+                    info!("Using runtime-aware object store");
                     Ok(Arc::new(RuntimeAwareObjectStore::try_new(
                         || get_dynamic_object_store(url, self.runtime.primary()),
                         self.runtime.primary().clone(),
                     )?))
                 } else {
+                    info!("Not using runtime-aware object store");
                     get_dynamic_object_store(url, self.runtime.primary())
                 }
             })?
