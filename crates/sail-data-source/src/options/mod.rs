@@ -6,7 +6,7 @@ pub use internal::{
     CsvReadOptions, CsvWriteOptions, DeltaReadOptions, DeltaWriteOptions, JsonReadOptions,
     JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
 };
-pub use loader::{load_default_options, load_options};
+pub use loader::{load_default_options, load_options, print_default_options};
 pub use resolver::DataSourceOptionsResolver;
 
 mod internal {

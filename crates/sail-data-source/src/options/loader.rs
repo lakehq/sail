@@ -21,5 +21,15 @@ pub fn load_default_options<T: DataSourceOptions>() -> Result<T> {
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
+    println!("CHECK HERE OPTIONS: {options:?}");
+    load_options(options)
+}
+
+pub fn print_default_options<T: DataSourceOptions>() -> Result<T> {
+    let options = T::DEFAULT_VALUES
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    println!("CHECK HERE EMPTY PARQUET OPTIONS OPTIONS: {options:?}");
     load_options(options)
 }
