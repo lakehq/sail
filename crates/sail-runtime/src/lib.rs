@@ -16,6 +16,15 @@ impl RuntimeManager {
         let primary = Self::build_runtime(config.stack_size, name)?;
         let cpu = Self::build_cpu_runtime(config.stack_size, name)?;
 
+        let primary_metrics = primary.handle().metrics();
+        let cpu_metrics = cpu.handle().metrics();
+
+        println!(
+            "Primary Runtime - Workers: {}",
+            primary_metrics.num_workers(),
+        );
+        println!("CPU Runtime - Workers: {}", cpu_metrics.num_workers(),);
+
         // use std::str::FromStr;
         // if std::env::var("SAIL_USE_CONSOLE_SUBSCRIBER")
         //     .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
