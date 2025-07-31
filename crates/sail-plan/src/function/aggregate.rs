@@ -265,7 +265,7 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             args: vec![agg_col.clone()],
             distinct: input.distinct,
             order_by: if input.distinct {
-                Some(vec![agg_col.clone().sort(true, true)])
+                vec![agg_col.clone().sort(true, true)]
             } else {
                 input.order_by
             },
