@@ -1018,7 +1018,7 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         cast_to_type: spec::DataType,
-        rename: bool,
+        _rename: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
@@ -1026,7 +1026,7 @@ impl PlanResolver<'_> {
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
         let expr_type = expr.get_type(schema)?;
-        let name = if rename {
+        let name = if need_rename_cast(&expr) {
             let data_type_string = self
                 .config
                 .plan_formatter
@@ -2155,6 +2155,17 @@ impl PlanResolver<'_> {
             ));
         }
         out
+    }
+}
+
+fn need_rename_cast(expr: &expr::Expr) -> bool {
+    match expr {
+        expr::Expr::Alias(_) | expr::Expr::Column(_) | expr::Expr::OuterReferenceColumn(..) => {
+            false
+        }
+        expr::Expr::Cast(cast) => need_rename_cast(cast.expr.as_ref()),
+        expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
+        _ => true,
     }
 }
 
