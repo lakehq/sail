@@ -10,8 +10,10 @@ use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
 
 use crate::extension::logical::{
-    MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode, SortWithinPartitionsNode,
+    FileWriteNode, MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode,
+    SortWithinPartitionsNode,
 };
+use crate::extension::physical::create_file_write_physical_plan;
 use crate::extension::physical::map_partitions::MapPartitionsExec;
 use crate::extension::physical::range::RangeExec;
 use crate::extension::physical::schema_pivot::SchemaPivotExec;
@@ -24,9 +26,9 @@ pub(crate) struct ExtensionPhysicalPlanner {}
 impl ExtensionPlanner for ExtensionPhysicalPlanner {
     async fn plan_extension(
         &self,
-        _planner: &dyn PhysicalPlanner,
+        planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
-        _logical_inputs: &[&LogicalPlan],
+        logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
@@ -71,6 +73,21 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.names().to_vec(),
                     node.schema().inner().clone(),
                 ))
+            } else if let Some(node) = node.as_any().downcast_ref::<FileWriteNode>() {
+                let [logical_input] = logical_inputs else {
+                    return internal_err!("FileWriteNode requires exactly one logical input");
+                };
+                let Ok(physical_input) = physical_inputs.one() else {
+                    return internal_err!("FileWriteNode requires exactly one physical input");
+                };
+                create_file_write_physical_plan(
+                    session_state,
+                    planner,
+                    logical_input,
+                    physical_input,
+                    node.options().clone(),
+                )
+                .await?
             } else {
                 return internal_err!("Unsupported logical extension node: {:?}", node);
             };

@@ -5,6 +5,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
+    #[allow(dead_code)]
     pub(super) fn resolve_table_constraint(
         &self,
         constraint: spec::TableConstraint,
@@ -54,6 +55,7 @@ impl PlanResolver<'_> {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn resolve_table_constraints(
         &self,
         constraints: Vec<spec::TableConstraint>,

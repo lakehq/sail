@@ -1,0 +1,13 @@
+[package]
+name = "sail-catalog-memory"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-catalog = { path = "../sail-catalog" }
+
+async-trait = { workspace = true }
+dashmap = { workspace = true }

@@ -1,0 +1,83 @@
+>>> spark.sql("SELECT to_number('<-$12,345.67>', 'S$999,099.99PR') AS result, typeof(to_number('<-$12,345.67>', 'S$999,099.99PR')) AS type").show(truncate=False)
++--------+------------+
+|result  |type        |
++--------+------------+
+|12345.67|decimal(8,2)|
++--------+------------+
+
+>>> spark.sql("SELECT to_number('<$1,212,345.67>', 'S$0,000,000.99PR') AS result, typeof(to_number('<$1,212,345.67>', 'S$0,000,000.99PR')) AS type").show(truncate=False)
++-----------+------------+
+|result     |type        |
++-----------+------------+
+|-1212345.67|decimal(9,2)|
++-----------+------------+
+
+>>> spark.sql("SELECT to_number('$345', 'S$999,099.99') AS result, typeof(to_number('$345', 'S$999,099.99')) AS type").show(truncate=False)
++------+------------+
+|result|type        |
++------+------------+
+|345.00|decimal(8,2)|
++------+------------+
+
+>>> spark.sql("SELECT to_number('$045', 'S$999,099.99') AS result, typeof(to_number('$045', 'S$999,099.99')) AS type").show(truncate=False)
++------+------------+
+|result|type        |
++------+------------+
+|45.00 |decimal(8,2)|
++------+------------+
+
+>>> spark.sql("SELECT to_number('<1234>', '999999PR') AS result, typeof(to_number('<1234>', '999999PR')) AS type").show(truncate=False)
++------+------------+
+|result|type        |
++------+------------+
+|-1234 |decimal(6,0)|
++------+------------+
+
+>>> spark.sql("SELECT to_number('12,454.8-', '99,999.9S') AS result, typeof(to_number('12,454.8-', '99,999.9S')) AS type").show(truncate=False)
++--------+------------+
+|result  |type        |
++--------+------------+
+|-12454.8|decimal(6,1)|
++--------+------------+
+
+>>> spark.sql("SELECT to_number('<-$123,456.32>', 'S$999,999.999999PR') AS result, typeof(to_number('<-$123,456.32>', 'S$999,999.999999PR')) AS type").show(truncate=False)
++-------------+-------------+
+|result       |type         |
++-------------+-------------+
+|123456.320000|decimal(12,6)|
++-------------+-------------+
+
+>>> spark.sql("SELECT to_number('$123,456.32', 'MI$999,999.99S') AS result, typeof(to_number('$123,456.32', 'MI$999,999.99S')) AS type").show(truncate=False)
++---------+------------+
+|result   |type        |
++---------+------------+
+|123456.32|decimal(8,2)|
++---------+------------+
+
+>>> spark.sql("SELECT to_number('$123,456.32-', 'MI$999,999.99S') AS result, typeof(to_number('$123,456.32-', 'MI$999,999.99S')) AS type").show(truncate=False)
++----------+------------+
+|result    |type        |
++----------+------------+
+|-123456.32|decimal(8,2)|
++----------+------------+
+
+>>> spark.sql("SELECT to_number('-$123,456.32-', 'MI$999,999.99S') AS result, typeof(to_number('-$123,456.32-', 'MI$999,999.99S')) AS type").show(truncate=False)
++---------+------------+
+|result   |type        |
++---------+------------+
+|123456.32|decimal(8,2)|
++---------+------------+
+
+>>> spark.sql("SELECT to_number('-$123,456.32+', 'MI$999,999.99S') AS result, typeof(to_number('-$123,456.32+', 'MI$999,999.99S')) AS type").show(truncate=False)
++----------+------------+
+|result    |type        |
++----------+------------+
+|-123456.32|decimal(8,2)|
++----------+------------+
+
+>>> spark.sql("SELECT to_number('-$123,456.32', 'MI$999,999.99S') AS result, typeof(to_number('-$123,456.32', 'MI$999,999.99S')) AS type").show(truncate=False)
++----------+------------+
+|result    |type        |
++----------+------------+
+|-123456.32|decimal(8,2)|
++----------+------------+
