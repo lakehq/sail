@@ -12,6 +12,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::extension::function::datetime::spark_date_part::SparkDatePart;
 use crate::extension::function::datetime::spark_from_to_utc_timestamp::SparkFromToUtcTimestamp;
 use crate::extension::function::datetime::spark_last_day::SparkLastDay;
+use crate::extension::function::datetime::spark_make_interval::SparkMakeInterval;
 use crate::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use crate::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use crate::extension::function::datetime::spark_next_day::SparkNextDay;
@@ -488,7 +489,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("make_date", F::ternary(make_date)),
         ("make_dt_interval", F::unknown("make_dt_interval")),
-        ("make_interval", F::unknown("make_interval")),
+        ("make_interval", F::udf(SparkMakeInterval::new())),
         ("make_timestamp", F::custom(make_timestamp)),
         ("make_timestamp_ltz", F::unknown("make_timestamp_ltz")),
         ("make_timestamp_ntz", F::udf(SparkMakeTimestampNtz::new())),
