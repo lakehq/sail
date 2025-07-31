@@ -53,7 +53,7 @@
     Defaults to the Sail configuration option `parquet.metadata_size_hint`.
   supported: true
   rust_type: usize
-  rust_deserialize_with: crate::options::serde::deserialize_usize
+  rust_deserialize_with: crate::options::serde::deserialize_non_zero_usize
 
 - key: pushdown_filters
   aliases:
