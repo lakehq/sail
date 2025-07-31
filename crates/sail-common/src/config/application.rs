@@ -184,6 +184,7 @@ pub struct ParquetConfig {
     pub enable_page_index: bool,
     pub pruning: bool,
     pub skip_metadata: bool,
+    #[serde(deserialize_with = "deserialize_non_zero")]
     pub metadata_size_hint: Option<usize>,
     pub pushdown_filters: bool,
     pub reorder_filters: bool,
