@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
@@ -73,6 +74,7 @@ pub(crate) async fn create_delta_table_provider_with_object_store(
 pub async fn create_delta_provider(
     ctx: &dyn Session,
     table_url: Url,
+    schema: Option<Schema>,
     options: &std::collections::HashMap<String, String>,
 ) -> Result<std::sync::Arc<dyn datafusion::catalog::TableProvider>> {
     // TODO: Parse options when needed
@@ -85,12 +87,15 @@ pub async fn create_delta_provider(
 
     let storage_config = StorageConfig::default();
 
-    // Create DeltaScanConfig with proper field names
     let scan_config = DeltaScanConfig {
         file_column_name: None,
         wrap_partition_values: true,
         enable_parquet_pushdown: true, // Default to true for now
-        schema: None,
+        schema: match schema {
+            Some(ref s) if s.fields().is_empty() => None,
+            Some(s) => Some(Arc::new(s)),
+            None => None,
+        },
     };
 
     let table_provider = create_delta_table_provider_with_object_store(

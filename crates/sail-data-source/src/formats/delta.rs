@@ -28,12 +28,11 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
             paths,
-            schema: _,
+            schema,
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        // TODO: schema is ignored for now
-        create_delta_provider(ctx, table_url, &options).await
+        create_delta_provider(ctx, table_url, schema, &options).await
     }
 
     async fn create_writer(
