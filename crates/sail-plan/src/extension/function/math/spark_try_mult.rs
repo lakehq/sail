@@ -102,7 +102,7 @@ impl ScalarUDFImpl for SparkTryMult {
             (DataType::Interval(YearMonth), DataType::Int32) => {
                 let l = left_arr.as_primitive::<IntervalYearMonthType>();
                 let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_op_interval_yearmonth_i32(l, r, i32::checked_div);
+                let result = try_op_interval_yearmonth_i32(l, r, i32::checked_mul);
                 binary_op_scalar_or_array(left, right, result)
             }
             (l, r) => Err(unsupported_data_types_exec_err(
