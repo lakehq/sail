@@ -545,7 +545,7 @@ mod tests {
         options_map.insert("metadata_size_hint".to_string(), "0".to_string());
         let options = resolver.resolve_parquet_read_options(options_map.clone())?;
         assert_eq!(options.global.statistics_truncate_length, None);
-        
+
         options_map.insert("metadata_size_hint".to_string(), "".to_string());
         let options = resolver.resolve_parquet_read_options(options_map)?;
         assert_eq!(options.global.statistics_truncate_length, None);
@@ -694,14 +694,21 @@ mod tests {
         assert_eq!(options.global.statistics_truncate_length, Some(99));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
 
-        let options = build_options(&[("column_index_truncate_length", "0"), ("statistics_truncate_length", "0"), ("encoding", "")]);
+        let options = build_options(&[
+            ("column_index_truncate_length", "0"),
+            ("statistics_truncate_length", "0"),
+            ("encoding", ""),
+        ]);
         let options = resolver.resolve_parquet_write_options(options)?;
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
 
-        let options = build_options(&[("column_index_truncate_length", ""), ("statistics_truncate_length", "")]);
+        let options = build_options(&[
+            ("column_index_truncate_length", ""),
+            ("statistics_truncate_length", ""),
+        ]);
         let options = resolver.resolve_parquet_write_options(options)?;
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
