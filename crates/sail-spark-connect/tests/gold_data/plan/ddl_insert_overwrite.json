@@ -60,7 +60,71 @@
     {
       "input": "\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3) IF NOT EXISTS\nSELECT * FROM source\n      ",
       "output": {
-        "failure": "invalid argument: IF NOT EXISTS is not allowed in INSERT"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "planId": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": true
+                }
+              },
+              "partition": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ]
+              ],
+              "ifNotExists": true
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -129,7 +193,8 @@
                   "p2",
                   null
                 ]
-              ]
+              ],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -206,7 +271,8 @@
                   "p2",
                   null
                 ]
-              ]
+              ],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -217,7 +283,75 @@
       "input": "INSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\nPARTITION (p1 = 3, p2) IF NOT EXISTS\nSELECT * FROM source",
       "exception": "\nOperation not allowed: IF NOT EXISTS with dynamic partitions: p2.\n== SQL (line 1, position 1) ==\nINSERT OVERWRITE TABLE testcat.ns1.ns2.tbl\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nPARTITION (p1 = 3, p2) IF NOT EXISTS\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: IF NOT EXISTS is not allowed in INSERT"
+        "success": {
+          "command": {
+            "insertInto": {
+              "input": {
+                "project": {
+                  "input": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "source"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "expressions": [
+                    {
+                      "unresolvedStar": {
+                        "target": null,
+                        "planId": null,
+                        "wildcardOptions": {
+                          "ilikePattern": null,
+                          "excludeColumns": null,
+                          "exceptColumns": null,
+                          "replaceColumns": null,
+                          "renameColumns": null
+                        }
+                      }
+                    }
+                  ]
+                },
+                "planId": null
+              },
+              "table": [
+                "testcat",
+                "ns1",
+                "ns2",
+                "tbl"
+              ],
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": true
+                }
+              },
+              "partition": [
+                [
+                  "p1",
+                  {
+                    "literal": {
+                      "int32": {
+                        "value": 3
+                      }
+                    }
+                  }
+                ],
+                [
+                  "p2",
+                  null
+                ]
+              ],
+              "ifNotExists": true
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -275,7 +409,8 @@
                   "overwrite": true
                 }
               },
-              "partition": []
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -333,7 +468,8 @@
                   "overwrite": true
                 }
               },
-              "partition": []
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -391,7 +527,8 @@
                   "overwrite": true
                 }
               },
-              "partition": []
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -453,7 +590,8 @@
                   "overwrite": true
                 }
               },
-              "partition": []
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -511,7 +649,8 @@
                   "overwrite": true
                 }
               },
-              "partition": []
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -569,7 +708,8 @@
                   "overwrite": true
                 }
               },
-              "partition": []
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }

@@ -419,6 +419,7 @@ pub enum CommandNode {
         table: ObjectName,
         mode: InsertMode,
         partition: Vec<(Identifier, Option<Expr>)>,
+        if_not_exists: bool,
     },
     InsertOverwriteDirectory {
         input: Box<QueryPlan>,

@@ -512,6 +512,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     condition: Box::new(from_ast_expression(condition)?),
                 },
                 partition: vec![],
+                if_not_exists: false,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -525,9 +526,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             columns,
             query,
         } => {
-            if if_not_exists.is_some() {
-                return Err(SqlError::invalid("IF NOT EXISTS is not allowed in INSERT"));
-            }
             let overwrite = matches!(into_or_overwrite, Either::Right(Overwrite { .. }));
             let partition = if let Some(partition) = partition {
                 from_ast_partition(partition)?
@@ -548,6 +546,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 table: from_ast_object_name(name)?,
                 mode,
                 partition,
+                if_not_exists: if_not_exists.is_some(),
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }

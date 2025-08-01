@@ -48,7 +48,8 @@
                   "overwrite": false
                 }
               },
-              "partition": []
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -103,7 +104,8 @@
                   "overwrite": false
                 }
               },
-              "partition": []
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -179,7 +181,8 @@
                     }
                   }
                 ]
-              ]
+              ],
+              "ifNotExists": false
             },
             "planId": null
           }

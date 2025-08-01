@@ -54,9 +54,16 @@ impl PlanResolver<'_> {
         table: spec::ObjectName,
         mode: spec::InsertMode,
         partition: Vec<(spec::Identifier, Option<spec::Expr>)>,
+        if_not_exists: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         use spec::InsertMode;
+
+        if if_not_exists {
+            return Err(PlanError::todo(
+                "INSERT INTO ... IF NOT EXISTS is not supported",
+            ));
+        }
 
         let input = self.resolve_write_input(input, state).await?;
 
