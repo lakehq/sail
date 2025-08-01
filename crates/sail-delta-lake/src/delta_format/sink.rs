@@ -4,12 +4,16 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use uuid::Uuid;
+
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::sink::DataSink;
+
 use datafusion::execution::context::TaskContext;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ToDFSchema};
 use deltalake::kernel::engine::arrow_conversion::TryIntoKernel;
 use deltalake::kernel::schema::StructType;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
@@ -21,6 +25,8 @@ use futures::StreamExt;
 use sail_common_datafusion::datasource::TableDeltaOptions;
 use url::Url;
 
+use crate::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
+use crate::operations::write::execution::{prepare_predicate_actions, WriterStatsConfig};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
@@ -108,6 +114,13 @@ impl DataSink for DeltaDataSink {
         let storage_config = StorageConfig::default();
         let object_store = self.get_object_store(context)?;
 
+        use crate::delta_datafusion::create_object_store_url;
+        let object_store_url = create_object_store_url(&self.table_url);
+        context.runtime_env().register_object_store(
+            object_store_url.as_ref(),
+            object_store.clone(),
+        );
+
         let (table, table_exists) = match open_table_with_object_store(
             self.table_url.clone(),
             object_store.clone(),
@@ -177,11 +190,60 @@ impl DataSink for DeltaDataSink {
 
         // Prepare actions for commit
         let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
+        let mut predicate_str: Option<String> = None;
 
         let operation = if table_exists {
             if self.mode == SaveMode::Overwrite {
-                // In overwrite mode, delete existing files
-                if let Ok(snapshot) = table.snapshot() {
+                if let Some(predicate) = replace_where {
+                    // This is the replace_where logic
+                    let snapshot = table
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    let df_schema = snapshot
+                        .arrow_schema()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .to_dfschema()?;
+
+                    let session_state = SessionStateBuilder::new()
+                        .with_runtime_env(context.runtime_env())
+                        .build();
+
+                    let predicate_expr = parse_predicate_expression(
+                        &df_schema,
+                        predicate,
+                        &session_state,
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    predicate_str = Some(predicate.clone());
+
+                    #[allow(clippy::expect_used)]
+                    let current_timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("System time before Unix epoch")
+                        .as_millis() as i64;
+
+                    let (remove_actions, _) = prepare_predicate_actions(
+                        predicate_expr,
+                        table.log_store(),
+                        snapshot,
+                        session_state.clone(),
+                        partition_columns.clone(),
+                        None,
+                        current_timestamp,
+                        WriterStatsConfig::new(32, None),
+                        Uuid::new_v4(),
+                    )
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    actions.extend(remove_actions);
+                } else {
+                    // This is a full overwrite
+                    let snapshot = table
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     let existing_files = snapshot
                         .file_actions()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -218,7 +280,7 @@ impl DataSink for DeltaDataSink {
                 } else {
                     Some(partition_columns)
                 },
-                predicate: replace_where.clone(),
+                predicate: predicate_str,
             }
         } else {
             // For new tables, we need to create Protocol and Metadata actions

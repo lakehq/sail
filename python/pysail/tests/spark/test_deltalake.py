@@ -914,3 +914,37 @@ class TestDeltaLake:
 
         loaded_schema = result_df.schema
         assert loaded_schema == schema, f"Schema mismatch: expected {schema}, got {loaded_schema}"
+
+    def test_delta_overwrite_with_replace_where(self, spark, tmp_path):
+        """Test Delta Lake overwrite with replaceWhere option."""
+        from pyspark.sql.types import Row
+
+        delta_path = tmp_path / "delta_replace_where"
+        delta_table_path = f"file://{delta_path}"
+
+        data = [
+            Row(id=1, category="A", value=10),
+            Row(id=2, category="B", value=20),
+            Row(id=3, category="A", value=30),
+            Row(id=4, category="B", value=40),
+        ]
+        df = spark.createDataFrame(data)
+        df.write.format("delta").mode("overwrite").save(str(delta_path))
+
+        new_data = [
+            Row(id=5, category="A", value=100),
+            Row(id=6, category="A", value=200),
+        ]
+        new_df = spark.createDataFrame(new_data)
+        new_df.write.format("delta").mode("overwrite") \
+            .option("replaceWhere", "category = 'A'") \
+            .save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
+        print(result_df.show())
+        result = result_df.collect()
+
+        assert {row.id for row in result} == {2, 4, 5, 6}
+        assert {row.category for row in result if row.category == "A"} == {"A"}
+        assert {row.value for row in result if row.category == "A"} == {100, 200}
+        assert {row.value for row in result if row.category == "B"} == {20, 40}
