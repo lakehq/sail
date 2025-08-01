@@ -236,7 +236,7 @@ impl Executor {
                 return Err(SparkError::internal("task is being paused"));
             }
         };
-        let (tx, rx) = mpsc::channel(2);
+        let (tx, rx) = mpsc::channel(1);
         let (notifier, listener) = oneshot::channel();
         let buffer = Arc::clone(&context.buffer);
         // let handle = self.runtime.primary().clone();
