@@ -1,4 +1,5 @@
 use std::fmt::Formatter;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -16,11 +17,13 @@ use aws_smithy_runtime_api::client::runtime_components::{
 };
 use aws_smithy_types::config_bag::ConfigBag;
 use datafusion_common::plan_datafusion_err;
-use log::debug;
+use log::{debug, info};
 use object_store::aws::{
     resolve_bucket_region, AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential,
 };
+use object_store::client::SpawnedReqwestConnector;
 use object_store::{ClientOptions, CredentialProvider};
+use tokio::runtime::Handle;
 use tokio::sync::OnceCell;
 use url::Url;
 
@@ -102,7 +105,7 @@ impl CredentialProvider for S3CredentialProvider {
     }
 }
 
-pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
+pub async fn get_s3_object_store(url: &Url, handle: Handle) -> object_store::Result<AmazonS3> {
     debug!("Creating S3 object store for url: {url}");
     let mut builder = AmazonS3Builder::from_env();
     let config = DEFAULT_AWS_CONFIG
@@ -142,7 +145,24 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
         builder = builder.with_region(region);
     }
 
-    builder.build()
+    if std::env::var("SAIL_USE_STORE_HTTP_CONNECTOR")
+        .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
+    {
+        info!("[sail_object_store] Using HTTP connector for S3 object store");
+        builder
+            .with_http_connector(SpawnedReqwestConnector::new(handle))
+            .build()
+    } else {
+        info!("[sail_object_store] Not using HTTP connector for S3 object store");
+        builder.build()
+    }
+
+    // use object_store::limit::LimitStore;
+    // let s3 = builder
+    //     .with_http_connector(SpawnedReqwestConnector::new(handle))
+    //     .build()?;
+    // let limited_store = LimitStore::new(s3, 16);
+    // Ok(limited_store)
 }
 
 pub fn parse_s3_url(

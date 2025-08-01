@@ -1,9 +1,12 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::{execute_stream, ExecutionPlan};
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::{EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::SessionContext;
+use sail_runtime::RuntimeHandle;
 use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
 
@@ -19,23 +22,58 @@ pub trait JobRunner: Send + Sync + 'static {
     ) -> ExecutionResult<SendableRecordBatchStream>;
 
     async fn stop(&self);
+
+    fn runtime(&self) -> &RuntimeHandle;
 }
 
 pub struct LocalJobRunner {
     stopped: AtomicBool,
+    runtime: RuntimeHandle,
 }
 
 impl LocalJobRunner {
-    pub fn new() -> Self {
+    pub fn new(runtime: RuntimeHandle) -> Self {
         Self {
             stopped: AtomicBool::new(false),
+            runtime,
         }
     }
-}
 
-impl Default for LocalJobRunner {
-    fn default() -> Self {
-        Self::new()
+    async fn execute_stream(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
+    ) -> ExecutionResult<SendableRecordBatchStream> {
+        match plan.output_partitioning().partition_count() {
+            0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
+            1 => self.execute_stream_partitioned(plan, 0, context).await,
+            2.. => {
+                self.execute_stream_partitioned(
+                    Arc::new(CoalescePartitionsExec::new(plan)),
+                    0,
+                    context,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn execute_stream_partitioned(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> ExecutionResult<SendableRecordBatchStream> {
+        let handle = self.runtime.cpu().clone();
+        let stream = handle
+            .spawn(async move { plan.execute(partition, context) })
+            .await
+            .map_err(|e| {
+                ExecutionError::InternalError(format!("failed to execute on CPU runtime: {e}"))
+            })??;
+        let schema = stream.schema();
+        let stream = RecordBatchStreamAdapter::new(schema, stream);
+        Ok(Box::pin(stream))
     }
 }
 
@@ -51,22 +89,37 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
-        Ok(execute_stream(plan, ctx.task_ctx())?)
+        Ok(self.execute_stream(plan, ctx.task_ctx()).await?)
+        // let task_ctx = ctx.task_ctx();
+        // let handle = self.runtime.cpu().clone();
+        // let result = handle
+        //     .spawn(async move { execute_stream(plan, task_ctx) })
+        //     .await
+        //     .map_err(|e| {
+        //         ExecutionError::InternalError(format!("failed to execute on CPU runtime: {e}"))
+        //     })?;
+        // Ok(result?)
     }
 
     async fn stop(&self) {
         self.stopped.store(true, Ordering::Relaxed);
     }
+
+    fn runtime(&self) -> &RuntimeHandle {
+        &self.runtime
+    }
 }
 
 pub struct ClusterJobRunner {
     driver: ActorHandle<DriverActor>,
+    runtime: RuntimeHandle,
 }
 
 impl ClusterJobRunner {
     pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
+        let runtime = options.runtime.clone();
         let driver = system.spawn(options);
-        Self { driver }
+        Self { driver, runtime }
     }
 }
 
@@ -89,5 +142,9 @@ impl JobRunner for ClusterJobRunner {
 
     async fn stop(&self) {
         let _ = self.driver.send(DriverEvent::Shutdown).await;
+    }
+
+    fn runtime(&self) -> &RuntimeHandle {
+        &self.runtime
     }
 }
