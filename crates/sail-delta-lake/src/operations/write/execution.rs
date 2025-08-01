@@ -14,7 +14,8 @@ use deltalake::Path;
 use uuid::Uuid;
 
 use crate::delta_datafusion::{
-    datafusion_to_delta_error, find_files, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
+    datafusion_to_delta_error, find_files, DataFusionMixins, DeltaScanConfigBuilder,
+    DeltaTableProvider,
 };
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 

@@ -936,12 +936,9 @@ class TestDeltaLake:
             Row(id=6, category="A", value=200),
         ]
         new_df = spark.createDataFrame(new_data)
-        new_df.write.format("delta").mode("overwrite") \
-            .option("replaceWhere", "category = 'A'") \
-            .save(str(delta_path))
+        new_df.write.format("delta").mode("overwrite").option("replaceWhere", "category = 'A'").save(str(delta_path))
 
         result_df = spark.read.format("delta").load(delta_table_path).sort("id")
-        print(result_df.show())
         result = result_df.collect()
 
         assert {row.id for row in result} == {2, 4, 5, 6}
