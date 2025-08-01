@@ -1,9 +1,9 @@
 use std::any::Any;
 
 use arrow::array::{Array, AsArray};
-use arrow::datatypes::IntervalUnit::YearMonth;
+use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use arrow::datatypes::{
-    DataType, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+    DataType, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
 };
 use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -58,11 +58,11 @@ impl ScalarUDFImpl for SparkTryMult {
             [DataType::Interval(YearMonth), DataType::Int32]
             | [DataType::Int32, DataType::Interval(YearMonth)] => Ok(DataType::Interval(YearMonth)),
 
-            [DataType::Interval(IntervalUnit::MonthDayNano), DataType::Int32]
-            | [DataType::Int32, DataType::Interval(IntervalUnit::MonthDayNano)]
-            | [DataType::Interval(IntervalUnit::MonthDayNano), DataType::Int64]
-            | [DataType::Int64, DataType::Interval(IntervalUnit::MonthDayNano)] => {
-                Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+            [DataType::Interval(MonthDayNano), DataType::Int32]
+            | [DataType::Int32, DataType::Interval(MonthDayNano)]
+            | [DataType::Interval(MonthDayNano), DataType::Int64]
+            | [DataType::Int64, DataType::Interval(MonthDayNano)] => {
+                Ok(DataType::Interval(MonthDayNano))
             }
 
             _ => Err(unsupported_data_types_exec_err(
@@ -125,20 +125,20 @@ impl ScalarUDFImpl for SparkTryMult {
                 let result = try_op_interval_yearmonth_i32(r, l, i32::checked_mul);
                 binary_op_scalar_or_array(left, right, result)
             }
-            (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Int32) => {
+            (DataType::Interval(MonthDayNano), DataType::Int32) => {
                 let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
                 let r = right_arr.as_primitive::<Int32Type>();
                 let result = try_op_interval_monthdaynano_i32(l, r, |a, b| a.checked_mul(b as i64));
                 binary_op_scalar_or_array(left, right, result)
             }
-            (DataType::Int32, DataType::Interval(IntervalUnit::MonthDayNano)) => {
+            (DataType::Int32, DataType::Interval(MonthDayNano)) => {
                 let l = left_arr.as_primitive::<Int32Type>();
                 let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
                 let result = try_op_interval_monthdaynano_i32(r, l, |a, b| a.checked_mul(b as i64));
 
                 binary_op_scalar_or_array(left, right, result)
             }
-            (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Int64) => {
+            (DataType::Interval(MonthDayNano), DataType::Int64) => {
                 let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
                 let r = right_arr.as_primitive::<Int64Type>();
                 let result =
@@ -204,33 +204,17 @@ impl ScalarUDFImpl for SparkTryMult {
         }
         if matches!(
             (left, right),
-            (
-                DataType::Interval(IntervalUnit::MonthDayNano),
-                DataType::Int32
-            ) | (
-                DataType::Int32,
-                DataType::Interval(IntervalUnit::MonthDayNano)
-            )
+            (DataType::Interval(MonthDayNano), DataType::Int32)
+                | (DataType::Int32, DataType::Interval(MonthDayNano))
         ) {
-            return Ok(vec![
-                DataType::Interval(IntervalUnit::MonthDayNano),
-                DataType::Int32,
-            ]);
+            return Ok(vec![DataType::Interval(MonthDayNano), DataType::Int32]);
         }
         if matches!(
             (left, right),
-            (
-                DataType::Interval(IntervalUnit::MonthDayNano),
-                DataType::Int64
-            ) | (
-                DataType::Int64,
-                DataType::Interval(IntervalUnit::MonthDayNano)
-            )
+            (DataType::Interval(MonthDayNano), DataType::Int64)
+                | (DataType::Int64, DataType::Interval(MonthDayNano))
         ) {
-            return Ok(vec![
-                DataType::Interval(IntervalUnit::MonthDayNano),
-                DataType::Int64,
-            ]);
+            return Ok(vec![DataType::Interval(MonthDayNano), DataType::Int64]);
         }
 
         Err(unsupported_data_types_exec_err(
