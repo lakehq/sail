@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion::arrow::datatypes::Schema;
+use datafusion_expr::{col, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
@@ -26,6 +27,7 @@ pub(super) enum WriteTarget {
     },
     ExistingTable {
         table: spec::ObjectName,
+        column_match: WriteColumnMatch,
     },
     NewTable {
         table: spec::ObjectName,
@@ -33,13 +35,18 @@ pub(super) enum WriteTarget {
     },
 }
 
+#[expect(clippy::enum_variant_names)]
+pub(super) enum WriteColumnMatch {
+    ByPosition,
+    ByName,
+    ByColumns { columns: Vec<spec::Identifier> },
+}
+
 pub(super) enum WriteTableAction {
     Create,
     CreateOrReplace,
     Replace,
 }
-
-// TODO: handle table column default values and generated columns
 
 /// A unified logical plan builder for all write or insert operations.
 pub(super) struct WritePlanBuilder {
@@ -71,22 +78,8 @@ impl WritePlanBuilder {
         }
     }
 
-    pub fn with_path_target(mut self, location: String) -> Self {
-        self.target = Some(WriteTarget::Path { location });
-        self
-    }
-
-    pub fn with_existing_table_target(mut self, table: spec::ObjectName) -> Self {
-        self.target = Some(WriteTarget::ExistingTable { table });
-        self
-    }
-
-    pub fn with_new_table_target(
-        mut self,
-        table: spec::ObjectName,
-        action: WriteTableAction,
-    ) -> Self {
-        self.target = Some(WriteTarget::NewTable { table, action });
+    pub fn with_target(mut self, target: WriteTarget) -> Self {
+        self.target = Some(target);
         self
     }
 
@@ -179,7 +172,9 @@ impl PlanResolver<'_> {
                     Some(SaveMode::Append) => SinkMode::Append,
                     Some(SaveMode::Overwrite) => SinkMode::Overwrite,
                 };
-                builder = builder.with_path_target(location).with_mode(mode);
+                builder = builder
+                    .with_target(WriteTarget::Path { location })
+                    .with_mode(mode);
             }
             SaveType::Table {
                 table,
@@ -187,23 +182,36 @@ impl PlanResolver<'_> {
             } => match mode {
                 Some(SaveMode::ErrorIfExists) | None => {
                     builder = builder
-                        .with_new_table_target(table, WriteTableAction::Create)
+                        .with_target(WriteTarget::NewTable {
+                            table,
+                            action: WriteTableAction::Create,
+                        })
                         .with_mode(SinkMode::ErrorIfExists);
                 }
                 Some(SaveMode::IgnoreIfExists) => {
                     builder = builder
-                        .with_new_table_target(table, WriteTableAction::Create)
+                        .with_target(WriteTarget::NewTable {
+                            table,
+                            action: WriteTableAction::Create,
+                        })
                         .with_mode(SinkMode::IgnoreIfExists);
                 }
                 Some(SaveMode::Append) => {
-                    builder = builder
-                        .with_mode(SinkMode::Append)
-                        .with_existing_table_target(table);
+                    builder = builder.with_mode(SinkMode::Append).with_target(
+                        WriteTarget::ExistingTable {
+                            table,
+                            column_match: WriteColumnMatch::ByName,
+                        },
+                    );
                 }
                 Some(SaveMode::Overwrite) => {
-                    builder = builder
-                        .with_mode(SinkMode::Overwrite)
-                        .with_new_table_target(table, WriteTableAction::CreateOrReplace);
+                    builder =
+                        builder
+                            .with_mode(SinkMode::Overwrite)
+                            .with_target(WriteTarget::NewTable {
+                                table,
+                                action: WriteTableAction::CreateOrReplace,
+                            });
                 }
             },
             SaveType::Table {
@@ -214,7 +222,12 @@ impl PlanResolver<'_> {
                     Some(SaveMode::Overwrite) => SinkMode::Overwrite,
                     _ => SinkMode::Append,
                 };
-                builder = builder.with_mode(mode).with_existing_table_target(table);
+                builder = builder
+                    .with_mode(mode)
+                    .with_target(WriteTarget::ExistingTable {
+                        table,
+                        column_match: WriteColumnMatch::ByPosition,
+                    });
             }
         };
         self.resolve_write_with_builder(input, builder, state).await
@@ -252,19 +265,31 @@ impl PlanResolver<'_> {
 
         match mode {
             WriteToMode::Append => {
-                builder = builder
-                    .with_mode(SinkMode::Append)
-                    .with_existing_table_target(table);
+                builder =
+                    builder
+                        .with_mode(SinkMode::Append)
+                        .with_target(WriteTarget::ExistingTable {
+                            table,
+                            column_match: WriteColumnMatch::ByName,
+                        });
             }
             WriteToMode::Create => {
-                builder = builder
-                    .with_mode(SinkMode::Overwrite)
-                    .with_new_table_target(table, WriteTableAction::Create)
+                builder =
+                    builder
+                        .with_mode(SinkMode::Overwrite)
+                        .with_target(WriteTarget::NewTable {
+                            table,
+                            action: WriteTableAction::Create,
+                        })
             }
             WriteToMode::CreateOrReplace => {
-                builder = builder
-                    .with_mode(SinkMode::Overwrite)
-                    .with_new_table_target(table, WriteTableAction::CreateOrReplace);
+                builder =
+                    builder
+                        .with_mode(SinkMode::Overwrite)
+                        .with_target(WriteTarget::NewTable {
+                            table,
+                            action: WriteTableAction::CreateOrReplace,
+                        });
             }
             WriteToMode::Overwrite { condition } => {
                 let condition = self
@@ -274,17 +299,27 @@ impl PlanResolver<'_> {
                     .with_mode(SinkMode::OverwriteIf {
                         condition: Box::new(condition),
                     })
-                    .with_existing_table_target(table);
+                    .with_target(WriteTarget::ExistingTable {
+                        table,
+                        column_match: WriteColumnMatch::ByName,
+                    });
             }
             WriteToMode::OverwritePartitions => {
                 builder = builder
                     .with_mode(SinkMode::OverwritePartitions)
-                    .with_existing_table_target(table);
+                    .with_target(WriteTarget::ExistingTable {
+                        table,
+                        column_match: WriteColumnMatch::ByName,
+                    });
             }
             WriteToMode::Replace => {
-                builder = builder
-                    .with_mode(SinkMode::Overwrite)
-                    .with_new_table_target(table, WriteTableAction::Replace);
+                builder =
+                    builder
+                        .with_mode(SinkMode::Overwrite)
+                        .with_target(WriteTarget::NewTable {
+                            table,
+                            action: WriteTableAction::Replace,
+                        });
             }
         };
         self.resolve_write_with_builder(input, builder, state).await
@@ -370,7 +405,7 @@ impl PlanResolver<'_> {
 
     pub(super) async fn resolve_write_with_builder(
         &self,
-        input: LogicalPlan,
+        mut input: LogicalPlan,
         builder: WritePlanBuilder,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
@@ -423,12 +458,19 @@ impl PlanResolver<'_> {
                 }
                 file_write_options.path = location;
             }
-            WriteTarget::ExistingTable { table } => {
+            WriteTarget::ExistingTable {
+                table,
+                column_match,
+            } => {
                 let Some(info) = self.resolve_table_info(&table).await? else {
                     return Err(PlanError::invalid(format!(
                         "table does not exist: {table:?}"
                     )));
                 };
+                if matches!(file_write_options.mode, SinkMode::IgnoreIfExists) {
+                    return Ok(LogicalPlanBuilder::empty(false).build()?);
+                }
+                input = self.rewrite_write_input(input, column_match, &info)?;
                 if !file_write_options.partition_by.is_empty() {
                     return Err(PlanError::invalid(
                         "cannot specify partitioning when writing to an existing table",
@@ -467,6 +509,9 @@ impl PlanResolver<'_> {
             }
             WriteTarget::NewTable { table, action } => {
                 let info = self.resolve_table_info(&table).await?;
+                if matches!(file_write_options.mode, SinkMode::IgnoreIfExists) && info.is_some() {
+                    return Ok(LogicalPlanBuilder::empty(false).build()?);
+                }
                 if file_write_options.format.is_empty() {
                     if let Some(format) = info.as_ref().map(|x| &x.format) {
                         file_write_options.format = format.clone();
@@ -482,7 +527,14 @@ impl PlanResolver<'_> {
                 let replace = match action {
                     WriteTableAction::Create => false,
                     WriteTableAction::CreateOrReplace => true,
-                    WriteTableAction::Replace => true,
+                    WriteTableAction::Replace => {
+                        if info.is_none() {
+                            return Err(PlanError::invalid(format!(
+                                "table does not exist: {table:?}"
+                            )));
+                        }
+                        true
+                    }
                 };
                 let columns = input
                     .schema()
@@ -535,6 +587,87 @@ impl PlanResolver<'_> {
         }))
     }
 
+    #[expect(clippy::only_used_in_recursion)]
+    fn rewrite_write_input(
+        &self,
+        input: LogicalPlan,
+        column_match: WriteColumnMatch,
+        info: &TableInfo,
+    ) -> PlanResult<LogicalPlan> {
+        // TODO: handle partitioning columns
+        // TODO: handle table column default values and generated columns
+
+        let table_schema = Schema::new(info.columns.iter().map(|x| x.field()).collect::<Vec<_>>());
+        if input.schema().fields().len() != table_schema.fields().len() {
+            return Err(PlanError::invalid(format!(
+                "input schema for INSERT has {} fields, but table schema has {} fields",
+                input.schema().fields().len(),
+                table_schema.fields().len()
+            )));
+        }
+        let plan = match column_match {
+            WriteColumnMatch::ByPosition => {
+                let expr = input
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .zip(table_schema.fields().iter())
+                    .map(|(column, field)| {
+                        Ok(col(column)
+                            .cast_to(field.data_type(), input.schema())?
+                            .alias(field.name()))
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                LogicalPlanBuilder::new(input).project(expr)?.build()?
+            }
+            WriteColumnMatch::ByName => {
+                let expr = table_schema
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        let name = field.name();
+                        let matches = input
+                            .schema()
+                            .fields()
+                            .iter()
+                            .filter(|f| f.name().eq_ignore_ascii_case(name))
+                            .map(|f| Ok(col(f.name()).cast_to(field.data_type(), input.schema())?))
+                            .collect::<PlanResult<Vec<_>>>()?;
+                        if matches.is_empty() {
+                            Err(PlanError::invalid(format!(
+                                "column not found for INSERT: {name}"
+                            )))
+                        } else {
+                            matches.one().map_err(|_| {
+                                PlanError::invalid(format!("ambiguous column: {name}"))
+                            })
+                        }
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                LogicalPlanBuilder::new(input).project(expr)?.build()?
+            }
+            WriteColumnMatch::ByColumns { columns } => {
+                if input.schema().fields().len() != columns.len() {
+                    return Err(PlanError::invalid(format!(
+                        "input schema for INSERT has {} fields, but {} columns are specified",
+                        input.schema().fields().len(),
+                        columns.len()
+                    )));
+                }
+                let expr = input
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .zip(columns)
+                    .map(|(column, name)| col(column).alias(name))
+                    .collect::<Vec<_>>();
+                let plan = LogicalPlanBuilder::new(input).project(expr)?.build()?;
+                self.rewrite_write_input(plan, WriteColumnMatch::ByName, info)?
+            }
+        };
+        Ok(plan)
+    }
+
     fn resolve_write_partition_by(
         &self,
         partition_by: Vec<spec::Identifier>,
@@ -560,7 +693,6 @@ impl PlanResolver<'_> {
 }
 
 struct TableInfo {
-    #[expect(unused)]
     columns: Vec<TableColumnStatus>,
     location: Option<String>,
     format: String,

@@ -149,19 +149,19 @@ def test_write_to(spark):
     assert_frame_equal(actual, expected(1))
 
     df.writeTo("t3").append()
-    actual = spark.sql("SELECT * FROM t2").toPandas()
+    actual = spark.sql("SELECT * FROM t3").toPandas()
     assert_frame_equal(actual, expected(2))
 
     pytest.skip("replace and overwrite are not supported in Sail yet")
 
     df.writeTo("t3").replace()
-    actual = spark.sql("SELECT * FROM t2").toPandas()
+    actual = spark.sql("SELECT * FROM t3").toPandas()
     assert_frame_equal(actual, expected(1))
 
     df.writeTo("t3").createOrReplace()
-    actual = spark.sql("SELECT * FROM t2").toPandas()
+    actual = spark.sql("SELECT * FROM t3").toPandas()
     assert_frame_equal(actual, expected(1))
 
     df.writeTo("t3").overwrite(F.lit(True))
-    actual = spark.sql("SELECT * FROM t2").toPandas()
+    actual = spark.sql("SELECT * FROM t3").toPandas()
     assert_frame_equal(actual, expected(1))

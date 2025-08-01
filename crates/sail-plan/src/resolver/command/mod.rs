@@ -188,8 +188,24 @@ impl PlanResolver<'_> {
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
             }
-            CommandNode::InsertOverwriteDirectory { .. } => {
-                Err(PlanError::todo("CommandNode::InsertOverwriteDirectory"))
+            CommandNode::InsertOverwriteDirectory {
+                input,
+                local,
+                location,
+                file_format,
+                row_format,
+                options,
+            } => {
+                self.resolve_command_insert_overwrite_directory(
+                    *input,
+                    local,
+                    location,
+                    file_format,
+                    row_format,
+                    options,
+                    state,
+                )
+                .await
             }
             CommandNode::InsertInto {
                 input,
