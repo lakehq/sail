@@ -2,9 +2,14 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::ops::DerefMut;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use datafusion::execution::cache::cache_manager::CacheManagerConfig;
+use datafusion::execution::cache::cache_unit::{
+    DefaultFileStatisticsCache, DefaultFilesMetadataCache, DefaultListFilesCache,
+};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -160,9 +165,34 @@ impl SessionManager {
         }
 
         let runtime = {
+            let cache_config = CacheManagerConfig::default()
+                .with_file_metadata_cache(Some(Arc::new(DefaultFilesMetadataCache::default())));
+            let cache_config = if std::env::var("SAIL_USE_TABLE_FILES_STATISTICS_CACHE")
+                .is_ok_and(|v| bool::from_str(&v).unwrap_or(true))
+            {
+                info!("[table_files_statistics_cache] Using table files statistics cache");
+                cache_config.with_files_statistics_cache(Some(Arc::new(
+                    DefaultFileStatisticsCache::default(),
+                )))
+            } else {
+                info!("[table_files_statistics_cache] Not using table files statistics cache");
+                cache_config
+            };
+            let cache_config = if std::env::var("SAIL_USE_LIST_FILES_CACHE")
+                .is_ok_and(|v| bool::from_str(&v).unwrap_or(true))
+            {
+                info!("[list_files_cache] Using list files cache");
+                cache_config.with_list_files_cache(Some(Arc::new(DefaultListFilesCache::default())))
+            } else {
+                info!("[list_files_cache] Not using list files cache");
+                cache_config
+            };
+
             let registry = DynamicObjectStoreRegistry::new(options.runtime.clone());
-            let builder =
-                RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
+
+            let builder = RuntimeEnvBuilder::default()
+                .with_object_store_registry(Arc::new(registry))
+                .with_cache_manager(cache_config);
             Arc::new(builder.build()?)
         };
         let state = SessionStateBuilder::new()
