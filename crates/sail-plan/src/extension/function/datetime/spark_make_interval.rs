@@ -47,15 +47,6 @@ impl ScalarUDFImpl for SparkMakeInterval {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        /*
-        from pyspark.sql.functions import make_interval
-        df = spark.createDataFrame([(2, 5, 3)], ["year", "month", "day"])
-        df.select(make_interval(df.year).alias("interval")).show(truncate=False)
-
-        from pyspark.sql.functions import make_interval
-        df = spark.createDataFrame([(2, 5, 3)], ["year", "month", "day"])
-        df.select(make_interval(df.year, df.month, None, df.day).alias("interval")).show(truncate=False)
-                */
         let ScalarFunctionArgs {
             args, number_rows, ..
         } = args;
@@ -113,43 +104,57 @@ impl ScalarUDFImpl for SparkMakeInterval {
         let years = match years {
             Ok(years) => years,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                    None,
+                )))
             }
         };
         let months = match months {
             Ok(months) => months,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                    None,
+                )))
             }
         };
         let weeks = match weeks {
             Ok(weeks) => weeks,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                    None,
+                )))
             }
         };
         let days = match days {
             Ok(days) => days,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                    None,
+                )))
             }
         };
         let hours = match hours {
             Ok(hours) => hours,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                    None,
+                )))
             }
         };
         let mins = match mins {
             Ok(mins) => mins,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                    None,
+                )))
             }
         };
         let secs = match secs {
             Ok(secs) => secs,
             Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(None)))
+                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                    None,
+                )))
             }
         };
         let mut builder = IntervalMonthDayNanoBuilder::with_capacity(number_rows);

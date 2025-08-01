@@ -5,7 +5,7 @@ use arrow::array::{
     PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
 };
 use arrow::datatypes::{
-    Date32Type, Float64Type, Int32Type, IntervalMonthDayNano, IntervalMonthDayNanoType,
+    Date32Type, Float64Type, Int32Type, Int64Type, IntervalMonthDayNano, IntervalMonthDayNanoType,
     IntervalYearMonthType,
 };
 use chrono::{Duration, Months, NaiveDate};
@@ -290,6 +290,74 @@ where
             match op(a, b) {
                 Some(v) => builder.append_value(v),
                 None => builder.append_null(),
+            }
+        }
+    }
+
+    builder.finish()
+}
+
+pub fn try_op_interval_monthdaynano_i32<F>(
+    intervals: &PrimitiveArray<IntervalMonthDayNanoType>,
+    scalars: &PrimitiveArray<Int32Type>,
+    op: F,
+) -> PrimitiveArray<IntervalMonthDayNanoType>
+where
+    F: Fn(i64, i32) -> Option<i64>,
+{
+    let mut builder = PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(intervals.len());
+
+    for i in 0..intervals.len() {
+        if intervals.is_null(i) || scalars.is_null(i) {
+            builder.append_null();
+        } else {
+            let interval = intervals.value(i);
+            let scalar = scalars.value(i);
+
+            let months = op(interval.months as i64, scalar).and_then(|v| v.try_into().ok());
+            let days = op(interval.days as i64, scalar).and_then(|v| v.try_into().ok());
+            let nanos = op(interval.nanoseconds, scalar);
+
+            match (months, days, nanos) {
+                (Some(m), Some(d), Some(n)) => {
+                    builder.append_value(arrow::datatypes::IntervalMonthDayNanoType::make_value(
+                        m, d, n,
+                    ));
+                }
+                _ => builder.append_null(),
+            }
+        }
+    }
+
+    builder.finish()
+}
+
+pub fn try_op_interval_monthdaynano_i64<F>(
+    intervals: &PrimitiveArray<IntervalMonthDayNanoType>,
+    scalars: &PrimitiveArray<Int64Type>,
+    op: F,
+) -> PrimitiveArray<IntervalMonthDayNanoType>
+where
+    F: Fn(i64, i64) -> Option<i64>,
+{
+    let mut builder = PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(intervals.len());
+
+    for i in 0..intervals.len() {
+        if intervals.is_null(i) || scalars.is_null(i) {
+            builder.append_null();
+        } else {
+            let interval = intervals.value(i);
+            let scalar = scalars.value(i);
+
+            let months = op(interval.months as i64, scalar).and_then(|v| i32::try_from(v).ok());
+            let days = op(interval.days as i64, scalar).and_then(|v| i32::try_from(v).ok());
+            let nanos = op(interval.nanoseconds, scalar);
+
+            match (months, days, nanos) {
+                (Some(m), Some(d), Some(n)) => {
+                    builder.append_value(IntervalMonthDayNanoType::make_value(m, d, n));
+                }
+                _ => builder.append_null(),
             }
         }
     }
@@ -914,5 +982,24 @@ mod tests {
 
             assert_eq!(result, expected);
         }
+    }
+
+    #[test]
+    fn test_try_op_interval_monthdaynano_i32_mul() {
+        use arrow::array::{Int32Array, IntervalMonthDayNanoArray};
+        use arrow::datatypes::IntervalMonthDayNanoType;
+
+        let intervals = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNanoType::make_value(2, 0, 0)), // 2 months
+        ]);
+        let scalars = Int32Array::from(vec![Some(3)]);
+
+        let result =
+            try_op_interval_monthdaynano_i32(&intervals, &scalars, |a, b| a.checked_mul(b as i64));
+
+        let res = result.value(0);
+        assert_eq!(res.months, 6);
+        assert_eq!(res.days, 0);
+        assert_eq!(res.nanoseconds, 0);
     }
 }

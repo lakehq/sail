@@ -2,7 +2,9 @@ use std::any::Any;
 
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::IntervalUnit::YearMonth;
-use arrow::datatypes::{DataType, Int32Type, Int64Type, IntervalYearMonthType};
+use arrow::datatypes::{
+    DataType, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+};
 use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
@@ -10,7 +12,8 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_binary_op_to_float64, try_op_interval_yearmonth_i32,
+    binary_op_scalar_or_array, try_binary_op_to_float64, try_op_interval_monthdaynano_i32,
+    try_op_interval_monthdaynano_i64, try_op_interval_yearmonth_i32,
 };
 
 #[derive(Debug)]
@@ -51,10 +54,22 @@ impl ScalarUDFImpl for SparkTryDiv {
             | [DataType::Int64, DataType::Int64]
             | [DataType::Int32, DataType::Int64]
             | [DataType::Int64, DataType::Int32] => Ok(DataType::Float64),
-            [DataType::Interval(YearMonth), DataType::Int32] => Ok(DataType::Interval(YearMonth)),
+
+            [DataType::Interval(IntervalUnit::YearMonth), DataType::Int32] => {
+                Ok(DataType::Interval(IntervalUnit::YearMonth))
+            }
+
+            [DataType::Interval(IntervalUnit::MonthDayNano), DataType::Int32] => {
+                Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+            }
+
+            [DataType::Interval(IntervalUnit::MonthDayNano), DataType::Int64] => {
+                Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+            }
+
             _ => Err(unsupported_data_types_exec_err(
                 "try_divide",
-                "Int32, Int64 o Interval(YearMonth) / Int32",
+                "Int32, Int64 o Interval(YearMonth|MonthDayNano) / escalar",
                 arg_types,
             )),
         }
@@ -114,9 +129,39 @@ impl ScalarUDFImpl for SparkTryDiv {
                 let result = try_op_interval_yearmonth_i32(l, r, i32::checked_div);
                 binary_op_scalar_or_array(left, right, result)
             }
+            (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Int32) => {
+                let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let r = right_arr.as_primitive::<Int32Type>();
+                let result = try_op_interval_monthdaynano_i32(l, r, |a, b| a.checked_div(b as i64));
+                binary_op_scalar_or_array(left, right, result)
+            }
+            (DataType::Int32, DataType::Interval(IntervalUnit::MonthDayNano)) => {
+                let l = left_arr.as_primitive::<Int32Type>();
+                let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let result = try_op_interval_monthdaynano_i32(r, l, |a, b| a.checked_div(b as i64));
+
+                binary_op_scalar_or_array(left, right, result)
+            }
+            (DataType::Interval(IntervalUnit::MonthDayNano), DataType::Int64) => {
+                let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let r = right_arr.as_primitive::<Int64Type>();
+                let result =
+                    try_op_interval_monthdaynano_i64(
+                        l,
+                        r,
+                        |a, b| {
+                            if b == 0 {
+                                None
+                            } else {
+                                Some(a / b)
+                            }
+                        },
+                    );
+                binary_op_scalar_or_array(left, right, result)
+            }
             (l, r) => Err(unsupported_data_types_exec_err(
                 "try_divide",
-                "Int32, Int64 o Interval(YearMonth) / Int32",
+                "Int32, Int64 o Interval(YearMonth) / Int32,,,,",
                 &[l.clone(), r.clone()],
             )),
         }
@@ -148,6 +193,36 @@ impl ScalarUDFImpl for SparkTryDiv {
             return Ok(vec![DataType::Interval(YearMonth), DataType::Int32]);
         }
 
+        if matches!(
+            (left, right),
+            (
+                DataType::Interval(IntervalUnit::MonthDayNano),
+                DataType::Int32
+            ) | (
+                DataType::Int32,
+                DataType::Interval(IntervalUnit::MonthDayNano)
+            )
+        ) {
+            return Ok(vec![
+                DataType::Interval(IntervalUnit::MonthDayNano),
+                DataType::Int32,
+            ]);
+        }
+        if matches!(
+            (left, right),
+            (
+                DataType::Interval(IntervalUnit::MonthDayNano),
+                DataType::Int64
+            ) | (
+                DataType::Int64,
+                DataType::Interval(IntervalUnit::MonthDayNano)
+            )
+        ) {
+            return Ok(vec![
+                DataType::Interval(IntervalUnit::MonthDayNano),
+                DataType::Int64,
+            ]);
+        }
         if matches!(
             (left, right),
             (DataType::Int32, DataType::Int32)
