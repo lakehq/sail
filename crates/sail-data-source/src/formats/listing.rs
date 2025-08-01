@@ -28,12 +28,12 @@ pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>>;
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>>;
 }
 
@@ -158,7 +158,7 @@ impl ListingFormat for ArrowListingFormat {
     fn create_read_format(
         &self,
         _ctx: &dyn Session,
-        _options: HashMap<String, String>,
+        _options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(ArrowFormat))
     }
@@ -166,7 +166,7 @@ impl ListingFormat for ArrowListingFormat {
     fn create_write_format(
         &self,
         _ctx: &dyn Session,
-        _options: HashMap<String, String>,
+        _options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(ArrowFormat))
     }
@@ -186,7 +186,7 @@ impl ListingFormat for AvroListingFormat {
     fn create_read_format(
         &self,
         _ctx: &dyn Session,
-        _options: HashMap<String, String>,
+        _options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(AvroFormat))
     }
@@ -194,7 +194,7 @@ impl ListingFormat for AvroListingFormat {
     fn create_write_format(
         &self,
         _ctx: &dyn Session,
-        _options: HashMap<String, String>,
+        _options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(AvroFormat))
     }
@@ -214,7 +214,7 @@ impl ListingFormat for CsvListingFormat {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_csv_read_options(options)?;
@@ -224,7 +224,7 @@ impl ListingFormat for CsvListingFormat {
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_csv_write_options(options)?;
@@ -246,7 +246,7 @@ impl ListingFormat for JsonListingFormat {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_json_read_options(options)?;
@@ -256,7 +256,7 @@ impl ListingFormat for JsonListingFormat {
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_json_write_options(options)?;
@@ -278,7 +278,7 @@ impl ListingFormat for ParquetListingFormat {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_parquet_read_options(options)?;
@@ -288,7 +288,7 @@ impl ListingFormat for ParquetListingFormat {
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_parquet_write_options(options)?;

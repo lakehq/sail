@@ -194,23 +194,11 @@ impl PlanResolver<'_> {
             CommandNode::InsertInto {
                 input,
                 table,
-                columns,
-                partition_spec,
-                replace,
-                if_not_exists,
-                overwrite,
+                mode,
+                partition,
             } => {
-                self.resolve_command_insert_into(
-                    *input,
-                    table,
-                    columns,
-                    partition_spec,
-                    replace,
-                    if_not_exists,
-                    overwrite,
-                    state,
-                )
-                .await
+                self.resolve_command_insert_into(*input, table, mode, partition, state)
+                    .await
             }
             CommandNode::MergeInto { .. } => Err(PlanError::todo("CommandNode::MergeInto")),
             CommandNode::SetVariable { variable, value } => {

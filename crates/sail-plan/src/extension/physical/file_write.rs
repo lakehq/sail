@@ -56,7 +56,11 @@ pub async fn create_file_write_physical_plan(
         partition_by,
         bucket_by,
         sort_order,
-        options: options.into_iter().collect(),
+        // TODO: detect duplicated keys in each set of options
+        options: options
+            .into_iter()
+            .map(|x| x.into_iter().collect())
+            .collect(),
     };
     default_registry()
         .get_format(&format)?

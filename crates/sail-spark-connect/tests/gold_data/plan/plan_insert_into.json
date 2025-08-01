@@ -43,11 +43,12 @@
               "table": [
                 "s"
               ],
-              "columns": "byPosition",
-              "partitionSpec": [],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": false
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": false
+                }
+              },
+              "partition": []
             },
             "planId": null
           }
@@ -97,11 +98,12 @@
               "table": [
                 "s"
               ],
-              "columns": "byPosition",
-              "partitionSpec": [],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": false
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": false
+                }
+              },
+              "partition": []
             },
             "planId": null
           }
@@ -151,8 +153,12 @@
               "table": [
                 "s"
               ],
-              "columns": "byPosition",
-              "partitionSpec": [
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": false
+                }
+              },
+              "partition": [
                 [
                   "c",
                   {
@@ -173,10 +179,7 @@
                     }
                   }
                 ]
-              ],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": false
+              ]
             },
             "planId": null
           }

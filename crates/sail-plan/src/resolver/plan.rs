@@ -495,7 +495,7 @@ impl PlanResolver<'_> {
                 partition_by: _,
                 sort_by: _,
                 bucket_by: _,
-                options,
+                options: table_options,
                 properties: _,
             } => {
                 let schema =
@@ -503,7 +503,11 @@ impl PlanResolver<'_> {
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
                     schema: Some(schema),
-                    options: options.into_iter().collect(),
+                    // TODO: detect duplicated keys in each set of options
+                    options: vec![
+                        table_options.into_iter().collect(),
+                        options.into_iter().collect(),
+                    ],
                 };
                 let table_provider = default_registry()
                     .get_format(&format)?
@@ -646,7 +650,8 @@ impl PlanResolver<'_> {
         let info = SourceInfo {
             paths,
             schema,
-            options: options.into_iter().collect(),
+            // TODO: detect duplicated keys in the set of options
+            options: vec![options.into_iter().collect()],
         };
         let table_provider = default_registry()
             .get_format(&format)?

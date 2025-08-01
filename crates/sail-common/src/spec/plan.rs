@@ -417,11 +417,8 @@ pub enum CommandNode {
     InsertInto {
         input: Box<QueryPlan>,
         table: ObjectName,
-        columns: WriteColumns,
-        partition_spec: Vec<(Identifier, Option<Expr>)>,
-        replace: Option<Expr>,
-        if_not_exists: bool,
-        overwrite: bool,
+        mode: InsertMode,
+        partition: Vec<(Identifier, Option<Expr>)>,
     },
     InsertOverwriteDirectory {
         input: Box<QueryPlan>,
@@ -769,6 +766,7 @@ pub struct TableDefinition {
     pub partition_by: Vec<Identifier>,
     pub sort_by: Vec<SortOrder>,
     pub bucket_by: Option<SaveBucketBy>,
+    pub cluster_by: Vec<ObjectName>,
     pub if_not_exists: bool,
     pub replace: bool,
     pub options: Vec<(String, String)>,
@@ -839,7 +837,7 @@ pub struct Write {
     pub input: Box<QueryPlan>,
     pub source: Option<String>,
     pub save_type: SaveType,
-    pub mode: SaveMode,
+    pub mode: Option<SaveMode>,
     pub sort_columns: Vec<SortOrder>,
     pub partitioning_columns: Vec<Identifier>,
     pub clustering_columns: Vec<Identifier>,
@@ -877,7 +875,7 @@ pub enum SaveMode {
     Append,
     Overwrite,
     ErrorIfExists,
-    Ignore,
+    IgnoreIfExists,
 }
 
 impl Default for SaveMode {
@@ -897,7 +895,6 @@ pub struct WriteTo {
     pub clustering_columns: Vec<Identifier>,
     pub options: Vec<(String, String)>,
     pub table_properties: Vec<(String, String)>,
-    pub overwrite_condition: Option<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -906,17 +903,27 @@ pub enum WriteToMode {
     Append,
     Create,
     CreateOrReplace,
-    Overwrite,
+    Overwrite { condition: Box<Expr> },
     OverwritePartitions,
     Replace,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum WriteColumns {
-    ByPosition,
-    ByName,
-    Columns(Vec<Identifier>),
+pub enum InsertMode {
+    InsertByPosition {
+        overwrite: bool,
+    },
+    InsertByName {
+        overwrite: bool,
+    },
+    InsertByColumns {
+        columns: Vec<Identifier>,
+        overwrite: bool,
+    },
+    Replace {
+        condition: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

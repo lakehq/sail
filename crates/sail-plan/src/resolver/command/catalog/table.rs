@@ -29,6 +29,7 @@ impl PlanResolver<'_> {
             partition_by,
             sort_by,
             bucket_by,
+            cluster_by,
             if_not_exists,
             replace,
             options,
@@ -37,6 +38,9 @@ impl PlanResolver<'_> {
 
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
+        }
+        if !cluster_by.is_empty() {
+            return Err(PlanError::todo("CLUSTER BY in CREATE TABLE statement"));
         }
         let columns = self.resolve_catalog_table_columns(columns, state)?;
         let constraints = self.resolve_catalog_table_constraints(constraints)?;

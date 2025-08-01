@@ -42,7 +42,9 @@ pub struct BucketBy {
 pub struct SourceInfo {
     pub paths: Vec<String>,
     pub schema: Option<Schema>,
-    pub options: HashMap<String, String>,
+    /// The sets of options for the data source.
+    /// A later set of options can override earlier ones.
+    pub options: Vec<HashMap<String, String>>,
 }
 
 /// Information required to create a data writer.
@@ -57,7 +59,9 @@ pub struct SinkInfo {
     pub partition_by: Vec<String>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Option<LexRequirement>,
-    pub options: HashMap<String, String>,
+    /// The sets of options for the data sink.
+    /// A later set of options can override earlier ones.
+    pub options: Vec<HashMap<String, String>>,
 }
 
 /// A trait for preparing physical execution for a specific format.

@@ -1361,6 +1361,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         partition_by: vec![],
                         sort_by: vec![],
                         bucket_by: None,
+                        cluster_by: vec![],
                         if_not_exists: false,
                         replace: false,
                         options: options.into_iter().collect(),
@@ -1404,6 +1405,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         partition_by: vec![],
                         sort_by: vec![],
                         bucket_by: None,
+                        cluster_by: vec![],
                         if_not_exists: false,
                         replace: false,
                         options: options.into_iter().collect(),
@@ -1512,11 +1514,11 @@ impl TryFrom<WriteOperation> for spec::Write {
         } = write;
         let input = input.required("input")?.try_into()?;
         let mode = match SaveMode::try_from(mode).required("save mode")? {
-            SaveMode::Unspecified => spec::SaveMode::ErrorIfExists,
-            SaveMode::Append => spec::SaveMode::Append,
-            SaveMode::Overwrite => spec::SaveMode::Overwrite,
-            SaveMode::ErrorIfExists => spec::SaveMode::ErrorIfExists,
-            SaveMode::Ignore => spec::SaveMode::Ignore,
+            SaveMode::Unspecified => None,
+            SaveMode::Append => Some(spec::SaveMode::Append),
+            SaveMode::Overwrite => Some(spec::SaveMode::Overwrite),
+            SaveMode::ErrorIfExists => Some(spec::SaveMode::ErrorIfExists),
+            SaveMode::Ignore => Some(spec::SaveMode::IgnoreIfExists),
         };
         let sort_columns = sort_column_names
             .into_iter()
@@ -1608,18 +1610,29 @@ impl TryFrom<WriteOperationV2> for spec::WriteTo {
         let clustering_columns = clustering_columns.into_iter().map(|x| x.into()).collect();
         let options = options.into_iter().collect();
         let table_properties = table_properties.into_iter().collect();
-        let mode = match Mode::try_from(mode).required("write operation v2 mode")? {
-            Mode::Unspecified => {
+        let mode = Mode::try_from(mode).required("write operation v2 mode")?;
+        let overwrite_condition = overwrite_condition.map(|x| x.try_into()).transpose()?;
+        let mode = match (mode, overwrite_condition) {
+            (Mode::Unspecified, _) => {
                 return Err(SparkError::invalid("unspecified write operation v2 method"));
             }
-            Mode::Create => spec::WriteToMode::Create,
-            Mode::Overwrite => spec::WriteToMode::Overwrite,
-            Mode::OverwritePartitions => spec::WriteToMode::OverwritePartitions,
-            Mode::Append => spec::WriteToMode::Append,
-            Mode::Replace => spec::WriteToMode::Replace,
-            Mode::CreateOrReplace => spec::WriteToMode::CreateOrReplace,
+            (Mode::Overwrite, Some(condition)) => spec::WriteToMode::Overwrite {
+                condition: Box::new(condition),
+            },
+            (Mode::Overwrite, None) => {
+                return Err(SparkError::invalid("missing overwrite condition"));
+            }
+            (_, Some(_)) => {
+                return Err(SparkError::invalid(
+                    "overwrite condition only supported for overwrite mode",
+                ));
+            }
+            (Mode::Create, None) => spec::WriteToMode::Create,
+            (Mode::OverwritePartitions, None) => spec::WriteToMode::OverwritePartitions,
+            (Mode::Append, None) => spec::WriteToMode::Append,
+            (Mode::Replace, None) => spec::WriteToMode::Replace,
+            (Mode::CreateOrReplace, None) => spec::WriteToMode::CreateOrReplace,
         };
-        let overwrite_condition = overwrite_condition.map(|x| x.try_into()).transpose()?;
         Ok(spec::WriteTo {
             input: Box::new(input),
             provider,
@@ -1629,7 +1642,6 @@ impl TryFrom<WriteOperationV2> for spec::WriteTo {
             clustering_columns,
             options,
             table_properties,
-            overwrite_condition,
         })
     }
 }

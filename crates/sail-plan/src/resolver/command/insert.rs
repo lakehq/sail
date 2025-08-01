@@ -1,55 +1,62 @@
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
+use sail_common_datafusion::datasource::SinkMode;
 
-use crate::error::{PlanError, PlanResult};
-use crate::resolver::command::write::{WriteMode, WriteSpec, WriteTarget};
+use crate::error::PlanResult;
+use crate::resolver::command::write::WritePlanBuilder;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn resolve_command_insert_into(
         &self,
         input: spec::QueryPlan,
         table: spec::ObjectName,
-        columns: spec::WriteColumns,
-        partition_spec: Vec<(spec::Identifier, Option<spec::Expr>)>,
-        replace: Option<spec::Expr>,
-        if_not_exists: bool,
-        overwrite: bool,
+        mode: spec::InsertMode,
+        partition: Vec<(spec::Identifier, Option<spec::Expr>)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let mode =
-            match (replace, if_not_exists, overwrite) {
-                (Some(condition), false, false) => WriteMode::OverwriteIf {
-                    condition: Box::new(condition),
-                },
-                (Some(_), _, _) => return Err(PlanError::invalid(
-                    "INSERT with REPLACE condition cannot be used with IF NOT EXISTS or OVERWRITE",
-                )),
-                (None, true, false) => WriteMode::IgnoreIfExists,
-                (None, true, true) => {
-                    return Err(PlanError::invalid(
-                        "INSERT with IF NOT EXISTS cannot be used with OVERWRITE",
-                    ))
+        use spec::InsertMode;
+
+        let input = self.resolve_write_input(input, state).await?;
+
+        let mut builder = WritePlanBuilder::new().with_partition(partition);
+        match mode {
+            InsertMode::InsertByPosition { overwrite } => {
+                if overwrite {
+                    builder = builder.with_mode(SinkMode::Overwrite);
+                } else {
+                    builder = builder.with_mode(SinkMode::Append);
                 }
-                (None, false, true) => WriteMode::Overwrite,
-                (None, false, false) => WriteMode::ErrorIfExists,
-            };
-        let write = WriteSpec {
-            input: Box::new(input),
-            partition: partition_spec,
-            format: None,
-            target: WriteTarget::Table(table),
-            mode,
-            columns,
-            partition_by: vec![],
-            bucket_by: None,
-            sort_by: vec![],
-            cluster_by: vec![],
-            options: vec![],
-            table_properties: vec![],
+            }
+            InsertMode::InsertByName { overwrite } => {
+                if overwrite {
+                    builder = builder.with_mode(SinkMode::Overwrite);
+                } else {
+                    builder = builder.with_mode(SinkMode::Append);
+                }
+            }
+            InsertMode::InsertByColumns {
+                columns: _,
+                overwrite,
+            } => {
+                if overwrite {
+                    builder = builder.with_mode(SinkMode::Overwrite);
+                } else {
+                    builder = builder.with_mode(SinkMode::Append);
+                }
+            }
+            InsertMode::Replace { condition } => {
+                let condition = self
+                    .resolve_expression(*condition, input.schema(), state)
+                    .await?;
+                builder = builder.with_mode(SinkMode::OverwriteIf {
+                    condition: Box::new(condition),
+                });
+            }
         };
-        self.resolve_write_spec(write, state).await
+        builder = builder.with_existing_table_target(table);
+
+        self.resolve_write_with_builder(input, builder, state).await
     }
 }

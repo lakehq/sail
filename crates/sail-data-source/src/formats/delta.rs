@@ -64,6 +64,8 @@ impl TableFormat for DeltaTableFormat {
                 return not_impl_err!("unsupported sink mode for Delta: {mode:?}")
             }
         };
+        // TODO: parse the sets of options properly (with overwrite logic)
+        let options = options.into_iter().flatten().collect();
         let sink = Arc::new(DeltaDataSink::new(
             mode,
             table_url,
