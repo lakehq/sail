@@ -993,7 +993,6 @@ mod tests {
             Some(IntervalMonthDayNanoType::make_value(2, 0, 0)), // 2 months
         ]);
         let scalars = Int32Array::from(vec![Some(3)]);
-
         let result =
             try_op_interval_monthdaynano_i32(&intervals, &scalars, |a, b| a.checked_mul(b as i64));
 
