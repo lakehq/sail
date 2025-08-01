@@ -4,12 +4,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use uuid::Uuid;
-
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::sink::DataSink;
-
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
@@ -24,6 +21,7 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::StreamExt;
 use sail_common_datafusion::datasource::TableDeltaOptions;
 use url::Url;
+use uuid::Uuid;
 
 use crate::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
 use crate::operations::write::execution::{prepare_predicate_actions, WriterStatsConfig};
@@ -116,10 +114,9 @@ impl DataSink for DeltaDataSink {
 
         use crate::delta_datafusion::create_object_store_url;
         let object_store_url = create_object_store_url(&self.table_url);
-        context.runtime_env().register_object_store(
-            object_store_url.as_ref(),
-            object_store.clone(),
-        );
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), object_store.clone());
 
         let (table, table_exists) = match open_table_with_object_store(
             self.table_url.clone(),
@@ -209,12 +206,9 @@ impl DataSink for DeltaDataSink {
                         .with_runtime_env(context.runtime_env())
                         .build();
 
-                    let predicate_expr = parse_predicate_expression(
-                        &df_schema,
-                        predicate,
-                        &session_state,
-                    )
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let predicate_expr =
+                        parse_predicate_expression(&df_schema, predicate, &session_state)
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     predicate_str = Some(predicate.clone());
 

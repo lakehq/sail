@@ -941,7 +941,6 @@ class TestDeltaLake:
             .save(str(delta_path))
 
         result_df = spark.read.format("delta").load(delta_table_path).sort("id")
-        print(result_df.show())
         result = result_df.collect()
 
         assert {row.id for row in result} == {2, 4, 5, 6}
