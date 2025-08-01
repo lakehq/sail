@@ -213,6 +213,7 @@ pub struct ParquetConfig {
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
+    pub cache_metadata: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

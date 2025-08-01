@@ -1002,6 +1002,7 @@ impl PlanResolver<'_> {
                                 order_by: vec![],
                                 window_frame: WindowFrame::new(None),
                                 null_treatment: Some(NullTreatment::RespectNulls),
+                                distinct: false,
                             },
                         }))
                         .alias(left_row_number_alias.as_str());
@@ -1019,6 +1020,7 @@ impl PlanResolver<'_> {
                                 order_by: vec![],
                                 window_frame: WindowFrame::new(None),
                                 null_treatment: Some(NullTreatment::RespectNulls),
+                                distinct: false,
                             },
                         }))
                         .alias(right_row_number_alias.as_str());

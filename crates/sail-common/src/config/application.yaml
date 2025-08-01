@@ -447,6 +447,16 @@
     at the expense of higher memory usage.
   experimental: true
 
+- key: parquet.cache_metadata
+  type: boolean
+  default: "true"
+  description: |
+    (Reading) Whether or not to enable the caching of embedded metadata of Parquet files
+    (footer and page metadata). Enabling it can offer substantial performance improvements
+    for repeated queries over large files. By default, the cache is automatically
+    invalidated when the underlying file is modified.
+  experimental: true
+
 - key: kubernetes.image
   type: string
   default: "sail:latest"

@@ -156,6 +156,7 @@ impl SessionManager {
                 .config
                 .parquet
                 .maximum_buffered_record_batches_per_stream;
+            parquet.cache_metadata = options.config.parquet.cache_metadata;
         }
 
         let runtime = {
