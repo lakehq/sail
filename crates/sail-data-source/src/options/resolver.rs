@@ -156,6 +156,7 @@ fn apply_parquet_read_options(
         binary_as_string,
         coerce_int96,
         bloom_filter_on_read,
+        cache_metadata,
     } = from;
     if let Some(v) = enable_page_index {
         to.global.enable_page_index = v;
@@ -186,6 +187,9 @@ fn apply_parquet_read_options(
     }
     if let Some(v) = bloom_filter_on_read {
         to.global.bloom_filter_on_read = v;
+    }
+    if let Some(v) = cache_metadata {
+        to.global.cache_metadata = v;
     }
     Ok(())
 }

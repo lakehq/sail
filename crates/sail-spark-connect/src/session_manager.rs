@@ -2,13 +2,16 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::ops::DerefMut;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+use datafusion::execution::cache::cache_manager::CacheManagerConfig;
+use datafusion::execution::cache::cache_unit::{DefaultFileStatisticsCache, DefaultListFilesCache};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use log::info;
+use log::{debug, info};
+use sail_cache::file_metadata_cache::MokaFilesMetadataCache;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -28,6 +31,13 @@ use tokio::time::Instant;
 
 use crate::error::{SparkError, SparkResult};
 use crate::session::SparkSession;
+
+pub static GLOBAL_FILE_METADATA_CACHE: LazyLock<Arc<MokaFilesMetadataCache>> =
+    LazyLock::new(|| {
+        // CHECK HERE: DO NOT MERGE UNTIL memory limit is set in the config
+        let memory_limit = std::env::var("SAIL_RUNTIME__FILE_METADATA_CACHE_LIMIT").ok();
+        Arc::new(MokaFilesMetadataCache::new(memory_limit))
+    });
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct SessionKey {
@@ -156,14 +166,37 @@ impl SessionManager {
                 .config
                 .parquet
                 .maximum_buffered_record_batches_per_stream;
+            parquet.cache_metadata = options.config.parquet.cache_metadata;
         }
 
         let runtime = {
             let registry = DynamicObjectStoreRegistry::new(options.runtime.clone());
-            let builder =
-                RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
+
+            let cache_config = CacheManagerConfig::default()
+                .with_file_metadata_cache(Some(GLOBAL_FILE_METADATA_CACHE.clone()));
+            let cache_config = if options.config.runtime.table_files_statistics_cache {
+                debug!("[table_files_statistics_cache] Using table files statistics cache");
+                cache_config.with_files_statistics_cache(Some(Arc::new(
+                    DefaultFileStatisticsCache::default(),
+                )))
+            } else {
+                debug!("[table_files_statistics_cache] Not using table files statistics cache");
+                cache_config
+            };
+            let cache_config = if options.config.runtime.list_files_cache {
+                debug!("[list_files_cache] Using list files cache");
+                cache_config.with_list_files_cache(Some(Arc::new(DefaultListFilesCache::default())))
+            } else {
+                debug!("[list_files_cache] Not using list files cache");
+                cache_config
+            };
+
+            let builder = RuntimeEnvBuilder::default()
+                .with_object_store_registry(Arc::new(registry))
+                .with_cache_manager(cache_config);
             Arc::new(builder.build()?)
         };
+
         let state = SessionStateBuilder::new()
             .with_config(session_config)
             .with_runtime_env(runtime)
