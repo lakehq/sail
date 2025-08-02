@@ -25,6 +25,7 @@ impl MokaFilesMetadataCache {
                             if let Some(parquet_meta) =
                                 value.1.as_any().downcast_ref::<ParquetMetaData>()
                             {
+                                // FIXME: Downcast doesn't seem to work.
                                 debug!("Using ParquetMetaData for size calculation");
                                 parquet_meta.memory_size().min(u32::MAX as usize) as u32
                             } else {
