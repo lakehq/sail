@@ -35,6 +35,8 @@ impl MokaFilesMetadataCache {
                     )
                     .max_capacity(max_capacity);
             }
+        } else {
+            debug!("No memory limit set for MokaFilesMetadataCache, using default settings");
         }
 
         Self {

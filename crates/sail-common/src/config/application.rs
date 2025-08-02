@@ -80,6 +80,8 @@ pub struct RuntimeConfig {
     pub enable_secondary: bool,
     pub table_files_statistics_cache: bool,
     pub list_files_cache: bool,
+    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    pub file_metadata_cache_limit: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

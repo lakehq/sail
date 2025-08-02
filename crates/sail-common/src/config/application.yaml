@@ -42,6 +42,16 @@
   experimental: true
   hidden: true
 
+- key: runtime.file_metadata_cache_limit
+  type: string
+  default: ""
+  description: |
+    Maximum memory limit for the file metadata cache.
+    Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: ‘2G’ for 2 gigabytes.
+    Only applies when `parquet.cache_metadata` is enabled.
+    Default is empty, which means no limit.
+  experimental: true
+
 - key: cluster.enable_tls
   type: boolean
   default: "false"
