@@ -1,0 +1,23 @@
+[package]
+name = "sail-cache"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+
+thiserror = { workspace = true }
+object_store = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+chrono = { workspace = true }
+moka = { workspace = true }
