@@ -32,6 +32,7 @@ pub enum Expr {
         cast_to_type: DataType,
         /// Whether to rename the expression to `CAST(... AS ...)`.
         rename: bool,
+        is_try: bool,
     },
     UnresolvedRegex {
         /// The regular expression to match column names.

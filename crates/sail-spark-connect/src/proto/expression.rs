@@ -12,7 +12,7 @@ use sail_sql_analyzer::parser::{
 use sail_sql_analyzer::query::from_ast_named_expression;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::spark::connect::expression::cast::CastToType;
+use crate::spark::connect::expression::cast::{CastToType, EvalMode};
 use crate::spark::connect::expression::sort_order::{NullOrdering, SortDirection};
 use crate::spark::connect::expression::window::window_frame::frame_boundary::Boundary;
 use crate::spark::connect::expression::window::window_frame::{FrameBoundary, FrameType};
@@ -133,7 +133,7 @@ impl TryFrom<Expression> for spec::Expr {
             ExprType::Cast(cast) => {
                 let Cast {
                     expr,
-                    eval_mode: _, // TODO: support eval mode
+                    eval_mode, // TODO: support eval mode
                     cast_to_type,
                 } = *cast;
                 let expr = expr.required("cast expression")?;
@@ -146,6 +146,7 @@ impl TryFrom<Expression> for spec::Expr {
                     expr: Box::new((*expr).try_into()?),
                     cast_to_type,
                     rename: false,
+                    is_try: matches!(EvalMode::try_from(eval_mode), Ok(EvalMode::Try)),
                 })
             }
             ExprType::UnresolvedRegex(UnresolvedRegex { col_name, plan_id }) => {
