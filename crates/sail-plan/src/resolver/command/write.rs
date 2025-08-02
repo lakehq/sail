@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion_expr::{col, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::Column;
+use datafusion_expr::expr::Sort;
+use datafusion_expr::{col, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
@@ -10,7 +12,6 @@ use sail_catalog::provider::{
     TableColumnStatus, TableKind,
 };
 use sail_common::spec;
-use sail_common::spec::WriteToMode;
 use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::utils::rename_logical_plan;
@@ -133,276 +134,6 @@ impl WritePlanBuilder {
 }
 
 impl PlanResolver<'_> {
-    pub(super) async fn resolve_command_write(
-        &self,
-        write: spec::Write,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        use spec::{SaveMode, SaveType, TableSaveMethod};
-
-        let spec::Write {
-            input,
-            source,
-            save_type,
-            mode,
-            sort_columns,
-            partitioning_columns,
-            clustering_columns,
-            bucket_by,
-            options,
-        } = write;
-
-        let input = self.resolve_write_input(*input, state).await?;
-        let clustering_columns = self.resolve_write_cluster_by_columns(clustering_columns)?;
-
-        let mut builder = WritePlanBuilder::new()
-            .with_partition_by(partitioning_columns)
-            .with_bucket_by(bucket_by)
-            .with_sort_by(sort_columns)
-            .with_cluster_by(clustering_columns)
-            .with_options(options);
-        if let Some(source) = source {
-            builder = builder.with_format(source);
-        }
-        match save_type {
-            SaveType::Path(location) => {
-                let mode = match mode {
-                    Some(SaveMode::ErrorIfExists) | None => SinkMode::ErrorIfExists,
-                    Some(SaveMode::IgnoreIfExists) => SinkMode::IgnoreIfExists,
-                    Some(SaveMode::Append) => SinkMode::Append,
-                    Some(SaveMode::Overwrite) => SinkMode::Overwrite,
-                };
-                builder = builder
-                    .with_target(WriteTarget::Path { location })
-                    .with_mode(mode);
-            }
-            SaveType::Table {
-                table,
-                save_method: TableSaveMethod::SaveAsTable,
-            } => match mode {
-                Some(SaveMode::ErrorIfExists) | None => {
-                    builder = builder
-                        .with_target(WriteTarget::NewTable {
-                            table,
-                            action: WriteTableAction::Create,
-                        })
-                        .with_mode(SinkMode::ErrorIfExists);
-                }
-                Some(SaveMode::IgnoreIfExists) => {
-                    builder = builder
-                        .with_target(WriteTarget::NewTable {
-                            table,
-                            action: WriteTableAction::Create,
-                        })
-                        .with_mode(SinkMode::IgnoreIfExists);
-                }
-                Some(SaveMode::Append) => {
-                    builder = builder.with_mode(SinkMode::Append).with_target(
-                        WriteTarget::ExistingTable {
-                            table,
-                            column_match: WriteColumnMatch::ByName,
-                        },
-                    );
-                }
-                Some(SaveMode::Overwrite) => {
-                    builder =
-                        builder
-                            .with_mode(SinkMode::Overwrite)
-                            .with_target(WriteTarget::NewTable {
-                                table,
-                                action: WriteTableAction::CreateOrReplace,
-                            });
-                }
-            },
-            SaveType::Table {
-                table,
-                save_method: TableSaveMethod::InsertInto,
-            } => {
-                let mode = match mode {
-                    Some(SaveMode::Overwrite) => SinkMode::Overwrite,
-                    _ => SinkMode::Append,
-                };
-                builder = builder
-                    .with_mode(mode)
-                    .with_target(WriteTarget::ExistingTable {
-                        table,
-                        column_match: WriteColumnMatch::ByPosition,
-                    });
-            }
-        };
-        self.resolve_write_with_builder(input, builder, state).await
-    }
-
-    pub(super) async fn resolve_command_write_to(
-        &self,
-        write_to: spec::WriteTo,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let spec::WriteTo {
-            input,
-            provider,
-            table,
-            mode,
-            partitioning_columns,
-            clustering_columns,
-            options,
-            table_properties,
-        } = write_to;
-
-        let input = self.resolve_write_input(*input, state).await?;
-        let partition_by = self.resolve_write_partition_by_expressions(partitioning_columns)?;
-        let cluster_by = self.resolve_write_cluster_by_columns(clustering_columns)?;
-
-        let mut builder = WritePlanBuilder::new()
-            .with_partition_by(partition_by)
-            .with_cluster_by(cluster_by)
-            .with_options(options)
-            .with_table_properties(table_properties);
-
-        if let Some(provider) = provider {
-            builder = builder.with_format(provider);
-        }
-
-        match mode {
-            WriteToMode::Append => {
-                builder =
-                    builder
-                        .with_mode(SinkMode::Append)
-                        .with_target(WriteTarget::ExistingTable {
-                            table,
-                            column_match: WriteColumnMatch::ByName,
-                        });
-            }
-            WriteToMode::Create => {
-                builder =
-                    builder
-                        .with_mode(SinkMode::Overwrite)
-                        .with_target(WriteTarget::NewTable {
-                            table,
-                            action: WriteTableAction::Create,
-                        })
-            }
-            WriteToMode::CreateOrReplace => {
-                builder =
-                    builder
-                        .with_mode(SinkMode::Overwrite)
-                        .with_target(WriteTarget::NewTable {
-                            table,
-                            action: WriteTableAction::CreateOrReplace,
-                        });
-            }
-            WriteToMode::Overwrite { condition } => {
-                let condition = self
-                    .resolve_expression(*condition, input.schema(), state)
-                    .await?;
-                builder = builder
-                    .with_mode(SinkMode::OverwriteIf {
-                        condition: Box::new(condition),
-                    })
-                    .with_target(WriteTarget::ExistingTable {
-                        table,
-                        column_match: WriteColumnMatch::ByName,
-                    });
-            }
-            WriteToMode::OverwritePartitions => {
-                builder = builder
-                    .with_mode(SinkMode::OverwritePartitions)
-                    .with_target(WriteTarget::ExistingTable {
-                        table,
-                        column_match: WriteColumnMatch::ByName,
-                    });
-            }
-            WriteToMode::Replace => {
-                builder =
-                    builder
-                        .with_mode(SinkMode::Overwrite)
-                        .with_target(WriteTarget::NewTable {
-                            table,
-                            action: WriteTableAction::Replace,
-                        });
-            }
-        };
-        self.resolve_write_with_builder(input, builder, state).await
-    }
-
-    pub(super) fn resolve_write_partition_by_expressions(
-        &self,
-        partition_by: Vec<spec::Expr>,
-    ) -> PlanResult<Vec<spec::Identifier>> {
-        // TODO: support functions for partitioning columns
-        partition_by
-            .into_iter()
-            .map(|x| match x {
-                spec::Expr::UnresolvedAttribute {
-                    name,
-                    plan_id: None,
-                    is_metadata_column: false,
-                } => {
-                    let name: Vec<String> = name.into();
-                    Ok(name.one()?.into())
-                }
-                _ => Err(PlanError::invalid(
-                    "partitioning column must be a column reference",
-                )),
-            })
-            .collect()
-    }
-
-    pub(super) fn resolve_write_cluster_by_columns(
-        &self,
-        cluster_by: Vec<spec::Identifier>,
-    ) -> PlanResult<Vec<spec::ObjectName>> {
-        Ok(cluster_by.into_iter().map(spec::ObjectName::bare).collect())
-    }
-
-    pub(super) async fn resolve_write_input(
-        &self,
-        input: spec::QueryPlan,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
-        let fields = Self::get_field_names(input.schema(), state)?;
-        Ok(rename_logical_plan(input, &fields)?)
-    }
-
-    async fn resolve_table_info(&self, table: &spec::ObjectName) -> PlanResult<Option<TableInfo>> {
-        let status = match self
-            .ctx
-            .extension::<CatalogManager>()?
-            .get_table(table.parts())
-            .await
-        {
-            Ok(x) => x,
-            Err(CatalogError::NotFound(_, _)) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        match status.kind {
-            TableKind::Table {
-                catalog: _,
-                database: _,
-                columns,
-                comment: _,
-                constraints: _,
-                location,
-                format,
-                partition_by,
-                sort_by,
-                bucket_by,
-                options,
-                properties: _,
-            } => Ok(Some(TableInfo {
-                columns,
-                location,
-                format,
-                partition_by,
-                sort_by,
-                bucket_by,
-                options,
-            })),
-            _ => Ok(None),
-        }
-    }
-
     pub(super) async fn resolve_write_with_builder(
         &self,
         mut input: LogicalPlan,
@@ -470,16 +201,18 @@ impl PlanResolver<'_> {
                 if matches!(file_write_options.mode, SinkMode::IgnoreIfExists) {
                     return Ok(LogicalPlanBuilder::empty(false).build()?);
                 }
-                input = self.rewrite_write_input(input, column_match, &info)?;
-                if !file_write_options.partition_by.is_empty() {
+                input = Self::rewrite_write_input(input, column_match, &info)?;
+                if !info.is_empty_or_equivalent_partitioning(&file_write_options.partition_by) {
                     return Err(PlanError::invalid(
-                        "cannot specify partitioning when writing to an existing table",
+                        "cannot specify a different partitioning when writing to an existing table",
                     ));
                 }
-                if file_write_options.bucket_by.is_some() || !file_write_options.sort_by.is_empty()
-                {
+                if !info.is_empty_or_equivalent_bucketing(
+                    &file_write_options.bucket_by,
+                    &file_write_options.sort_by,
+                ) {
                     return Err(PlanError::invalid(
-                        "cannot specify bucketing when writing to an existing table",
+                        "cannot specify a different bucketing when writing to an existing table",
                     ));
                 }
                 if !table_properties.is_empty() {
@@ -587,9 +320,62 @@ impl PlanResolver<'_> {
         }))
     }
 
-    #[expect(clippy::only_used_in_recursion)]
-    fn rewrite_write_input(
+    pub(super) fn resolve_write_cluster_by_columns(
         &self,
+        cluster_by: Vec<spec::Identifier>,
+    ) -> PlanResult<Vec<spec::ObjectName>> {
+        Ok(cluster_by.into_iter().map(spec::ObjectName::bare).collect())
+    }
+
+    pub(super) async fn resolve_write_input(
+        &self,
+        input: spec::QueryPlan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let input = self.resolve_query_plan(input, state).await?;
+        let fields = Self::get_field_names(input.schema(), state)?;
+        Ok(rename_logical_plan(input, &fields)?)
+    }
+
+    async fn resolve_table_info(&self, table: &spec::ObjectName) -> PlanResult<Option<TableInfo>> {
+        let status = match self
+            .ctx
+            .extension::<CatalogManager>()?
+            .get_table(table.parts())
+            .await
+        {
+            Ok(x) => x,
+            Err(CatalogError::NotFound(_, _)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        match status.kind {
+            TableKind::Table {
+                catalog: _,
+                database: _,
+                columns,
+                comment: _,
+                constraints: _,
+                location,
+                format,
+                partition_by,
+                sort_by,
+                bucket_by,
+                options,
+                properties: _,
+            } => Ok(Some(TableInfo {
+                columns,
+                location,
+                format,
+                partition_by,
+                sort_by,
+                bucket_by,
+                options,
+            })),
+            _ => Ok(None),
+        }
+    }
+
+    fn rewrite_write_input(
         input: LogicalPlan,
         column_match: WriteColumnMatch,
         info: &TableInfo,
@@ -662,7 +448,7 @@ impl PlanResolver<'_> {
                     .map(|(column, name)| col(column).alias(name))
                     .collect::<Vec<_>>();
                 let plan = LogicalPlanBuilder::new(input).project(expr)?.build()?;
-                self.rewrite_write_input(plan, WriteColumnMatch::ByName, info)?
+                Self::rewrite_write_input(plan, WriteColumnMatch::ByName, info)?
             }
         };
         Ok(plan)
@@ -700,4 +486,59 @@ struct TableInfo {
     sort_by: Vec<CatalogTableSort>,
     bucket_by: Option<CatalogTableBucketBy>,
     options: Vec<(String, String)>,
+}
+
+impl TableInfo {
+    fn is_empty_or_equivalent_partitioning(&self, partition_by: &[String]) -> bool {
+        partition_by.is_empty()
+            || (partition_by.len() == self.partition_by.len()
+                && partition_by
+                    .iter()
+                    .zip(self.partition_by.iter())
+                    .all(|(a, b)| a.eq_ignore_ascii_case(b)))
+    }
+
+    fn is_empty_or_equivalent_bucketing(
+        &self,
+        bucket_by: &Option<BucketBy>,
+        sort_by: &[Sort],
+    ) -> bool {
+        let bucket_by_match = match (bucket_by, &self.bucket_by) {
+            (None, _) => true,
+            (Some(b1), Some(b2)) => {
+                b1.num_buckets == b2.num_buckets
+                    && b1.columns.len() == b2.columns.len()
+                    && b1
+                        .columns
+                        .iter()
+                        .zip(&b2.columns)
+                        .all(|(a, b)| a.eq_ignore_ascii_case(b))
+            }
+            (Some(_), None) => false,
+        };
+        let sort_by_match = match (sort_by, self.sort_by.as_slice()) {
+            ([], _) => true,
+            (_, []) => false,
+            (s1, s2) => {
+                s1.len() == s2.len()
+                    && s1.iter().zip(s2.iter()).all(|(a, b)| {
+                        let Sort {
+                            expr:
+                                Expr::Column(Column {
+                                    relation: _,
+                                    name,
+                                    spans: _,
+                                }),
+                            asc,
+                            nulls_first: _,
+                        } = a
+                        else {
+                            return false;
+                        };
+                        name.eq_ignore_ascii_case(&b.column) && *asc == b.ascending
+                    })
+            }
+        };
+        bucket_by_match && sort_by_match
+    }
 }

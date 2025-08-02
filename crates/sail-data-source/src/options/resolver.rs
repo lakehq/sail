@@ -413,11 +413,11 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
-        let options = build_options(&[
+        let kv = build_options(&[
             ("schema_infer_max_records", "100"),
             ("compression", "bzip2"),
         ]);
-        let options = resolver.resolve_json_read_options(vec![options])?;
+        let options = resolver.resolve_json_read_options(vec![kv])?;
         assert_eq!(options.schema_infer_max_rec, Some(100));
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
@@ -430,8 +430,8 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
-        let options = build_options(&[("compression", "bzip2")]);
-        let options = resolver.resolve_json_write_options(vec![options])?;
+        let kv = build_options(&[("compression", "bzip2")]);
+        let options = resolver.resolve_json_write_options(vec![kv])?;
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         Ok(())
@@ -443,7 +443,7 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
-        let options = build_options(&[
+        let kv = build_options(&[
             ("delimiter", "!"),
             ("quote", "("),
             ("escape", "*"),
@@ -455,7 +455,7 @@ mod tests {
             ("multi_line", "true"),
             ("compression", "bzip2"),
         ]);
-        let options = resolver.resolve_csv_read_options(vec![options])?;
+        let options = resolver.resolve_csv_read_options(vec![kv])?;
         assert_eq!(options.delimiter, b'!');
         assert_eq!(options.quote, b'(');
         assert_eq!(options.escape, Some(b'*'));
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(options.newlines_in_values, Some(true)); // multi_line
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
-        let options = build_options(&[
+        let kv = build_options(&[
             ("delimiter", "!"),
             ("quote", "("),
             ("escape", "*"),
@@ -482,10 +482,10 @@ mod tests {
             ("compression", "bzip2"),
         ]);
         // null_value and null_regex cannot both be set
-        let result = resolver.resolve_csv_read_options(vec![options]);
+        let result = resolver.resolve_csv_read_options(vec![kv]);
         assert!(result.is_err());
 
-        let options = build_options(&[
+        let kv = build_options(&[
             ("delimiter", "!"),
             ("quote", "("),
             ("escape", "*"),
@@ -497,7 +497,7 @@ mod tests {
             ("multi_line", "true"),
             ("compression", "bzip2"),
         ]);
-        let options = resolver.resolve_csv_read_options(vec![options])?;
+        let options = resolver.resolve_csv_read_options(vec![kv])?;
         assert_eq!(options.null_value, None); // This is for the writer
         assert_eq!(options.null_regex, Some("MEOW".to_string())); // null_regex
 
@@ -510,7 +510,7 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
-        let options = build_options(&[
+        let kv = build_options(&[
             ("delimiter", "!"),
             ("quote", "("),
             ("escape", "*"),
@@ -519,7 +519,7 @@ mod tests {
             ("null_value", "MEOW"),
             ("compression", "bzip2"),
         ]);
-        let options = resolver.resolve_csv_write_options(vec![options])?;
+        let options = resolver.resolve_csv_write_options(vec![kv])?;
         assert_eq!(options.delimiter, b'!');
         assert_eq!(options.quote, b'(');
         assert_eq!(options.escape, Some(b'*'));
@@ -537,7 +537,7 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
-        let mut options_map = build_options(&[
+        let mut kv = build_options(&[
             ("enable_page_index", "true"),
             ("pruning", "true"),
             ("skip_metadata", "false"),
@@ -549,7 +549,7 @@ mod tests {
             ("coerce_int96", "ms"),
             ("bloom_filter_on_read", "true"),
         ]);
-        let options = resolver.resolve_parquet_read_options(vec![options_map.clone()])?;
+        let options = resolver.resolve_parquet_read_options(vec![kv.clone()])?;
         assert!(options.global.enable_page_index);
         assert!(options.global.pruning);
         assert!(!options.global.skip_metadata);
@@ -561,12 +561,12 @@ mod tests {
         assert_eq!(options.global.coerce_int96, Some("ms".to_string()));
         assert!(options.global.bloom_filter_on_read);
 
-        options_map.insert("metadata_size_hint".to_string(), "0".to_string());
-        let options = resolver.resolve_parquet_read_options(vec![options_map.clone()])?;
+        kv.insert("metadata_size_hint".to_string(), "0".to_string());
+        let options = resolver.resolve_parquet_read_options(vec![kv.clone()])?;
         assert_eq!(options.global.metadata_size_hint, None);
 
-        options_map.insert("metadata_size_hint".to_string(), "".to_string());
-        let options = resolver.resolve_parquet_read_options(vec![options_map])?;
+        kv.insert("metadata_size_hint".to_string(), "".to_string());
+        let options = resolver.resolve_parquet_read_options(vec![kv])?;
         assert_eq!(options.global.metadata_size_hint, None);
 
         Ok(())
@@ -585,16 +585,17 @@ mod tests {
             .metadata_size_hint = Some(123);
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
-        let options = build_options(&[]);
-        let options = resolver.resolve_parquet_read_options(vec![options])?;
+
+        let kv = build_options(&[]);
+        let options = resolver.resolve_parquet_read_options(vec![kv])?;
         assert_eq!(options.global.metadata_size_hint, Some(123));
 
-        let options = build_options(&[("metadata_size_hint", "0")]);
-        let options = resolver.resolve_parquet_read_options(vec![options])?;
+        let kv = build_options(&[("metadata_size_hint", "0")]);
+        let options = resolver.resolve_parquet_read_options(vec![kv])?;
         assert_eq!(options.global.metadata_size_hint, Some(123));
 
-        let options = build_options(&[("metadata_size_hint", "")]);
-        let options = resolver.resolve_parquet_read_options(vec![options])?;
+        let kv = build_options(&[("metadata_size_hint", "")]);
+        let options = resolver.resolve_parquet_read_options(vec![kv])?;
         assert_eq!(options.global.metadata_size_hint, Some(123));
 
         Ok(())
@@ -606,7 +607,7 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
-        let mut options_map = build_options(&[
+        let mut kv = build_options(&[
             ("data_page_size_limit", "1024"),
             ("write_batch_size", "1000"),
             ("writer_version", "2.0"),
@@ -627,7 +628,7 @@ mod tests {
             ("maximum_parallel_row_group_writers", "4"),
             ("maximum_buffered_record_batches_per_stream", "10"),
         ]);
-        let options = resolver.resolve_parquet_write_options(vec![options_map.clone()])?;
+        let options = resolver.resolve_parquet_write_options(vec![kv.clone()])?;
         assert_eq!(options.global.data_pagesize_limit, 1024);
         assert_eq!(options.global.write_batch_size, 1000);
         assert_eq!(options.global.writer_version, "2.0");
@@ -654,17 +655,17 @@ mod tests {
             10
         );
 
-        options_map.insert("column_index_truncate_length".to_string(), "0".to_string());
-        options_map.insert("statistics_truncate_length".to_string(), "0".to_string());
-        options_map.insert("encoding".to_string(), "".to_string());
-        let options = resolver.resolve_parquet_write_options(vec![options_map.clone()])?;
+        kv.insert("column_index_truncate_length".to_string(), "0".to_string());
+        kv.insert("statistics_truncate_length".to_string(), "0".to_string());
+        kv.insert("encoding".to_string(), "".to_string());
+        let options = resolver.resolve_parquet_write_options(vec![kv.clone()])?;
         assert_eq!(options.global.column_index_truncate_length, Some(64));
         assert_eq!(options.global.statistics_truncate_length, None);
         assert_eq!(options.global.encoding, None,);
 
-        options_map.insert("column_index_truncate_length".to_string(), "".to_string());
-        options_map.insert("statistics_truncate_length".to_string(), "".to_string());
-        let options = resolver.resolve_parquet_write_options(vec![options_map])?;
+        kv.insert("column_index_truncate_length".to_string(), "".to_string());
+        kv.insert("statistics_truncate_length".to_string(), "".to_string());
+        let options = resolver.resolve_parquet_write_options(vec![kv])?;
         assert_eq!(options.global.column_index_truncate_length, Some(64));
         assert_eq!(options.global.statistics_truncate_length, None);
 
@@ -706,29 +707,29 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
-        let options = build_options(&[]);
-        let options = resolver.resolve_parquet_write_options(vec![options])?;
+        let kv = build_options(&[]);
+        let options = resolver.resolve_parquet_write_options(vec![kv])?;
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
 
-        let options = build_options(&[
+        let kv = build_options(&[
             ("column_index_truncate_length", "0"),
             ("statistics_truncate_length", "0"),
             ("encoding", ""),
         ]);
-        let options = resolver.resolve_parquet_write_options(vec![options])?;
+        let options = resolver.resolve_parquet_write_options(vec![kv])?;
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
 
-        let options = build_options(&[
+        let kv = build_options(&[
             ("column_index_truncate_length", ""),
             ("statistics_truncate_length", ""),
         ]);
-        let options = resolver.resolve_parquet_write_options(vec![options])?;
+        let options = resolver.resolve_parquet_write_options(vec![kv])?;
         assert_eq!(options.global.max_row_group_size, 1234);
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));

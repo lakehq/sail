@@ -10,6 +10,8 @@ use crate::resolver::PlanResolver;
 mod catalog;
 mod insert;
 mod write;
+mod write_v1;
+mod write_v2;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_command_plan(

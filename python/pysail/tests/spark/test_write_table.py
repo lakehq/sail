@@ -13,6 +13,8 @@ def tables(spark):
     spark.sql("DROP TABLE t1")
     spark.sql("DROP TABLE IF EXISTS t2")
     spark.sql("DROP TABLE IF EXISTS t3")
+    spark.sql("DROP TABLE IF EXISTS t4")
+    spark.sql("DROP TABLE IF EXISTS t5")
 
 
 def test_insert_into_basic(spark):
@@ -165,3 +167,61 @@ def test_write_to(spark):
     df.writeTo("t3").overwrite(F.lit(True))
     actual = spark.sql("SELECT * FROM t3").toPandas()
     assert_frame_equal(actual, expected(1))
+
+
+@pytest.mark.skipif(not is_jvm_spark(), reason="the options overwrite logic is not fully compatible yet")
+def test_write_options(spark, tmpdir):
+    spark.sql(f"""
+        CREATE TABLE t4 (a STRING, b STRING) USING CSV
+        LOCATION '{tmpdir / "test"}'
+        OPTIONS (header 'false', delimiter '|')
+    """)
+
+    df = spark.createDataFrame([("1-2", "3")], schema="a STRING, b STRING")
+    # Spark requires `.format()` to match the table definition.
+    # If the format is not specified, the default format is used, and an exception is raised
+    # if it does not match the table definition.
+    df.write.format("csv").saveAsTable("t4", mode="append")
+
+    df = spark.createDataFrame([("1|2", "3")], schema="a STRING, b STRING")
+    df.write.format("csv").option("delimiter", "-").saveAsTable("t4", mode="append")
+    df.write.format("csv").option("SEP", "-").saveAsTable("t4", mode="append")
+
+    # Spark rewrites the entire table with the new options.
+    assert sorted(spark.read.format("csv").table("t4").collect()) == [
+        ("1-2", "3"),
+        ("1|2", "3"),
+        ("1|2", "3"),
+    ]
+    # Spark ignores the options if it conflicts with the table definition.
+    assert sorted(spark.read.format("csv").option("delimiter", "|").table("t4").collect()) == [
+        ("1-2", "3"),
+        ("1|2", "3"),
+        ("1|2", "3"),
+    ]
+
+
+def test_write_with_partition_columns(spark, tmpdir):
+    location = tmpdir / "test"
+    spark.sql(f"""
+        CREATE TABLE t5 (a INT, b STRING)
+        USING PARQUET
+        LOCATION '{location}'
+        PARTITIONED BY (a)
+    """)
+    df = spark.createDataFrame([(42, "foo")], schema="a INT, b STRING")
+    df.write.partitionBy("a").format("parquet").saveAsTable("t5", mode="append")
+
+    with pytest.raises(Exception, match=".*"):
+        df.write.partitionBy("b").format("parquet").saveAsTable("t5", mode="append")
+
+    assert spark.read.format("parquet").table("t5").select("a", "b").collect() == [
+        (42, "foo"),
+    ]
+
+    if is_jvm_spark():
+        pytest.skip("Spark cannot infer partition columns when reading paths")
+
+    assert spark.read.parquet(str(location)).select("a", "b").collect() == [
+        ("42", "foo"),
+    ]

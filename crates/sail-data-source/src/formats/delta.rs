@@ -29,6 +29,10 @@ impl TableFormat for DeltaTableFormat {
         let SourceInfo {
             paths,
             schema: _,
+            constraints: _,
+            partition_by: _,
+            bucket_by: _,
+            sort_order: _,
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;

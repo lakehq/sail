@@ -42,8 +42,8 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY in CREATE TABLE statement"));
         }
-        let columns = self.resolve_catalog_table_columns(columns, state)?;
-        let constraints = self.resolve_catalog_table_constraints(constraints)?;
+        let columns = self.resolve_table_columns(columns, state)?;
+        let constraints = self.resolve_table_constraints(constraints)?;
         let location = if let Some(location) = location {
             location
         } else {
@@ -128,7 +128,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn resolve_catalog_table_columns(
+    fn resolve_table_columns(
         &self,
         columns: Vec<spec::TableColumnDefinition>,
         state: &mut PlanResolverState,
@@ -156,7 +156,7 @@ impl PlanResolver<'_> {
             .collect()
     }
 
-    fn resolve_catalog_table_constraints(
+    fn resolve_table_constraints(
         &self,
         constraints: Vec<spec::TableConstraint>,
     ) -> PlanResult<Vec<CatalogTableConstraint>> {
