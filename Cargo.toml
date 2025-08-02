@@ -113,17 +113,17 @@ tonic-types = "0.12.3"
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 prost-build = "0.13.5"
 prost = "0.13.5"
-datafusion = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29", features = ["serde", "avro"] }
-datafusion-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29", features = ["object_store", "avro"] }
-datafusion-expr = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-expr-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-execution = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-physical-optimizer = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-proto = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-functions = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-functions-nested = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-physical-expr = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-spark = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
+datafusion = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a", features = ["serde", "avro"] }
+datafusion-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a", features = ["object_store", "avro"] }
+datafusion-expr = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-expr-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-execution = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-physical-optimizer = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-proto = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-functions = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-functions-nested = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-physical-expr = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-spark = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
 datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "d199e09" }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
@@ -154,39 +154,39 @@ indexmap = "2.10.0"
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
-datafusion = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-catalog = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-catalog-listing = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-common-runtime = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-datasource = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-datasource-avro = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-datasource-csv = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-datasource-json = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-datasource-parquet = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-doc = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-execution = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-expr = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-expr-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-functions = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-functions-aggregate = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-functions-aggregate-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-functions-nested = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-functions-table = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-functions-window = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-functions-window-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-macros = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-optimizer = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-physical-expr = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-physical-expr-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-physical-optimizer = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-physical-plan = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-proto = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-proto-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-pruning = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-session = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-spark = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
-datafusion-sql = { git = "https://github.com/nuno-faria/datafusion.git", rev = "292ac29" }
+datafusion = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-catalog = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-catalog-listing = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-common-runtime = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-datasource = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-datasource-avro = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-datasource-csv = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-datasource-json = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-datasource-parquet = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-doc = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-execution = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-expr = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-expr-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-functions = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-functions-aggregate = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-functions-aggregate-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-functions-nested = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-functions-table = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-functions-window = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-functions-window-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-macros = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-optimizer = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-physical-expr = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-physical-expr-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-physical-optimizer = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-physical-plan = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-proto = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-proto-common = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-pruning = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-session = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-spark = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
+datafusion-sql = { git = "https://github.com/nuno-faria/datafusion.git", rev = "881917a" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release
