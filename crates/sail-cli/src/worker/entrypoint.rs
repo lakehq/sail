@@ -1,12 +1,12 @@
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeManager;
+use sail_runtime::RuntimeManager;
 use sail_telemetry::telemetry::init_telemetry;
 
 pub fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry()?;
 
     let config = AppConfig::load()?;
-    let runtime = RuntimeManager::try_new(&config.runtime)?;
+    let runtime = RuntimeManager::try_new(&config.runtime, "CLI-Worker")?;
     runtime
         .handle()
         .primary()

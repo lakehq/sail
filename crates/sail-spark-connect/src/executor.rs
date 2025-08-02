@@ -7,10 +7,12 @@ use std::sync::{Arc, Mutex};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
+use futures::stream::{StreamExt, TryStreamExt};
+use sail_runtime::RuntimeHandle;
+use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
-use tonic::codegen::tokio_stream::StreamExt;
 use uuid::Uuid;
 
 use crate::error::{SparkError, SparkResult};
@@ -93,6 +95,7 @@ pub(crate) struct ExecutorMetadata {
 pub(crate) struct Executor {
     pub(crate) metadata: ExecutorMetadata,
     state: Mutex<ExecutorState>,
+    runtime: RuntimeHandle,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -145,10 +148,15 @@ enum ExecutorTaskResult {
 }
 
 impl Executor {
-    pub(crate) fn new(metadata: ExecutorMetadata, stream: SendableRecordBatchStream) -> Self {
+    pub(crate) fn new(
+        metadata: ExecutorMetadata,
+        stream: SendableRecordBatchStream,
+        runtime: RuntimeHandle,
+    ) -> Self {
         Self {
             metadata,
             state: Mutex::new(ExecutorState::Pending(ExecutorTaskContext::new(stream))),
+            runtime,
         }
     }
 
@@ -166,6 +174,7 @@ impl Executor {
 
         let mut empty = true;
         while let Some(batch) = context.stream.next().await {
+            // tokio::task::yield_now().await;
             let batch = batch?;
             let batch = to_arrow_batch(&batch)?;
             let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
@@ -193,6 +202,7 @@ impl Executor {
         tx: mpsc::Sender<ExecutorOutput>,
     ) -> ExecutorTaskResult {
         let out = tokio::select! {
+            biased;
             x = Executor::run_internal(&mut context, tx) => x,
             _ = listener => return ExecutorTaskResult::Paused(context),
         };
@@ -229,7 +239,10 @@ impl Executor {
         let (tx, rx) = mpsc::channel(1);
         let (notifier, listener) = oneshot::channel();
         let buffer = Arc::clone(&context.buffer);
-        let handle = tokio::spawn(async move { Executor::run(context, listener, tx).await });
+        // let handle = self.runtime.primary().clone();
+        let handle = self.runtime.cpu().clone();
+        let handle = handle.spawn(async move { Executor::run(context, listener, tx).await });
+        // let handle = tokio::spawn(async move { Executor::run(context, listener, tx).await });
         *state = ExecutorState::Running(ExecutorTask {
             notifier,
             handle,
@@ -279,24 +292,84 @@ impl Executor {
 }
 
 pub(crate) async fn read_stream(
-    mut stream: SendableRecordBatchStream,
+    stream: SendableRecordBatchStream,
+    handle: Handle,
 ) -> SparkResult<Vec<RecordBatch>> {
-    let mut output = vec![];
-    while let Some(batch) = stream.next().await {
-        let batch = batch?;
-        output.push(batch);
-    }
-    Ok(output)
+    // let mut output = vec![];
+    // while let Some(batch) = stream.next().await {
+    //     let batch = batch?;
+    //     output.push(batch);
+    // }
+    // Ok(output)
+
+    handle
+        .spawn(async move { stream.err_into().try_collect::<Vec<_>>().await })
+        .await
+        .map_err(|e| SparkError::internal(format!("failed to execute on CPU runtime: {e}")))?
 }
 
+// pub(crate) async fn collect_partitioned(
+//     streams: Vec<SendableRecordBatchStream>,
+// ) -> SparkResult<Vec<Vec<RecordBatch>>> {
+//     let mut join_set = datafusion::common::runtime::JoinSet::new();
+//     // Execute the plan and collect the results into batches.
+//     streams.into_iter().enumerate().for_each(|(idx, stream)| {
+//         join_set.spawn(async move {
+//             let result: SparkResult<Vec<RecordBatch>> = stream.try_collect().await.map_err(|e| {
+//                 SparkError::internal(format!(
+//                     "failed to collect partitioned stream at index {idx}: {e}"
+//                 ))
+//             });
+//             (idx, result)
+//         });
+//     });
+//
+//     let mut batches = vec![];
+//     // Note that currently this doesn't identify the thread that panicked
+//     //
+//     // TODO: Replace with [join_next_with_id](https://docs.rs/tokio/latest/tokio/task/struct.JoinSet.html#method.join_next_with_id
+//     // once it is stable
+//     while let Some(result) = join_set.join_next().await {
+//         match result {
+//             Ok((idx, res)) => batches.push((idx, res?)),
+//             Err(e) => {
+//                 if e.is_panic() {
+//                     std::panic::resume_unwind(e.into_panic());
+//                 } else {
+//                     unreachable!();
+//                 }
+//             }
+//         }
+//     }
+//
+//     batches.sort_by_key(|(idx, _)| *idx);
+//     let batches = batches.into_iter().map(|(_, batch)| batch).collect();
+//
+//     Ok(batches)
+// }
+
+// pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
+//     let mut output = ArrowBatch::default();
+//     {
+//         let cursor = Cursor::new(&mut output.data);
+//         let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
+//         writer.write(batch)?;
+//         output.row_count += batch.num_rows() as i64;
+//         writer.finish()?;
+//     }
+//     Ok(output)
+// }
+
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
-    let mut output = ArrowBatch::default();
-    {
-        let cursor = Cursor::new(&mut output.data);
-        let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
-        writer.write(batch)?;
-        output.row_count += batch.num_rows() as i64;
-        writer.finish()?;
-    }
+    let estimated_size = batch.get_array_memory_size() + 4096; // Add buffer for Arrow IPC overhead
+    let mut output = ArrowBatch {
+        data: Vec::with_capacity(estimated_size),
+        row_count: batch.num_rows() as i64,
+        ..Default::default()
+    };
+    let cursor = Cursor::new(&mut output.data);
+    let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
+    writer.write(batch)?;
+    writer.finish()?;
     Ok(output)
 }

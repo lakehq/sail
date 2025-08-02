@@ -1,5 +1,5 @@
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeHandle;
+use sail_runtime::RuntimeHandle;
 use sail_server::actor::ActorSystem;
 
 use crate::worker::{WorkerActor, WorkerOptions};

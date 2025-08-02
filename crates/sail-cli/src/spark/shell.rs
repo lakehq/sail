@@ -4,7 +4,7 @@ use std::sync::Arc;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{PyResult, Python};
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeManager;
+use sail_runtime::RuntimeManager;
 use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -13,7 +13,7 @@ use crate::python::Modules;
 
 pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(AppConfig::load()?);
-    let runtime = RuntimeManager::try_new(&config.runtime)?;
+    let runtime = RuntimeManager::try_new(&config.runtime, "CLI-PySpark-Shell")?;
     let options = SessionManagerOptions {
         config,
         runtime: runtime.handle(),

@@ -4,7 +4,7 @@ use log::error;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 
-const ACTOR_CHANNEL_SIZE: usize = 8;
+const ACTOR_CHANNEL_SIZE: usize = 16;
 
 #[tonic::async_trait]
 pub trait Actor: Sized + Send + 'static {

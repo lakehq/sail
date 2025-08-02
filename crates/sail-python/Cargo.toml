@@ -11,6 +11,7 @@ sail-common = { path = "../sail-common" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 sail-cli = { path = "../sail-cli" }
+sail-runtime = { path = "../sail-runtime" }
 
 pyo3 = { workspace = true }
 tokio = { workspace = true }

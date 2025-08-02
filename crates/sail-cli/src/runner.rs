@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use clap::{Parser, Subcommand};
 
 use crate::spark::{
@@ -79,6 +81,12 @@ enum SparkCommand {
 }
 
 pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var("SAIL_USE_CONSOLE_SUBSCRIBER")
+        .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
+    {
+        println!("[sail_cli::runner] Initializing console subscriber for logging");
+        console_subscriber::init();
+    }
     let cli = Cli::parse_from(args);
 
     match cli.command {
