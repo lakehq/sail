@@ -29,6 +29,10 @@ impl TableFormat for DeltaTableFormat {
         let SourceInfo {
             paths,
             schema: _,
+            constraints: _,
+            partition_by: _,
+            bucket_by: _,
+            sort_order: _,
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
@@ -64,6 +68,8 @@ impl TableFormat for DeltaTableFormat {
                 return not_impl_err!("unsupported sink mode for Delta: {mode:?}")
             }
         };
+        // TODO: parse the sets of options properly (with overwrite logic)
+        let options = options.into_iter().flatten().collect();
         let sink = Arc::new(DeltaDataSink::new(
             mode,
             table_url,

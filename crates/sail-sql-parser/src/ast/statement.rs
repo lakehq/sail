@@ -7,17 +7,17 @@ use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use crate::ast::identifier::{table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
     Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog, Change,
-    Clear, Clustered, Codegen, Collection, Column, Columns, Comment, Compute, Cost, Create, Data,
-    Database, Databases, Dbproperties, Default, Defined, Delete, Delimited, Desc, Describe,
-    Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain, Extended, External, Fields,
-    Fileformat, First, For, Format, Formatted, From, Function, Functions, Generated, Global, If,
-    In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local,
-    Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options, Or, Outputformat,
-    Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename,
-    Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source,
-    Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then,
-    Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View, Views, When, With,
-    Zone,
+    Clear, Cluster, Clustered, Codegen, Collection, Column, Columns, Comment, Compute, Cost,
+    Create, Data, Database, Databases, Dbproperties, Default, Defined, Delete, Delimited, Desc,
+    Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain, Extended,
+    External, Fields, Fileformat, First, For, Format, Formatted, From, Function, Functions,
+    Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy, Like,
+    Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options, Or,
+    Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
+    Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
+    Sorted, Source, Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary,
+    Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View,
+    Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -511,6 +511,14 @@ pub enum CreateTableClause {
         Into,
         IntegerLiteral,
         Buckets,
+    ),
+    /// The `CLUSTER BY ...` clause introduced in Spark 4.0.
+    ClusterBy(
+        Cluster,
+        By,
+        LeftParenthesis,
+        Sequence<ObjectName, Comma>,
+        RightParenthesis,
     ),
     RowFormat(Row, Format, RowFormat),
     StoredAs(Stored, As, FileFormat),

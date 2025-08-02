@@ -244,7 +244,9 @@ impl CatalogProvider for MemoryCatalogProvider {
         table: &str,
         options: DropTableOptions,
     ) -> CatalogResult<()> {
-        // TODO: purge data if requested
+        // In Spark, the `DROP TABLE ... PURGE` SQL statement deletes data if the table
+        // is managed by the Hive metastore. `PURGE` is ignored if the table is external.
+        // In Sail, all tables are external, so we ignore the `purge` option.
         let DropTableOptions {
             if_exists,
             purge: _,

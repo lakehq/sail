@@ -10,6 +10,8 @@ use crate::resolver::PlanResolver;
 mod catalog;
 mod insert;
 mod write;
+mod write_v1;
+mod write_v2;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_command_plan(
@@ -188,26 +190,38 @@ impl PlanResolver<'_> {
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
             }
-            CommandNode::InsertOverwriteDirectory { .. } => {
-                Err(PlanError::todo("CommandNode::InsertOverwriteDirectory"))
+            CommandNode::InsertOverwriteDirectory {
+                input,
+                local,
+                location,
+                file_format,
+                row_format,
+                options,
+            } => {
+                self.resolve_command_insert_overwrite_directory(
+                    *input,
+                    local,
+                    location,
+                    file_format,
+                    row_format,
+                    options,
+                    state,
+                )
+                .await
             }
             CommandNode::InsertInto {
                 input,
                 table,
-                columns,
-                partition_spec,
-                replace,
+                mode,
+                partition,
                 if_not_exists,
-                overwrite,
             } => {
                 self.resolve_command_insert_into(
                     *input,
                     table,
-                    columns,
-                    partition_spec,
-                    replace,
+                    mode,
+                    partition,
                     if_not_exists,
-                    overwrite,
                     state,
                 )
                 .await
