@@ -325,6 +325,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
                 expr: Box::new(expr),
                 cast_to_type: from_ast_data_type(data_type)?,
                 rename: false,
+                is_try: false,
             })
         }
         Expr::IsFalse(expr, _, not, _) => {
@@ -649,6 +650,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             expr: Box::new(from_ast_expression(*expr)?),
             cast_to_type: from_ast_data_type(data_type)?,
             rename: true,
+            is_try: false,
         }),
         AtomExpr::Extract(_, _, ident, _, expr, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
