@@ -12,6 +12,8 @@ use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_format::DeltaDataSink;
 use url::Url;
 
+use crate::options::DataSourceOptionsResolver;
+
 #[derive(Debug, Default)]
 pub struct DeltaTableFormat;
 
@@ -28,12 +30,11 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
             paths,
-            schema: _,
+            schema,
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        // TODO: schema is ignored for now
-        create_delta_provider(ctx, table_url, &options).await
+        create_delta_provider(ctx, table_url, schema, &options).await
     }
 
     async fn create_writer(
@@ -64,6 +65,9 @@ impl TableFormat for DeltaTableFormat {
                 return not_impl_err!("unsupported sink mode for Delta: {mode:?}")
             }
         };
+        let resolver = DataSourceOptionsResolver::new(ctx);
+        let options = resolver.resolve_delta_write_options(options)?;
+
         let sink = Arc::new(DeltaDataSink::new(
             mode,
             table_url,

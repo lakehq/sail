@@ -8,8 +8,9 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::sink::DataSink;
 use datafusion::execution::context::TaskContext;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ToDFSchema};
 use deltalake::kernel::engine::arrow_conversion::TryIntoKernel;
 use deltalake::kernel::schema::StructType;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
@@ -18,8 +19,12 @@ use deltalake::logstore::StorageConfig;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::StreamExt;
+use sail_common_datafusion::datasource::TableDeltaOptions;
 use url::Url;
+use uuid::Uuid;
 
+use crate::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
+use crate::operations::write::execution::{prepare_predicate_actions, WriterStatsConfig};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
@@ -27,9 +32,7 @@ use crate::table::{create_delta_table_with_object_store, open_table_with_object_
 pub struct DeltaDataSink {
     mode: SaveMode,
     table_url: Url,
-    // TODO: maybe here we should accept parsed options?
-    //   For example, `ParquetSink` accepts `TableParquetOptions`.
-    options: HashMap<String, String>,
+    options: TableDeltaOptions,
     schema: SchemaRef,
     partition_columns: Vec<String>,
 }
@@ -38,7 +41,7 @@ impl DeltaDataSink {
     pub fn new(
         mode: SaveMode,
         table_url: Url,
-        options: HashMap<String, String>,
+        options: TableDeltaOptions,
         schema: SchemaRef,
         partition_columns: Vec<String>,
     ) -> Self {
@@ -51,18 +54,6 @@ impl DeltaDataSink {
         }
     }
 
-    fn extract_storage_config(&self) -> Result<StorageConfig> {
-        let mut storage_options = HashMap::new();
-        for (key, value) in &self.options {
-            if key.starts_with("storage.") {
-                storage_options.insert(key.clone(), value.clone());
-            }
-        }
-
-        StorageConfig::parse_options(storage_options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-
     /// Get object store from TaskContext
     fn get_object_store(
         &self,
@@ -73,33 +64,6 @@ impl DeltaDataSink {
             .object_store_registry
             .get_store(&self.table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-
-    // TODO: The following parsing methods does not make sense, we should find a better way to handle spec::Write.
-    // Maybe datafusion has handled it already.
-
-    /// Parse target file size from options
-    fn parse_target_file_size(&self) -> Option<usize> {
-        self.options
-            .get("target_file_size")
-            .or(self.options.get("targetFileSize"))
-            .and_then(|s| s.parse().ok())
-    }
-
-    /// Parse write batch size from options
-    fn parse_write_batch_size(&self) -> Option<usize> {
-        self.options
-            .get("write_batch_size")
-            .or(self.options.get("writeBatchSize"))
-            .and_then(|s| s.parse().ok())
-    }
-
-    /// Create storage config from options
-    #[allow(dead_code)]
-    fn create_storage_config(&self) -> StorageConfig {
-        // For now, use default configuration
-        // TODO: Parse additional storage options if needed
-        StorageConfig::default()
     }
 }
 
@@ -136,8 +100,23 @@ impl DataSink for DeltaDataSink {
         mut data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let storage_config = self.extract_storage_config()?;
+        let TableDeltaOptions {
+            replace_where,
+            merge_schema: _,
+            overwrite_schema: _,
+            target_file_size,
+            write_batch_size,
+            ..
+        } = &self.options;
+
+        let storage_config = StorageConfig::default();
         let object_store = self.get_object_store(context)?;
+
+        use crate::delta_datafusion::create_object_store_url;
+        let object_store_url = create_object_store_url(&self.table_url);
+        context
+            .runtime_env()
+            .register_object_store(object_store_url.as_ref(), object_store.clone());
 
         let (table, table_exists) = match open_table_with_object_store(
             self.table_url.clone(),
@@ -169,8 +148,8 @@ impl DataSink for DeltaDataSink {
             self.schema.clone(),
             partition_columns.clone(),
             Some(writer_properties),
-            self.parse_target_file_size(),
-            self.parse_write_batch_size(),
+            *target_file_size,
+            *write_batch_size,
             32, // TODO: Default num_indexed_cols for now
             None,
         );
@@ -208,11 +187,57 @@ impl DataSink for DeltaDataSink {
 
         // Prepare actions for commit
         let mut actions: Vec<Action> = add_actions.into_iter().map(Action::Add).collect();
+        let mut predicate_str: Option<String> = None;
 
         let operation = if table_exists {
             if self.mode == SaveMode::Overwrite {
-                // In overwrite mode, delete existing files
-                if let Ok(snapshot) = table.snapshot() {
+                if let Some(predicate) = replace_where {
+                    // This is the replace_where logic
+                    let snapshot = table
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    let df_schema = snapshot
+                        .arrow_schema()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .to_dfschema()?;
+
+                    let session_state = SessionStateBuilder::new()
+                        .with_runtime_env(context.runtime_env())
+                        .build();
+
+                    let predicate_expr =
+                        parse_predicate_expression(&df_schema, predicate, &session_state)
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    predicate_str = Some(predicate.clone());
+
+                    #[allow(clippy::expect_used)]
+                    let current_timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("System time before Unix epoch")
+                        .as_millis() as i64;
+
+                    let (remove_actions, _) = prepare_predicate_actions(
+                        predicate_expr,
+                        table.log_store(),
+                        snapshot,
+                        session_state.clone(),
+                        partition_columns.clone(),
+                        None,
+                        current_timestamp,
+                        WriterStatsConfig::new(32, None),
+                        Uuid::new_v4(),
+                    )
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    actions.extend(remove_actions);
+                } else {
+                    // This is a full overwrite
+                    let snapshot = table
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     let existing_files = snapshot
                         .file_actions()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -249,7 +274,7 @@ impl DataSink for DeltaDataSink {
                 } else {
                     Some(partition_columns)
                 },
-                predicate: self.options.get("replaceWhere").cloned(),
+                predicate: predicate_str,
             }
         } else {
             // For new tables, we need to create Protocol and Metadata actions

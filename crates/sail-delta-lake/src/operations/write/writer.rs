@@ -19,12 +19,9 @@ use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 use super::async_utils::AsyncShareableBuffer;
 use super::stats::create_add;
-
-/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
-const DEFAULT_TARGET_FILE_SIZE: usize = 104_857_600; // 100MB
-const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
@@ -75,8 +72,8 @@ impl WriterConfig {
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
         writer_properties: Option<WriterProperties>,
-        target_file_size: Option<usize>,
-        write_batch_size: Option<usize>,
+        target_file_size: usize,
+        write_batch_size: usize,
         num_indexed_cols: i32,
         stats_columns: Option<Vec<String>>,
     ) -> Self {
@@ -90,8 +87,8 @@ impl WriterConfig {
             table_schema,
             partition_columns,
             writer_properties,
-            target_file_size: target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE),
-            write_batch_size: write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE),
+            target_file_size,
+            write_batch_size,
             num_indexed_cols,
             stats_columns,
         }

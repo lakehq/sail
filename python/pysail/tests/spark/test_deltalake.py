@@ -887,3 +887,63 @@ class TestDeltaLake:
 
         filtered_df_is_null = spark.read.format("delta").load(delta_table_path).filter("optional_col IS NULL")
         assert filtered_df_is_null.count() == 10 + 5  # File 2 (10) + File 3 (5)
+
+    def test_delta_query_with_custom_schema(self, spark, tmp_path):
+        """Test with a custom schema and filter conditions."""
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+        delta_path = tmp_path / "delta_custom_schema"
+        delta_table_path = f"file://{delta_path}"
+
+        # User-defined schema
+        schema = StructType(
+            [
+                StructField("id", IntegerType(), False),
+                StructField("name", StringType(), True),
+                StructField("score", IntegerType(), True),
+            ]
+        )
+
+        data = [(1, "Alice", 90), (2, "Bob", None), (3, "Charlie", 85)]
+        spark.createDataFrame(data, schema=schema).write.format("delta").mode("overwrite").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(delta_table_path).filter("name IS NOT NULL AND score > 80")
+        result = result_df.collect()
+        assert len(result) == 2  # noqa: PLR2004
+        assert {row.name for row in result} == {"Alice", "Charlie"}
+
+        loaded_schema = result_df.schema
+        assert loaded_schema == schema, f"Schema mismatch: expected {schema}, got {loaded_schema}"
+
+    def test_delta_overwrite_with_replace_where(self, spark, tmp_path):
+        """Test Delta Lake overwrite with replaceWhere option."""
+        from pyspark.sql.types import Row
+
+        delta_path = tmp_path / "delta_replace_where"
+        delta_table_path = f"file://{delta_path}"
+
+        data = [
+            Row(id=1, category="A", value=10),
+            Row(id=2, category="B", value=20),
+            Row(id=3, category="A", value=30),
+            Row(id=4, category="B", value=40),
+        ]
+        df = spark.createDataFrame(data)
+        df.write.format("delta").mode("overwrite").save(str(delta_path))
+
+        new_data = [
+            Row(id=5, category="A", value=100),
+            Row(id=6, category="A", value=200),
+        ]
+        new_df = spark.createDataFrame(new_data)
+        new_df.write.format("delta").mode("overwrite") \
+            .option("replaceWhere", "category = 'A'") \
+            .save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
+        result = result_df.collect()
+
+        assert {row.id for row in result} == {2, 4, 5, 6}
+        assert {row.category for row in result if row.category == "A"} == {"A"}
+        assert {row.value for row in result if row.category == "A"} == {100, 200}
+        assert {row.value for row in result if row.category == "B"} == {20, 40}
