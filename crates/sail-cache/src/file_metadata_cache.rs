@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use datafusion::execution::cache::CacheAccessor;
 use datafusion::parquet::file::metadata::ParquetMetaData;
-use log::error;
+use log::{debug, error};
 use moka::sync::Cache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -18,14 +18,17 @@ impl MokaFilesMetadataCache {
 
         if let Some(limit) = memory_limit {
             if let Some(max_capacity) = try_parse_memory_limit(&limit) {
+                debug!("Setting memory limit for MokaFilesMetadataCache to {max_capacity} bytes");
                 builder = builder
                     .weigher(
                         |_key: &Path, value: &(ObjectMeta, Arc<dyn FileMetadata>)| -> u32 {
                             if let Some(parquet_meta) =
                                 value.1.as_any().downcast_ref::<ParquetMetaData>()
                             {
+                                debug!("Using ParquetMetaData for size calculation");
                                 parquet_meta.memory_size().min(u32::MAX as usize) as u32
                             } else {
+                                debug!("Using ObjectMeta for size calculation");
                                 size_of::<ObjectMeta>() as u32 + 1024
                             }
                         },
