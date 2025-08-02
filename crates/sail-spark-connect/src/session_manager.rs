@@ -2,17 +2,16 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::ops::DerefMut;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use datafusion::execution::cache::cache_manager::CacheManagerConfig;
-use datafusion::execution::cache::cache_unit::{
-    DefaultFileStatisticsCache, DefaultFilesMetadataCache, DefaultListFilesCache,
-};
+use datafusion::execution::cache::cache_unit::{DefaultFileStatisticsCache, DefaultListFilesCache};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use log::{debug, info};
+use sail_cache::file_metadata_cache::MokaFilesMetadataCache;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -32,6 +31,13 @@ use tokio::time::Instant;
 
 use crate::error::{SparkError, SparkResult};
 use crate::session::SparkSession;
+
+pub static GLOBAL_FILE_METADATA_CACHE: LazyLock<Arc<MokaFilesMetadataCache>> =
+    LazyLock::new(|| {
+        // CHECK HERE: DO NOT MERGE UNTIL memory limit is set in the config
+        let memory_limit = std::env::var("SAIL_RUNTIME__FILE_METADATA_CACHE_LIMIT").ok();
+        Arc::new(MokaFilesMetadataCache::new(memory_limit))
+    });
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct SessionKey {
@@ -167,7 +173,7 @@ impl SessionManager {
             let registry = DynamicObjectStoreRegistry::new(options.runtime.clone());
 
             let cache_config = CacheManagerConfig::default()
-                .with_file_metadata_cache(Some(Arc::new(DefaultFilesMetadataCache::default())));
+                .with_file_metadata_cache(Some(GLOBAL_FILE_METADATA_CACHE.clone()));
             let cache_config = if options.config.runtime.table_files_statistics_cache {
                 debug!("[table_files_statistics_cache] Using table files statistics cache");
                 cache_config.with_files_statistics_cache(Some(Arc::new(

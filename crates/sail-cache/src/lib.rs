@@ -1,2 +1,2 @@
-mod error;
+pub mod error;
 pub mod file_metadata_cache;

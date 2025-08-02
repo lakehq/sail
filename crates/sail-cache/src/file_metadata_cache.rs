@@ -1,50 +1,44 @@
 use std::sync::Arc;
 
-use crate::error::{CacheError, CacheResult};
 use datafusion::execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use datafusion::execution::cache::CacheAccessor;
 use datafusion::parquet::file::metadata::ParquetMetaData;
+use log::error;
 use moka::sync::Cache;
-use object_store::{path::Path, ObjectMeta};
+use object_store::path::Path;
+use object_store::ObjectMeta;
 
 pub struct MokaFilesMetadataCache {
     metadata: Cache<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
 }
 
 impl MokaFilesMetadataCache {
-    pub fn new(memory_limit: Option<String>) -> CacheResult<Self> {
+    pub fn new(memory_limit: Option<String>) -> Self {
         let mut builder = Cache::builder();
 
         if let Some(limit) = memory_limit {
-            let max_capacity = parse_memory_limit(&limit)?;
-            builder = builder
-                .weigher(
-                    |_key: &Path, value: &(ObjectMeta, Arc<dyn FileMetadata>)| -> u32 {
-                        if let Some(parquet_meta) =
-                            value.1.as_any().downcast_ref::<ParquetMetaData>()
-                        {
-                            parquet_meta.memory_size().min(u32::MAX as usize) as u32
-                        } else {
-                            size_of::<ObjectMeta>() as u32 + 1024
-                        }
-                    },
-                )
-                .max_capacity(max_capacity);
+            if let Some(max_capacity) = try_parse_memory_limit(&limit) {
+                builder = builder
+                    .weigher(
+                        |_key: &Path, value: &(ObjectMeta, Arc<dyn FileMetadata>)| -> u32 {
+                            if let Some(parquet_meta) =
+                                value.1.as_any().downcast_ref::<ParquetMetaData>()
+                            {
+                                parquet_meta.memory_size().min(u32::MAX as usize) as u32
+                            } else {
+                                size_of::<ObjectMeta>() as u32 + 1024
+                            }
+                        },
+                    )
+                    .max_capacity(max_capacity);
+            }
         }
 
-        Ok(Self {
+        Self {
             metadata: builder.build(),
-        })
+        }
     }
 }
-//
-// impl Default for MokaFilesMetadataCache {
-//     fn default() -> Self {
-//         Self {
-//             metadata: Cache::new(10_000),
-//         }
-//     }
-// }
 
 impl FileMetadataCache for MokaFilesMetadataCache {}
 
@@ -108,33 +102,38 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for MokaFilesMetadataCache
     }
 }
 
-fn parse_memory_limit(limit: &str) -> CacheResult<u64> {
+fn try_parse_memory_limit(limit: &str) -> Option<u64> {
     let (number, unit) = limit.split_at(limit.len() - 1);
-    let number: f64 = number.parse().map_err(|_| {
-        CacheError::invalid(format!(
-            "Failed to parse number from memory limit '{limit}'"
-        ))
-    })?;
-
+    let number: f64 = match number.parse() {
+        Ok(n) => n,
+        Err(_) => {
+            error!("Memory limit not set! Failed to parse number from '{limit}'");
+            return None;
+        }
+    };
     match unit {
-        "K" => Ok((number * 1024.0) as u64),
-        "M" => Ok((number * 1024.0 * 1024.0) as u64),
-        "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as u64),
-        _ => Err(CacheError::unsupported(format!(
-            "Unsupported unit '{unit}' in memory limit '{limit}'"
-        ))),
+        "K" => Some((number * 1024.0) as u64),
+        "M" => Some((number * 1024.0 * 1024.0) as u64),
+        "G" => Some((number * 1024.0 * 1024.0 * 1024.0) as u64),
+        _ => {
+            error!("Memory limit not set! Unsupported unit '{unit}' in memory limit '{limit}'.");
+            None
+        }
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::any::Any;
+    use std::sync::Arc;
+
     use chrono::DateTime;
     use datafusion::execution::cache::cache_manager::FileMetadata;
     use object_store::path::Path;
     use object_store::ObjectMeta;
-    use std::any::Any;
-    use std::sync::Arc;
+
+    use super::*;
 
     pub struct TestFileMetadata {
         metadata: String,
@@ -162,7 +161,7 @@ mod tests {
             metadata: "retrieved_metadata".to_owned(),
         });
 
-        let mut cache = MokaFilesMetadataCache::new(None).unwrap();
+        let mut cache = MokaFilesMetadataCache::new(None);
         assert!(cache.get(&object_meta).is_none());
 
         // put

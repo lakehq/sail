@@ -12,10 +12,6 @@ pub enum CacheError {
     NotSupported(String),
     #[error("internal error: {0}")]
     InternalError(String),
-    #[error("Worker thread gone, executor was likely shut dow")]
-    WorkerGone,
-    #[error("Panic: {0}")]
-    Panic(String),
 }
 
 impl CacheError {

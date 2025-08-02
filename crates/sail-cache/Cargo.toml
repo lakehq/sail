@@ -18,6 +18,6 @@ sail-common = { path = "../sail-common" }
 thiserror = { workspace = true }
 object_store = { workspace = true }
 datafusion = { workspace = true }
-datafusion-common = { workspace = true }
 chrono = { workspace = true }
 moka = { workspace = true }
+log = { workspace = true }
