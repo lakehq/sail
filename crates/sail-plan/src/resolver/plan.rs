@@ -31,10 +31,11 @@ use datafusion_expr::utils::{
     find_aggregate_exprs,
 };
 use datafusion_expr::{
-    and, build_join_schema, col, expr, ident, lit, or, when, Aggregate, AggregateUDF, BinaryExpr,
-    ExplainFormat, ExprSchemable, LogicalPlanBuilder, Operator, Projection, ScalarUDF, TryCast,
+    and, build_join_schema, cast, col, expr, ident, is_false, lit, or, when, Aggregate,
+    AggregateUDF, ExplainFormat, ExprSchemable, LogicalPlanBuilder, Projection, ScalarUDF, TryCast,
     WindowFrame, WindowFunctionDefinition,
 };
+use datafusion_functions::math::expr_fn::isnan;
 use rand::{rng, Rng};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
@@ -2839,26 +2840,33 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
-
-        let not_null_exprs = if columns.is_empty() {
-            schema
-                .columns()
-                .into_iter()
-                .map(|c| col(c).is_not_null())
-                .collect::<Vec<Expr>>()
-        } else {
-            let columns: Vec<String> = columns.into_iter().map(|x| x.into()).collect();
-            schema
-                .columns()
-                .into_iter()
-                .filter(|column| {
+        let not_null_exprs = schema
+            .columns()
+            .into_iter()
+            .filter_map(|column| {
+                (columns.is_empty() || {
+                    let columns: Vec<String> = columns.iter().map(|x| x.as_ref().into()).collect();
                     state
                         .get_field_info(column.name())
                         .is_ok_and(|info| columns.iter().any(|c| info.matches(c, None)))
                 })
-                .map(|c| col(c).is_not_null())
-                .collect::<Vec<Expr>>()
-        };
+                .then(|| {
+                    col(column.clone()).get_type(schema).ok().map(|col_type| {
+                        let is_nan = match col_type {
+                            adt::DataType::Float16 => {
+                                isnan(cast(col(column.clone()), adt::DataType::Float32))
+                            }
+                            adt::DataType::Float32 | adt::DataType::Float64 => {
+                                isnan(col(column.clone()))
+                            }
+                            _ => lit(false),
+                        };
+                        col(column).is_not_null().and(is_false(is_nan))
+                    })
+                })
+                .flatten()
+            })
+            .collect::<Vec<Expr>>();
 
         let filter_expr = match min_non_nulls {
             Some(min_non_nulls) if min_non_nulls > 0 => {
@@ -2866,11 +2874,7 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .map(|expr| Ok(when(expr, lit(1)).otherwise(lit(0))?))
                     .try_fold(lit(0), |acc: Expr, predicate: PlanResult<Expr>| {
-                        Ok(Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(acc),
-                            Operator::Plus,
-                            Box::new(predicate?),
-                        ))) as PlanResult<Expr>
+                        Ok(acc + predicate?) as PlanResult<Expr>
                     })?;
                 non_null_count.gt_eq(lit(min_non_nulls as u32))
             }
