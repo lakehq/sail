@@ -1616,7 +1616,7 @@ dependencies = [
 [[package]]
 name = "datafusion"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "arrow-ipc",
@@ -1672,7 +1672,7 @@ dependencies = [
 [[package]]
 name = "datafusion-catalog"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1697,7 +1697,7 @@ dependencies = [
 [[package]]
 name = "datafusion-catalog-listing"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1719,7 +1719,7 @@ dependencies = [
 [[package]]
 name = "datafusion-common"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "ahash",
  "apache-avro",
@@ -1745,7 +1745,7 @@ dependencies = [
 [[package]]
 name = "datafusion-common-runtime"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "futures",
  "log",
@@ -1755,7 +1755,7 @@ dependencies = [
 [[package]]
 name = "datafusion-datasource"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "async-compression",
@@ -1790,7 +1790,7 @@ dependencies = [
 [[package]]
 name = "datafusion-datasource-avro"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -1814,7 +1814,7 @@ dependencies = [
 [[package]]
 name = "datafusion-datasource-csv"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1838,7 +1838,7 @@ dependencies = [
 [[package]]
 name = "datafusion-datasource-json"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1862,7 +1862,7 @@ dependencies = [
 [[package]]
 name = "datafusion-datasource-parquet"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1894,12 +1894,12 @@ dependencies = [
 [[package]]
 name = "datafusion-doc"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 
 [[package]]
 name = "datafusion-execution"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "dashmap",
@@ -1917,7 +1917,7 @@ dependencies = [
 [[package]]
 name = "datafusion-expr"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1938,7 +1938,7 @@ dependencies = [
 [[package]]
 name = "datafusion-expr-common"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1950,7 +1950,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -1978,7 +1978,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-aggregate"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "ahash",
  "arrow",
@@ -1998,7 +1998,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-aggregate-common"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "ahash",
  "arrow",
@@ -2021,7 +2021,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-nested"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "arrow-ord",
@@ -2042,7 +2042,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-table"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2057,7 +2057,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-window"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2074,7 +2074,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-window-common"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "datafusion-common",
  "datafusion-physical-expr-common",
@@ -2083,7 +2083,7 @@ dependencies = [
 [[package]]
 name = "datafusion-macros"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "datafusion-expr",
  "quote",
@@ -2093,7 +2093,7 @@ dependencies = [
 [[package]]
 name = "datafusion-optimizer"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "chrono",
@@ -2112,7 +2112,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-expr"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "ahash",
  "arrow",
@@ -2133,7 +2133,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-expr-common"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "ahash",
  "arrow",
@@ -2146,7 +2146,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-optimizer"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2165,7 +2165,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-plan"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "ahash",
  "arrow",
@@ -2194,7 +2194,7 @@ dependencies = [
 [[package]]
 name = "datafusion-proto"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "chrono",
@@ -2209,7 +2209,7 @@ dependencies = [
 [[package]]
 name = "datafusion-proto-common"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -2219,7 +2219,7 @@ dependencies = [
 [[package]]
 name = "datafusion-pruning"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2236,7 +2236,7 @@ dependencies = [
 [[package]]
 name = "datafusion-session"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2259,7 +2259,7 @@ dependencies = [
 [[package]]
 name = "datafusion-spark"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "chrono",
@@ -2275,7 +2275,7 @@ dependencies = [
 [[package]]
 name = "datafusion-sql"
 version = "49.0.0"
-source = "git+https://github.com/nuno-faria/datafusion.git?rev=881917a#881917a56be39c280ab2a4077997a70fdf9752ab"
+source = "git+https://github.com/apache/datafusion.git?rev=b4e7147#b4e7147c85b52addd687e5524e6ebbc5ad7d675d"
 dependencies = [
  "arrow",
  "bigdecimal",
