@@ -21,6 +21,27 @@
   description: Whether to enable a secondary Tokio runtime for separating I/O and compute tasks.
   experimental: true
 
+- key: runtime.table_files_statistics_cache
+  type: boolean
+  default: "false"
+  description: |
+    Enable cache of files statistics when listing files.
+    Default is disabled. Fow now only supports Parquet files.
+  experimental: true
+  hidden: true
+
+- key: runtime.list_files_cache
+  type: boolean
+  default: "false"
+  description: |
+    Enable cache of file metadata when listing files.
+    This setting avoids listing file meta of the same path repeatedly in same session,
+    which may be expensive in certain situations (e.g., remote object storage).
+    Note that if this option is enabled, Sail will not see any updates to the underlying location.
+    Default is disabled.
+  experimental: true
+  hidden: true
+
 - key: cluster.enable_tls
   type: boolean
   default: "false"

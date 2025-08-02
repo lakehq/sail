@@ -78,6 +78,8 @@ pub enum ExecutionMode {
 pub struct RuntimeConfig {
     pub stack_size: usize,
     pub enable_secondary: bool,
+    pub table_files_statistics_cache: bool,
+    pub list_files_cache: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
