@@ -168,7 +168,7 @@ impl SessionManager {
             let cache_config = CacheManagerConfig::default()
                 .with_file_metadata_cache(Some(Arc::new(DefaultFilesMetadataCache::default())));
             let cache_config = if std::env::var("SAIL_USE_TABLE_FILES_STATISTICS_CACHE")
-                .is_ok_and(|v| bool::from_str(&v).unwrap_or(true))
+                .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
             {
                 info!("[table_files_statistics_cache] Using table files statistics cache");
                 cache_config.with_files_statistics_cache(Some(Arc::new(
@@ -179,7 +179,7 @@ impl SessionManager {
                 cache_config
             };
             let cache_config = if std::env::var("SAIL_USE_LIST_FILES_CACHE")
-                .is_ok_and(|v| bool::from_str(&v).unwrap_or(true))
+                .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
             {
                 info!("[list_files_cache] Using list files cache");
                 cache_config.with_list_files_cache(Some(Arc::new(DefaultListFilesCache::default())))
