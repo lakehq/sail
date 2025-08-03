@@ -87,12 +87,12 @@ def main():
     parser.add_argument("--url", type=str, default="sc://localhost:50051")
     parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--query-path", type=str, required=True)
+    parser.add_argument("--num-runs", type=int, default=1)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--console", action="store_true")
     group.add_argument("--query", type=int, choices=range(1, 23))
     group.add_argument("--query-all", action="store_true")
     group.add_argument("--explain", type=int, choices=range(1, 23))
-    group.add_argument("--num-runs", type=int, default=1)
     args = parser.parse_args()
 
     benchmark = TpchBenchmark(args.url, args.data_path, args.query_path)
