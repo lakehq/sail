@@ -1,8 +1,7 @@
-use std::sync::Arc;
-
+use datafusion::datasource::physical_plan::parquet::reader::CachedParquetMetaData;
 use datafusion::execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use datafusion::execution::cache::CacheAccessor;
-use datafusion::parquet::file::metadata::ParquetMetaData;
+use std::sync::Arc;
 use log::{debug, error};
 use moka::sync::Cache;
 use object_store::path::Path;
@@ -22,12 +21,14 @@ impl MokaFilesMetadataCache {
                 builder = builder
                     .weigher(
                         |_key: &Path, value: &(ObjectMeta, Arc<dyn FileMetadata>)| -> u32 {
-                            if let Some(parquet_meta) =
-                                value.1.as_any().downcast_ref::<ParquetMetaData>()
+                            if let Some(parquet_metadata) =
+                                value.1.as_any().downcast_ref::<CachedParquetMetaData>()
                             {
-                                // FIXME: Downcast doesn't seem to work.
                                 debug!("Using ParquetMetaData for size calculation");
-                                parquet_meta.memory_size().min(u32::MAX as usize) as u32
+                                parquet_metadata
+                                    .parquet_metadata()
+                                    .memory_size()
+                                    .min(u32::MAX as usize) as u32
                             } else {
                                 debug!("Using ObjectMeta for size calculation");
                                 size_of::<ObjectMeta>() as u32 + 1024
