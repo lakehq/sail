@@ -21,15 +21,6 @@
   description: Whether to enable a secondary Tokio runtime for separating I/O and compute tasks.
   experimental: true
 
-- key: runtime.table_files_statistics_cache
-  type: boolean
-  default: "false"
-  description: |
-    Enable cache of files statistics when listing files.
-    Default is disabled. Fow now only supports Parquet files.
-  experimental: true
-  hidden: true
-
 - key: runtime.list_files_cache
   type: boolean
   default: "false"
@@ -40,17 +31,15 @@
     Note that if this option is enabled, Sail will not see any updates to the underlying location.
     Default is disabled.
   experimental: true
-  hidden: true
 
-- key: runtime.file_metadata_cache_limit
-  type: string
-  default: ""
+- key: runtime.list_files_cache_ttl
+  type: number
+  default: "3600"
   description: |
-    Maximum memory limit for the file metadata cache.
-    Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: ‘2G’ for 2 gigabytes.
-    Only applies when `parquet.cache_metadata` is enabled.
-    Default is empty, which means no limit.
-  experimental: true
+    The time-to-live (TTL) in seconds for the file metadata cache.
+    This setting is only effective when `runtime.list_files_cache` is enabled.
+    Setting this value to `0` disables the TTL.
+    Default is 3600 seconds (1 hour).
 
 - key: cluster.enable_tls
   type: boolean
@@ -478,7 +467,7 @@
     at the expense of higher memory usage.
   experimental: true
 
-- key: parquet.cache_metadata
+- key: parquet.cache_file_metadata
   type: boolean
   default: "true"
   description: |
@@ -486,6 +475,24 @@
     (footer and page metadata). Enabling it can offer substantial performance improvements
     for repeated queries over large files. By default, the cache is automatically
     invalidated when the underlying file is modified.
+  experimental: true
+
+- key: parquet.file_metadata_cache_limit
+  type: string
+  default: ""
+  description: |
+    Maximum memory limit for the Parquet metadata cache in bytes.
+    Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: ‘2G’ for 2 gigabytes.
+    Only applies when `parquet.cache_metadata` is enabled.
+    Default is empty, which means no limit.
+  experimental: true
+
+- key: parquet.table_files_statistics_cache
+  type: boolean
+  default: "false"
+  description: |
+    Enable cache of files statistics when listing Parquet files.
+    Default is disabled.
   experimental: true
 
 - key: kubernetes.image

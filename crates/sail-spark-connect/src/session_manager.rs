@@ -12,6 +12,7 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use log::{debug, info};
 use sail_cache::file_metadata_cache::{MokaFilesMetadataCache, GLOBAL_FILE_METADATA_CACHE};
+use sail_cache::list_file_cache::GLOBAL_LIST_FILES_CACHE;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -159,15 +160,16 @@ impl SessionManager {
                 .config
                 .parquet
                 .maximum_buffered_record_batches_per_stream;
-            parquet.cache_metadata = options.config.parquet.cache_metadata;
+            parquet.cache_metadata = options.config.parquet.cache_file_metadata;
         }
 
         let runtime = {
             let registry = DynamicObjectStoreRegistry::new(options.runtime.clone());
 
             let cache_config = CacheManagerConfig::default()
+                // Only used if `options.config.parquet.cache_file_metadata` is true.
                 .with_file_metadata_cache(Some(GLOBAL_FILE_METADATA_CACHE.clone()));
-            let cache_config = if options.config.runtime.table_files_statistics_cache {
+            let cache_config = if options.config.parquet.table_files_statistics_cache {
                 debug!("[table_files_statistics_cache] Using table files statistics cache");
                 cache_config.with_files_statistics_cache(Some(Arc::new(
                     DefaultFileStatisticsCache::default(),
@@ -178,7 +180,7 @@ impl SessionManager {
             };
             let cache_config = if options.config.runtime.list_files_cache {
                 debug!("[list_files_cache] Using list files cache");
-                cache_config.with_list_files_cache(Some(Arc::new(DefaultListFilesCache::default())))
+                cache_config.with_list_files_cache(Some(GLOBAL_LIST_FILES_CACHE.clone()))
             } else {
                 debug!("[list_files_cache] Not using list files cache");
                 cache_config

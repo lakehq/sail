@@ -1,15 +1,18 @@
+use std::sync::{Arc, LazyLock};
+
 use datafusion::datasource::physical_plan::parquet::reader::CachedParquetMetaData;
 use datafusion::execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use datafusion::execution::cache::CacheAccessor;
-use log::{debug, error};
+use log::debug;
 use moka::sync::Cache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use std::sync::{Arc, LazyLock};
+
+use crate::try_parse_memory_limit;
 
 pub static GLOBAL_FILE_METADATA_CACHE: LazyLock<Arc<MokaFilesMetadataCache>> =
     LazyLock::new(|| {
-        let memory_limit = std::env::var("SAIL_RUNTIME__FILE_METADATA_CACHE_LIMIT").ok();
+        let memory_limit = std::env::var("SAIL_PARQUET__FILE_METADATA_CACHE_LIMIT").ok();
         Arc::new(MokaFilesMetadataCache::new(memory_limit))
     });
 
@@ -30,21 +33,23 @@ impl MokaFilesMetadataCache {
                             if let Some(parquet_metadata) =
                                 value.1.as_any().downcast_ref::<CachedParquetMetaData>()
                             {
-                                debug!("Using ParquetMetaData for size calculation");
+                                debug!("Using ParquetMetaData for size calculation in MokaFilesMetadataCache");
                                 parquet_metadata
                                     .parquet_metadata()
                                     .memory_size()
                                     .min(u32::MAX as usize) as u32
                             } else {
-                                debug!("Using ObjectMeta for size calculation");
+                                debug!("Using ObjectMeta for size calculation in MokaFilesMetadataCache");
                                 size_of::<ObjectMeta>() as u32 + 1024
                             }
                         },
                     )
                     .max_capacity(max_capacity);
+            } else {
+                debug!("Disabled or invalid memory limit for MokaFilesMetadataCache: {limit}");
             }
         } else {
-            debug!("No memory limit set for MokaFilesMetadataCache, using default settings");
+            debug!("No memory limit set for MokaFilesMetadataCache");
         }
 
         Self {
@@ -112,26 +117,6 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for MokaFilesMetadataCache
 
     fn name(&self) -> String {
         "MokaFilesMetadataCache".to_string()
-    }
-}
-
-fn try_parse_memory_limit(limit: &str) -> Option<u64> {
-    let (number, unit) = limit.split_at(limit.len() - 1);
-    let number: f64 = match number.parse() {
-        Ok(n) => n,
-        Err(_) => {
-            error!("Memory limit not set! Failed to parse number from '{limit}'");
-            return None;
-        }
-    };
-    match unit {
-        "K" => Some((number * 1024.0) as u64),
-        "M" => Some((number * 1024.0 * 1024.0) as u64),
-        "G" => Some((number * 1024.0 * 1024.0 * 1024.0) as u64),
-        _ => {
-            error!("Memory limit not set! Unsupported unit '{unit}' in memory limit '{limit}'.");
-            None
-        }
     }
 }
 

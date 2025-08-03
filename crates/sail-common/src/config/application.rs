@@ -78,10 +78,9 @@ pub enum ExecutionMode {
 pub struct RuntimeConfig {
     pub stack_size: usize,
     pub enable_secondary: bool,
-    pub table_files_statistics_cache: bool,
     pub list_files_cache: bool,
-    #[serde(deserialize_with = "deserialize_non_empty_string")]
-    pub file_metadata_cache_limit: Option<String>,
+    #[serde(deserialize_with = "deserialize_non_zero")]
+    pub list_files_cache_ttl: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -217,7 +216,10 @@ pub struct ParquetConfig {
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
-    pub cache_metadata: bool,
+    pub cache_file_metadata: bool,
+    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    pub file_metadata_cache_limit: Option<String>,
+    pub table_files_statistics_cache: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
