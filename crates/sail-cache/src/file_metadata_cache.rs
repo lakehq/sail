@@ -1,11 +1,17 @@
 use datafusion::datasource::physical_plan::parquet::reader::CachedParquetMetaData;
 use datafusion::execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use datafusion::execution::cache::CacheAccessor;
-use std::sync::Arc;
 use log::{debug, error};
 use moka::sync::Cache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
+use std::sync::{Arc, LazyLock};
+
+pub static GLOBAL_FILE_METADATA_CACHE: LazyLock<Arc<MokaFilesMetadataCache>> =
+    LazyLock::new(|| {
+        let memory_limit = std::env::var("SAIL_RUNTIME__FILE_METADATA_CACHE_LIMIT").ok();
+        Arc::new(MokaFilesMetadataCache::new(memory_limit))
+    });
 
 pub struct MokaFilesMetadataCache {
     metadata: Cache<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
