@@ -291,7 +291,7 @@ fn hypot(expr1: Expr, expr2: Expr) -> Expr {
 }
 
 fn log1p(expr: Expr) -> Expr {
-    expr_fn::ln(expr + lit(1.0 as f64))
+    expr_fn::ln(expr + lit(1.0_f64))
 }
 
 fn positive(expr: Expr) -> Expr {
@@ -306,7 +306,7 @@ fn spark_ln(expr: Expr) -> Expr {
     Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(
-            Box::new(expr.clone().not_eq(lit(0 as i64))),
+            Box::new(expr.clone().not_eq(lit(0_i64))),
             Box::new(expr_fn::ln(expr)),
         )],
         else_expr: None,
