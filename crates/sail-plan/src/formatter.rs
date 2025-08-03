@@ -432,6 +432,7 @@ impl PlanFormatter for SparkPlanFormatter {
                     Ok(format!("({left} {name} {right})"))
                 }
             }
+            "positive" => Ok(format!("(+ {})", arguments.one()?)),
             "==" => {
                 let (left, right) = arguments.two()?;
                 Ok(format!("({left} = {right})"))
