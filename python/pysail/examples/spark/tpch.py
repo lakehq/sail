@@ -72,10 +72,7 @@ class TpchBenchmark:
                     total_time = 0
                     for query in range(1, 23):
                         total_time += self._run_query(spark, query, explain)
-                    if run == 0:
-                        min_total_time = total_time
-                    else:
-                        min_total_time = min(min_total_time, total_time)
+                    min_total_time = total_time if run == 0 else min(min_total_time, total_time)
                     if not explain:
                         print(f"\n\nRun {run+1} Total time for all queries: {total_time} seconds.")
                 if not explain:
