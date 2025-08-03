@@ -6,7 +6,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-fn to_struct_array(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
+pub fn to_struct_array(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("struct requires at least one argument");
     }
