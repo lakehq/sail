@@ -4,9 +4,7 @@ use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{
-    cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF,
-};
+use datafusion_expr::{cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use half::f16;
 
