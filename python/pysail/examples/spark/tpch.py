@@ -62,16 +62,24 @@ class TpchBenchmark:
                     print(f"The query returned {len(rows)} rows and took {query_time} seconds.")
         return total_time
 
-    def run(self, query: int | None = None, explain: bool = False):  # noqa: FBT001, FBT002
+    def run(self, query: int | None = None, explain: bool = False, num_runs: int = 1):  # noqa: FBT001, FBT002
         with self.spark_session() as spark:
             if query is not None:
                 self._run_query(spark, query, explain)
             else:
-                total_time = 0
-                for query in range(1, 23):
-                    total_time += self._run_query(spark, query, explain)
+                min_total_time = 0
+                for run in range(num_runs):
+                    total_time = 0
+                    for query in range(1, 23):
+                        total_time += self._run_query(spark, query, explain)
+                    if run == 0:
+                        min_total_time = total_time
+                    else:
+                        min_total_time = min(min_total_time, total_time)
+                    if not explain:
+                        print(f"\n\nRun {run+1} Total time for all queries: {total_time} seconds.")
                 if not explain:
-                    print(f"\n\nTotal time for all queries: {total_time} seconds.")
+                    print(f"\n\nMin total time across {num_runs}: {min_total_time} seconds.")
 
 
 def main():
@@ -84,6 +92,7 @@ def main():
     group.add_argument("--query", type=int, choices=range(1, 23))
     group.add_argument("--query-all", action="store_true")
     group.add_argument("--explain", type=int, choices=range(1, 23))
+    group.add_argument("--num-runs", type=int, default=1)
     args = parser.parse_args()
 
     benchmark = TpchBenchmark(args.url, args.data_path, args.query_path)
@@ -105,7 +114,7 @@ def main():
     elif args.explain:
         benchmark.run(args.explain, explain=True)
     elif args.query_all:
-        benchmark.run()
+        benchmark.run(query=None, explain=False, num_runs=args.num_runs)
 
 
 if __name__ == "__main__":
