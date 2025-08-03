@@ -586,7 +586,7 @@ impl PlanFormatter for SparkPlanFormatter {
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "exp"
             | "log" | "log10" | "log1p" | "log2" | "regexp" | "regexp_like" | "signum" | "sqrt"
             | "cos" | "cosh" | "cot" | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan"
-            | "tanh" | "pi" | "expm1" | "hypot" | "e" => {
+            | "tanh" | "pi" | "expm1" | "hypot" | "e" | "sec" => {
                 let name = name.to_uppercase();
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))
