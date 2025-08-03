@@ -3,6 +3,7 @@ use std::sync::{Arc, LazyLock};
 use datafusion::common::Statistics;
 use datafusion::execution::cache::CacheAccessor;
 use log::{debug, error};
+use moka::policy::EvictionPolicy;
 use moka::sync::Cache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -22,7 +23,7 @@ pub struct MokaFileStatisticsCache {
 
 impl MokaFileStatisticsCache {
     pub fn new(max_entries: Option<String>) -> Self {
-        let mut builder = Cache::builder();
+        let mut builder = Cache::builder().eviction_policy(EvictionPolicy::lru());
         if let Some(max_entries) = max_entries {
             if let Some(max_entries) = try_parse_non_zero_u64(&max_entries) {
                 debug!("Setting max entries for MokaFileStatisticsCache to {max_entries}");

@@ -4,6 +4,7 @@ use datafusion::datasource::physical_plan::parquet::reader::CachedParquetMetaDat
 use datafusion::execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use datafusion::execution::cache::CacheAccessor;
 use log::debug;
+use moka::policy::EvictionPolicy;
 use moka::sync::Cache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -22,7 +23,7 @@ pub struct MokaFilesMetadataCache {
 
 impl MokaFilesMetadataCache {
     pub fn new(memory_limit: Option<String>) -> Self {
-        let mut builder = Cache::builder();
+        let mut builder = Cache::builder().eviction_policy(EvictionPolicy::lru());
 
         if let Some(limit) = memory_limit {
             if let Some(max_capacity) = try_parse_memory_limit(&limit) {
