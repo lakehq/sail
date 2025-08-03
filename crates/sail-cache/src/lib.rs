@@ -3,6 +3,7 @@ use log::error;
 pub mod error;
 pub mod file_metadata_cache;
 pub mod list_file_cache;
+pub mod table_files_statistics_cache;
 
 pub(crate) fn try_parse_memory_limit(limit: &str) -> Option<u64> {
     let (number, unit) = limit.split_at(limit.len() - 1);

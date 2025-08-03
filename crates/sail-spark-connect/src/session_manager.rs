@@ -6,13 +6,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::execution::cache::cache_manager::CacheManagerConfig;
-use datafusion::execution::cache::cache_unit::{DefaultFileStatisticsCache, DefaultListFilesCache};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use log::{debug, info};
-use sail_cache::file_metadata_cache::{MokaFilesMetadataCache, GLOBAL_FILE_METADATA_CACHE};
+use sail_cache::file_metadata_cache::GLOBAL_FILE_METADATA_CACHE;
 use sail_cache::list_file_cache::GLOBAL_LIST_FILES_CACHE;
+use sail_cache::table_files_statistics_cache::GLOBAL_FILE_STATISTICS_CACHE;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -160,7 +160,7 @@ impl SessionManager {
                 .config
                 .parquet
                 .maximum_buffered_record_batches_per_stream;
-            parquet.cache_metadata = options.config.parquet.cache_file_metadata;
+            parquet.cache_metadata = options.config.parquet.file_metadata_cache;
         }
 
         let runtime = {
@@ -171,9 +171,7 @@ impl SessionManager {
                 .with_file_metadata_cache(Some(GLOBAL_FILE_METADATA_CACHE.clone()));
             let cache_config = if options.config.parquet.table_files_statistics_cache {
                 debug!("[table_files_statistics_cache] Using table files statistics cache");
-                cache_config.with_files_statistics_cache(Some(Arc::new(
-                    DefaultFileStatisticsCache::default(),
-                )))
+                cache_config.with_files_statistics_cache(Some(GLOBAL_FILE_STATISTICS_CACHE.clone()))
             } else {
                 debug!("[table_files_statistics_cache] Not using table files statistics cache");
                 cache_config

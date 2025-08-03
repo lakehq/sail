@@ -11,7 +11,8 @@ use crate::try_parse_non_zero_u64;
 
 pub static GLOBAL_LIST_FILES_CACHE: LazyLock<Arc<MokaListFilesCache>> = LazyLock::new(|| {
     let ttl = std::env::var("SAIL_RUNTIME__LIST_FILES_CACHE_TTL").ok();
-    Arc::new(MokaListFilesCache::new(ttl))
+    let max_entries = std::env::var("SAIL_RUNTIME__LIST_FILES_CACHE_MAX_ENTRIES").ok();
+    Arc::new(MokaListFilesCache::new(ttl, max_entries))
 });
 
 pub struct MokaListFilesCache {
@@ -19,7 +20,7 @@ pub struct MokaListFilesCache {
 }
 
 impl MokaListFilesCache {
-    pub fn new(ttl: Option<String>) -> Self {
+    pub fn new(ttl: Option<String>, max_entries: Option<String>) -> Self {
         let mut builder = Cache::builder();
 
         if let Some(ttl) = ttl {
@@ -31,6 +32,17 @@ impl MokaListFilesCache {
             }
         } else {
             debug!("No TTL set for MokaListFilesCache");
+        }
+
+        if let Some(max_entries) = max_entries {
+            if let Some(max_entries) = try_parse_non_zero_u64(&max_entries) {
+                debug!("Setting max entries for MokaListFilesCache to {max_entries}");
+                builder = builder.max_capacity(max_entries);
+            } else {
+                debug!("Disabled or invalid max entries for MokaListFilesCache: {max_entries}");
+            }
+        } else {
+            debug!("No max entries set for MokaListFilesCache");
         }
 
         Self {
@@ -82,5 +94,37 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for MokaListFilesCache {
 
     fn name(&self) -> String {
         "MokaListFilesCache".to_string()
+    }
+}
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use chrono::DateTime;
+    use object_store::path::Path;
+    use object_store::ObjectMeta;
+
+    use super::*;
+
+    #[test]
+    fn test_list_file_cache() {
+        let meta = ObjectMeta {
+            location: Path::from("test"),
+            last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
+                .unwrap()
+                .into(),
+            size: 1024,
+            e_tag: None,
+            version: None,
+        };
+
+        let cache = MokaListFilesCache::new(None, None);
+        assert!(cache.get(&meta.location).is_none());
+
+        cache.put(&meta.location, vec![meta.clone()].into());
+        assert_eq!(
+            cache.get(&meta.location).unwrap().first().unwrap().clone(),
+            meta.clone()
+        );
     }
 }

@@ -26,9 +26,10 @@
   default: "false"
   description: |
     Enable cache of file metadata when listing files.
-    This setting avoids listing file meta of the same path repeatedly in same session,
+    This setting avoids repeatedly listing file metadata across all sessions,
     which may be expensive in certain situations (e.g., remote object storage).
-    Note that if this option is enabled, Sail will not see any updates to the underlying location.
+    When enabled, updates to the underlying location may not be visible until
+    the cache entry expires (controlled by `runtime.list_files_cache_ttl`).
     Default is disabled.
   experimental: true
 
@@ -36,10 +37,23 @@
   type: number
   default: "3600"
   description: |
-    The time-to-live (TTL) in seconds for the file metadata cache.
+    The time-to-live (TTL) in seconds for cached file listings.
+    Entries expire after this duration from when they were cached,
+    ensuring eventual consistency with the file system.
     This setting is only effective when `runtime.list_files_cache` is enabled.
     Setting this value to `0` disables the TTL.
+    Note: This setting can only be configured at startup and cannot be changed at runtime.
     Default is 3600 seconds (1 hour).
+
+- key: runtime.list_files_cache_max_entries
+  type: number
+  default: "100000"
+  description: |
+    Maximum number of directory listings to cache.
+    This setting is only effective when `runtime.list_files_cache` is enabled.
+    Setting this value to `0` disables the limit.
+    Note: This setting can only be configured at startup and cannot be changed at runtime.
+    Default is 100000 entries.
 
 - key: cluster.enable_tls
   type: boolean
@@ -467,23 +481,26 @@
     at the expense of higher memory usage.
   experimental: true
 
-- key: parquet.cache_file_metadata
+- key: parquet.file_metadata_cache
   type: boolean
   default: "true"
   description: |
-    (Reading) Whether or not to enable the caching of embedded metadata of Parquet files
-    (footer and page metadata). Enabling it can offer substantial performance improvements
-    for repeated queries over large files. By default, the cache is automatically
-    invalidated when the underlying file is modified.
+    (Reading) Enable cache of embedded metadata of Parquet files (footer and page metadata).
+    This setting avoids repeatedly reading metadata across all sessions,
+    which can offer substantial performance improvements for repeated queries over large files.
+    The cache is automatically invalidated when the underlying file is modified.
+    Default is enabled.
   experimental: true
 
 - key: parquet.file_metadata_cache_limit
   type: string
   default: ""
   description: |
-    Maximum memory limit for the Parquet metadata cache in bytes.
-    Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: ‘2G’ for 2 gigabytes.
-    Only applies when `parquet.cache_metadata` is enabled.
+    (Reading) Maximum memory limit for the Parquet metadata cache in bytes.
+    Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.
+    This setting is only effective when `parquet.file_metadata_cache` is enabled.
+    Setting this value to empty string or `0` disables the limit.
+    Note: This setting can only be configured at startup and cannot be changed at runtime.
     Default is empty, which means no limit.
   experimental: true
 
@@ -491,9 +508,23 @@
   type: boolean
   default: "false"
   description: |
-    Enable cache of files statistics when listing Parquet files.
+    (Reading) Enable cache of files statistics when listing Parquet files.
+    This setting avoids repeatedly computing statistics across all sessions,
+    which may be expensive in certain situations (e.g., remote object storage).
+    The cache is automatically invalidated when the underlying file is modified.
     Default is disabled.
   experimental: true
+
+- key: parquet.table_files_statistics_cache_max_entries
+  type: number
+  default: "100000"
+  description: |
+    Maximum number of Parquet files statistics to cache.
+    This setting is only effective when `parquet.table_files_statistics_cache` is enabled.
+    When the limit is reached, least recently used entries are evicted.
+    Setting this value to `0` disables the limit.
+    Note: This setting can only be configured at startup and cannot be changed at runtime.
+    Default is 100000 entries.
 
 - key: kubernetes.image
   type: string
