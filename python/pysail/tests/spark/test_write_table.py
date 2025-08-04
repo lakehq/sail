@@ -3,7 +3,7 @@ import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.tests.spark.utils import escape_sql_string_literal, is_jvm_spark
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -17,7 +17,7 @@ def tables(spark):
     spark.sql("DROP TABLE IF EXISTS t5")
 
 
-def test_insert_into_basic(spark):
+def test_insert_into_with_values(spark):
     spark.sql("INSERT INTO t1 VALUES (101, 'Alice', 20)")
     df = spark.createDataFrame([(102, "Bob", 30)])
     df.write.insertInto("t1")
@@ -171,9 +171,10 @@ def test_write_to(spark):
 
 @pytest.mark.skipif(not is_jvm_spark(), reason="the options overwrite logic is not fully compatible yet")
 def test_write_options(spark, tmpdir):
+    location = str(tmpdir / "test")
     spark.sql(f"""
         CREATE TABLE t4 (a STRING, b STRING) USING CSV
-        LOCATION '{tmpdir / "test"}'
+        LOCATION '{escape_sql_string_literal(location)}'
         OPTIONS (header 'false', delimiter '|')
     """)
 
@@ -202,11 +203,11 @@ def test_write_options(spark, tmpdir):
 
 
 def test_write_with_partition_columns(spark, tmpdir):
-    location = tmpdir / "test"
+    location = str(tmpdir / "test")
     spark.sql(f"""
         CREATE TABLE t5 (a INT, b STRING)
         USING PARQUET
-        LOCATION '{location}'
+        LOCATION '{escape_sql_string_literal(location)}'
         PARTITIONED BY (a)
     """)
     df = spark.createDataFrame([(42, "foo")], schema="a INT, b STRING")
@@ -222,6 +223,6 @@ def test_write_with_partition_columns(spark, tmpdir):
     if is_jvm_spark():
         pytest.skip("Spark cannot infer partition columns when reading paths")
 
-    assert spark.read.parquet(str(location)).select("a", "b").collect() == [
+    assert spark.read.parquet(location).select("a", "b").collect() == [
         ("42", "foo"),
     ]

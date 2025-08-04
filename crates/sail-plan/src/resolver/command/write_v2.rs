@@ -46,61 +46,57 @@ impl PlanResolver<'_> {
 
         match mode {
             WriteToMode::Append => {
-                builder =
-                    builder
-                        .with_mode(SinkMode::Append)
-                        .with_target(WriteTarget::ExistingTable {
-                            table,
-                            column_match: WriteColumnMatch::ByName,
-                        });
+                builder = builder
+                    .with_target(WriteTarget::ExistingTable {
+                        table,
+                        column_match: WriteColumnMatch::ByName,
+                    })
+                    .with_mode(SinkMode::Append);
             }
             WriteToMode::Create => {
-                builder =
-                    builder
-                        .with_mode(SinkMode::Overwrite)
-                        .with_target(WriteTarget::NewTable {
-                            table,
-                            action: WriteTableAction::Create,
-                        })
+                builder = builder
+                    .with_target(WriteTarget::NewTable {
+                        table,
+                        action: WriteTableAction::Create,
+                    })
+                    .with_mode(SinkMode::Overwrite);
             }
             WriteToMode::CreateOrReplace => {
-                builder =
-                    builder
-                        .with_mode(SinkMode::Overwrite)
-                        .with_target(WriteTarget::NewTable {
-                            table,
-                            action: WriteTableAction::CreateOrReplace,
-                        });
+                builder = builder
+                    .with_target(WriteTarget::NewTable {
+                        table,
+                        action: WriteTableAction::CreateOrReplace,
+                    })
+                    .with_mode(SinkMode::Overwrite);
             }
             WriteToMode::Overwrite { condition } => {
                 let condition = self
                     .resolve_expression(*condition, input.schema(), state)
                     .await?;
                 builder = builder
-                    .with_mode(SinkMode::OverwriteIf {
-                        condition: Box::new(condition),
-                    })
                     .with_target(WriteTarget::ExistingTable {
                         table,
                         column_match: WriteColumnMatch::ByName,
+                    })
+                    .with_mode(SinkMode::OverwriteIf {
+                        condition: Box::new(condition),
                     });
             }
             WriteToMode::OverwritePartitions => {
                 builder = builder
-                    .with_mode(SinkMode::OverwritePartitions)
                     .with_target(WriteTarget::ExistingTable {
                         table,
                         column_match: WriteColumnMatch::ByName,
-                    });
+                    })
+                    .with_mode(SinkMode::OverwritePartitions);
             }
             WriteToMode::Replace => {
-                builder =
-                    builder
-                        .with_mode(SinkMode::Overwrite)
-                        .with_target(WriteTarget::NewTable {
-                            table,
-                            action: WriteTableAction::Replace,
-                        });
+                builder = builder
+                    .with_target(WriteTarget::NewTable {
+                        table,
+                        action: WriteTableAction::Replace,
+                    })
+                    .with_mode(SinkMode::Overwrite);
             }
         };
         self.resolve_write_with_builder(input, builder, state).await

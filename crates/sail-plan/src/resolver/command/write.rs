@@ -380,7 +380,6 @@ impl PlanResolver<'_> {
         column_match: WriteColumnMatch,
         info: &TableInfo,
     ) -> PlanResult<LogicalPlan> {
-        // TODO: handle partitioning columns
         // TODO: handle table column default values and generated columns
 
         let table_schema = Schema::new(info.columns.iter().map(|x| x.field()).collect::<Vec<_>>());

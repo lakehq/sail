@@ -75,21 +75,20 @@ impl PlanResolver<'_> {
                         .with_mode(SinkMode::IgnoreIfExists);
                 }
                 Some(SaveMode::Append) => {
-                    builder = builder.with_mode(SinkMode::Append).with_target(
-                        WriteTarget::ExistingTable {
+                    builder = builder
+                        .with_target(WriteTarget::ExistingTable {
                             table,
                             column_match: WriteColumnMatch::ByName,
-                        },
-                    );
+                        })
+                        .with_mode(SinkMode::Append);
                 }
                 Some(SaveMode::Overwrite) => {
-                    builder =
-                        builder
-                            .with_mode(SinkMode::Overwrite)
-                            .with_target(WriteTarget::NewTable {
-                                table,
-                                action: WriteTableAction::CreateOrReplace,
-                            });
+                    builder = builder
+                        .with_target(WriteTarget::NewTable {
+                            table,
+                            action: WriteTableAction::CreateOrReplace,
+                        })
+                        .with_mode(SinkMode::Overwrite);
                 }
             },
             SaveType::Table {
@@ -101,11 +100,11 @@ impl PlanResolver<'_> {
                     _ => SinkMode::Append,
                 };
                 builder = builder
-                    .with_mode(mode)
                     .with_target(WriteTarget::ExistingTable {
                         table,
                         column_match: WriteColumnMatch::ByPosition,
-                    });
+                    })
+                    .with_mode(mode);
             }
         };
         self.resolve_write_with_builder(input, builder, state).await

@@ -107,6 +107,8 @@ pub fn create_sort_order(
     }
 }
 
+/// Given a schema and a list of partition columns, returns the partition columns
+/// with their data types, and a schema with the partition columns removed.
 pub fn get_partition_columns_and_file_schema(
     schema: &Schema,
     partition_by: Vec<String>,
@@ -117,10 +119,9 @@ pub fn get_partition_columns_and_file_schema(
             let mut candidates = schema
                 .fields()
                 .iter()
-                .filter(|f| f.name().eq_ignore_ascii_case(&col))
-                .collect::<Vec<_>>();
-            match (candidates.pop(), candidates.is_empty()) {
-                (Some(field), true) => Ok((col, field.data_type().clone())),
+                .filter(|f| f.name().eq_ignore_ascii_case(&col));
+            match (candidates.next(), candidates.next()) {
+                (Some(field), None) => Ok((col, field.data_type().clone())),
                 _ => {
                     plan_err!("missing or ambiguous partition column: {col}")
                 }

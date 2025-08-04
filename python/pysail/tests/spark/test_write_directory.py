@@ -1,23 +1,18 @@
-import platform
-
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.tests.spark.utils import escape_sql_string_literal, is_jvm_spark
 
 
-@pytest.mark.skipif(
-    platform.system() == "Windows", reason="the temporary path may not be valid SQL string unless escaped"
-)
 def test_insert_overwrite_directory(spark, tmpdir):
-    location = tmpdir / "test"
+    location = str(tmpdir / "test")
 
     spark.sql(f"""
-        INSERT OVERWRITE DIRECTORY '{location}' USING PARQUET
+        INSERT OVERWRITE DIRECTORY '{escape_sql_string_literal(location)}' USING PARQUET
         SELECT CAST(101 AS LONG) AS id, 'Alice' AS name, 22 AS age
     """)
-    actual = spark.read.parquet(str(location)).toPandas()
+    actual = spark.read.parquet(location).toPandas()
     expected = pd.DataFrame(
         {"id": [101], "name": ["Alice"], "age": [22]},
     ).astype({"age": "int32"})
@@ -27,10 +22,10 @@ def test_insert_overwrite_directory(spark, tmpdir):
         pytest.skip("overwrite for existing data is not supported in Sail yet")
 
     spark.sql(f"""
-        INSERT OVERWRITE DIRECTORY '{location}' USING JSON
+        INSERT OVERWRITE DIRECTORY '{escape_sql_string_literal(location)}' USING JSON
         SELECT CAST(201 AS LONG) AS id, 'Bob' AS name, 32 AS age
     """)
-    actual = spark.read.json(str(location)).select("id", "name", "age").toPandas()
+    actual = spark.read.json(location).select("id", "name", "age").toPandas()
     # `INT` and `LONG` are written as JSON numbers and both read as `int64`.
     expected = pd.DataFrame(
         {"id": [201], "name": ["Bob"], "age": [32]},
