@@ -16,8 +16,8 @@ use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
 use datafusion_expr::expr::{FieldMetadata, ScalarFunction, WindowFunctionParams};
 use datafusion_expr::{
-    col, expr, expr_fn, lit, window_frame, AggregateUDF, BinaryExpr, ExprSchemable, Operator,
-    ScalarUDF,
+    cast, col, expr, expr_fn, lit, try_cast, window_frame, AggregateUDF, BinaryExpr, ExprSchemable,
+    Operator, ScalarUDF,
 };
 use datafusion_functions_nested::expr_fn::array_element;
 use sail_common::spec;
@@ -376,8 +376,9 @@ impl PlanResolver<'_> {
                 expr,
                 cast_to_type,
                 rename,
+                is_try,
             } => {
-                self.resolve_expression_cast(*expr, cast_to_type, rename, schema, state)
+                self.resolve_expression_cast(*expr, cast_to_type, rename, is_try, schema, state)
                     .await
             }
             Expr::UnresolvedRegex { col_name, plan_id } => {
@@ -1019,6 +1020,7 @@ impl PlanResolver<'_> {
         expr: spec::Expr,
         cast_to_type: spec::DataType,
         _rename: bool,
+        is_try: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
@@ -1032,7 +1034,8 @@ impl PlanResolver<'_> {
                 .plan_formatter
                 .data_type_to_simple_string(&cast_to_type)?;
             vec![format!(
-                "CAST({} AS {})",
+                "{}CAST({} AS {})",
+                if is_try { "TRY_" } else { "" },
                 name.one()?,
                 data_type_string.to_ascii_uppercase()
             )]
@@ -1056,44 +1059,59 @@ impl PlanResolver<'_> {
                 | DataType::Struct(_)
                 | DataType::Map(_, _)
         );
-        let expr = match (expr_type, cast_to_type) {
-            (from, DataType::Timestamp(time_unit, tz)) if from.is_numeric() => int64_to_timestamp(
-                expr::Expr::Cast(expr::Cast::new(Box::new(expr), DataType::Int64)),
-                time_unit,
-                tz,
-            ),
-            (DataType::Timestamp(time_unit, _), to) if to.is_numeric() => expr::Expr::Cast(
-                expr::Cast::new(Box::new(timestamp_to_int64(expr, &time_unit)), to),
-            ),
+        let expr = match (expr_type, cast_to_type.clone(), is_try) {
+            (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
+                if from.is_numeric() =>
+            {
+                cast(
+                    expr.mul(lit(time_unit_to_multiplier(&time_unit))),
+                    cast_to_type,
+                )
+            }
+            (DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), to, _)
+                if to.is_numeric() =>
+            {
+                cast(
+                    lit(1.0)
+                        .div(lit(time_unit_to_multiplier(&time_unit)))
+                        .mul(cast(expr, DataType::Int64)),
+                    to,
+                )
+            }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::YearMonth),
+                _,
             ) => ScalarUDF::new_from_impl(SparkYearMonthInterval::new()).call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Duration(TimeUnit::Microsecond),
+                _,
             ) => ScalarUDF::new_from_impl(SparkDayTimeInterval::new()).call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::MonthDayNano),
+                _,
             ) => ScalarUDF::new_from_impl(SparkCalendarInterval::new()).call(vec![expr]),
-            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32) => {
+            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Date32, _) => {
                 ScalarUDF::new_from_impl(SparkDate::new()).call(vec![expr])
             }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, tz),
+                _,
             ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(tz)?)).call(vec![expr]),
-            (_, DataType::Utf8) if override_string_cast => {
+            (_, DataType::Utf8, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
             }
-            (_, DataType::LargeUtf8) if override_string_cast => {
+            (_, DataType::LargeUtf8, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
             }
-            (_, DataType::Utf8View) if override_string_cast => {
+            (_, DataType::Utf8View, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
             }
-            (_, to) => expr::Expr::Cast(expr::Cast::new(Box::new(expr), to)),
+            (_, to, true) => try_cast(expr, to),
+            (_, to, _) => cast(expr, to),
         };
         Ok(NamedExpr::new(name, expr))
     }
@@ -2202,29 +2220,12 @@ fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableRe
     }
 }
 
-fn int64_to_timestamp(expr: expr::Expr, time_unit: TimeUnit, tz: Option<Arc<str>>) -> expr::Expr {
-    let expr = match time_unit {
-        TimeUnit::Second => expr,
-        TimeUnit::Millisecond => expr.mul(lit(1000i64)),
-        TimeUnit::Microsecond => expr.mul(lit(1_000_000i64)),
-        TimeUnit::Nanosecond => expr.mul(lit(1_000_000_000i64)),
-    };
-    expr::Expr::Cast(expr::Cast {
-        expr: Box::new(expr),
-        data_type: DataType::Timestamp(time_unit, tz),
-    })
-}
-
-fn timestamp_to_int64(expr: expr::Expr, time_unit: &TimeUnit) -> expr::Expr {
-    let expr = expr::Expr::Cast(expr::Cast {
-        expr: Box::new(expr),
-        data_type: DataType::Int64,
-    });
+fn time_unit_to_multiplier(time_unit: &TimeUnit) -> i64 {
     match time_unit {
-        TimeUnit::Second => expr,
-        TimeUnit::Millisecond => expr.div(lit(1_000i64)),
-        TimeUnit::Microsecond => expr.div(lit(1_000_000i64)),
-        TimeUnit::Nanosecond => expr.div(lit(1_000_000_000i64)),
+        TimeUnit::Second => 1i64,
+        TimeUnit::Millisecond => 1000i64,
+        TimeUnit::Microsecond => 1_000_000i64,
+        TimeUnit::Nanosecond => 1_000_000_000i64,
     }
 }
 
