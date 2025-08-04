@@ -308,19 +308,25 @@ impl PartitionWriter {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             let slice = batch.slice(offset, length);
             if let Some(writer) = self.arrow_writer.as_mut() {
-                writer
-                    .write(&slice)
-                    .await
-                    .map_err(|e| DeltaTableError::generic(format!("Failed to write batch: {e}")))?;
+                writer.write(&slice).await.map_err(|e| {
+                    DeltaTableError::generic(format!("Failed to write batch slice: {e}"))
+                })?;
             }
 
-            // Check if we need to flush
-            let buffer_size = if let Some(buffer) = self.buffer.as_ref() {
+            // Check if need to flush after writing the slice
+            let buffer_len = if let Some(buffer) = self.buffer.as_ref() {
                 buffer.len().await
             } else {
                 0
             };
-            if buffer_size >= self.config.target_file_size {
+            let in_progress_size = if let Some(writer) = self.arrow_writer.as_ref() {
+                writer.in_progress_size()
+            } else {
+                0
+            };
+            let estimated_size = buffer_len + in_progress_size;
+
+            if estimated_size >= self.config.target_file_size {
                 self.flush_writer().await?;
             }
         }
@@ -376,6 +382,7 @@ impl PartitionWriter {
 
     /// Generate the next data file path, returning both relative and full paths
     fn next_data_path(&mut self) -> (String, Path) {
+        let current_count = self.part_counter;
         self.part_counter += 1;
 
         let column_path = ColumnPath::new(Vec::new());
@@ -392,7 +399,7 @@ impl PartitionWriter {
 
         let file_name = format!(
             "part-{:05}-{}-c000{}.parquet",
-            self.part_counter, self.writer_id, compression_suffix
+            current_count, self.writer_id, compression_suffix
         );
 
         let mut full_path = self.config.table_path.clone();

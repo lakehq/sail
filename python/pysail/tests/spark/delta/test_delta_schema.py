@@ -147,34 +147,37 @@ class TestDeltaSchema:
         """Test Delta Lake write with target_file_size option"""
         delta_path = tmp_path / "delta_target_file_size"
 
-        # Create test data with enough content to test file sizing
         test_data = [
-            Row(id=i, name=f"user_with_long_name_{i}" * 10, description=f"description_{i}" * 20)
-            for i in range(1, 201)  # 200 rows with larger content
+            Row(
+                id=i,
+                name=f"user_with_very_long_name_{i}" * 15,
+                description=f"detailed_description_content_{i}" * 10,
+                metadata=f"additional_metadata_field_{i}" * 8
+            )
+            for i in range(1, 1001)
         ]
         df = spark.createDataFrame(test_data)
 
-        # Test with different target_file_size values
-        for file_size in [1024, 4096, 8192]:  # Small sizes to force multiple files
+        for file_size in [50000, 100000, 150000]:
             size_path = delta_path / f"size_{file_size}"
 
-            # Write with specific target file size
-            df.write.format("delta").mode("overwrite").option("target_file_size", str(file_size)).save(str(size_path))
+            df.write.format("delta").mode("overwrite") \
+                .option("target_file_size", str(file_size)) \
+                .option("write_batch_size", "100") \
+                .save(str(size_path))
 
-            # Physical artifact assertion: small target_file_size should create multiple files
+            # target_file_size should create multiple files
             data_files = get_data_files(str(size_path))
-            assert len(data_files) > 1, f"A small target_file_size ({file_size}) should create multiple output files, got {len(data_files)}"
+            assert len(data_files) > 2, f"target_file_size ({file_size}) should create multiple output files, got {len(data_files)} files"
 
-            # Read back and verify data integrity
             result_df = spark.read.format("delta").load(f"file://{size_path}").sort("id")
             result_data = result_df.collect()
 
-            # Verify all data is present and correct
-            assert len(result_data) == 200
+            assert len(result_data) == 1000
             assert result_data[0].id == 1
-            assert result_data[-1].id == 200
-            assert "user_with_long_name_1" in result_data[0].name
-            assert "user_with_long_name_200" in result_data[-1].name
+            assert result_data[-1].id == 1000
+            assert "user_with_very_long_name_1" in result_data[0].name
+            assert "user_with_very_long_name_1000" in result_data[-1].name
 
     def test_delta_combined_write_options(self, spark, tmp_path):
         """Test Delta Lake write with both write_batch_size and target_file_size options"""
