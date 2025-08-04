@@ -75,9 +75,9 @@ pub async fn create_delta_provider(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
-    options: &std::collections::HashMap<String, String>,
+    options: &[std::collections::HashMap<String, String>],
 ) -> Result<std::sync::Arc<dyn datafusion::catalog::TableProvider>> {
-    // TODO: Parse options when needed
+    // TODO: Parse options (with overwrite logic) when needed
     // let resolver = DataSourceOptionsResolver::new(ctx);
     // let delta_options = resolver.resolve_delta_read_options(options.clone())?;
     let _ = options;

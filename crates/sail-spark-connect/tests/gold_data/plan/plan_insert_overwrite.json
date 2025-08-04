@@ -43,8 +43,12 @@
               "table": [
                 "s"
               ],
-              "columns": "byPosition",
-              "partitionSpec": [
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": true
+                }
+              },
+              "partition": [
                 [
                   "e",
                   {
@@ -56,9 +60,7 @@
                   }
                 ]
               ],
-              "replace": null,
-              "ifNotExists": true,
-              "overwrite": true
+              "ifNotExists": true
             },
             "planId": null
           }
@@ -108,11 +110,13 @@
               "table": [
                 "s"
               ],
-              "columns": "byPosition",
-              "partitionSpec": [],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": true
+                }
+              },
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }

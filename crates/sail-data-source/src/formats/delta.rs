@@ -31,6 +31,10 @@ impl TableFormat for DeltaTableFormat {
         let SourceInfo {
             paths,
             schema,
+            constraints: _,
+            partition_by: _,
+            bucket_by: _,
+            sort_order: _,
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
@@ -67,7 +71,6 @@ impl TableFormat for DeltaTableFormat {
         };
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_delta_write_options(options)?;
-
         let sink = Arc::new(DeltaDataSink::new(
             mode,
             table_url,

@@ -508,11 +508,11 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let node = spec::CommandNode::InsertInto {
                 input: Box::new(query),
                 table: from_ast_object_name(name)?,
-                columns: spec::WriteColumns::ByPosition,
-                partition_spec: vec![],
-                replace: Some(from_ast_expression(condition)?),
+                mode: spec::InsertMode::Replace {
+                    condition: Box::new(from_ast_expression(condition)?),
+                },
+                partition: vec![],
                 if_not_exists: false,
-                overwrite: false,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -526,28 +526,27 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             columns,
             query,
         } => {
-            let partition_spec = if let Some(partition) = partition {
+            let overwrite = matches!(into_or_overwrite, Either::Right(Overwrite { .. }));
+            let partition = if let Some(partition) = partition {
                 from_ast_partition(partition)?
             } else {
                 vec![]
             };
-            let columns = match columns {
-                Some(Either::Left((_, _))) => spec::WriteColumns::ByName,
-                Some(Either::Right(columns)) => {
-                    spec::WriteColumns::Columns(from_ast_identifier_list(columns)?)
-                }
-                None => spec::WriteColumns::ByPosition,
+            let mode = match columns {
+                Some(Either::Left((_, _))) => spec::InsertMode::InsertByName { overwrite },
+                Some(Either::Right(columns)) => spec::InsertMode::InsertByColumns {
+                    columns: from_ast_identifier_list(columns)?,
+                    overwrite,
+                },
+                None => spec::InsertMode::InsertByPosition { overwrite },
             };
             let query = from_ast_query(query)?;
-            let overwrite = matches!(into_or_overwrite, Either::Right(Overwrite { .. }));
             let node = spec::CommandNode::InsertInto {
                 input: Box::new(query),
                 table: from_ast_object_name(name)?,
-                columns,
-                partition_spec,
-                replace: None,
+                mode,
+                partition,
                 if_not_exists: if_not_exists.is_some(),
-                overwrite,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -956,6 +955,7 @@ fn from_ast_table_definition(
             CreateTableClauses {
                 partition_by,
                 bucket_by,
+                cluster_by,
                 row_format,
                 stored_as,
                 location,
@@ -1010,6 +1010,11 @@ fn from_ast_table_definition(
     } else {
         (vec![], None)
     };
+    let cluster_by = cluster_by
+        .into_iter()
+        .flatten()
+        .map(from_ast_object_name)
+        .collect::<SqlResult<Vec<_>>>()?;
     let options = options.map(from_ast_property_list).transpose()?;
     let properties = properties.map(from_ast_property_list).transpose()?;
     let columns = from_ast_table_columns(columns)?;
@@ -1023,6 +1028,7 @@ fn from_ast_table_definition(
         partition_by,
         sort_by,
         bucket_by,
+        cluster_by,
         if_not_exists,
         replace: or_replace,
         options: options.into_iter().flatten().collect(),
@@ -1284,6 +1290,7 @@ struct CreateTableBucketBy {
 struct CreateTableClauses {
     partition_by: Option<Vec<PartitionColumn>>,
     bucket_by: Option<CreateTableBucketBy>,
+    cluster_by: Option<Vec<ObjectName>>,
     row_format: Option<RowFormat>,
     stored_as: Option<FileFormat>,
     location: Option<StringLiteral>,
@@ -1346,6 +1353,12 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                     };
                     if output.bucket_by.replace(bucket_by).is_some() {
                         return Err(SqlError::invalid("duplicate CLUSTERED BY clause"));
+                    }
+                }
+                CreateTableClause::ClusterBy(_, _, _, cluster_by, _) => {
+                    let cluster_by = cluster_by.into_items().collect();
+                    if output.cluster_by.replace(cluster_by).is_some() {
+                        return Err(SqlError::invalid("duplicate CLUSTER BY clause"));
                     }
                 }
                 CreateTableClause::RowFormat(_, _, x) => {

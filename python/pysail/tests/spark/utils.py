@@ -74,3 +74,15 @@ class AnyOf:
 def any_of(*values):
     """Wrapper around a value for comparison with any of the values in a list."""
     return AnyOf(*values)
+
+
+def escape_sql_string_literal(s: str) -> str:
+    """Escapes a string for use in SQL literals.
+    All non-ASCII characters remain unchanged,
+    while ASCII characters are converted to their octal representation
+    unless they are alphanumeric.
+    """
+    return "".join(
+        f"\\{ord(c):03o}" if ord(c) < 128 and not c.isalnum() else c  # noqa: PLR2004
+        for c in s
+    )
