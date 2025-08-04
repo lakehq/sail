@@ -16,7 +16,9 @@ use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{internal_err, not_impl_err, Result};
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+use sail_common_datafusion::datasource::{
+    get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
+};
 
 use crate::options::DataSourceOptionsResolver;
 
@@ -28,12 +30,12 @@ pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>>;
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>>;
 }
 
@@ -68,25 +70,56 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         let SourceInfo {
             paths,
             schema,
+            constraints,
+            partition_by,
+            bucket_by: _,
+            sort_order,
             options,
         } = info;
 
+        let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
         let file_format = self.inner.create_read_format(ctx, options)?;
         let listing_options = ListingOptions::new(file_format);
-        let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
 
-        let schema = match schema {
-            Some(x) if !x.fields().is_empty() => Arc::new(x),
-            _ => crate::listing::resolve_listing_schema(ctx, &urls, &listing_options).await?,
+        let (schema, partition_by) = match schema {
+            Some(schema) if !schema.fields().is_empty() => {
+                let (partition_by, schema) =
+                    get_partition_columns_and_file_schema(&schema, partition_by)?;
+                (Arc::new(schema), partition_by)
+            }
+            _ => {
+                let schema =
+                    crate::listing::resolve_listing_schema(ctx, &urls, &listing_options).await?;
+                let partition_by = partition_by
+                    .into_iter()
+                    .map(|col| (col, DataType::Utf8))
+                    .collect();
+                (schema, partition_by)
+            }
         };
 
-        let config = ListingTableConfig::new_with_multi_paths(urls)
-            .with_listing_options(listing_options)
-            .with_schema(schema)
-            .infer_partitions_from_path(ctx)
-            .await?;
+        let listing_options = listing_options
+            .with_file_sort_order(vec![sort_order])
+            .with_table_partition_cols(partition_by);
+
+        let config = ListingTableConfig::new_with_multi_paths(urls);
+        let config = if listing_options.table_partition_cols.is_empty() {
+            config
+                .with_listing_options(listing_options)
+                .infer_partitions_from_path(ctx)
+                .await?
+        } else {
+            for url in config.table_paths.iter() {
+                listing_options.validate_partitions(ctx, url).await?;
+            }
+            config.with_listing_options(listing_options)
+        };
+        // The schema must be set after the listing options, otherwise it will panic.
+        let config = config.with_schema(schema);
         let config = crate::listing::rewrite_listing_partitions(config)?;
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        Ok(Arc::new(
+            ListingTable::try_new(config)?.with_constraints(constraints),
+        ))
     }
 
     async fn create_writer(
@@ -158,7 +191,7 @@ impl ListingFormat for ArrowListingFormat {
     fn create_read_format(
         &self,
         _ctx: &dyn Session,
-        _options: HashMap<String, String>,
+        _options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(ArrowFormat))
     }
@@ -166,7 +199,7 @@ impl ListingFormat for ArrowListingFormat {
     fn create_write_format(
         &self,
         _ctx: &dyn Session,
-        _options: HashMap<String, String>,
+        _options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(ArrowFormat))
     }
@@ -186,7 +219,7 @@ impl ListingFormat for AvroListingFormat {
     fn create_read_format(
         &self,
         _ctx: &dyn Session,
-        _options: HashMap<String, String>,
+        _options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(AvroFormat))
     }
@@ -194,7 +227,7 @@ impl ListingFormat for AvroListingFormat {
     fn create_write_format(
         &self,
         _ctx: &dyn Session,
-        _options: HashMap<String, String>,
+        _options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(AvroFormat))
     }
@@ -214,7 +247,7 @@ impl ListingFormat for CsvListingFormat {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_csv_read_options(options)?;
@@ -224,7 +257,7 @@ impl ListingFormat for CsvListingFormat {
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_csv_write_options(options)?;
@@ -246,7 +279,7 @@ impl ListingFormat for JsonListingFormat {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_json_read_options(options)?;
@@ -256,7 +289,7 @@ impl ListingFormat for JsonListingFormat {
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_json_write_options(options)?;
@@ -278,7 +311,7 @@ impl ListingFormat for ParquetListingFormat {
     fn create_read_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_parquet_read_options(options)?;
@@ -288,7 +321,7 @@ impl ListingFormat for ParquetListingFormat {
     fn create_write_format(
         &self,
         ctx: &dyn Session,
-        options: HashMap<String, String>,
+        options: Vec<HashMap<String, String>>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_parquet_write_options(options)?;

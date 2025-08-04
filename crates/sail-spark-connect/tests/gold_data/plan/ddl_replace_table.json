@@ -29,6 +29,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -104,6 +105,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [
@@ -159,6 +161,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -172,13 +175,159 @@
     {
       "input": "REPLACE TABLE my_tab (a INT, b STRING, ts TIMESTAMP) USING parquet\nCLUSTER BY (a, b)\n",
       "output": {
-        "failure": "invalid argument: found CLUSTER at 67:74 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "ts",
+                  "dataType": {
+                    "timestamp": {
+                      "timeUnit": "microsecond",
+                      "timestampType": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [
+                [
+                  "a"
+                ],
+                [
+                  "b"
+                ]
+              ],
+              "ifNotExists": false,
+              "replace": true,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "REPLACE TABLE my_tab (a STRUCT<b INT, c STRING>, ts TIMESTAMP) USING parquet\nCLUSTER BY (a.b, ts)\n",
       "output": {
-        "failure": "invalid argument: found CLUSTER at 77:84 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": {
+                    "struct": {
+                      "fields": [
+                        {
+                          "name": "b",
+                          "dataType": "int32",
+                          "nullable": true,
+                          "metadata": []
+                        },
+                        {
+                          "name": "c",
+                          "dataType": {
+                            "configuredUtf8": {
+                              "utf8Type": "configured"
+                            }
+                          },
+                          "nullable": true,
+                          "metadata": []
+                        }
+                      ]
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "ts",
+                  "dataType": {
+                    "timestamp": {
+                      "timeUnit": "microsecond",
+                      "timestampType": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [
+                [
+                  "a",
+                  "b"
+                ],
+                [
+                  "ts"
+                ]
+              ],
+              "ifNotExists": false,
+              "replace": true,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -215,6 +364,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -264,6 +414,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -317,6 +468,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -371,6 +523,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -414,6 +567,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -467,6 +621,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -520,6 +675,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -572,6 +728,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -625,6 +782,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -664,6 +822,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -678,7 +837,7 @@
       "input": "REPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)",
       "exception": "\n[INVALID_STATEMENT_OR_CLAUSE] The statement or clause: CREATE TABLE ... SKEWED BY is not valid. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab (id bigint) SKEWED BY (id) ON (1,2,3)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found SKEWED at 33:39 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found SKEWED at 33:39 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
@@ -714,6 +873,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -774,6 +934,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -844,6 +1005,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -903,6 +1065,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -940,6 +1103,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -993,6 +1157,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -1048,6 +1213,7 @@
               ],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -1097,6 +1263,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -1150,6 +1317,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -1164,7 +1332,7 @@
       "input": "REPLACE TABLE my_tab(a INT, b STRING) CLUSTER BY (a) CLUSTER BY (a)",
       "exception": "\n[DUPLICATE_CLAUSES] Found duplicate clauses: CLUSTER BY. Please, remove one of them. SQLSTATE: 42614\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) CLUSTER BY (a) CLUSTER BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found CLUSTER at 38:45 expected 'USING', 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: duplicate CLUSTER BY clause"
       }
     },
     {
@@ -1234,14 +1402,125 @@
       "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTER BY (a) PARTITIONED BY (a)",
       "exception": "\n[SPECIFY_CLUSTER_BY_WITH_PARTITIONED_BY_IS_NOT_ALLOWED] Cannot specify both CLUSTER BY and PARTITIONED BY. SQLSTATE: 42908\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTER BY (a) PARTITIONED BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found CLUSTER at 52:59 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [
+                "a"
+              ],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [
+                [
+                  "a"
+                ]
+              ],
+              "ifNotExists": false,
+              "replace": true,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "REPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS CLUSTER BY (a)",
       "exception": "\n[SPECIFY_CLUSTER_BY_WITH_BUCKETING_IS_NOT_ALLOWED] Cannot specify both CLUSTER BY and CLUSTERED BY INTO BUCKETS. SQLSTATE: 42908\n== SQL (line 1, position 1) ==\nREPLACE TABLE my_tab(a INT, b STRING) USING parquet CLUSTERED BY (a) INTO 2 BUCKETS CLUSTER BY (a)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found CLUSTER at 84:91 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "columns": [
+                {
+                  "name": "a",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                },
+                {
+                  "name": "b",
+                  "dataType": {
+                    "configuredUtf8": {
+                      "utf8Type": "configured"
+                    }
+                  },
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": {
+                "bucketColumnNames": [
+                  "a"
+                ],
+                "numBuckets": 2
+              },
+              "clusterBy": [
+                [
+                  "a"
+                ]
+              ],
+              "ifNotExists": false,
+              "replace": true,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -1306,6 +1585,7 @@
                 ],
                 "numBuckets": 5
               },
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -1359,6 +1639,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -1412,6 +1693,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -1465,6 +1747,7 @@
               "partitionBy": [],
               "sortBy": [],
               "bucketBy": null,
+              "clusterBy": [],
               "ifNotExists": false,
               "replace": true,
               "options": [],
@@ -1675,43 +1958,43 @@
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION sr",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION sr_ci_ai",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode_ci",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION unicode_ci_rtrim",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION utf8_binary",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     },
     {
       "input": "REPLACE TABLE t (c STRING) USING parquet DEFAULT COLLATION utf8_lcase",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
+        "failure": "invalid argument: found DEFAULT at 41:48 expected 'PARTITIONED', 'CLUSTERED', 'DISTRIBUTED', 'CLUSTER', 'ROW', 'STORED', 'LOCATION', 'COMMENT', 'OPTIONS', 'TBLPROPERTIES', 'AS', query, ';', or end of input"
       }
     }
   ]
