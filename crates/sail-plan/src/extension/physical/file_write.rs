@@ -1,17 +1,11 @@
 use std::sync::Arc;
 
-use arrow::compute::SortOptions;
-use arrow::datatypes::Schema;
 use datafusion::execution::SessionState;
-use datafusion::physical_expr::{
-    LexOrdering, LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
-};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
-use datafusion_common::{plan_err, Result};
-use datafusion_expr::expr::Sort;
-use datafusion_expr::{Expr, LogicalPlan};
-use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SinkMode};
+use datafusion_common::Result;
+use datafusion_expr::LogicalPlan;
+use sail_common_datafusion::datasource::{create_sort_order, PhysicalSinkMode, SinkInfo, SinkMode};
 use sail_data_source::default_registry;
 
 use crate::extension::logical::FileWriteOptions;
@@ -44,11 +38,7 @@ pub async fn create_file_write_physical_plan(
         }
         SinkMode::OverwritePartitions => PhysicalSinkMode::OverwritePartitions,
     };
-    let sort_order = if sort_by.is_empty() {
-        None
-    } else {
-        create_sort_order(sort_by, &physical_input.schema())?
-    };
+    let sort_order = create_sort_order(ctx, sort_by, logical_input.schema())?;
     let info = SinkInfo {
         input: physical_input,
         path,
@@ -56,40 +46,14 @@ pub async fn create_file_write_physical_plan(
         partition_by,
         bucket_by,
         sort_order,
-        options: options.into_iter().collect(),
+        // TODO: detect duplicated keys in each set of options
+        options: options
+            .into_iter()
+            .map(|x| x.into_iter().collect())
+            .collect(),
     };
     default_registry()
         .get_format(&format)?
         .create_writer(ctx, info)
         .await
-}
-
-fn create_sort_order(sort_by: Vec<Sort>, schema: &Schema) -> Result<Option<LexRequirement>> {
-    let mut ordering = Vec::with_capacity(sort_by.len());
-    for sort in sort_by.iter() {
-        match &sort.expr {
-            Expr::Column(c) => {
-                let expr = datafusion_physical_expr::expressions::col(c.name(), schema)?;
-                ordering.push(PhysicalSortExpr {
-                    expr,
-                    options: SortOptions {
-                        descending: !sort.asc,
-                        nulls_first: sort.nulls_first,
-                    },
-                });
-            }
-            _ => return plan_err!("expected column expression in sort order: {sort_by:?}"),
-        }
-    }
-    let ordering = LexOrdering::new(ordering);
-    if let Some(ordering) = ordering {
-        Ok(LexRequirement::new(
-            ordering
-                .into_iter()
-                .map(PhysicalSortRequirement::from)
-                .collect::<Vec<_>>(),
-        ))
-    } else {
-        Ok(None)
-    }
 }

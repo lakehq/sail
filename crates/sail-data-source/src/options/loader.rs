@@ -5,11 +5,13 @@ use serde::de::value::MapDeserializer;
 
 use crate::options::DataSourceOptions;
 
-// TODO: implement a function to load options with only allowed keys
-//   This is to avoid deserializing unknown external table options for table read/write.
-
 pub fn load_options<T: DataSourceOptions>(options: HashMap<String, String>) -> Result<T> {
-    let options = options.into_iter().map(|(k, v)| (k.to_lowercase(), v));
+    // Here we load options while ignoring unknown keys.
+    // This is to avoid deserializing unknown external table options for table read/write.
+    let options = options
+        .into_iter()
+        .map(|(k, v)| (k.to_lowercase(), v))
+        .filter(|(k, _)| T::ALLOWED_KEYS.contains(&k.as_str()));
     T::deserialize(<MapDeserializer<'_, _, serde::de::value::Error>>::new(
         options,
     ))
