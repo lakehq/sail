@@ -3,6 +3,8 @@ from datetime import date
 
 from pyspark.sql.types import Row
 
+from ..utils import get_data_files
+
 
 class TestDeltaDataSkipping:
     """Delta Lake data skipping (file pruning) tests"""
@@ -15,19 +17,20 @@ class TestDeltaDataSkipping:
         df1 = spark.createDataFrame([Row(id=i, value=float(i)) for i in range(1, 11)])
         df1.write.format("delta").mode("overwrite").save(str(delta_path))
 
-        df2 = spark.createDataFrame([Row(id=i, value=float(i)) for i in range(101, 111)])
+        df2 = spark.createDataFrame([Row(id=i, value=float(i)) for i in range(100001, 100011)])
         df2.write.format("delta").mode("append").save(str(delta_path))
 
-        df3 = spark.createDataFrame([Row(id=i, value=float(i)) for i in range(201, 211)])
+        df3 = spark.createDataFrame([Row(id=i, value=float(i)) for i in range(200001, 200011)])
         df3.write.format("delta").mode("append").save(str(delta_path))
 
-        total_files = len([f for f in os.listdir(delta_path) if f.endswith(".parquet")])
-        assert total_files == 3, "Table should have 3 data files"  # noqa: PLR2004
+        data_files = get_data_files(str(delta_path))
+        assert len(data_files) == 3, f"Setup should result in 3 distinct data files, got {len(data_files)}"
 
-        filtered_df = spark.read.format("delta").load(delta_table_path).filter("value > 200.0")
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("value > 200000.0")
 
-        assert filtered_df.count() == 10  # noqa: PLR2004
-        assert filtered_df.agg({"value": "min"}).collect()[0][0] == 201.0  # noqa: PLR2004
+        assert filtered_df.count() == 10, "Should return exactly 10 records from the third file"
+        assert filtered_df.agg({"value": "min"}).collect()[0][0] == 200001.0, "Minimum value should be 200001"
+        assert filtered_df.agg({"value": "max"}).collect()[0][0] == 200010.0, "Maximum value should be 200010"
 
     def test_data_skipping_on_string_and_date_columns(self, spark, tmp_path):
         """Test data skipping on string and date columns."""

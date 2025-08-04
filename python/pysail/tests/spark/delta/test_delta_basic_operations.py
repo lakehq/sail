@@ -3,6 +3,8 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 
+from ..utils import assert_file_lifecycle, get_data_files
+
 
 class TestDeltaBasicOperations:
     """Delta Lake basic read/write operations tests"""
@@ -30,6 +32,10 @@ class TestDeltaBasicOperations:
         df = spark.createDataFrame(delta_test_data)
 
         df.write.format("delta").mode("overwrite").save(str(delta_path))
+
+        # Physical artifact assertion: verify file creation
+        data_files = get_data_files(str(delta_path))
+        assert len(data_files) == 1, f"Expected exactly 1 data file, got {len(data_files)}"
 
         result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
 
@@ -66,6 +72,10 @@ class TestDeltaBasicOperations:
 
         df1.write.format("delta").mode("overwrite").save(str(delta_path))
 
+        # Record files after first write
+        files_v0 = set(get_data_files(str(delta_path)))
+        assert len(files_v0) > 0, "Initial write should create files"
+
         append_data = [
             Row(id=13, event="C", score=0.89),
             Row(id=14, event="D", score=0.67),
@@ -73,6 +83,10 @@ class TestDeltaBasicOperations:
         df2 = spark.createDataFrame(append_data)
 
         df2.write.format("delta").mode("append").save(str(delta_path))
+
+        # Physical artifact assertion: verify file lifecycle for append
+        files_v1 = set(get_data_files(str(delta_path)))
+        assert_file_lifecycle(files_v0, files_v1, "append")
 
         result_df = spark.read.format("delta").load(delta_table_path).sort("id")
 
@@ -97,6 +111,10 @@ class TestDeltaBasicOperations:
 
         df1.write.format("delta").mode("overwrite").save(str(delta_path))
 
+        # Record files after first write
+        files_v0 = set(get_data_files(str(delta_path)))
+        assert len(files_v0) > 0, "Initial write should create files"
+
         new_data = [
             Row(id=20, event="X", score=0.95),
             Row(id=21, event="Y", score=0.88),
@@ -104,6 +122,11 @@ class TestDeltaBasicOperations:
         df2 = spark.createDataFrame(new_data)
 
         df2.write.format("delta").mode("overwrite").save(str(delta_path))
+
+        # Physical artifact assertion: Delta Lake overwrite creates new files
+        # Note: Old files remain physically but are marked as removed in transaction log
+        files_v1 = set(get_data_files(str(delta_path)))
+        assert len(files_v1) > len(files_v0), "Overwrite should create new data files"
 
         result_df = spark.read.format("delta").load(delta_table_path).sort("id")
 

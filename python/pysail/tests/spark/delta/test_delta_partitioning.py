@@ -5,6 +5,8 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 
+from ..utils import assert_file_count_in_partitions, get_partition_structure
+
 
 class TestDeltaPartitioning:
     """Delta Lake partitioning functionality tests"""
@@ -33,6 +35,10 @@ class TestDeltaPartitioning:
 
         # Write partitioned table
         df.write.format("delta").mode("overwrite").partitionBy("year").save(str(delta_path))
+
+        # Physical artifact assertion: verify partition directory structure
+        partition_dirs = get_partition_structure(str(delta_path))
+        assert partition_dirs == {"year=2025", "year=2026"}, f"Expected year partitions, got {partition_dirs}"
 
         # Read entire table
         result_df = spark.read.format("delta").load(delta_table_path).sort("id")
@@ -93,10 +99,7 @@ class TestDeltaPartitioning:
         actual_partitions = set(partition_dirs)
         assert actual_partitions == expected_partitions, f"Expected {expected_partitions}, got {actual_partitions}"
 
-        for partition_dir in partition_dirs:
-            partition_path = delta_path / partition_dir
-            parquet_files = [f for f in os.listdir(partition_path) if f.endswith(".parquet")]
-            assert len(parquet_files) > 0, f"No parquet files found in partition directory {partition_dir}"
+        assert_file_count_in_partitions(str(delta_path), expected_files_per_partition=1)
 
     def test_delta_multi_column_partitioning(self, spark, tmp_path):
         """Test multi-column partitioning behavior."""
@@ -143,3 +146,43 @@ class TestDeltaPartitioning:
         assert (
             actual_partitions == expected_partition_structure
         ), f"Expected {expected_partition_structure}, got {actual_partitions}"
+
+        df_region1 = spark.read.format("delta").load(f"file://{delta_path}").filter("region = 1")
+        assert df_region1.count() == 2, "Region 1 should have 2 records"
+
+        df_region2_cat2 = spark.read.format("delta").load(f"file://{delta_path}").filter("region = 2 AND category = 2")
+        assert df_region2_cat2.count() == 1, "Region 2, Category 2 should have 1 record"
+
+        df_region_ge2 = spark.read.format("delta").load(f"file://{delta_path}").filter("region >= 2")
+        assert df_region_ge2.count() == 2, "Region >= 2 should have 2 records"
+
+    @pytest.mark.parametrize(
+        "filter_condition, expected_count, description",
+        [
+            ("year = 2025", 2, "Single year filter"),
+            ("year = 2026", 2, "Different year filter"),
+            ("year >= 2026", 2, "Greater than or equal filter"),
+            ("year < 2026", 2, "Less than filter"),
+            ("year != 2025", 2, "Not equal filter"),
+            ("year IN (2025)", 2, "IN clause with single value"),
+            ("year IN (2025, 2026)", 4, "IN clause with multiple values"),
+        ],
+    )
+    def test_delta_partition_filtering_parametrized(self, spark, tmp_path, filter_condition, expected_count, description):
+        """Parametrized test for various partition filtering scenarios"""
+        delta_path = tmp_path / "delta_partition_filter_test"
+
+        partition_data = [
+            Row(id=1, event="A", year=2025, score=0.8),
+            Row(id=2, event="B", year=2025, score=0.9),
+            Row(id=3, event="A", year=2026, score=0.7),
+            Row(id=4, event="B", year=2026, score=0.6),
+        ]
+        df = spark.createDataFrame(partition_data)
+
+        df.write.format("delta").mode("overwrite").partitionBy("year").save(str(delta_path))
+
+        filtered_df = spark.read.format("delta").load(f"file://{delta_path}").filter(filter_condition)
+        actual_count = filtered_df.count()
+
+        assert actual_count == expected_count, f"{description}: expected {expected_count} records, got {actual_count}"

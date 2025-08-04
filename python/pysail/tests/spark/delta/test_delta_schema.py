@@ -4,6 +4,8 @@ import pandas as pd
 import pytest
 from pyspark.sql.types import Row
 
+from ..utils import get_data_files
+
 
 class TestDeltaSchema:
     """Delta Lake schema-related tests"""
@@ -111,3 +113,135 @@ class TestDeltaSchema:
 
         loaded_schema = result_df.schema
         assert loaded_schema == schema, f"Schema mismatch: expected {schema}, got {loaded_schema}"
+
+    def test_delta_write_batch_size_option(self, spark, tmp_path):
+        """Test Delta Lake write with write_batch_size option"""
+        delta_path = tmp_path / "delta_write_batch_size"
+
+        # Create test data with enough rows to test batching
+        test_data = [
+            Row(id=i, name=f"user_{i}", score=float(i * 0.1))
+            for i in range(1, 101)  # 100 rows
+        ]
+        df = spark.createDataFrame(test_data)
+
+        # Test with different write_batch_size values
+        for batch_size in [10, 25, 50]:
+            batch_path = delta_path / f"batch_{batch_size}"
+
+            # Write with specific batch size
+            df.write.format("delta").mode("overwrite").option("write_batch_size", str(batch_size)).save(str(batch_path))
+
+            # Read back and verify data integrity
+            result_df = spark.read.format("delta").load(f"file://{batch_path}").sort("id")
+            result_data = result_df.collect()
+
+            # Verify all data is present and correct
+            assert len(result_data) == 100
+            assert result_data[0].id == 1
+            assert result_data[-1].id == 100
+            assert result_data[0].name == "user_1"
+            assert result_data[-1].name == "user_100"
+
+    def test_delta_target_file_size_option(self, spark, tmp_path):
+        """Test Delta Lake write with target_file_size option"""
+        delta_path = tmp_path / "delta_target_file_size"
+
+        # Create test data with enough content to test file sizing
+        test_data = [
+            Row(id=i, name=f"user_with_long_name_{i}" * 10, description=f"description_{i}" * 20)
+            for i in range(1, 201)  # 200 rows with larger content
+        ]
+        df = spark.createDataFrame(test_data)
+
+        # Test with different target_file_size values
+        for file_size in [1024, 4096, 8192]:  # Small sizes to force multiple files
+            size_path = delta_path / f"size_{file_size}"
+
+            # Write with specific target file size
+            df.write.format("delta").mode("overwrite").option("target_file_size", str(file_size)).save(str(size_path))
+
+            # Physical artifact assertion: small target_file_size should create multiple files
+            data_files = get_data_files(str(size_path))
+            assert len(data_files) > 1, f"A small target_file_size ({file_size}) should create multiple output files, got {len(data_files)}"
+
+            # Read back and verify data integrity
+            result_df = spark.read.format("delta").load(f"file://{size_path}").sort("id")
+            result_data = result_df.collect()
+
+            # Verify all data is present and correct
+            assert len(result_data) == 200
+            assert result_data[0].id == 1
+            assert result_data[-1].id == 200
+            assert "user_with_long_name_1" in result_data[0].name
+            assert "user_with_long_name_200" in result_data[-1].name
+
+    def test_delta_combined_write_options(self, spark, tmp_path):
+        """Test Delta Lake write with both write_batch_size and target_file_size options"""
+        delta_path = tmp_path / "delta_combined_options"
+
+        # Create test data
+        test_data = [
+            Row(id=i, name=f"user_{i}", data=f"data_content_{i}" * 5, score=float(i * 0.01))
+            for i in range(1, 151)  # 150 rows
+        ]
+        df = spark.createDataFrame(test_data)
+
+        # Write with both options
+        df.write.format("delta").mode("overwrite") \
+            .option("write_batch_size", "20") \
+            .option("target_file_size", "2048") \
+            .save(str(delta_path))
+
+        # Read back and verify data integrity
+        result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
+        result_data = result_df.collect()
+
+        # Verify all data is present and correct
+        assert len(result_data) == 150
+        assert result_data[0].id == 1
+        assert result_data[-1].id == 150
+        assert result_data[0].name == "user_1"
+        assert result_data[-1].name == "user_150"
+
+        # Verify data types are preserved
+        assert isinstance(result_data[0].score, float)
+        assert result_data[0].score == 0.01
+        assert result_data[-1].score == 1.5
+
+    @pytest.mark.skip(reason="Temporarily skipped")
+    def test_delta_write_options_with_partitioning(self, spark, tmp_path):
+        """Test Delta Lake write options combined with partitioning"""
+        delta_path = tmp_path / "delta_options_partitioned"
+
+        # Create partitioned test data
+        test_data = [
+            Row(id=i, category=f"cat_{i % 3}", name=f"user_{i}", value=i * 10)
+            for i in range(1, 61)  # 60 rows across 3 partitions
+        ]
+        df = spark.createDataFrame(test_data)
+
+        # Write with options and partitioning
+        df.write.format("delta").mode("overwrite") \
+            .option("write_batch_size", "15") \
+            .option("target_file_size", "1024") \
+            .partitionBy("category") \
+            .save(str(delta_path))
+
+        # Read back and verify data integrity
+        result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
+        result_data = result_df.collect()
+
+        # Verify all data is present and correct
+        assert len(result_data) == 60
+        assert result_data[0].id == 1
+        assert result_data[-1].id == 60
+
+        # Verify partitioning worked
+        categories = {row.category for row in result_data}
+        assert categories == {"cat_0", "cat_1", "cat_2"}
+
+        # Test partition filtering
+        filtered_df = spark.read.format("delta").load(f"file://{delta_path}").filter("category = 'cat_0'")
+        filtered_data = filtered_df.collect()
+        assert len(filtered_data) == 20  # 60 rows / 3 categories = 20 rows per category

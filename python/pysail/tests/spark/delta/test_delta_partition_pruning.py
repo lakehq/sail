@@ -1,3 +1,4 @@
+import pytest
 from pyspark.sql.types import Row
 
 
@@ -442,3 +443,53 @@ class TestDeltaPartitionPruning:
         result_count = filtered_df.count()
         expected_count = 2 * 3 * 2  # 2 years * 3 categories * 2 records with score = 7
         assert result_count == expected_count, f"Expected {expected_count} rows, got {result_count}"
+
+    @pytest.fixture(scope="class")
+    def setup_partitioned_table(self, spark, tmp_path_factory):
+        """Fixture to create a partitioned table for parametrized tests"""
+        delta_path = tmp_path_factory.mktemp("partitioned_table")
+
+        partition_data = []
+        for year in [2022, 2023]:
+            for month in range(1, 13):  # 12 months
+                for category in ["A", "B"]:
+                    # 10 records per partition
+                    for i in range(10):
+                        partition_data.append(
+                            Row(
+                                id=len(partition_data),
+                                year=year,
+                                month=month,
+                                category=category,
+                                value=f"data_{year}_{month}_{category}_{i}",
+                                score=i % 5  # scores 0-4
+                            )
+                        )
+
+        df = spark.createDataFrame(partition_data)
+        df.write.format("delta").partitionBy("year", "month").mode("overwrite").save(str(delta_path))
+
+        return f"file://{delta_path}"
+
+    @pytest.mark.parametrize(
+        "filter_str, expected_count",
+        [
+            ("year = 2023", 12 * 2 * 10),  # 1 year * 12 months * 2 categories * 10 records
+            ("year = 2022 AND month = 6", 2 * 10),  # 1 year * 1 month * 2 categories * 10 records
+            ("year >= 2023 AND month <= 3", 1 * 3 * 2 * 10),  # 1 year * 3 months * 2 categories * 10 records
+            ("year IN (2022, 2023) AND month IN (1, 12)", 2 * 2 * 2 * 10),  # 2 years * 2 months * 2 categories * 10 records
+            ("year BETWEEN 2022 AND 2023 AND month BETWEEN 6 AND 8", 2 * 3 * 2 * 10),  # 2 years * 3 months * 2 categories * 10 records
+            ("year != 2022", 1 * 12 * 2 * 10),  # 1 year * 12 months * 2 categories * 10 records
+            ("month > 10", 2 * 2 * 2 * 10),  # 2 years * 2 months (11,12) * 2 categories * 10 records
+            ("month < 3", 2 * 2 * 2 * 10),  # 2 years * 2 months (1,2) * 2 categories * 10 records
+        ],
+    )
+    def test_delta_partition_pruning_parametrized(self, spark, setup_partitioned_table, filter_str, expected_count):
+        """Parametrized test for  partition pruning scenarios"""
+        delta_table_path = setup_partitioned_table
+
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter(filter_str)
+        actual_count = filtered_df.count()
+
+        assert actual_count == expected_count, \
+            f"Filter '{filter_str}': expected {expected_count} records, got {actual_count}"
