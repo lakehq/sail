@@ -4034,7 +4034,8 @@
                     }
                   },
                   "castToType": "int32",
-                  "rename": true
+                  "rename": true,
+                  "isTry": false
                 }
               }
             },
