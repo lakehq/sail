@@ -11,6 +11,9 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_command_insert_overwrite_directory(
         &self,
         input: spec::QueryPlan,
+        // TODO: `local` is ignored for now since the object store can be inferred from
+        //   the URL scheme in `location`. But we may want to validate it in the future
+        //   and return an error if `local` does not match the type of `location`.
         _local: bool,
         location: Option<String>,
         file_format: Option<spec::TableFileFormat>,
