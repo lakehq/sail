@@ -284,8 +284,12 @@ impl DataSink for DeltaDataSink {
                 .as_ref()
                 .try_into_kernel()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-            let protocol = Protocol::default();
+            // TODO: Flexible protocol
+            let protocol: Protocol = serde_json::from_value(serde_json::json!({
+                "minReaderVersion": 1,
+                "minWriterVersion": 2,
+            }))
+            .unwrap();
             // FIXME: Follow upstream changes.
             #[allow(deprecated)]
             let metadata = deltalake::kernel::new_metadata(
