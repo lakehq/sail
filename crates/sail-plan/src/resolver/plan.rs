@@ -480,31 +480,36 @@ impl PlanResolver<'_> {
             .extension::<CatalogManager>()?
             .get_table_or_view(&reference)
             .await?;
-        if !options.is_empty() {
-            return Err(PlanError::todo("table options"));
-        }
         let plan = match status.kind {
-            // TODO: handle constraints/partitioning/bucketing information
             TableKind::Table {
                 catalog: _,
                 database: _,
                 columns,
                 comment: _,
-                constraints: _,
+                constraints,
                 format,
                 location,
-                partition_by: _,
-                sort_by: _,
-                bucket_by: _,
-                options,
+                partition_by,
+                sort_by,
+                bucket_by,
+                options: table_options,
                 properties: _,
             } => {
                 let schema =
                     adt::Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
+                let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
                     schema: Some(schema),
-                    options: options.into_iter().collect(),
+                    constraints,
+                    partition_by,
+                    bucket_by: bucket_by.map(|x| x.into()),
+                    sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
+                    // TODO: detect duplicated keys in each set of options
+                    options: vec![
+                        table_options.into_iter().collect(),
+                        options.into_iter().collect(),
+                    ],
                 };
                 let table_provider = default_registry()
                     .get_format(&format)?
@@ -647,7 +652,12 @@ impl PlanResolver<'_> {
         let info = SourceInfo {
             paths,
             schema,
-            options: options.into_iter().collect(),
+            // TODO: detect duplicated keys in the set of options
+            constraints: Default::default(),
+            partition_by: vec![],
+            bucket_by: None,
+            sort_order: vec![],
+            options: vec![options.into_iter().collect()],
         };
         let table_provider = default_registry()
             .get_format(&format)?

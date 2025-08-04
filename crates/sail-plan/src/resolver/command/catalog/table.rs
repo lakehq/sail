@@ -29,6 +29,7 @@ impl PlanResolver<'_> {
             partition_by,
             sort_by,
             bucket_by,
+            cluster_by,
             if_not_exists,
             replace,
             options,
@@ -38,8 +39,11 @@ impl PlanResolver<'_> {
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
         }
-        let columns = self.resolve_catalog_table_columns(columns, state)?;
-        let constraints = self.resolve_catalog_table_constraints(constraints)?;
+        if !cluster_by.is_empty() {
+            return Err(PlanError::todo("CLUSTER BY in CREATE TABLE statement"));
+        }
+        let columns = self.resolve_table_columns(columns, state)?;
+        let constraints = self.resolve_table_constraints(constraints)?;
         let location = if let Some(location) = location {
             location
         } else {
@@ -124,7 +128,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn resolve_catalog_table_columns(
+    fn resolve_table_columns(
         &self,
         columns: Vec<spec::TableColumnDefinition>,
         state: &mut PlanResolverState,
@@ -152,7 +156,7 @@ impl PlanResolver<'_> {
             .collect()
     }
 
-    fn resolve_catalog_table_constraints(
+    fn resolve_table_constraints(
         &self,
         constraints: Vec<spec::TableConstraint>,
     ) -> PlanResult<Vec<CatalogTableConstraint>> {
