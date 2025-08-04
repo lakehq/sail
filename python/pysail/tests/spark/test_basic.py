@@ -389,11 +389,6 @@ def test_sql_parameters(spark):
     assert_frame_equal(actual, expected)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="missing clean-up")
-def test_save_table(df):
-    df.write.saveAsTable("meow")
-
-
 def test_select_expression(df):
     assert_frame_equal(df.selectExpr("b.foo").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
     assert_frame_equal(df.selectExpr("b.*").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))

@@ -65,6 +65,29 @@ fn get_arguments_and_null_treatment(
     }
 }
 
+fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let (args, null_treatment) =
+        get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
+    if args
+        .first()
+        .map(|arg| arg.get_type(input.function_context.schema))
+        .transpose()?
+        == Some(DataType::Null)
+    {
+        return Ok(lit(ScalarValue::Null));
+    }
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: average::avg_udaf(),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment,
+        },
+    }))
+}
+
 fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
@@ -308,7 +331,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
         ("array_agg", F::custom(array_agg_compacted)),
-        ("avg", F::default(average::avg_udaf)),
+        ("avg", F::custom(avg)),
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
         ("bit_or", F::default(bit_and_or_xor::bit_or_udaf)),
         ("bit_xor", F::default(bit_and_or_xor::bit_xor_udaf)),
