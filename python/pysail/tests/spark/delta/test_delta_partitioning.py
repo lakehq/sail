@@ -5,7 +5,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 
-from ..utils import assert_file_count_in_partitions, get_partition_structure
+from ..utils import assert_file_count_in_partitions, get_partition_structure  # noqa: TID252
 
 
 class TestDeltaPartitioning:
@@ -148,16 +148,16 @@ class TestDeltaPartitioning:
         ), f"Expected {expected_partition_structure}, got {actual_partitions}"
 
         df_region1 = spark.read.format("delta").load(f"file://{delta_path}").filter("region = 1")
-        assert df_region1.count() == 2, "Region 1 should have 2 records"
+        assert df_region1.count() == 2, "Region 1 should have 2 records"  # noqa: PLR2004
 
         df_region2_cat2 = spark.read.format("delta").load(f"file://{delta_path}").filter("region = 2 AND category = 2")
         assert df_region2_cat2.count() == 1, "Region 2, Category 2 should have 1 record"
 
         df_region_ge2 = spark.read.format("delta").load(f"file://{delta_path}").filter("region >= 2")
-        assert df_region_ge2.count() == 2, "Region >= 2 should have 2 records"
+        assert df_region_ge2.count() == 2, "Region >= 2 should have 2 records"  # noqa: PLR2004
 
     @pytest.mark.parametrize(
-        "filter_condition, expected_count, description",
+        ("filter_condition", "expected_count", "description"),
         [
             ("year = 2025", 2, "Single year filter"),
             ("year = 2026", 2, "Different year filter"),
@@ -168,7 +168,9 @@ class TestDeltaPartitioning:
             ("year IN (2025, 2026)", 4, "IN clause with multiple values"),
         ],
     )
-    def test_delta_partition_filtering_parametrized(self, spark, tmp_path, filter_condition, expected_count, description):
+    def test_delta_partition_filtering_parametrized(
+        self, spark, tmp_path, filter_condition, expected_count, description
+    ):
         """Parametrized test for various partition filtering scenarios"""
         delta_path = tmp_path / "delta_partition_filter_test"
 

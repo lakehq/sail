@@ -90,11 +90,12 @@ def escape_sql_string_literal(s: str) -> str:
 
 def get_data_files(path: str, extension: str = ".parquet") -> list[str]:
     """Recursively find all data files under the given path."""
-    data_files = []
-    for root, _, files in os.walk(path):
-        for file in files:
-            if file.endswith(extension):
-                data_files.append(os.path.relpath(os.path.join(root, file), path))
+    data_files = [
+        os.path.relpath(os.path.join(root, file), path)
+        for root, _, files in os.walk(path)
+        for file in files
+        if file.endswith(extension)
+    ]
     return sorted(data_files)
 
 
@@ -134,8 +135,9 @@ def assert_file_count_in_partitions(path: str, expected_files_per_partition: int
     for partition in partitions:
         partition_path = os.path.join(str(path), partition)
         parquet_files = [f for f in os.listdir(partition_path) if f.endswith(".parquet")]
-        assert len(parquet_files) == expected_files_per_partition, \
-            f"Expected {expected_files_per_partition} parquet file(s) in {partition}, got {len(parquet_files)}"
+        assert (
+            len(parquet_files) == expected_files_per_partition
+        ), f"Expected {expected_files_per_partition} parquet file(s) in {partition}, got {len(parquet_files)}"
 
 
 def assert_file_lifecycle(files_before: set[str], files_after: set[str], operation: str):
@@ -145,4 +147,5 @@ def assert_file_lifecycle(files_before: set[str], files_after: set[str], operati
         assert not files_after.issubset(files_before), "Append should add new files"
         assert files_before.issubset(files_after), "Append should preserve existing files"
     else:
-        raise ValueError(f"Unknown operation: {operation}. Only 'append' is supported for file lifecycle assertions.")
+        msg = f"Unknown operation: {operation}. Only 'append' is supported for file lifecycle assertions."
+        raise ValueError(msg)

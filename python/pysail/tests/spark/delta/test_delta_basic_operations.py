@@ -3,7 +3,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 
-from ..utils import assert_file_lifecycle, get_data_files
+from ..utils import assert_file_lifecycle, get_data_files  # noqa: TID252
 
 
 class TestDeltaBasicOperations:

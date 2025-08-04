@@ -3,7 +3,7 @@ from datetime import date
 
 from pyspark.sql.types import Row
 
-from ..utils import get_data_files
+from ..utils import get_data_files  # noqa: TID252
 
 
 class TestDeltaDataSkipping:
@@ -24,13 +24,13 @@ class TestDeltaDataSkipping:
         df3.write.format("delta").mode("append").save(str(delta_path))
 
         data_files = get_data_files(str(delta_path))
-        assert len(data_files) == 3, f"Setup should result in 3 distinct data files, got {len(data_files)}"
+        assert len(data_files) == 3, f"Setup should result in 3 distinct data files, got {len(data_files)}"  # noqa: PLR2004
 
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("value > 200000.0")
 
-        assert filtered_df.count() == 10, "Should return exactly 10 records from the third file"
-        assert filtered_df.agg({"value": "min"}).collect()[0][0] == 200001.0, "Minimum value should be 200001"
-        assert filtered_df.agg({"value": "max"}).collect()[0][0] == 200010.0, "Maximum value should be 200010"
+        assert filtered_df.count() == 10, "Should return exactly 10 records from the third file"  # noqa: PLR2004
+        assert filtered_df.agg({"value": "min"}).collect()[0][0] == 200001.0, "Minimum value should be 200001"  # noqa: PLR2004
+        assert filtered_df.agg({"value": "max"}).collect()[0][0] == 200010.0, "Maximum value should be 200010"  # noqa: PLR2004
 
     def test_data_skipping_on_string_and_date_columns(self, spark, tmp_path):
         """Test data skipping on string and date columns."""

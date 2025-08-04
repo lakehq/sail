@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from pyspark.sql.types import Row
 
-from ..utils import get_data_files
+from ..utils import get_data_files  # noqa: TID252
 
 
 class TestDeltaSchema:
@@ -137,9 +137,9 @@ class TestDeltaSchema:
             result_data = result_df.collect()
 
             # Verify all data is present and correct
-            assert len(result_data) == 100
+            assert len(result_data) == 100  # noqa: PLR2004
             assert result_data[0].id == 1
-            assert result_data[-1].id == 100
+            assert result_data[-1].id == 100  # noqa: PLR2004
             assert result_data[0].name == "user_1"
             assert result_data[-1].name == "user_100"
 
@@ -152,7 +152,7 @@ class TestDeltaSchema:
                 id=i,
                 name=f"user_with_very_long_name_{i}" * 15,
                 description=f"detailed_description_content_{i}" * 10,
-                metadata=f"additional_metadata_field_{i}" * 8
+                metadata=f"additional_metadata_field_{i}" * 8,
             )
             for i in range(1, 1001)
         ]
@@ -161,21 +161,22 @@ class TestDeltaSchema:
         for file_size in [50000, 100000, 150000]:
             size_path = delta_path / f"size_{file_size}"
 
-            df.write.format("delta").mode("overwrite") \
-                .option("target_file_size", str(file_size)) \
-                .option("write_batch_size", "100") \
-                .save(str(size_path))
+            df.write.format("delta").mode("overwrite").option("target_file_size", str(file_size)).option(
+                "write_batch_size", "100"
+            ).save(str(size_path))
 
             # target_file_size should create multiple files
             data_files = get_data_files(str(size_path))
-            assert len(data_files) > 2, f"target_file_size ({file_size}) should create multiple output files, got {len(data_files)} files"
+            assert (
+                len(data_files) > 2  # noqa: PLR2004
+            ), f"target_file_size ({file_size}) should create multiple output files, got {len(data_files)} files"
 
             result_df = spark.read.format("delta").load(f"file://{size_path}").sort("id")
             result_data = result_df.collect()
 
-            assert len(result_data) == 1000
+            assert len(result_data) == 1000  # noqa: PLR2004
             assert result_data[0].id == 1
-            assert result_data[-1].id == 1000
+            assert result_data[-1].id == 1000  # noqa: PLR2004
             assert "user_with_very_long_name_1" in result_data[0].name
             assert "user_with_very_long_name_1000" in result_data[-1].name
 
@@ -191,26 +192,25 @@ class TestDeltaSchema:
         df = spark.createDataFrame(test_data)
 
         # Write with both options
-        df.write.format("delta").mode("overwrite") \
-            .option("write_batch_size", "20") \
-            .option("target_file_size", "2048") \
-            .save(str(delta_path))
+        df.write.format("delta").mode("overwrite").option("write_batch_size", "20").option(
+            "target_file_size", "2048"
+        ).save(str(delta_path))
 
         # Read back and verify data integrity
         result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
         result_data = result_df.collect()
 
         # Verify all data is present and correct
-        assert len(result_data) == 150
+        assert len(result_data) == 150  # noqa: PLR2004
         assert result_data[0].id == 1
-        assert result_data[-1].id == 150
+        assert result_data[-1].id == 150  # noqa: PLR2004
         assert result_data[0].name == "user_1"
         assert result_data[-1].name == "user_150"
 
         # Verify data types are preserved
         assert isinstance(result_data[0].score, float)
-        assert result_data[0].score == 0.01
-        assert result_data[-1].score == 1.5
+        assert result_data[0].score == 0.01  # noqa: PLR2004
+        assert result_data[-1].score == 1.5  # noqa: PLR2004
 
     @pytest.mark.skip(reason="Temporarily skipped")
     def test_delta_write_options_with_partitioning(self, spark, tmp_path):
@@ -225,20 +225,18 @@ class TestDeltaSchema:
         df = spark.createDataFrame(test_data)
 
         # Write with options and partitioning
-        df.write.format("delta").mode("overwrite") \
-            .option("write_batch_size", "15") \
-            .option("target_file_size", "1024") \
-            .partitionBy("category") \
-            .save(str(delta_path))
+        df.write.format("delta").mode("overwrite").option("write_batch_size", "15").option(
+            "target_file_size", "1024"
+        ).partitionBy("category").save(str(delta_path))
 
         # Read back and verify data integrity
         result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
         result_data = result_df.collect()
 
         # Verify all data is present and correct
-        assert len(result_data) == 60
+        assert len(result_data) == 60  # noqa: PLR2004
         assert result_data[0].id == 1
-        assert result_data[-1].id == 60
+        assert result_data[-1].id == 60  # noqa: PLR2004
 
         # Verify partitioning worked
         categories = {row.category for row in result_data}
@@ -247,4 +245,4 @@ class TestDeltaSchema:
         # Test partition filtering
         filtered_df = spark.read.format("delta").load(f"file://{delta_path}").filter("category = 'cat_0'")
         filtered_data = filtered_df.collect()
-        assert len(filtered_data) == 20  # 60 rows / 3 categories = 20 rows per category
+        assert len(filtered_data) == 20  # 60 rows / 3 categories = 20 rows per category  # noqa: PLR2004

@@ -462,7 +462,7 @@ class TestDeltaPartitionPruning:
                                 month=month,
                                 category=category,
                                 value=f"data_{year}_{month}_{category}_{i}",
-                                score=i % 5  # scores 0-4
+                                score=i % 5,  # scores 0-4
                             )
                         )
 
@@ -472,13 +472,19 @@ class TestDeltaPartitionPruning:
         return f"file://{delta_path}"
 
     @pytest.mark.parametrize(
-        "filter_str, expected_count",
+        ("filter_str", "expected_count"),
         [
             ("year = 2023", 12 * 2 * 10),  # 1 year * 12 months * 2 categories * 10 records
             ("year = 2022 AND month = 6", 2 * 10),  # 1 year * 1 month * 2 categories * 10 records
             ("year >= 2023 AND month <= 3", 1 * 3 * 2 * 10),  # 1 year * 3 months * 2 categories * 10 records
-            ("year IN (2022, 2023) AND month IN (1, 12)", 2 * 2 * 2 * 10),  # 2 years * 2 months * 2 categories * 10 records
-            ("year BETWEEN 2022 AND 2023 AND month BETWEEN 6 AND 8", 2 * 3 * 2 * 10),  # 2 years * 3 months * 2 categories * 10 records
+            (
+                "year IN (2022, 2023) AND month IN (1, 12)",
+                2 * 2 * 2 * 10,
+            ),  # 2 years * 2 months * 2 categories * 10 records
+            (
+                "year BETWEEN 2022 AND 2023 AND month BETWEEN 6 AND 8",
+                2 * 3 * 2 * 10,
+            ),  # 2 years * 3 months * 2 categories * 10 records
             ("year != 2022", 1 * 12 * 2 * 10),  # 1 year * 12 months * 2 categories * 10 records
             ("month > 10", 2 * 2 * 2 * 10),  # 2 years * 2 months (11,12) * 2 categories * 10 records
             ("month < 3", 2 * 2 * 2 * 10),  # 2 years * 2 months (1,2) * 2 categories * 10 records
@@ -491,5 +497,6 @@ class TestDeltaPartitionPruning:
         filtered_df = spark.read.format("delta").load(delta_table_path).filter(filter_str)
         actual_count = filtered_df.count()
 
-        assert actual_count == expected_count, \
-            f"Filter '{filter_str}': expected {expected_count} records, got {actual_count}"
+        assert (
+            actual_count == expected_count
+        ), f"Filter '{filter_str}': expected {expected_count} records, got {actual_count}"
