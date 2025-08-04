@@ -285,6 +285,7 @@ impl DataSink for DeltaDataSink {
                 .try_into_kernel()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             // TODO: Flexible protocol
+            #[allow(clippy::unwrap_used)]
             let protocol: Protocol = serde_json::from_value(serde_json::json!({
                 "minReaderVersion": 1,
                 "minWriterVersion": 2,
