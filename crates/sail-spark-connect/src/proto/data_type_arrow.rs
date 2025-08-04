@@ -164,9 +164,13 @@ impl TryFrom<adt::DataType> for DataType {
                     type_variation_reference: 0,
                 }))
             }
-            adt::DataType::Union { .. }
-            | adt::DataType::Dictionary { .. }
-            | adt::DataType::RunEndEncoded(_, _) => return Err(error(&data_type)),
+            adt::DataType::Dictionary(_, value_type) => {
+                let inner_data_type: DataType = value_type.as_ref().clone().try_into()?;
+                return Ok(inner_data_type);
+            }
+            adt::DataType::Union { .. } | adt::DataType::RunEndEncoded(_, _) => {
+                return Err(error(&data_type))
+            }
         };
         Ok(DataType { kind: Some(kind) })
     }

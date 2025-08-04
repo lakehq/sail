@@ -212,7 +212,6 @@ class TestDeltaSchema:
         assert result_data[0].score == 0.01  # noqa: PLR2004
         assert result_data[-1].score == 1.5  # noqa: PLR2004
 
-    @pytest.mark.skip(reason="Temporarily skipped")
     def test_delta_write_options_with_partitioning(self, spark, tmp_path):
         """Test Delta Lake write options combined with partitioning"""
         delta_path = tmp_path / "delta_options_partitioned"
