@@ -17,7 +17,6 @@ use crate::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInt
 use crate::extension::function::datetime::spark_next_day::SparkNextDay;
 use crate::extension::function::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use crate::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
-use crate::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
 use crate::extension::function::datetime::timestamp_now::TimestampNow;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
@@ -309,21 +308,6 @@ fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(expr_fn::to_char(expr, format))
 }
 
-fn weekofyear(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 1 {
-        let timezone = input.function_context.plan_config.session_timezone.clone();
-        Ok(Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkWeekOfYear::new(timezone))),
-            args: input.arguments,
-        }))
-    } else {
-        Err(PlanError::invalid(format!(
-            "weekofyear requires 1 argument, got {:?}",
-            input.arguments
-        )))
-    }
-}
-
 fn unix_time_unit(input: ScalarFunctionInput, time_unit: TimeUnit) -> PlanResult<Expr> {
     let arg = input.arguments.one()?;
     Ok(Expr::Cast(expr::Cast::new(
@@ -458,10 +442,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("datepart", F::binary(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
-        (
-            "dayname",
-            F::unary(|arg| expr_fn::to_char(arg, lit(ScalarValue::Utf8(Some("%a".into()))))),
-        ),
+        ("dayname", F::unary(|arg| expr_fn::to_char(arg, lit("%a")))),
         ("dayofmonth", F::unary(|arg| integer_part(arg, "DAY"))),
         (
             "dayofweek",
@@ -495,6 +476,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("make_ym_interval", F::custom(make_ym_interval)),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
+        (
+            "monthname",
+            F::unary(|arg| expr_fn::to_char(arg, lit("%b"))),
+        ),
         ("months_between", F::unknown("months_between")),
         ("next_day", F::udf(SparkNextDay::new())),
         ("now", F::custom(current_timestamp_microseconds)),
@@ -581,7 +566,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                 ))
             }),
         ),
-        ("weekofyear", F::custom(weekofyear)),
+        (
+            "weekofyear",
+            F::unary(|arg| expr_fn::to_char(arg, lit("%V"))),
+        ),
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
         ("year", F::unary(|arg| integer_part(arg, "YEAR"))),

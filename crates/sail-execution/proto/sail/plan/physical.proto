@@ -40,10 +40,9 @@ message ExtendedScalarUdf {
     SparkUnixTimestampUdf spark_unix_timestamp = 7;
     StructFunctionUdf struct_function = 8;
     UpdateStructFieldUdf update_struct_field = 9;
-    SparkWeekOfYearUdf spark_week_of_year = 10;
-    TimestampNowUdf timestamp_now = 11;
-    SparkTimestampUdf spark_timestamp = 12;
-    SparkFromToUtcTimestampUdf spark_from_to_utc_timestamp = 13;
+    TimestampNowUdf timestamp_now = 10;
+    SparkTimestampUdf spark_timestamp = 11;
+    SparkFromToUtcTimestampUdf spark_from_to_utc_timestamp = 12;
   }
 }
 
@@ -109,10 +108,6 @@ message StructFunctionUdf {
 
 message UpdateStructFieldUdf {
   repeated string field_names = 1;
-}
-
-message SparkWeekOfYearUdf {
-  string timezone = 1;
 }
 
 message TimestampNowUdf {
