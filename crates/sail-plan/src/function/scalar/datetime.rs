@@ -6,7 +6,7 @@ use datafusion::arrow::datatypes::{
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
-use datafusion_expr::{lit, BinaryExpr, Operator, ScalarUDF};
+use datafusion_expr::{cast, lit, BinaryExpr, Operator, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::datetime::spark_date_part::SparkDatePart;
@@ -568,7 +568,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         (
             "weekofyear",
-            F::unary(|arg| expr_fn::to_char(arg, lit("%V"))),
+            F::unary(|arg| cast(expr_fn::to_char(arg, lit("%V")), DataType::Int32)),
         ),
         ("window", F::unknown("window")),
         ("window_time", F::unknown("window_time")),
