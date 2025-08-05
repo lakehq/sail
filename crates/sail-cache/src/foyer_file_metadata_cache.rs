@@ -78,13 +78,8 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
     type Extra = ObjectMeta;
 
     fn get(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        info!(
-            "FoyerFilesMetadataCache GET for key: {k:?}. Current usage: {}, capacity: {}",
-            self.metadata.usage(),
-            self.metadata.capacity()
-        );
-
-        self.metadata
+        let meta = self
+            .metadata
             .get(&k.location)
             .map(|s| {
                 let (extra, metadata) = s.value();
@@ -94,7 +89,14 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
                     Some(Arc::clone(metadata))
                 }
             })
-            .unwrap_or(None)
+            .unwrap_or(None);
+        info!(
+            "FoyerFilesMetadataCache GET for key: {k:?}. FOUND: {}, Current usage: {}, capacity: {}",
+             meta.is_some(),
+            self.metadata.usage(),
+            self.metadata.capacity()
+        );
+        meta
     }
 
     fn get_with_extra(&self, k: &ObjectMeta, _e: &Self::Extra) -> Option<Arc<dyn FileMetadata>> {
@@ -107,7 +109,6 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
             self.metadata.usage(),
             self.metadata.capacity()
         );
-
         let entry = self
             .metadata
             .insert(key.location.clone(), (key.clone(), value));
@@ -130,7 +131,6 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
             self.metadata.usage(),
             self.metadata.capacity()
         );
-
         self.metadata.remove(&k.location).map(|x| {
             let (_, metadata) = x.value();
             Arc::clone(metadata)
