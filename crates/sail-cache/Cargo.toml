@@ -19,5 +19,7 @@ thiserror = { workspace = true }
 object_store = { workspace = true }
 datafusion = { workspace = true }
 chrono = { workspace = true }
-moka = { workspace = true }
 log = { workspace = true }
+moka = { workspace = true }
+foyer = { workspace = true }
+num_cpus = { workspace = true }

@@ -3,77 +3,98 @@ use std::sync::{Arc, LazyLock};
 use datafusion::datasource::physical_plan::parquet::reader::CachedParquetMetaData;
 use datafusion::execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use datafusion::execution::cache::CacheAccessor;
-use log::debug;
-use moka::policy::EvictionPolicy;
-use moka::sync::Cache;
+use foyer::{Cache, CacheBuilder, EvictionConfig, S3FifoConfig};
+use log::{debug, info};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
 use crate::try_parse_memory_limit;
 
-pub static GLOBAL_FILE_METADATA_CACHE: LazyLock<Arc<MokaFilesMetadataCache>> =
+pub static GLOBAL_FOYER_FILE_METADATA_CACHE: LazyLock<Arc<FoyerFilesMetadataCache>> =
     LazyLock::new(|| {
         let memory_limit = std::env::var("SAIL_PARQUET__FILE_METADATA_CACHE_LIMIT").ok();
-        Arc::new(MokaFilesMetadataCache::new(memory_limit))
+        Arc::new(FoyerFilesMetadataCache::new(memory_limit))
     });
 
-pub struct MokaFilesMetadataCache {
+pub struct FoyerFilesMetadataCache {
     metadata: Cache<Path, (ObjectMeta, Arc<dyn FileMetadata>)>,
 }
 
-impl MokaFilesMetadataCache {
+impl FoyerFilesMetadataCache {
     pub fn new(memory_limit: Option<String>) -> Self {
-        let mut builder = Cache::builder().eviction_policy(EvictionPolicy::lru());
+        let cpu_count = num_cpus::get();
 
-        if let Some(limit) = memory_limit {
-            if let Some(max_capacity) = try_parse_memory_limit(&limit) {
-                debug!("Setting memory limit for MokaFilesMetadataCache to {max_capacity} bytes");
-                builder = builder
-                    .weigher(
-                        |_key: &Path, value: &(ObjectMeta, Arc<dyn FileMetadata>)| -> u32 {
-                            if let Some(parquet_metadata) =
-                                value.1.as_any().downcast_ref::<CachedParquetMetaData>()
-                            {
-                                debug!("Using ParquetMetaData for size calculation in MokaFilesMetadataCache");
-                                parquet_metadata
-                                    .parquet_metadata()
-                                    .memory_size()
-                                    .min(u32::MAX as usize) as u32
-                            } else {
-                                debug!("Using ObjectMeta for size calculation in MokaFilesMetadataCache");
-                                size_of::<ObjectMeta>() as u32 + 1024
-                            }
-                        },
-                    )
-                    .max_capacity(max_capacity as u64);
+        let (capacity, use_weigher) =
+            if let Some(limit) = memory_limit.and_then(|l| try_parse_memory_limit(&l)) {
+                debug!("Setting memory capacity for metadata cache: {limit} bytes");
+                (limit, true)
             } else {
-                debug!("Disabled or invalid memory limit for MokaFilesMetadataCache: {limit}");
-            }
-        } else {
-            debug!("No memory limit set for MokaFilesMetadataCache");
+                debug!("No memory limit set for metadata cache, using default capacity: 100000");
+                (100000, false)
+            };
+
+        info!("Initializing Foyer metadata cache with {capacity} capacity and {cpu_count} shards on {cpu_count} CPUs");
+
+        let mut builder = CacheBuilder::new(capacity)
+            .with_name("parquet_file_metadata_cache")
+            .with_shards(cpu_count)
+            .with_eviction_config(EvictionConfig::S3Fifo(S3FifoConfig {
+                small_queue_capacity_ratio: 0.1,
+                ghost_queue_capacity_ratio: 1.0,
+                small_to_main_freq_threshold: 1,
+            }));
+
+        if use_weigher {
+            debug!("Using weigher for metadata cache entries");
+            builder = builder.with_weighter(
+                |_key: &Path, value: &(ObjectMeta, Arc<dyn FileMetadata>)| -> usize {
+                    if let Some(parquet_metadata) =
+                        value.1.as_any().downcast_ref::<CachedParquetMetaData>()
+                    {
+                        debug!(
+                            "Using ParquetMetaData for size calculation in FoyerFilesMetadataCache"
+                        );
+                        parquet_metadata
+                            .parquet_metadata()
+                            .memory_size()
+                            .min(u32::MAX as usize)
+                    } else {
+                        debug!("Using ObjectMeta for size calculation in FoyerFilesMetadataCache");
+                        size_of::<ObjectMeta>() + 1024
+                    }
+                },
+            );
         }
 
-        Self {
-            metadata: builder.build(),
-        }
+        let cache = builder.build();
+
+        Self { metadata: cache }
     }
 }
 
-impl FileMetadataCache for MokaFilesMetadataCache {}
+impl FileMetadataCache for FoyerFilesMetadataCache {}
 
-impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for MokaFilesMetadataCache {
+impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCache {
     type Extra = ObjectMeta;
 
     fn get(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
+        debug!(
+            "FoyerFilesMetadataCache GET for key: {k:?}. Current usage: {}, capacity: {}",
+            self.metadata.usage(),
+            self.metadata.capacity()
+        );
+
         self.metadata
             .get(&k.location)
-            .and_then(|(extra, metadata)| {
-                if extra.size == k.size && extra.last_modified == k.last_modified {
-                    Some(Arc::clone(&metadata))
-                } else {
+            .map(|s| {
+                let (extra, metadata) = s.value();
+                if extra.size != k.size || extra.last_modified != k.last_modified {
                     None
+                } else {
+                    Some(Arc::clone(metadata))
                 }
             })
+            .unwrap_or(None)
     }
 
     fn get_with_extra(&self, k: &ObjectMeta, _e: &Self::Extra) -> Option<Arc<dyn FileMetadata>> {
@@ -81,9 +102,17 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for MokaFilesMetadataCache
     }
 
     fn put(&self, key: &ObjectMeta, value: Arc<dyn FileMetadata>) -> Option<Arc<dyn FileMetadata>> {
-        self.metadata
+        debug!(
+            "FoyerFilesMetadataCache PUT for key: {key:?}. Current usage: {}, capacity: {}",
+            self.metadata.usage(),
+            self.metadata.capacity()
+        );
+
+        let entry = self
+            .metadata
             .insert(key.location.clone(), (key.clone(), value));
-        None
+        let (_, metadata) = entry.value();
+        Some(Arc::clone(metadata))
     }
 
     fn put_with_extra(
@@ -96,28 +125,44 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for MokaFilesMetadataCache
     }
 
     fn remove(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        self.metadata
-            .remove(&k.location)
-            .map(|(_, metadata)| metadata)
+        debug!(
+            "FoyerFilesMetadataCache REMOVE for key: {k:?}. Current usage: {}, capacity: {}",
+            self.metadata.usage(),
+            self.metadata.capacity()
+        );
+
+        self.metadata.remove(&k.location).map(|x| {
+            let (_, metadata) = x.value();
+            Arc::clone(metadata)
+        })
     }
 
     fn contains_key(&self, k: &ObjectMeta) -> bool {
+        debug!(
+            "FoyerFilesMetadataCache CONTAINS_KEY for key: {k:?}. Current usage: {}, capacity: {}",
+            self.metadata.usage(),
+            self.metadata.capacity()
+        );
+
         self.metadata
             .get(&k.location)
-            .map(|(extra, _)| extra.size == k.size && extra.last_modified == k.last_modified)
+            .map(|s| {
+                let (extra, _) = s.value();
+                extra.size == k.size && extra.last_modified == k.last_modified
+            })
             .unwrap_or(false)
     }
 
     fn len(&self) -> usize {
-        self.metadata.entry_count() as usize
+        self.metadata.usage()
     }
 
     fn clear(&self) {
-        self.metadata.invalidate_all();
+        self.metadata.clear();
     }
 
     fn name(&self) -> String {
-        "MokaFilesMetadataCache".to_string()
+        "FoyerFilesMetadataCache".to_string()
     }
 }
 
@@ -160,7 +205,7 @@ mod tests {
             metadata: "retrieved_metadata".to_owned(),
         });
 
-        let mut cache = MokaFilesMetadataCache::new(None);
+        let mut cache = FoyerFilesMetadataCache::new(None);
         assert!(cache.get(&object_meta).is_none());
 
         // put

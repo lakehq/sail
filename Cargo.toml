@@ -98,6 +98,8 @@ rustls = "0.23.29"
 dashmap = "6.1.0"
 itertools = "0.14.0"
 moka = { version = "0.12.10", features = ["sync"] }
+foyer = "0.18.0"
+num_cpus = "1.17.0"
 
 ######
 # The versions of the following dependencies are managed manually.
