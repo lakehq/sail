@@ -26,11 +26,11 @@ impl FoyerFilesMetadataCache {
 
         let (capacity, use_weigher) =
             if let Some(limit) = memory_limit.and_then(|l| try_parse_memory_limit(&l)) {
-                debug!("Setting memory capacity for metadata cache: {limit} bytes");
+                info!("Setting memory capacity for metadata cache: {limit} bytes");
                 (limit, true)
             } else {
-                debug!("No memory limit set for metadata cache, using default capacity: 100000");
-                (100000, false)
+                info!("No memory limit set for metadata cache, using default capacity: 10000");
+                (10000, false)
             };
 
         info!("Initializing Foyer metadata cache with {capacity} capacity and {cpu_count} shards on {cpu_count} CPUs");
@@ -51,7 +51,7 @@ impl FoyerFilesMetadataCache {
                     if let Some(parquet_metadata) =
                         value.1.as_any().downcast_ref::<CachedParquetMetaData>()
                     {
-                        debug!(
+                        info!(
                             "Using ParquetMetaData for size calculation in FoyerFilesMetadataCache"
                         );
                         parquet_metadata
@@ -59,7 +59,7 @@ impl FoyerFilesMetadataCache {
                             .memory_size()
                             .min(u32::MAX as usize)
                     } else {
-                        debug!("Using ObjectMeta for size calculation in FoyerFilesMetadataCache");
+                        info!("Using ObjectMeta for size calculation in FoyerFilesMetadataCache");
                         size_of::<ObjectMeta>() + 1024
                     }
                 },
@@ -78,7 +78,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
     type Extra = ObjectMeta;
 
     fn get(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        debug!(
+        info!(
             "FoyerFilesMetadataCache GET for key: {k:?}. Current usage: {}, capacity: {}",
             self.metadata.usage(),
             self.metadata.capacity()
@@ -102,7 +102,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
     }
 
     fn put(&self, key: &ObjectMeta, value: Arc<dyn FileMetadata>) -> Option<Arc<dyn FileMetadata>> {
-        debug!(
+        info!(
             "FoyerFilesMetadataCache PUT for key: {key:?}. Current usage: {}, capacity: {}",
             self.metadata.usage(),
             self.metadata.capacity()
@@ -125,7 +125,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
     }
 
     fn remove(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        debug!(
+        info!(
             "FoyerFilesMetadataCache REMOVE for key: {k:?}. Current usage: {}, capacity: {}",
             self.metadata.usage(),
             self.metadata.capacity()
@@ -138,19 +138,20 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
     }
 
     fn contains_key(&self, k: &ObjectMeta) -> bool {
-        debug!(
-            "FoyerFilesMetadataCache CONTAINS_KEY for key: {k:?}. Current usage: {}, capacity: {}",
-            self.metadata.usage(),
-            self.metadata.capacity()
-        );
-
-        self.metadata
+        let contains = self
+            .metadata
             .get(&k.location)
             .map(|s| {
                 let (extra, _) = s.value();
                 extra.size == k.size && extra.last_modified == k.last_modified
             })
-            .unwrap_or(false)
+            .unwrap_or(false);
+        info!(
+            "FoyerFilesMetadataCache CONTAINS_KEY for key: {k:?}. CONTAINS KEY: {contains}, Current usage: {}, capacity: {}",
+            self.metadata.usage(),
+            self.metadata.capacity()
+        );
+        contains
     }
 
     fn len(&self) -> usize {
