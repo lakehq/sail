@@ -108,6 +108,7 @@ impl From<CommonErrorCause> for TaskStreamError {
             | CommonErrorCause::Configuration(x)
             | CommonErrorCause::Execution(x)
             | CommonErrorCause::DeltaTable(x) => Self::Unknown(x),
+            CommonErrorCause::ArrowOffsetOverflowError(x) => Self::Unknown(format!("{x}")),
             CommonErrorCause::Python { summary, traceback } => {
                 Self::External(Arc::new(RemotePythonError { summary, traceback }))
             }

@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
+use futures::stream::{StreamExt, TryStreamExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
-use tonic::codegen::tokio_stream::StreamExt;
 use uuid::Uuid;
 
 use crate::error::{SparkError, SparkResult};
@@ -279,14 +279,12 @@ impl Executor {
 }
 
 pub(crate) async fn read_stream(
-    mut stream: SendableRecordBatchStream,
+    stream: SendableRecordBatchStream,
 ) -> SparkResult<Vec<RecordBatch>> {
-    let mut output = vec![];
-    while let Some(batch) = stream.next().await {
-        let batch = batch?;
-        output.push(batch);
-    }
-    Ok(output)
+    stream
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| SparkError::internal(format!("failed to execute on CPU runtime: {e}")))
 }
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {

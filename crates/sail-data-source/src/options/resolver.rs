@@ -664,14 +664,14 @@ mod tests {
         kv.insert("encoding".to_string(), "".to_string());
         let options = resolver.resolve_parquet_write_options(vec![kv.clone()])?;
         assert_eq!(options.global.column_index_truncate_length, Some(64));
-        assert_eq!(options.global.statistics_truncate_length, None);
+        assert_eq!(options.global.statistics_truncate_length, Some(64));
         assert_eq!(options.global.encoding, None,);
 
         kv.insert("column_index_truncate_length".to_string(), "".to_string());
         kv.insert("statistics_truncate_length".to_string(), "".to_string());
         let options = resolver.resolve_parquet_write_options(vec![kv])?;
         assert_eq!(options.global.column_index_truncate_length, Some(64));
-        assert_eq!(options.global.statistics_truncate_length, None);
+        assert_eq!(options.global.statistics_truncate_length, Some(64));
 
         Ok(())
     }

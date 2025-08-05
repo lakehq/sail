@@ -141,7 +141,9 @@ impl PlanFormatter for SparkPlanFormatter {
                 self.data_type_to_simple_string(key_type)?,
                 self.data_type_to_simple_string(value_type)?
             )),
-            DataType::RunEndEncoded(_, _) => {
+            DataType::RunEndEncoded(_, _)
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _) => {
                 not_impl_err!("data type: {data_type:?}")
             }
         }

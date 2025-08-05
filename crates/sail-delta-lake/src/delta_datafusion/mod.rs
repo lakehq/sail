@@ -282,7 +282,7 @@ fn arrow_type_from_delta_type(
                 false,
             )
         }
-        DeltaType::Struct(struct_type) => {
+        DeltaType::Struct(struct_type) | DeltaType::Variant(struct_type) => {
             let fields = struct_type
                 .fields()
                 .map(|f| {
