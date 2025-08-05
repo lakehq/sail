@@ -83,6 +83,11 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         let listing_options = ListingOptions::new(file_format)
             .with_target_partitions(config.target_partitions())
             .with_collect_stat(config.collect_statistics());
+        log::info!(
+            "CHECK HERE: COLLECT STATISTICS: {} AND TARGET PARTITIONS: {}",
+            config.collect_statistics(),
+            config.target_partitions()
+        );
 
         let (schema, partition_by) = match schema {
             Some(schema) if !schema.fields().is_empty() => {

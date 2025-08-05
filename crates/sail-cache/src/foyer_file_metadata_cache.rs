@@ -48,7 +48,7 @@ impl FoyerFilesMetadataCache {
                     if let Some(parquet_metadata) =
                         value.1.as_any().downcast_ref::<CachedParquetMetaData>()
                     {
-                        info!(
+                        debug!(
                             "Using ParquetMetaData for size calculation in FoyerFilesMetadataCache"
                         );
                         parquet_metadata
@@ -56,7 +56,7 @@ impl FoyerFilesMetadataCache {
                             .memory_size()
                             .min(u32::MAX as usize)
                     } else {
-                        info!("Using ObjectMeta for size calculation in FoyerFilesMetadataCache");
+                        debug!("Using ObjectMeta for size calculation in FoyerFilesMetadataCache");
                         size_of::<ObjectMeta>() + 1024
                     }
                 },
