@@ -137,7 +137,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
                 }
             })
             .unwrap_or(None);
-        info!(
+        debug!(
             "FoyerFilesMetadataCache GET for key: {k:?}. FOUND: {}, Current usage: {}, capacity: {}",
              meta.is_some(),
             self.metadata.usage(),
@@ -151,7 +151,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
     }
 
     fn put(&self, key: &ObjectMeta, value: Arc<dyn FileMetadata>) -> Option<Arc<dyn FileMetadata>> {
-        info!(
+        debug!(
             "FoyerFilesMetadataCache PUT for key: {key:?}. Current usage: {}, capacity: {}",
             self.metadata.usage(),
             self.metadata.capacity()
@@ -173,7 +173,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
     }
 
     fn remove(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
-        info!(
+        debug!(
             "FoyerFilesMetadataCache REMOVE for key: {k:?}. Current usage: {}, capacity: {}",
             self.metadata.usage(),
             self.metadata.capacity()
@@ -193,7 +193,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for FoyerFilesMetadataCach
                 extra.size == k.size && extra.last_modified == k.last_modified
             })
             .unwrap_or(false);
-        info!(
+        debug!(
             "FoyerFilesMetadataCache CONTAINS_KEY for key: {k:?}. CONTAINS KEY: {contains}, Current usage: {}, capacity: {}",
             self.metadata.usage(),
             self.metadata.capacity()
