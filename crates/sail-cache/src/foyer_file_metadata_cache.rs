@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::datasource::physical_plan::parquet::reader::CachedParquetMetaData;
@@ -13,7 +14,12 @@ use crate::try_parse_memory_limit;
 pub static GLOBAL_FOYER_FILE_METADATA_CACHE: LazyLock<Arc<FoyerFilesMetadataCache>> =
     LazyLock::new(|| {
         let memory_limit = std::env::var("SAIL_PARQUET__FILE_METADATA_CACHE_LIMIT").ok();
-        Arc::new(FoyerFilesMetadataCache::new(memory_limit))
+        if std::env::var("SAIL_FOYER_USE_CUSTOM").is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
+        {
+            Arc::new(FoyerFilesMetadataCache::new_custom(memory_limit))
+        } else {
+            Arc::new(FoyerFilesMetadataCache::new(memory_limit))
+        }
     });
 
 pub struct FoyerFilesMetadataCache {
@@ -22,6 +28,47 @@ pub struct FoyerFilesMetadataCache {
 
 impl FoyerFilesMetadataCache {
     pub fn new(memory_limit: Option<String>) -> Self {
+        let (capacity, use_weigher) =
+            if let Some(limit) = memory_limit.and_then(|l| try_parse_memory_limit(&l)) {
+                info!("Setting memory capacity for metadata cache: {limit} bytes");
+                (limit, true)
+            } else {
+                info!("No memory limit set for metadata cache, using default capacity: 1000");
+                (1000, false)
+            };
+
+        info!("Initializing custom Foyer metadata cache with {capacity} capacity");
+
+        let mut builder = CacheBuilder::new(capacity).with_name("parquet_file_metadata_cache");
+
+        if use_weigher {
+            debug!("Using weigher for metadata cache entries");
+            builder = builder.with_weighter(
+                |_key: &Path, value: &(ObjectMeta, Arc<dyn FileMetadata>)| -> usize {
+                    if let Some(parquet_metadata) =
+                        value.1.as_any().downcast_ref::<CachedParquetMetaData>()
+                    {
+                        info!(
+                            "Using ParquetMetaData for size calculation in FoyerFilesMetadataCache"
+                        );
+                        parquet_metadata
+                            .parquet_metadata()
+                            .memory_size()
+                            .min(u32::MAX as usize)
+                    } else {
+                        info!("Using ObjectMeta for size calculation in FoyerFilesMetadataCache");
+                        size_of::<ObjectMeta>() + 1024
+                    }
+                },
+            );
+        }
+
+        let cache = builder.build();
+
+        Self { metadata: cache }
+    }
+
+    pub fn new_custom(memory_limit: Option<String>) -> Self {
         let cpu_count = num_cpus::get();
 
         let (capacity, use_weigher) =
@@ -29,11 +76,11 @@ impl FoyerFilesMetadataCache {
                 info!("Setting memory capacity for metadata cache: {limit} bytes");
                 (limit, true)
             } else {
-                info!("No memory limit set for metadata cache, using default capacity: 10000");
-                (10000, false)
+                info!("No memory limit set for metadata cache, using default capacity: 1000");
+                (1000, false)
             };
 
-        info!("Initializing Foyer metadata cache with {capacity} capacity and {cpu_count} shards on {cpu_count} CPUs");
+        info!("Initializing custom Foyer metadata cache with {capacity} capacity and {cpu_count} shards on {cpu_count} CPUs");
 
         let mut builder = CacheBuilder::new(capacity)
             .with_name("parquet_file_metadata_cache")

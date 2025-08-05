@@ -107,9 +107,9 @@ def main():
                 banner="Spark TPC-H Data Explorer\nThe Spark session is available as `spark`.",
             )
     elif args.query:
-        benchmark.run(args.query)
+        benchmark.run(args.query, explain=False, num_runs=args.num_runs)
     elif args.explain:
-        benchmark.run(args.explain, explain=True)
+        benchmark.run(args.explain, explain=True, num_runs=args.num_runs)
     elif args.query_all:
         benchmark.run(query=None, explain=False, num_runs=args.num_runs)
 
