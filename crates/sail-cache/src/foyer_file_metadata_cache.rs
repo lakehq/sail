@@ -73,10 +73,10 @@ impl FoyerFilesMetadataCache {
 
         let (capacity, use_weigher) =
             if let Some(limit) = memory_limit.and_then(|l| try_parse_memory_limit(&l)) {
-                info!("Setting memory capacity for metadata cache: {limit} bytes");
+                debug!("Setting memory capacity for metadata cache: {limit} bytes");
                 (limit, true)
             } else {
-                info!("No memory limit set for metadata cache, using default capacity: 1000");
+                debug!("No memory limit set for metadata cache, using default capacity: 1000");
                 (1000, false)
             };
 
