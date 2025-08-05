@@ -169,7 +169,6 @@ class TestDeltaBasicOperations:
         assert {row.value for row in result if row.category == "A"} == {100, 200}
         assert {row.value for row in result if row.category == "B"} == {20, 40}
 
-    @pytest.mark.skip(reason="Temporarily skipped")
     def test_delta_overwrite_with_condition_v2(self, spark, tmp_path):
         """Test Delta Lake overwrite with a condition using the V2 API."""
         from pyspark.sql import functions as F  # noqa: N812
@@ -178,6 +177,8 @@ class TestDeltaBasicOperations:
         delta_path = tmp_path / "delta_condition_v2"
         delta_table_path = f"file://{delta_path}"
         table_name = "delta_v2_overwrite_test"
+
+        table_columns = "(id bigint, category string, value bigint)"
 
         data = [
             Row(id=1, category="A", value=10),
@@ -188,7 +189,7 @@ class TestDeltaBasicOperations:
         df = spark.createDataFrame(data)
         df.write.format("delta").mode("overwrite").save(str(delta_path))
 
-        spark.sql(f"CREATE OR REPLACE TABLE {table_name} USING DELTA LOCATION '{delta_table_path}'")
+        spark.sql(f"CREATE OR REPLACE TABLE {table_name} {table_columns} USING DELTA LOCATION '{delta_table_path}'")
 
         try:
             new_data = [
@@ -197,8 +198,8 @@ class TestDeltaBasicOperations:
             ]
             new_df = spark.createDataFrame(new_data)
 
-            # FIXME: This doesn't work
             new_df.writeTo(table_name).overwrite(F.col("category") == "A")
+            # spark.sql(f"INSERT INTO TABLE {table_name} REPLACE WHERE category = 'A' SELECT * FROM VALUES (5, 'A', 100), (6, 'A', 200)")
 
             result_df = spark.read.format("delta").load(delta_table_path).sort("id")
             result = result_df.collect()

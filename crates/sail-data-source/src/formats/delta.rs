@@ -6,8 +6,10 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::execution::SessionStateBuilder;
+use datafusion::physical_expr_common::physical_expr::{fmt_sql, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSchema};
+use datafusion::sql::sqlparser::ast::escape_quoted_string;
+use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result, ScalarValue, ToDFSchema};
 use deltalake::kernel::{Action, Remove};
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
@@ -191,8 +193,8 @@ impl TableFormat for DeltaTableFormat {
                         .with_runtime_env(ctx.runtime_env().clone())
                         .build();
 
-                    // Convert PhysicalExpr to string and then parse back to LogicalExpr
-                    let condition_str = format!("{condition}");
+                    // Convert PhysicalExpr to sql string
+                    let condition_str = physical_expr_to_sql_string(condition.as_ref());
                     let logical_expr =
                         parse_predicate_expression(&df_schema, &condition_str, &session_state)
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -268,5 +270,44 @@ impl DeltaTableFormat {
             (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
         }
+    }
+}
+
+/// Convert a PhysicalExpr to a properly formatted SQL string
+/// This function handles string literals correctly by adding quotes
+fn physical_expr_to_sql_string(expr: &dyn PhysicalExpr) -> String {
+    // Try to downcast to a BinaryExpr first
+    if let Some(binary) = expr
+        .as_any()
+        .downcast_ref::<datafusion::physical_plan::expressions::BinaryExpr>()
+    {
+        let left = physical_expr_to_sql_string(binary.left().as_ref());
+        let right = physical_expr_to_sql_string(binary.right().as_ref());
+        let op = binary.op();
+        return format!("{} {} {}", left, op, right);
+    }
+
+    // Try to downcast to a Literal expression
+    if let Some(literal) = expr
+        .as_any()
+        .downcast_ref::<datafusion::physical_plan::expressions::Literal>()
+    {
+        // Handle string literals specially by adding quotes
+        match literal.value() {
+            ScalarValue::Utf8(Some(s))
+            | ScalarValue::LargeUtf8(Some(s))
+            | ScalarValue::Utf8View(Some(s)) => {
+                format!("'{}'", escape_quoted_string(s, '\''))
+            }
+            _ => literal.value().to_string(),
+        }
+    } else if let Some(column) = expr
+        .as_any()
+        .downcast_ref::<datafusion::physical_plan::expressions::Column>()
+    {
+        column.name().to_string()
+    } else {
+        // For other expressions, use the default fmt_sql
+        fmt_sql(expr).to_string()
     }
 }
