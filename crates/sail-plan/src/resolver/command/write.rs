@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion_common::Column;
+use datafusion_common::{Column, DFSchema};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{col, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder};
 use sail_catalog::command::CatalogCommand;
@@ -14,13 +14,22 @@ use sail_catalog::provider::{
 use sail_common::spec;
 use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::utils::rename_logical_plan;
+use sail_common_datafusion::utils::{rename_logical_plan, rename_schema};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::logical::{FileWriteNode, FileWriteOptions, WithPreconditionsNode};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
+
+pub(super) enum WriteMode {
+    ErrorIfExists,
+    IgnoreIfExists,
+    Append,
+    Overwrite,
+    OverwriteIf { condition: Box<spec::Expr> },
+    OverwritePartitions,
+}
 
 pub(super) enum WriteTarget {
     Path {
@@ -52,7 +61,7 @@ pub(super) enum WriteTableAction {
 /// A unified logical plan builder for all write or insert operations.
 pub(super) struct WritePlanBuilder {
     target: Option<WriteTarget>,
-    mode: Option<SinkMode>,
+    mode: Option<WriteMode>,
     format: Option<String>,
     partition: Vec<(spec::Identifier, Option<spec::Expr>)>,
     partition_by: Vec<spec::Identifier>,
@@ -84,7 +93,7 @@ impl WritePlanBuilder {
         self
     }
 
-    pub fn with_mode(mut self, mode: SinkMode) -> Self {
+    pub fn with_mode(mut self, mode: WriteMode) -> Self {
         self.mode = Some(mode);
         self
     }
@@ -167,7 +176,8 @@ impl PlanResolver<'_> {
         }
         let mut file_write_options = FileWriteOptions {
             path: String::new(),
-            mode,
+            // The mode will be set later so the value here is just a placeholder.
+            mode: SinkMode::ErrorIfExists,
             format: format.unwrap_or_default(),
             partition_by: self.resolve_write_partition_by(partition_by.clone())?,
             sort_by: self
@@ -188,6 +198,7 @@ impl PlanResolver<'_> {
                     file_write_options.format = self.config.default_table_file_format.clone();
                 }
                 file_write_options.path = location;
+                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
             }
             WriteTarget::ExistingTable {
                 table,
@@ -198,7 +209,7 @@ impl PlanResolver<'_> {
                         "table does not exist: {table:?}"
                     )));
                 };
-                if matches!(file_write_options.mode, SinkMode::IgnoreIfExists) {
+                if matches!(mode, WriteMode::IgnoreIfExists) {
                     return Ok(LogicalPlanBuilder::empty(false).build()?);
                 }
                 input = Self::rewrite_write_input(input, column_match, &info)?;
@@ -228,23 +239,24 @@ impl PlanResolver<'_> {
                         file_write_options.format, info.format
                     )));
                 }
-                let Some(location) = info.location else {
-                    return Err(PlanError::invalid(format!(
-                        "table does not have a location: {table:?}"
-                    )));
-                };
+                file_write_options.mode = self
+                    .resolve_write_mode(mode, Some(&info.schema()), state)
+                    .await?;
                 file_write_options.partition_by = info.partition_by;
                 file_write_options.sort_by = info.sort_by.into_iter().map(|x| x.into()).collect();
                 file_write_options.bucket_by = info.bucket_by.map(|x| x.into());
-                file_write_options.path = location;
+                file_write_options.path = info.location.ok_or_else(|| {
+                    PlanError::invalid(format!("table does not have a location: {table:?}"))
+                })?;
                 file_write_options.format = info.format;
                 file_write_options.options.insert(0, info.options);
             }
             WriteTarget::NewTable { table, action } => {
                 let info = self.resolve_table_info(&table).await?;
-                if matches!(file_write_options.mode, SinkMode::IgnoreIfExists) && info.is_some() {
+                if matches!(mode, WriteMode::IgnoreIfExists) && info.is_some() {
                     return Ok(LogicalPlanBuilder::empty(false).build()?);
                 }
+                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
                 if file_write_options.format.is_empty() {
                     if let Some(format) = info.as_ref().map(|x| &x.format) {
                         file_write_options.format = format.clone();
@@ -335,6 +347,38 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(input, state).await?;
         let fields = Self::get_field_names(input.schema(), state)?;
         Ok(rename_logical_plan(input, &fields)?)
+    }
+
+    /// Resolves the write mode against an optional table schema.
+    /// If the table schema is not specified, conditional overwrite is not allowed.
+    async fn resolve_write_mode(
+        &self,
+        mode: WriteMode,
+        schema: Option<&Schema>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<SinkMode> {
+        match mode {
+            WriteMode::ErrorIfExists => Ok(SinkMode::ErrorIfExists),
+            WriteMode::IgnoreIfExists => Ok(SinkMode::IgnoreIfExists),
+            WriteMode::Append => Ok(SinkMode::Append),
+            WriteMode::Overwrite => Ok(SinkMode::Overwrite),
+            WriteMode::OverwriteIf { condition } => {
+                let Some(schema) = schema else {
+                    return Err(PlanError::internal(
+                        "conditional overwrite is not allowed without a table schema",
+                    ));
+                };
+                let names = state.register_fields(schema.fields());
+                let schema = rename_schema(schema, &names)?;
+                let schema = Arc::new(DFSchema::try_from(schema)?);
+                let condition = self.resolve_expression(*condition, &schema, state).await?;
+                let condition = self.rewrite_expression_for_external_schema(condition, state)?;
+                Ok(SinkMode::OverwriteIf {
+                    condition: Box::new(condition),
+                })
+            }
+            WriteMode::OverwritePartitions => Ok(SinkMode::OverwritePartitions),
+        }
     }
 
     async fn resolve_table_info(&self, table: &spec::ObjectName) -> PlanResult<Option<TableInfo>> {
@@ -488,6 +532,15 @@ struct TableInfo {
 }
 
 impl TableInfo {
+    fn schema(&self) -> Schema {
+        let fields = self
+            .columns
+            .iter()
+            .map(|col| col.field())
+            .collect::<Vec<_>>();
+        Schema::new(fields)
+    }
+
     fn is_empty_or_equivalent_partitioning(&self, partition_by: &[String]) -> bool {
         partition_by.is_empty()
             || (partition_by.len() == self.partition_by.len()

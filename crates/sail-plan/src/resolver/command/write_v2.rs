@@ -1,10 +1,9 @@
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
-use sail_common_datafusion::datasource::SinkMode;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::command::write::{
-    WriteColumnMatch, WritePlanBuilder, WriteTableAction, WriteTarget,
+    WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget,
 };
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -51,7 +50,7 @@ impl PlanResolver<'_> {
                         table,
                         column_match: WriteColumnMatch::ByName,
                     })
-                    .with_mode(SinkMode::Append);
+                    .with_mode(WriteMode::Append);
             }
             WriteToMode::Create => {
                 builder = builder
@@ -59,7 +58,7 @@ impl PlanResolver<'_> {
                         table,
                         action: WriteTableAction::Create,
                     })
-                    .with_mode(SinkMode::Overwrite);
+                    .with_mode(WriteMode::Overwrite);
             }
             WriteToMode::CreateOrReplace => {
                 builder = builder
@@ -67,20 +66,15 @@ impl PlanResolver<'_> {
                         table,
                         action: WriteTableAction::CreateOrReplace,
                     })
-                    .with_mode(SinkMode::Overwrite);
+                    .with_mode(WriteMode::Overwrite);
             }
             WriteToMode::Overwrite { condition } => {
-                let condition = self
-                    .resolve_expression(*condition, input.schema(), state)
-                    .await?;
                 builder = builder
                     .with_target(WriteTarget::ExistingTable {
                         table,
                         column_match: WriteColumnMatch::ByName,
                     })
-                    .with_mode(SinkMode::OverwriteIf {
-                        condition: Box::new(condition),
-                    });
+                    .with_mode(WriteMode::OverwriteIf { condition });
             }
             WriteToMode::OverwritePartitions => {
                 builder = builder
@@ -88,7 +82,7 @@ impl PlanResolver<'_> {
                         table,
                         column_match: WriteColumnMatch::ByName,
                     })
-                    .with_mode(SinkMode::OverwritePartitions);
+                    .with_mode(WriteMode::OverwritePartitions);
             }
             WriteToMode::Replace => {
                 builder = builder
@@ -96,7 +90,7 @@ impl PlanResolver<'_> {
                         table,
                         action: WriteTableAction::Replace,
                     })
-                    .with_mode(SinkMode::Overwrite);
+                    .with_mode(WriteMode::Overwrite);
             }
         };
         self.resolve_write_with_builder(input, builder, state).await

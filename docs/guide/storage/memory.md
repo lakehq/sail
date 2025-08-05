@@ -1,9 +1,9 @@
 ---
-title: Memory Storage
+title: Memory
 rank: 8
 ---
 
-# Memory Storage
+# Memory
 
 Sail provides an in-memory storage backend that stores data entirely in RAM. This is particularly useful for testing, development, and scenarios where you need temporary storage without persisting to disk.
 
@@ -13,27 +13,31 @@ Memory storage uses the `memory://` URI scheme.
 
 ## Examples
 
-### DataFrame
+<!--@include: ../_common/spark-session.md-->
+
+### Spark DataFrame API
 
 ```python
-df = spark.createDataFrame([(1, "Alice"), (2, "Bob")], ["id", "name"])
-df.write.parquet("memory:///users")
+path = "memory:///users"
 
-users_df = spark.read.parquet("memory:///users")
-users_df.show()
+df = spark.createDataFrame([(1, "Alice"), (2, "Bob")], schema="id INT, name STRING")
+df.write.parquet(path)
+
+df = spark.read.parquet(path)
+df.show()
 ```
 
-### SQL
+### Spark SQL
 
 ```python
 sql = """
-CREATE TABLE memory_table
+CREATE TABLE my_table (id INT, name STRING)
 USING parquet
-LOCATION 'memory:///users';
+LOCATION 'memory:///users'
 """
 spark.sql(sql)
-spark.sql("SELECT * FROM memory_table;").show()
+spark.sql("SELECT * FROM my_table").show()
 
-spark.sql("INSERT INTO memory_table VALUES (3::int64, 'Charlie'), (4::int64, 'David');")
-spark.sql("SELECT * FROM memory_table;").show()
+spark.sql("INSERT INTO my_table VALUES (3, 'Charlie'), (4, 'David')")
+spark.sql("SELECT * FROM my_table").show()
 ```

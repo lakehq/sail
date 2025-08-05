@@ -79,7 +79,10 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
 
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
         let file_format = self.inner.create_read_format(ctx, options)?;
-        let listing_options = ListingOptions::new(file_format);
+        let config = ctx.config();
+        let listing_options = ListingOptions::new(file_format)
+            .with_target_partitions(config.target_partitions())
+            .with_collect_stat(config.collect_statistics());
 
         let (schema, partition_by) = match schema {
             Some(schema) if !schema.fields().is_empty() => {

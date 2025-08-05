@@ -13,7 +13,10 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::core::get_field;
 use datafusion::sql::unparser::expr_to_sql;
-use datafusion_common::{Column, DFSchemaRef, DataFusionError, TableReference};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{
+    plan_datafusion_err, Column, DFSchemaRef, DataFusionError, TableReference,
+};
 use datafusion_expr::expr::{FieldMetadata, ScalarFunction, WindowFunctionParams};
 use datafusion_expr::{
     cast, col, expr, expr_fn, lit, try_cast, window_frame, AggregateUDF, BinaryExpr, ExprSchemable,
@@ -2173,6 +2176,36 @@ impl PlanResolver<'_> {
             ));
         }
         out
+    }
+
+    /// Rewrites the resolved expression to refer to columns in an external schema.
+    /// The external schema has user-facing field names instead of internal names
+    /// derived from field IDs in the resolver state.
+    pub(super) fn rewrite_expression_for_external_schema(
+        &self,
+        expr: expr::Expr,
+        state: &PlanResolverState,
+    ) -> PlanResult<expr::Expr> {
+        let rewrite = |e: expr::Expr| -> Result<Transformed<expr::Expr>> {
+            if let expr::Expr::Column(Column {
+                name,
+                relation,
+                spans,
+            }) = e
+            {
+                let info = state
+                    .get_field_info(&name)
+                    .map_err(|_| plan_datafusion_err!("column {name} not found"))?;
+                Ok(Transformed::yes(expr::Expr::Column(Column {
+                    name: info.name().to_string(),
+                    relation,
+                    spans,
+                })))
+            } else {
+                Ok(Transformed::no(e))
+            }
+        };
+        Ok(expr.transform(rewrite).data()?)
     }
 }
 
