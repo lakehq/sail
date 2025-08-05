@@ -1,8 +1,6 @@
 use log::error;
 
 pub mod error;
-pub mod file_metadata_cache;
-pub mod foyer_file_metadata_cache;
 pub mod list_file_cache;
 pub mod table_files_statistics_cache;
 

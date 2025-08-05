@@ -21,5 +21,3 @@ datafusion = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 moka = { workspace = true }
-foyer = { workspace = true }
-num_cpus = { workspace = true }

@@ -27,7 +27,6 @@ fn count(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
-        distinct,
         function_context: _,
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
@@ -40,7 +39,6 @@ fn count(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             order_by,
             window_frame,
             null_treatment,
-            distinct,
         },
     })))
 }

@@ -16,4 +16,3 @@ tonic-reflection = { workspace = true }
 tonic-health = { workspace = true }
 tower = { workspace = true }
 log = { workspace = true }
-axum = { workspace = true }

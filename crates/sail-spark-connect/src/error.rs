@@ -332,11 +332,6 @@ impl From<CommonErrorCause> for SparkThrowable {
                 SparkThrowable::AnalysisException(x)
             }
             CommonErrorCause::DeltaTable(x) => SparkThrowable::QueryExecutionException(x),
-            CommonErrorCause::ArrowOffsetOverflowError(offset) => {
-                SparkThrowable::QueryExecutionException(format!(
-                    "Arrow offset overflow error: {offset}"
-                ))
-            }
         }
     }
 }

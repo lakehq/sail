@@ -7,11 +7,11 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Date32Type, Date64Type, Decimal128Type,
-    Decimal256Type, Decimal32Type, Decimal64Type, DecimalType, DurationMicrosecondType,
-    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalYearMonthType, RunEndIndexType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
+    Decimal256Type, DecimalType, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalYearMonthType, RunEndIndexType, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type, UnionMode,
 };
@@ -484,7 +484,7 @@ macro_rules! decimal_display {
     };
 }
 
-decimal_display!(Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type);
+decimal_display!(Decimal128Type, Decimal256Type);
 
 macro_rules! try_convert {
     ($value:expr, $f:expr, $t:expr $(,)?) => {

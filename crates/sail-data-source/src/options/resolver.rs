@@ -156,7 +156,6 @@ fn apply_parquet_read_options(
         binary_as_string,
         coerce_int96,
         bloom_filter_on_read,
-        cache_metadata,
     } = from;
     if let Some(v) = enable_page_index {
         to.global.enable_page_index = v;
@@ -187,9 +186,6 @@ fn apply_parquet_read_options(
     }
     if let Some(v) = bloom_filter_on_read {
         to.global.bloom_filter_on_read = v;
-    }
-    if let Some(v) = cache_metadata {
-        to.global.cache_metadata = v;
     }
     Ok(())
 }
@@ -664,14 +660,14 @@ mod tests {
         kv.insert("encoding".to_string(), "".to_string());
         let options = resolver.resolve_parquet_write_options(vec![kv.clone()])?;
         assert_eq!(options.global.column_index_truncate_length, Some(64));
-        assert_eq!(options.global.statistics_truncate_length, Some(64));
+        assert_eq!(options.global.statistics_truncate_length, None);
         assert_eq!(options.global.encoding, None,);
 
         kv.insert("column_index_truncate_length".to_string(), "".to_string());
         kv.insert("statistics_truncate_length".to_string(), "".to_string());
         let options = resolver.resolve_parquet_write_options(vec![kv])?;
         assert_eq!(options.global.column_index_truncate_length, Some(64));
-        assert_eq!(options.global.statistics_truncate_length, Some(64));
+        assert_eq!(options.global.statistics_truncate_length, None);
 
         Ok(())
     }

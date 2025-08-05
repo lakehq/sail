@@ -131,18 +131,6 @@
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
 
-- key: cache_metadata
-  aliases:
-    - CacheMetadata
-  description: |
-    (Reading) Whether or not to enable the caching of embedded metadata of Parquet files
-    (footer and page metadata). Enabling it can offer substantial performance improvements
-    for repeated queries over large files. By default, the cache is automatically
-    invalidated when the underlying file is modified.
-  supported: true
-  rust_type: bool
-  rust_deserialize_with: crate::options::serde::deserialize_bool
-
 - key: merge_schema
   aliases:
     - mergeSchema

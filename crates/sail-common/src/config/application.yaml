@@ -408,7 +408,7 @@
 
 - key: parquet.statistics_truncate_length
   type: number
-  default: "64"
+  default: "0"
   description: |
     (Writing) The statistics truncate length for the Parquet writer.
     If the value is `0`, no truncation is applied.
@@ -479,29 +479,6 @@
     (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
     This may improve performance when writing large Parquet files,
     at the expense of higher memory usage.
-  experimental: true
-
-- key: parquet.file_metadata_cache
-  type: boolean
-  default: "true"
-  description: |
-    (Reading) Enable cache of embedded metadata of Parquet files (footer and page metadata).
-    This setting avoids repeatedly reading metadata across all sessions,
-    which can offer substantial performance improvements for repeated queries over large files.
-    The cache is automatically invalidated when the underlying file is modified.
-    Default is enabled.
-  experimental: true
-
-- key: parquet.file_metadata_cache_limit
-  type: string
-  default: ""
-  description: |
-    (Reading) Maximum memory limit for the Parquet metadata cache in bytes.
-    Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.
-    This setting is only effective when `parquet.file_metadata_cache` is enabled.
-    Setting this value to empty string or `0` disables the limit.
-    Note: This setting can only be configured at startup and cannot be changed at runtime.
-    Default is empty, which means no limit.
   experimental: true
 
 - key: parquet.table_files_statistics_cache

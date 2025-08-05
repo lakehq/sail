@@ -167,8 +167,6 @@ impl TryFrom<adt::DataType> for DataType {
             adt::DataType::Union { .. }
             | adt::DataType::Dictionary { .. }
             | adt::DataType::RunEndEncoded(_, _)
-            | adt::DataType::Decimal32(_, _)
-            | adt::DataType::Decimal64(_, _) => return Err(error(&data_type)),
         };
         Ok(DataType { kind: Some(kind) })
     }
