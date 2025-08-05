@@ -5505,6 +5505,7 @@ dependencies = [
  "serde_yaml",
  "syn",
  "url",
+ "uuid",
 ]
 
 [[package]]

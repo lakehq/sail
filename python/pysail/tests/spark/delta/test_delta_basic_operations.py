@@ -168,3 +168,44 @@ class TestDeltaBasicOperations:
         assert {row.category for row in result if row.category == "A"} == {"A"}
         assert {row.value for row in result if row.category == "A"} == {100, 200}
         assert {row.value for row in result if row.category == "B"} == {20, 40}
+
+    @pytest.mark.skip(reason="Temporarily skipped")
+    def test_delta_overwrite_with_condition_v2(self, spark, tmp_path):
+        """Test Delta Lake overwrite with a condition using the V2 API."""
+        from pyspark.sql import functions as F  # noqa: N812
+        from pyspark.sql.types import Row
+
+        delta_path = tmp_path / "delta_condition_v2"
+        delta_table_path = f"file://{delta_path}"
+        table_name = "delta_v2_overwrite_test"
+
+        data = [
+            Row(id=1, category="A", value=10),
+            Row(id=2, category="B", value=20),
+            Row(id=3, category="A", value=30),
+            Row(id=4, category="B", value=40),
+        ]
+        df = spark.createDataFrame(data)
+        df.write.format("delta").mode("overwrite").save(str(delta_path))
+
+        spark.sql(f"CREATE OR REPLACE TABLE {table_name} USING DELTA LOCATION '{delta_table_path}'")
+
+        try:
+            new_data = [
+                Row(id=5, category="A", value=100),
+                Row(id=6, category="A", value=200),
+            ]
+            new_df = spark.createDataFrame(new_data)
+
+            # FIXME: This doesn't work
+            new_df.writeTo(table_name).overwrite(F.col("category") == "A")
+
+            result_df = spark.read.format("delta").load(delta_table_path).sort("id")
+            result = result_df.collect()
+
+            assert {row.id for row in result} == {2, 4, 5, 6}
+            assert {row.category for row in result if row.category == "A"} == {"A"}
+            assert {row.value for row in result if row.category == "A"} == {100, 200}
+            assert {row.value for row in result if row.category == "B"} == {20, 40}
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")

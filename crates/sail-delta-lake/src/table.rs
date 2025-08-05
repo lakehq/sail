@@ -11,7 +11,7 @@ use url::Url;
 
 use crate::delta_datafusion::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
 
-pub(crate) async fn open_table_with_object_store(
+pub async fn open_table_with_object_store(
     location: Url,
     object_store: Arc<dyn ObjectStore>,
     storage_options: StorageConfig,

@@ -161,7 +161,7 @@ async fn write_execution_plan(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn prepare_predicate_actions(
+pub async fn prepare_predicate_actions(
     predicate: Expr,
     log_store: LogStoreRef,
     snapshot: &DeltaTableState,
