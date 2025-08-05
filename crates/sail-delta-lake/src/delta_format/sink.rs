@@ -96,7 +96,7 @@ impl DeltaDataSink {
                 }
             }
             (true, false) => Ok(Some(SchemaMode::Merge)),
-            (false, false) => Ok(None),
+            (false, false) => Ok(None), // Default, should check
         }
     }
 

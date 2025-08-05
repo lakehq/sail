@@ -1,7 +1,6 @@
 from datetime import UTC, date, datetime
 
 import pandas as pd
-import pytest
 from pyspark.sql.types import Row
 
 from ..utils import get_data_files  # noqa: TID252
@@ -10,7 +9,6 @@ from ..utils import get_data_files  # noqa: TID252
 class TestDeltaSchema:
     """Delta Lake schema-related tests"""
 
-    @pytest.mark.skip(reason="Temporarily skipped")
     def test_delta_schema_evolution(self, spark, tmp_path):
         """Test Delta Lake schema evolution"""
         delta_path = tmp_path / "delta_table"
