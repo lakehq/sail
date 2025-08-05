@@ -12,6 +12,8 @@ use datafusion_common::{DataFusionError, Result};
 use deltalake::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use deltalake::kernel::schema::StructType;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
+// TODO: Follow upstream for MetadataExt usage!!!
+#[allow(deprecated)]
 use deltalake::kernel::{Action, MetadataExt, Protocol};
 use deltalake::logstore::StorageConfig;
 use deltalake::parquet::file::properties::WriterProperties;
@@ -127,6 +129,8 @@ impl DeltaDataSink {
                     let current_metadata = table
                         .metadata()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    // TODO: Follow upstream for `with_schema`
+                    #[allow(deprecated)]
                     let new_metadata = current_metadata
                         .clone()
                         .with_schema(&new_delta_schema)
@@ -146,6 +150,8 @@ impl DeltaDataSink {
                 let current_metadata = table
                     .metadata()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                // TODO: Follow upstream for `with_schema`
+                #[allow(deprecated)]
                 let new_metadata = current_metadata
                     .clone()
                     .with_schema(&new_delta_schema)
@@ -191,6 +197,7 @@ impl DeltaDataSink {
         }
 
         // Build merged fields in the correct order
+        #[allow(clippy::unwrap_used)]
         let merged_fields: Vec<Field> = field_order
             .into_iter()
             .map(|name| field_map.remove(&name).unwrap())

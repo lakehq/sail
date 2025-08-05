@@ -284,7 +284,7 @@ fn physical_expr_to_sql_string(expr: &dyn PhysicalExpr) -> String {
         let left = physical_expr_to_sql_string(binary.left().as_ref());
         let right = physical_expr_to_sql_string(binary.right().as_ref());
         let op = binary.op();
-        return format!("{} {} {}", left, op, right);
+        return format!("{left} {op} {right}");
     }
 
     // Try to downcast to a Literal expression
