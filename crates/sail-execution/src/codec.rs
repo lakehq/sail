@@ -42,6 +42,7 @@ use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
+use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
 use sail_plan::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
 use sail_plan::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
@@ -773,6 +774,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_empty_to_null" => Ok(Arc::new(ScalarUDF::from(ArrayEmptyToNull::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
+            "arrays_zip" => Ok(Arc::new(ScalarUDF::from(ArraysZip::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(Greatest::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(Least::new()))),
@@ -881,6 +883,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ArrayEmptyToNull>()
             || node.inner().as_any().is::<ArrayMin>()
             || node.inner().as_any().is::<ArrayMax>()
+            || node.inner().as_any().is::<ArraysZip>()
             || node.inner().as_any().is::<BitmapCount>()
             || node.inner().as_any().is::<Greatest>()
             || node.inner().as_any().is::<Least>()
