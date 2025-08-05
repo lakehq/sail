@@ -15,11 +15,12 @@ use crate::extension::function::datetime::spark_last_day::SparkLastDay;
 use crate::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use crate::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use crate::extension::function::datetime::spark_next_day::SparkNextDay;
+use crate::extension::function::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use crate::extension::function::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use crate::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use crate::extension::function::datetime::timestamp_now::TimestampNow;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
+use crate::utils::ItemTaker;
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(
@@ -173,15 +174,10 @@ fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn to_chrono_fmt(format: Expr) -> PlanResult<Expr> {
-    // FIXME: Implement UDFs for all callers of this function so that we have `format` as a string
-    //  instead of some arbitrary expression
-    match format {
-        Expr::Literal(ScalarValue::Utf8(Some(format)), _metadata) => {
-            let format = spark_datetime_format_to_chrono_strftime(&format)?;
-            Ok(lit(ScalarValue::Utf8(Some(format))))
-        }
-        _ => Ok(format),
-    }
+    Ok(Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(SparkToChronoFmt::new())),
+        args: vec![format],
+    }))
 }
 
 fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -223,6 +219,16 @@ fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         Err(PlanError::invalid(
             "unix_timestamp requires 1 or 2 arguments",
         ))
+    }
+}
+
+fn to_unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    if input.arguments.is_empty() {
+        Err(PlanError::invalid(
+            "to_unix_timestamp requires 1 or 2 arguments",
+        ))
+    } else {
+        unix_timestamp(input)
     }
 }
 
@@ -494,7 +500,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
         ("to_timestamp_ltz", F::custom(to_timestamp)),
         ("to_timestamp_ntz", F::custom(to_timestamp)),
-        ("to_unix_timestamp", F::unknown("to_unix_timestamp")),
+        ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         (
             "to_utc_timestamp",
             F::binary(|ts, tz| from_to_utc_timestamp(ts, tz, true)),
