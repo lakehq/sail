@@ -281,10 +281,7 @@ impl Executor {
 pub(crate) async fn read_stream(
     stream: SendableRecordBatchStream,
 ) -> SparkResult<Vec<RecordBatch>> {
-    stream
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|e| SparkError::internal(format!("failed to execute on CPU runtime: {e}")))
+    stream.err_into().try_collect::<Vec<_>>().await
 }
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
