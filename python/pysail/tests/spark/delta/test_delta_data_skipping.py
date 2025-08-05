@@ -64,11 +64,11 @@ class TestDeltaDataSkipping:
         df1_data = [Row(id=i, optional_col=f"value_{i}") for i in range(10)]
         spark.createDataFrame(df1_data).write.format("delta").mode("overwrite").save(str(delta_path))
 
-        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+        from pyspark.sql.types import LongType, StringType, StructField, StructType
 
         schema = StructType(
             [
-                StructField("id", IntegerType(), False),
+                StructField("id", LongType(), True),
                 StructField("optional_col", StringType(), True),
             ]
         )
