@@ -37,7 +37,7 @@ impl FoyerFilesMetadataCache {
                 (1000, false)
             };
 
-        info!("Initializing custom Foyer metadata cache with {capacity} capacity");
+        info!("Initializing normal Foyer metadata cache with {capacity} capacity");
 
         let mut builder = CacheBuilder::new(capacity).with_name("parquet_file_metadata_cache");
 
