@@ -110,7 +110,7 @@ spark.sql("SELECT 1").write.parquet(path)
 spark.read.parquet(path).show()
 
 # Google Cloud Storage
-# Note: There is no working emulator for GCS, so we read from a public bucket for testing
+# Note: There is no working emulator for GCS, so we read from a public bucket for testing.
 path = "gs://anaconda-public-data/nyc-taxi/nyc.parquet/part.0.parquet"
 spark.read.parquet(path).show()
 ```

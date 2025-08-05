@@ -65,7 +65,6 @@ use sail_plan::extension::function::datetime::spark_next_day::SparkNextDay;
 use sail_plan::extension::function::datetime::spark_timestamp::SparkTimestamp;
 use sail_plan::extension::function::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_plan::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
-use sail_plan::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
 use sail_plan::extension::function::datetime::timestamp_now::TimestampNow;
 use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
@@ -744,10 +743,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = UpdateStructField::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkWeekOfYear(gen::SparkWeekOfYearUdf { timezone }) => {
-                let udf = SparkWeekOfYear::new(Arc::from(timezone));
-                return Ok(Arc::new(ScalarUDF::from(udf)));
-            }
             UdfKind::TimestampNow(gen::TimestampNowUdf {
                 timezone,
                 time_unit,
@@ -1022,9 +1017,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<UpdateStructField>() {
             let field_names = func.field_names().to_vec();
             UdfKind::UpdateStructField(gen::UpdateStructFieldUdf { field_names })
-        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkWeekOfYear>() {
-            let timezone = func.timezone().to_string();
-            UdfKind::SparkWeekOfYear(gen::SparkWeekOfYearUdf { timezone })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<TimestampNow>() {
             let timezone = func.timezone().to_string();
             let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
