@@ -4307,7 +4307,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_validate_utf8"
+        "success": "ok"
       }
     },
     {
@@ -4329,7 +4329,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_validate_utf8"
+        "success": "ok"
       }
     },
     {
@@ -4351,7 +4351,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_validate_utf8"
+        "success": "ok"
       }
     },
     {
@@ -4373,7 +4373,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_validate_utf8"
+        "success": "ok"
       }
     },
     {
@@ -4461,7 +4461,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: validate_utf8"
+        "success": "ok"
       }
     },
     {
@@ -4483,7 +4483,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: validate_utf8"
+        "success": "ok"
       }
     },
     {
