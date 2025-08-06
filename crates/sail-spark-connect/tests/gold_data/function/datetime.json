@@ -2086,7 +2086,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: monthname"
+        "success": "ok"
       }
     },
     {
@@ -2504,7 +2504,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_unix_timestamp"
+        "success": "ok"
       }
     },
     {

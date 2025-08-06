@@ -473,6 +473,14 @@ impl PlanFormatter for SparkPlanFormatter {
                 Ok(result)
             }
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
+            "to_unix_timestamp" => {
+                let mut argv = arguments.clone();
+                if argv.len() == 1 {
+                    argv.push("yyyy-MM-dd HH:mm:ss")
+                }
+                let args = argv.join(", ");
+                Ok(format!("{name}({args})"))
+            }
             "dateadd" => {
                 let arguments = arguments.join(", ");
                 Ok(format!("date_add({arguments})"))

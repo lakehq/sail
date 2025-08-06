@@ -1,10 +1,9 @@
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
-use sail_common_datafusion::datasource::SinkMode;
 
 use crate::error::PlanResult;
 use crate::resolver::command::write::{
-    WriteColumnMatch, WritePlanBuilder, WriteTableAction, WriteTarget,
+    WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTableAction, WriteTarget,
 };
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -45,10 +44,10 @@ impl PlanResolver<'_> {
         match save_type {
             SaveType::Path(location) => {
                 let mode = match mode {
-                    Some(SaveMode::ErrorIfExists) | None => SinkMode::ErrorIfExists,
-                    Some(SaveMode::IgnoreIfExists) => SinkMode::IgnoreIfExists,
-                    Some(SaveMode::Append) => SinkMode::Append,
-                    Some(SaveMode::Overwrite) => SinkMode::Overwrite,
+                    Some(SaveMode::ErrorIfExists) | None => WriteMode::ErrorIfExists,
+                    Some(SaveMode::IgnoreIfExists) => WriteMode::IgnoreIfExists,
+                    Some(SaveMode::Append) => WriteMode::Append,
+                    Some(SaveMode::Overwrite) => WriteMode::Overwrite,
                 };
                 builder = builder
                     .with_target(WriteTarget::Path { location })
@@ -64,7 +63,7 @@ impl PlanResolver<'_> {
                             table,
                             action: WriteTableAction::Create,
                         })
-                        .with_mode(SinkMode::ErrorIfExists);
+                        .with_mode(WriteMode::ErrorIfExists);
                 }
                 Some(SaveMode::IgnoreIfExists) => {
                     builder = builder
@@ -72,7 +71,7 @@ impl PlanResolver<'_> {
                             table,
                             action: WriteTableAction::Create,
                         })
-                        .with_mode(SinkMode::IgnoreIfExists);
+                        .with_mode(WriteMode::IgnoreIfExists);
                 }
                 Some(SaveMode::Append) => {
                     builder = builder
@@ -80,7 +79,7 @@ impl PlanResolver<'_> {
                             table,
                             column_match: WriteColumnMatch::ByName,
                         })
-                        .with_mode(SinkMode::Append);
+                        .with_mode(WriteMode::Append);
                 }
                 Some(SaveMode::Overwrite) => {
                     builder = builder
@@ -88,7 +87,7 @@ impl PlanResolver<'_> {
                             table,
                             action: WriteTableAction::CreateOrReplace,
                         })
-                        .with_mode(SinkMode::Overwrite);
+                        .with_mode(WriteMode::Overwrite);
                 }
             },
             SaveType::Table {
@@ -96,8 +95,8 @@ impl PlanResolver<'_> {
                 save_method: TableSaveMethod::InsertInto,
             } => {
                 let mode = match mode {
-                    Some(SaveMode::Overwrite) => SinkMode::Overwrite,
-                    _ => SinkMode::Append,
+                    Some(SaveMode::Overwrite) => WriteMode::Overwrite,
+                    _ => WriteMode::Append,
                 };
                 builder = builder
                     .with_target(WriteTarget::ExistingTable {

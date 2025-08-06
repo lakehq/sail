@@ -1,9 +1,9 @@
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use datafusion::common::Statistics;
 use datafusion::execution::cache::CacheAccessor;
 use log::{debug, error};
-use moka::policy::EvictionPolicy;
 use moka::sync::Cache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -12,9 +12,10 @@ use crate::try_parse_non_zero_u64;
 
 pub static GLOBAL_FILE_STATISTICS_CACHE: LazyLock<Arc<MokaFileStatisticsCache>> =
     LazyLock::new(|| {
+        let ttl = std::env::var("SAIL_PARQUET__TABLE_FILES_STATISTICS_CACHE_TTL").ok();
         let max_entries =
             std::env::var("SAIL_PARQUET__TABLE_FILES_STATISTICS_CACHE_MAX_ENTRIES").ok();
-        Arc::new(MokaFileStatisticsCache::new(max_entries))
+        Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
     });
 
 pub struct MokaFileStatisticsCache {
@@ -22,8 +23,20 @@ pub struct MokaFileStatisticsCache {
 }
 
 impl MokaFileStatisticsCache {
-    pub fn new(max_entries: Option<String>) -> Self {
-        let mut builder = Cache::builder().eviction_policy(EvictionPolicy::lru());
+    pub fn new(ttl: Option<String>, max_entries: Option<String>) -> Self {
+        let mut builder = Cache::builder();
+
+        if let Some(ttl) = ttl {
+            if let Some(ttl) = try_parse_non_zero_u64(&ttl) {
+                debug!("Setting TTL for MokaFileStatisticsCache to {ttl}");
+                builder = builder.time_to_live(Duration::from_secs(ttl));
+            } else {
+                debug!("Disabled or invalid TTL for MokaFileStatisticsCache: {ttl}");
+            }
+        } else {
+            debug!("No TTL set for MokaFileStatisticsCache");
+        }
+
         if let Some(max_entries) = max_entries {
             if let Some(max_entries) = try_parse_non_zero_u64(&max_entries) {
                 debug!("Setting max entries for MokaFileStatisticsCache to {max_entries}");
@@ -117,7 +130,7 @@ mod tests {
             e_tag: None,
             version: None,
         };
-        let cache = MokaFileStatisticsCache::new(None);
+        let cache = MokaFileStatisticsCache::new(None, None);
         assert!(cache.get_with_extra(&meta.location, &meta).is_none());
 
         cache.put_with_extra(

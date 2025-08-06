@@ -51,7 +51,7 @@ pub fn write_record_batches(batches: &[RecordBatch], schema: &Schema) -> Result<
     Ok(output)
 }
 
-pub fn rename_schema(schema: &SchemaRef, names: &[String]) -> Result<SchemaRef> {
+pub fn rename_schema(schema: &Schema, names: &[String]) -> Result<SchemaRef> {
     if schema.fields().len() != names.len() {
         return plan_err!(
             "cannot rename fields for schema with {} fields using {} names",
