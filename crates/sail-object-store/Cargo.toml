@@ -7,7 +7,7 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
-sail-common = { path = "../sail-common" }
+sail-runtime = { path = "../sail-runtime" }
 
 object_store = { workspace = true }
 aws-config = { workspace = true }

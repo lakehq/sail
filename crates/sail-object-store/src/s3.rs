@@ -20,7 +20,9 @@ use log::debug;
 use object_store::aws::{
     resolve_bucket_region, AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential,
 };
+use object_store::client::SpawnedReqwestConnector;
 use object_store::{ClientOptions, CredentialProvider};
+use tokio::runtime::Handle;
 use tokio::sync::OnceCell;
 use url::Url;
 
@@ -102,7 +104,10 @@ impl CredentialProvider for S3CredentialProvider {
     }
 }
 
-pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
+pub async fn get_s3_object_store(
+    url: &Url,
+    handle: Option<Handle>,
+) -> object_store::Result<AmazonS3> {
     debug!("Creating S3 object store for url: {url}");
     let mut builder = AmazonS3Builder::from_env();
     let config = DEFAULT_AWS_CONFIG
@@ -142,7 +147,13 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
         builder = builder.with_region(region);
     }
 
-    builder.build()
+    if let Some(handle) = handle {
+        builder
+            .with_http_connector(SpawnedReqwestConnector::new(handle))
+            .build()
+    } else {
+        builder.build()
+    }
 }
 
 pub fn parse_s3_url(

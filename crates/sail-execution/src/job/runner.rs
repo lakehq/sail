@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
+use sail_runtime::RuntimeHandle;
 use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::oneshot;
 
@@ -23,19 +24,15 @@ pub trait JobRunner: Send + Sync + 'static {
 
 pub struct LocalJobRunner {
     stopped: AtomicBool,
+    runtime: RuntimeHandle,
 }
 
 impl LocalJobRunner {
-    pub fn new() -> Self {
+    pub fn new(runtime: RuntimeHandle) -> Self {
         Self {
             stopped: AtomicBool::new(false),
+            runtime,
         }
-    }
-}
-
-impl Default for LocalJobRunner {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -51,7 +48,20 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
-        Ok(execute_stream(plan, ctx.task_ctx())?)
+        // Ok(execute_stream(plan, ctx.task_ctx())?)
+        let task_ctx = ctx.task_ctx();
+        let handle = self.runtime.cpu().clone();
+        let result = handle
+            .spawn(async move {
+                let result = execute_stream(plan, task_ctx)?;
+                Ok(result)
+            })
+            .await
+            .map_err(|e| {
+                ExecutionError::InternalError(format!("failed to execute on CPU runtime: {e}"))
+            })?;
+
+        result
     }
 
     async fn stop(&self) {

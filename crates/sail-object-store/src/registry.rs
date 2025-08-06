@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -12,7 +13,8 @@ use object_store::http::{HttpBuilder, HttpStore};
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::{ObjectStore, ObjectStoreScheme};
-use sail_common::runtime::RuntimeHandle;
+use sail_runtime::RuntimeHandle;
+use tokio::runtime::Handle;
 use url::Url;
 
 use crate::hugging_face::HuggingFaceObjectStore;
@@ -70,28 +72,48 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
 
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let key = ObjectStoreKey::new(url);
-
         // Use entry API for atomic get-or-insert
         let store = self
             .stores
             .entry(key)
             .or_try_insert_with(|| {
-                if let Some(handle) = self.runtime.secondary() {
+                if std::env::var("SAIL_RUNTIME__ENABLE_SECONDARY")
+                    .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
+                {
                     Ok(Arc::new(RuntimeAwareObjectStore::try_new(
-                        || get_dynamic_object_store(url),
-                        handle.clone(),
+                        || get_dynamic_object_store(url, None),
+                        self.runtime.primary().clone(),
                     )?))
                 } else {
-                    get_dynamic_object_store(url)
+                    get_dynamic_object_store(url, Some(self.runtime.primary().clone()))
                 }
             })?
             .clone();
-
         Ok(store)
+
+        // // Use entry API for atomic get-or-insert
+        // let store = self
+        //     .stores
+        //     .entry(key)
+        //     .or_try_insert_with(|| {
+        //         if let Some(handle) = self.runtime.secondary() {
+        //             Ok(Arc::new(RuntimeAwareObjectStore::try_new(
+        //                 || get_dynamic_object_store(url),
+        //                 handle.clone(),
+        //             )?))
+        //         } else {
+        //             get_dynamic_object_store(url)
+        //         }
+        //     })?
+        //     .clone();
+        // Ok(store)
     }
 }
 
-fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectStore>> {
+fn get_dynamic_object_store(
+    url: &Url,
+    handle: Option<Handle>,
+) -> object_store::Result<Arc<dyn ObjectStore>> {
     let key = ObjectStoreKey::new(url);
     let store: Arc<dyn ObjectStore> = match key.scheme.as_str() {
         #[cfg(feature = "hdfs")]
@@ -115,9 +137,11 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
                 ObjectStoreScheme::Memory => Arc::new(InMemory::new()),
                 ObjectStoreScheme::AmazonS3 => {
                     let url = url.clone();
+                    let handle = handle.clone();
                     let store = LazyObjectStore::new(move || {
                         let url = url.clone();
-                        async move { get_s3_object_store(&url).await }
+                        let handle = handle.clone();
+                        async move { get_s3_object_store(&url, handle).await }
                     });
                     Arc::new(store)
                 }
