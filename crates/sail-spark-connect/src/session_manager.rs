@@ -173,11 +173,11 @@ impl SessionManagerActor {
                 let max_entries = options.config.parquet.file_statistics_cache.max_entries;
                 match &options.config.parquet.file_statistics_cache.r#type {
                     CacheType::None => {
-                        debug!("Not using files statistics cache");
+                        debug!("Not using file statistics cache");
                         None
                     }
                     CacheType::Global => {
-                        debug!("Using global files statistics cache");
+                        debug!("Using global file statistics cache");
                         Some(
                             self.global_file_statistics_cache
                                 .get_or_insert_with(|| {
@@ -187,7 +187,7 @@ impl SessionManagerActor {
                         )
                     }
                     CacheType::Session => {
-                        debug!("Using session files statistics cache");
+                        debug!("Using session file statistics cache");
                         Some(Arc::new(MokaFileStatisticsCache::new(ttl, max_entries)))
                     }
                 }
@@ -197,11 +197,11 @@ impl SessionManagerActor {
                 let max_entries = options.config.execution.file_listing_cache.max_entries;
                 match &options.config.execution.file_listing_cache.r#type {
                     CacheType::None => {
-                        debug!("Not using files listing cache");
+                        debug!("Not using file listing cache");
                         None
                     }
                     CacheType::Global => {
-                        debug!("Using global files listing cache");
+                        debug!("Using global file listing cache");
                         Some(
                             self.global_file_listing_cache
                                 .get_or_insert_with(|| {
@@ -211,7 +211,7 @@ impl SessionManagerActor {
                         )
                     }
                     CacheType::Session => {
-                        debug!("Using session files listing cache");
+                        debug!("Using session file listing cache");
                         Some(Arc::new(MokaFileListingCache::new(ttl, max_entries)))
                     }
                 }
