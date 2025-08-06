@@ -4,6 +4,7 @@ pub mod error;
 pub mod list_file_cache;
 pub mod table_files_statistics_cache;
 
+#[allow(dead_code)]
 pub(crate) fn try_parse_memory_limit(limit: &str) -> Option<usize> {
     let (number, unit) = limit.split_at(limit.len() - 1);
     let number: f64 = match number.parse() {

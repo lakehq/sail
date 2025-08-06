@@ -220,6 +220,8 @@ pub struct ParquetConfig {
     pub maximum_buffered_record_batches_per_stream: usize,
     pub table_files_statistics_cache: bool,
     #[serde(deserialize_with = "deserialize_non_zero")]
+    pub table_files_statistics_cache_ttl: Option<u64>,
+    #[serde(deserialize_with = "deserialize_non_zero")]
     pub table_files_statistics_cache_max_entries: Option<u64>,
 }
 

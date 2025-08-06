@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use datafusion::execution::cache::CacheAccessor;
 use log::debug;
-use moka::policy::EvictionPolicy;
 use moka::sync::Cache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -22,7 +21,7 @@ pub struct MokaListFilesCache {
 
 impl MokaListFilesCache {
     pub fn new(ttl: Option<String>, max_entries: Option<String>) -> Self {
-        let mut builder = Cache::builder().eviction_policy(EvictionPolicy::lru());
+        let mut builder = Cache::builder();
 
         if let Some(ttl) = ttl {
             if let Some(ttl) = try_parse_non_zero_u64(&ttl) {

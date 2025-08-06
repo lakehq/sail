@@ -31,11 +31,10 @@
     When enabled, updates to the underlying location may not be visible until
     the cache entry expires (controlled by `runtime.list_files_cache_ttl`).
     Default is disabled.
-  experimental: true
 
 - key: runtime.list_files_cache_ttl
   type: number
-  default: "3600"
+  default: "1800"
   description: |
     The time-to-live (TTL) in seconds for cached file listings.
     Entries expire after this duration from when they were cached,
@@ -43,17 +42,19 @@
     This setting is only effective when `runtime.list_files_cache` is enabled.
     Setting this value to `0` disables the TTL.
     Note: This setting can only be configured at startup and cannot be changed at runtime.
-    Default is 3600 seconds (1 hour).
+    Default is 1800 seconds (30 minutes).
+  experimental: true
 
 - key: runtime.list_files_cache_max_entries
   type: number
-  default: "100000"
+  default: "10000"
   description: |
     Maximum number of directory listings to cache.
     This setting is only effective when `runtime.list_files_cache` is enabled.
     Setting this value to `0` disables the limit.
     Note: This setting can only be configured at startup and cannot be changed at runtime.
-    Default is 100000 entries.
+    Default is 10000 entries.
+  experimental: true
 
 - key: cluster.enable_tls
   type: boolean
@@ -483,25 +484,38 @@
 
 - key: parquet.table_files_statistics_cache
   type: boolean
-  default: "false"
+  default: "true"
   description: |
     (Reading) Enable cache of files statistics when listing Parquet files.
     This setting avoids repeatedly computing statistics across all sessions,
     which may be expensive in certain situations (e.g., remote object storage).
     The cache is automatically invalidated when the underlying file is modified.
-    Default is disabled.
+    Default is enabled.
+
+- key: parquet.table_files_statistics_cache_ttl
+  type: number
+  default: "1800"
+  description: |
+    The time-to-live (TTL) in seconds for cached Parquet files statistics.
+    Entries expire after this duration from when they were cached,
+    ensuring eventual consistency with the file system.
+    This setting is only effective when `parquet.table_files_statistics_cache` is enabled.
+    Setting this value to `0` disables the TTL.
+    Note: This setting can only be configured at startup and cannot be changed at runtime.
+    Default is 1800 seconds (30 minutes).
   experimental: true
 
 - key: parquet.table_files_statistics_cache_max_entries
   type: number
-  default: "100000"
+  default: "10000"
   description: |
     Maximum number of Parquet files statistics to cache.
     This setting is only effective when `parquet.table_files_statistics_cache` is enabled.
     When the limit is reached, least recently used entries are evicted.
     Setting this value to `0` disables the limit.
     Note: This setting can only be configured at startup and cannot be changed at runtime.
-    Default is 100000 entries.
+    Default is 10000 entries.
+  experimental: true
 
 - key: kubernetes.image
   type: string
