@@ -223,6 +223,9 @@ pub struct ParquetConfig {
     pub table_files_statistics_cache_ttl: Option<u64>,
     #[serde(deserialize_with = "deserialize_non_zero")]
     pub table_files_statistics_cache_max_entries: Option<u64>,
+    pub file_metadata_cache: bool,
+    #[serde(deserialize_with = "deserialize_non_empty_string")]
+    pub file_metadata_cache_limit: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

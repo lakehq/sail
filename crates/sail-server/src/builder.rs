@@ -3,8 +3,8 @@ use std::future::Future;
 
 use sail_telemetry::trace_layer::TraceLayer;
 use tokio::net::TcpListener;
-use tonic::body::BoxBody;
-use tonic::codegen::http::{Request, Response};
+use tonic::body::Body;
+use tonic::codegen::http::Request;
 use tonic::codegen::Service;
 use tonic::server::NamedService;
 use tonic::transport::server::{Router, TcpIncoming};
@@ -80,11 +80,13 @@ impl<'b> ServerBuilder<'b> {
 
     pub async fn add_service<S>(mut self, service: S, file_descriptor_set: Option<&'b [u8]>) -> Self
     where
-        S: Service<Request<BoxBody>, Response = Response<BoxBody>, Error = Infallible>
+        S: Service<Request<Body>, Error = Infallible>
             + NamedService
             + Clone
             + Send
+            + Sync
             + 'static,
+        S::Response: axum::response::IntoResponse,
         S::Future: Send + 'static,
     {
         self.health_reporter.set_serving::<S>().await;
@@ -111,9 +113,9 @@ impl<'b> ServerBuilder<'b> {
         let reflection_server = self.reflection_server_builder.build_v1()?;
         let router = self.router.add_service(reflection_server);
 
-        let incoming =
-            TcpIncoming::from_listener(listener, self.options.nodelay, self.options.keepalive)
-                .map_err(|e| e as Box<dyn std::error::Error>)?;
+        let incoming = TcpIncoming::from(listener)
+            .with_nodelay(Some(self.options.nodelay))
+            .with_keepalive(self.options.keepalive);
 
         router
             .serve_with_incoming_shutdown(incoming, signal)
