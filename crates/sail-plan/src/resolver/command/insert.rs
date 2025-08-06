@@ -1,9 +1,8 @@
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
-use sail_common_datafusion::datasource::SinkMode;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::command::write::{WriteColumnMatch, WritePlanBuilder, WriteTarget};
+use crate::resolver::command::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -43,7 +42,7 @@ impl PlanResolver<'_> {
             }
         };
         let builder = WritePlanBuilder::new()
-            .with_mode(SinkMode::Overwrite)
+            .with_mode(WriteMode::Overwrite)
             .with_target(WriteTarget::Path { location })
             .with_format(format)
             .with_options(options);
@@ -74,9 +73,9 @@ impl PlanResolver<'_> {
         match mode {
             InsertMode::InsertByPosition { overwrite } => {
                 let mode = if overwrite {
-                    SinkMode::Overwrite
+                    WriteMode::Overwrite
                 } else {
-                    SinkMode::Append
+                    WriteMode::Append
                 };
                 builder = builder
                     .with_mode(mode)
@@ -87,9 +86,9 @@ impl PlanResolver<'_> {
             }
             InsertMode::InsertByName { overwrite } => {
                 let mode = if overwrite {
-                    SinkMode::Overwrite
+                    WriteMode::Overwrite
                 } else {
-                    SinkMode::Append
+                    WriteMode::Append
                 };
                 builder = builder
                     .with_mode(mode)
@@ -100,9 +99,9 @@ impl PlanResolver<'_> {
             }
             InsertMode::InsertByColumns { columns, overwrite } => {
                 let mode = if overwrite {
-                    SinkMode::Overwrite
+                    WriteMode::Overwrite
                 } else {
-                    SinkMode::Append
+                    WriteMode::Append
                 };
                 builder = builder
                     .with_mode(mode)
@@ -112,16 +111,11 @@ impl PlanResolver<'_> {
                     });
             }
             InsertMode::Replace { condition } => {
-                let condition = self
-                    .resolve_expression(*condition, input.schema(), state)
-                    .await?;
                 builder = builder
-                    .with_mode(SinkMode::OverwriteIf {
-                        condition: Box::new(condition),
-                    })
+                    .with_mode(WriteMode::OverwriteIf { condition })
                     .with_target(WriteTarget::ExistingTable {
                         table,
-                        column_match: WriteColumnMatch::ByName,
+                        column_match: WriteColumnMatch::ByPosition,
                     });
             }
         };

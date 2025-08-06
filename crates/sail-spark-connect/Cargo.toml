@@ -7,6 +7,7 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-cache = { path = "../sail-cache" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-server = { path = "../sail-server" }
@@ -34,6 +35,7 @@ monostate = { workspace = true }
 regex = { workspace = true }
 phf = { workspace = true }
 log = { workspace = true }
+futures = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
