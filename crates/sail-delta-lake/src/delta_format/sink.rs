@@ -186,11 +186,17 @@ impl DeltaDataSink {
             field_order.push(field_name);
         }
 
-        // Add new fields from input schema
-        for field in input_schema.fields() {
-            let field_name = field.name().clone();
-            if !field_map.contains_key(&field_name) {
-                field_map.insert(field_name.clone(), field.as_ref().clone());
+        // Process fields from input schema
+        for input_field in input_schema.fields() {
+            let field_name = input_field.name().clone();
+
+            if let Some(existing_field) = field_map.get(&field_name) {
+                // Field exists in both schemas - check for type compatibility and promotion
+                let promoted_field = self.promote_field_types(existing_field, input_field)?;
+                field_map.insert(field_name, promoted_field);
+            } else {
+                // New field from input schema
+                field_map.insert(field_name.clone(), input_field.as_ref().clone());
                 field_order.push(field_name);
             }
         }
@@ -203,6 +209,80 @@ impl DeltaDataSink {
             .collect();
 
         Ok(std::sync::Arc::new(Schema::new(merged_fields)))
+    }
+
+    fn promote_field_types(
+        &self,
+        table_field: &datafusion::arrow::datatypes::Field,
+        input_field: &datafusion::arrow::datatypes::Field,
+    ) -> Result<datafusion::arrow::datatypes::Field> {
+        use datafusion::arrow::compute::can_cast_types;
+        use datafusion::arrow::datatypes::DataType;
+
+        let table_type = table_field.data_type();
+        let input_type = input_field.data_type();
+
+        // If types are identical, return the table field (preserve table metadata)
+        if table_type == input_type {
+            return Ok(table_field.clone());
+        }
+
+        let merged_type = match (table_type, input_type) {
+            (
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+            ) => Some(input_type.clone()),
+            (
+                DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+            ) => Some(input_type.clone()),
+
+            (
+                DataType::Decimal128(table_precision, table_scale)
+                | DataType::Decimal256(table_precision, table_scale),
+                DataType::Decimal128(input_precision, input_scale),
+            ) => {
+                if input_precision <= table_precision && input_scale <= table_scale {
+                    Some(table_type.clone()) // Keep table type for decimals
+                } else {
+                    return Err(DataFusionError::Plan(format!(
+                        "Cannot merge field {} from {} to {}. Decimal precision/scale mismatch.",
+                        table_field.name(),
+                        input_type,
+                        table_type
+                    )));
+                }
+            }
+
+            // For other types, use Arrow's can_cast_types to determine compatibility
+            // Prefer widening conversions (table -> input) over narrowing (input -> table)
+            (table_dt, input_dt) => {
+                if can_cast_types(table_dt, input_dt) {
+                    Some(input_type.clone())
+                } else if can_cast_types(input_dt, table_dt) {
+                    Some(table_type.clone())
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(new_type) = merged_type {
+            // Create new field with merged type, combining nullability
+            let is_nullable = table_field.is_nullable() || input_field.is_nullable();
+            Ok(datafusion::arrow::datatypes::Field::new(
+                table_field.name(),
+                new_type,
+                is_nullable,
+            ))
+        } else {
+            Err(DataFusionError::Plan(format!(
+                "Schema evolution failed: incompatible types for field '{}'. Cannot merge from {:?} to {:?}. Consider using overwriteSchema=true if you want to replace the schema entirely.",
+                table_field.name(),
+                table_type,
+                input_type
+            )))
+        }
     }
 
     /// Validate schema compatibility

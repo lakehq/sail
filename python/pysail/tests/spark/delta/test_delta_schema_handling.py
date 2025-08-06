@@ -121,27 +121,38 @@ class TestDeltaSchemaHandling:
 
     def test_delta_schema_merge_with_compatible_types(self, spark, tmp_path):
         """Test mergeSchema behavior with compatible type changes."""
+        from pyspark.sql.types import IntegerType, LongType, StructField, StructType
+
         delta_path = tmp_path / "delta_merge_type_changes"
 
-        # Create initial table with integer column
+        initial_schema = StructType([StructField("id", LongType(), True), StructField("value", IntegerType(), True)])
         initial_data = [Row(id=1, value=100)]
-        df1 = spark.createDataFrame(initial_data)
+        df1 = spark.createDataFrame(initial_data, schema=initial_schema)
         df1.write.format("delta").mode("overwrite").save(str(delta_path))
 
-        # Append data with same column but potentially different precision
-        # This tests the schema merging logic for compatible types
+        initial_table_schema = spark.read.format("delta").load(str(delta_path)).schema
+        assert initial_table_schema["value"].dataType == IntegerType()
+
+        new_schema = StructType([StructField("id", LongType(), True), StructField("value", LongType(), True)])
         new_data = [Row(id=2, value=200)]
-        df2 = spark.createDataFrame(new_data)
+        df2 = spark.createDataFrame(new_data, schema=new_schema)
+
         df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(delta_path))
 
-        # Verify data integrity
-        result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
-        result_pandas = result_df.toPandas()
+        result_df = spark.read.format("delta").load(str(delta_path))
 
-        expected_data = pd.DataFrame({"id": [1, 2], "value": [100, 200]}).astype({"id": "int32", "value": "int32"})
+        final_schema = result_df.schema
+
+        assert final_schema["value"].dataType == LongType()
+
+        result_pandas = result_df.sort("id").toPandas()
+
+        expected_data = pd.DataFrame({"id": [1, 2], "value": [100, 200]})
+
+        expected_data = expected_data.astype({"id": "int64", "value": "int64"})
 
         pd.testing.assert_frame_equal(
-            result_pandas.sort_values("id").reset_index(drop=True), expected_data, check_dtype=False
+            result_pandas.sort_values("id").reset_index(drop=True), expected_data, check_dtype=True
         )
 
     def test_delta_schema_read_with_custom_schema(self, spark, tmp_path):
@@ -169,3 +180,34 @@ class TestDeltaSchemaHandling:
 
         loaded_schema = result_df.schema
         assert loaded_schema == schema, f"Schema mismatch: expected {schema}, got {loaded_schema}"
+
+    def test_delta_schema_merge_float_promotion(self, spark, tmp_path):
+        """Test mergeSchema with Float32 to Float64 promotion."""
+        from pyspark.sql.types import DoubleType, FloatType, IntegerType, StructField, StructType
+
+        delta_path = tmp_path / "delta_float_promotion"
+
+        # Create table with Float32
+        initial_schema = StructType([StructField("id", IntegerType(), True), StructField("value", FloatType(), True)])
+        initial_data = [Row(id=1, value=1.5)]
+        df1 = spark.createDataFrame(initial_data, schema=initial_schema)
+        df1.write.format("delta").mode("overwrite").save(str(delta_path))
+
+        # Append data with Float64
+        new_schema = StructType([StructField("id", IntegerType(), True), StructField("value", DoubleType(), True)])
+        new_data = [Row(id=2, value=2.5)]
+        df2 = spark.createDataFrame(new_data, schema=new_schema)
+        df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(delta_path))
+
+        # Verify schema was promoted to Float64
+        result_df = spark.read.format("delta").load(str(delta_path))
+        final_schema = result_df.schema
+        assert final_schema["value"].dataType == DoubleType()
+
+        # Verify data integrity
+        result_pandas = result_df.sort("id").toPandas()
+        expected_data = pd.DataFrame({"id": [1, 2], "value": [1.5, 2.5]})
+        expected_data = expected_data.astype({"id": "int32", "value": "float64"})
+        pd.testing.assert_frame_equal(
+            result_pandas.sort_values("id").reset_index(drop=True), expected_data, check_dtype=True
+        )
