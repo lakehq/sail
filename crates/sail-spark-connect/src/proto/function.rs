@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use datafusion::arrow::array::RecordBatch;
     use datafusion::arrow::error::ArrowError;
@@ -11,7 +11,6 @@ mod tests {
     use sail_common::tests::test_gold_set;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_plan::resolve_and_execute_plan;
-    use sail_server::actor::ActorSystem;
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
@@ -56,25 +55,24 @@ mod tests {
     fn test_sql_function() -> Result<(), Box<dyn std::error::Error>> {
         let config = Arc::new(AppConfig::load()?);
         let runtime = RuntimeManager::try_new(&config.runtime)?;
-        let system = Arc::new(Mutex::new(ActorSystem::new()));
+        let handle = runtime.handle();
+        let options = SessionManagerOptions {
+            config,
+            runtime: handle.clone(),
+        };
+        // We create the session manager inside an async context, even though the
+        // `SessionManager::new()` function itself is sync. This is because the actor system
+        // may need to spawn actors when the session runs in cluster mode.
+        let manager = handle
+            .primary()
+            .block_on(async { SessionManager::new(options) });
         let session_key = SessionKey {
             user_id: None,
             session_id: "test".to_string(),
         };
-        let handle = runtime.handle();
-        let context = handle.primary().block_on(async {
-            // We create the session inside an async context, even though the
-            // `create_session_context` function itself is sync. This is because the actor system
-            // may need to spawn actors when the session runs in cluster mode.
-            SessionManager::create_session_context(
-                system,
-                session_key,
-                SessionManagerOptions {
-                    config,
-                    runtime: runtime.handle(),
-                },
-            )
-        })?;
+        let context = handle
+            .primary()
+            .block_on(manager.get_or_create_session_context(session_key))?;
         test_gold_set(
             "tests/gold_data/function/*.json",
             |example: FunctionExample| -> SparkResult<String> {

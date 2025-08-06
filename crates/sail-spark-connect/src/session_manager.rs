@@ -1,18 +1,19 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use datafusion::execution::cache::cache_manager::CacheManagerConfig;
+use datafusion::execution::cache::cache_manager::{
+    CacheManagerConfig, FileStatisticsCache, ListFilesCache,
+};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use log::{debug, info};
-use sail_cache::list_file_cache::GLOBAL_LIST_FILES_CACHE;
-use sail_cache::table_files_statistics_cache::GLOBAL_FILE_STATISTICS_CACHE;
-use sail_common::config::{AppConfig, ExecutionMode};
+use sail_cache::file_listing_cache::MokaFileListingCache;
+use sail_cache::file_statistics_cache::MokaFileStatisticsCache;
+use sail_common::config::{AppConfig, CacheType, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_execution::driver::DriverOptions;
@@ -83,12 +84,15 @@ impl SessionManager {
         rx.await
             .map_err(|e| SparkError::internal(format!("failed to get session: {e}")))?
     }
+}
 
+impl SessionManagerActor {
     pub fn create_session_context(
+        &mut self,
         system: Arc<Mutex<ActorSystem>>,
         key: SessionKey,
-        options: SessionManagerOptions,
     ) -> SparkResult<SessionContext> {
+        let options = &self.options;
         let job_runner: Box<dyn JobRunner> = match options.config.mode {
             ExecutionMode::Local => Box::new(LocalJobRunner::new()),
             ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
@@ -164,22 +168,58 @@ impl SessionManager {
         let runtime = {
             let registry = DynamicObjectStoreRegistry::new(options.runtime.clone());
 
-            let cache_config = CacheManagerConfig::default();
-            let cache_config = if options.config.parquet.table_files_statistics_cache {
-                debug!("[table_files_statistics_cache] Using table files statistics cache");
-                cache_config.with_files_statistics_cache(Some(GLOBAL_FILE_STATISTICS_CACHE.clone()))
-            } else {
-                debug!("[table_files_statistics_cache] Not using table files statistics cache");
-                cache_config
+            let file_statistics_cache: Option<FileStatisticsCache> = {
+                let ttl = options.config.parquet.file_statistics_cache.ttl;
+                let max_entries = options.config.parquet.file_statistics_cache.max_entries;
+                match &options.config.parquet.file_statistics_cache.r#type {
+                    CacheType::None => {
+                        debug!("Not using files statistics cache");
+                        None
+                    }
+                    CacheType::Global => {
+                        debug!("Using global files statistics cache");
+                        Some(
+                            self.global_file_statistics_cache
+                                .get_or_insert_with(|| {
+                                    Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
+                                })
+                                .clone(),
+                        )
+                    }
+                    CacheType::Session => {
+                        debug!("Using session files statistics cache");
+                        Some(Arc::new(MokaFileStatisticsCache::new(ttl, max_entries)))
+                    }
+                }
             };
-            let cache_config = if options.config.runtime.list_files_cache {
-                debug!("[list_files_cache] Using list files cache");
-                cache_config.with_list_files_cache(Some(GLOBAL_LIST_FILES_CACHE.clone()))
-            } else {
-                debug!("[list_files_cache] Not using list files cache");
-                cache_config
+            let file_listing_cache: Option<ListFilesCache> = {
+                let ttl = options.config.execution.file_listing_cache.ttl;
+                let max_entries = options.config.execution.file_listing_cache.max_entries;
+                match &options.config.execution.file_listing_cache.r#type {
+                    CacheType::None => {
+                        debug!("Not using files listing cache");
+                        None
+                    }
+                    CacheType::Global => {
+                        debug!("Using global files listing cache");
+                        Some(
+                            self.global_file_listing_cache
+                                .get_or_insert_with(|| {
+                                    Arc::new(MokaFileListingCache::new(ttl, max_entries))
+                                })
+                                .clone(),
+                        )
+                    }
+                    CacheType::Session => {
+                        debug!("Using session files listing cache");
+                        Some(Arc::new(MokaFileListingCache::new(ttl, max_entries)))
+                    }
+                }
             };
 
+            let cache_config = CacheManagerConfig::default()
+                .with_files_statistics_cache(file_statistics_cache)
+                .with_list_files_cache(file_listing_cache);
             let builder = RuntimeEnvBuilder::default()
                 .with_object_store_registry(Arc::new(registry))
                 .with_cache_manager(cache_config);
@@ -235,6 +275,8 @@ enum SessionManagerEvent {
 struct SessionManagerActor {
     options: SessionManagerOptions,
     sessions: HashMap<SessionKey, SessionContext>,
+    global_file_listing_cache: Option<Arc<MokaFileListingCache>>,
+    global_file_statistics_cache: Option<Arc<MokaFileStatisticsCache>>,
 }
 
 #[tonic::async_trait]
@@ -246,6 +288,8 @@ impl Actor for SessionManagerActor {
         Self {
             options,
             sessions: HashMap::new(),
+            global_file_listing_cache: None,
+            global_file_statistics_cache: None,
         }
     }
 
@@ -271,16 +315,19 @@ impl SessionManagerActor {
         system: Arc<Mutex<ActorSystem>>,
         result: oneshot::Sender<SparkResult<SessionContext>>,
     ) -> ActorAction {
-        let entry = self.sessions.entry(key.clone());
-        let context = match entry {
-            Entry::Occupied(o) => Ok(o.get().clone()),
-            Entry::Vacant(v) => {
-                let key = v.key().clone();
-                info!("creating session {key}");
-                match SessionManager::create_session_context(system, key, self.options.clone()) {
-                    Ok(context) => Ok(v.insert(context).clone()),
-                    Err(e) => Err(e),
+        // We cannot use `self.sessions.entry()` to perform the get-or-insert operation
+        // because `self.create_session_context()` takes `&mut self`.
+        let context = if let Some(context) = self.sessions.get(&key) {
+            Ok(context.clone())
+        } else {
+            let key = key.clone();
+            info!("creating session {key}");
+            match self.create_session_context(system, key.clone()) {
+                Ok(context) => {
+                    self.sessions.insert(key, context.clone());
+                    Ok(context)
                 }
+                Err(e) => Err(e),
             }
         };
         if let Ok(context) = &context {

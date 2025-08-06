@@ -1,8 +1,8 @@
 use log::error;
 
 pub mod error;
-pub mod list_file_cache;
-pub mod table_files_statistics_cache;
+pub mod file_listing_cache;
+pub mod file_statistics_cache;
 
 #[allow(dead_code)]
 pub(crate) fn try_parse_memory_limit(limit: &str) -> Option<usize> {
@@ -20,22 +20,6 @@ pub(crate) fn try_parse_memory_limit(limit: &str) -> Option<usize> {
         "G" => Some((number * 1024.0 * 1024.0 * 1024.0) as usize),
         _ => {
             error!("Memory limit not set! Unsupported unit '{unit}' in memory limit '{limit}'.");
-            None
-        }
-    }
-}
-
-pub(crate) fn try_parse_non_zero_u64(number: &str) -> Option<u64> {
-    match number.parse::<u64>() {
-        Ok(n) => {
-            if n == 0 {
-                None
-            } else {
-                Some(n)
-            }
-        }
-        Err(_) => {
-            error!("Failed to parse '{number}' as u64");
             None
         }
     }
