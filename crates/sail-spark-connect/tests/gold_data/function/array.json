@@ -733,7 +733,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: arrays_zip"
+        "success": "ok"
       }
     },
     {
@@ -775,7 +775,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: arrays_zip"
+        "success": "ok"
       }
     },
     {

@@ -97,6 +97,7 @@ percent-encoding = "2.3.1"
 rustls = "0.23.29"
 dashmap = "6.1.0"
 itertools = "0.14.0"
+moka = { version = "0.12.10", features = ["sync"] }
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -134,6 +135,7 @@ arrow-buffer = { version = "55.2.0" }
 arrow-schema = { version = "55.2.0", features = ["serde"] }
 arrow-flight = { version = "55.2.0" }
 arrow-pyarrow = { version = "55.2.0" }
+parquet = { version = "55.2.0" }
 serde_arrow = { version = "0.13.5", features = ["arrow-55"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.3", features = ["aws", "gcp", "azure", "http"] }
@@ -142,7 +144,6 @@ hdfs-native-object-store = "0.14.2"
 # Lakehouse
 deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "5ac08eb", default-features = false, features = ["rustls"] }
 delta_kernel = { version = "0.13.0", features = ["arrow-55", "internal-api", "default-engine"] }
-parquet = { version = "55.2.0" }
 bytes = "1.9.0"
 indexmap = "2.10.0"
 
