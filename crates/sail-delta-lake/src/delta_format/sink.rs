@@ -16,7 +16,6 @@ use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableRefer
 #[allow(deprecated)]
 use deltalake::kernel::{Action, MetadataExt, Protocol};
 use deltalake::logstore::StorageConfig;
-use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::StreamExt;
 use sail_common_datafusion::datasource::TableDeltaOptions;
@@ -336,11 +335,10 @@ impl DataSink for DeltaDataSink {
         };
 
         // Create writer with potentially evolved schema
-        let writer_properties = WriterProperties::builder().build();
         let writer_config = WriterConfig::new(
             final_schema,
             self.partition_columns.clone(),
-            Some(writer_properties),
+            None, // TODO: Make compression configurable
             *target_file_size,
             *write_batch_size,
             32, // TODO: Default num_indexed_cols for now

@@ -382,7 +382,6 @@ impl PartitionWriter {
 
     /// Generate the next data file path, returning both relative and full paths
     fn next_data_path(&mut self) -> (String, Path) {
-        let current_count = self.part_counter;
         self.part_counter += 1;
 
         let column_path = ColumnPath::new(Vec::new());
@@ -399,7 +398,7 @@ impl PartitionWriter {
 
         let file_name = format!(
             "part-{:05}-{}-c000{}.parquet",
-            current_count, self.writer_id, compression_suffix
+            self.part_counter, self.writer_id, compression_suffix
         );
 
         let mut full_path = self.config.table_path.clone();
