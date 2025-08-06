@@ -42,6 +42,7 @@ use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
+use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
 use sail_plan::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
 use sail_plan::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
@@ -64,7 +65,6 @@ use sail_plan::extension::function::datetime::spark_next_day::SparkNextDay;
 use sail_plan::extension::function::datetime::spark_timestamp::SparkTimestamp;
 use sail_plan::extension::function::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_plan::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
-use sail_plan::extension::function::datetime::spark_weekofyear::SparkWeekOfYear;
 use sail_plan::extension::function::datetime::timestamp_now::TimestampNow;
 use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
@@ -743,10 +743,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = UpdateStructField::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkWeekOfYear(gen::SparkWeekOfYearUdf { timezone }) => {
-                let udf = SparkWeekOfYear::new(Arc::from(timezone));
-                return Ok(Arc::new(ScalarUDF::from(udf)));
-            }
             UdfKind::TimestampNow(gen::TimestampNowUdf {
                 timezone,
                 time_unit,
@@ -778,6 +774,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_empty_to_null" => Ok(Arc::new(ScalarUDF::from(ArrayEmptyToNull::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
+            "arrays_zip" => Ok(Arc::new(ScalarUDF::from(ArraysZip::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(Greatest::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(Least::new()))),
@@ -886,6 +883,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ArrayEmptyToNull>()
             || node.inner().as_any().is::<ArrayMin>()
             || node.inner().as_any().is::<ArrayMax>()
+            || node.inner().as_any().is::<ArraysZip>()
             || node.inner().as_any().is::<BitmapCount>()
             || node.inner().as_any().is::<Greatest>()
             || node.inner().as_any().is::<Least>()
@@ -1017,9 +1015,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<UpdateStructField>() {
             let field_names = func.field_names().to_vec();
             UdfKind::UpdateStructField(gen::UpdateStructFieldUdf { field_names })
-        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkWeekOfYear>() {
-            let timezone = func.timezone().to_string();
-            UdfKind::SparkWeekOfYear(gen::SparkWeekOfYearUdf { timezone })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<TimestampNow>() {
             let timezone = func.timezone().to_string();
             let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();

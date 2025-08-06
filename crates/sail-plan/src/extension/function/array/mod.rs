@@ -1,3 +1,4 @@
+pub mod arrays_zip;
 pub mod spark_array;
 pub mod spark_array_empty_to_null;
 pub mod spark_array_item_with_position;
