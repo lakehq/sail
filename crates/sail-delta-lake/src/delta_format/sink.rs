@@ -284,20 +284,6 @@ impl DataSink for DeltaDataSink {
             .runtime_env()
             .register_object_store(object_store_url.as_ref(), object_store.clone());
 
-        // Collect all batches first
-        let mut batches = Vec::new();
-        let mut total_rows = 0u64;
-
-        while let Some(batch_result) = data.next().await {
-            let batch = batch_result?;
-            total_rows += batch.num_rows() as u64;
-            batches.push(batch);
-        }
-
-        if batches.is_empty() {
-            return Ok(0);
-        }
-
         let table = if self.table_exists {
             open_table_with_object_store(
                 self.table_url.clone(),
@@ -348,12 +334,23 @@ impl DataSink for DeltaDataSink {
         let writer_path = object_store::path::Path::from(self.table_url.path());
         let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
 
-        // Write all batches
-        for batch in batches {
+        let mut total_rows = 0u64;
+        let mut has_data = false;
+
+        while let Some(batch_result) = data.next().await {
+            let batch = batch_result?;
+            total_rows += batch.num_rows() as u64;
+            has_data = true;
+
             writer
                 .write(&batch)
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        }
+
+        // Early return if no data was processed
+        if !has_data {
+            return Ok(0);
         }
 
         let add_actions = writer
