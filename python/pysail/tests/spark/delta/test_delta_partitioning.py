@@ -20,7 +20,7 @@ class TestDeltaPartitioning:
             Row(id=12, event="A", score=0.76),
         ]
 
-    def test_delta_partition_by(self, spark, tmp_path):
+    def test_delta_partitioning_by_single_column(self, spark, tmp_path):
         """Test Delta Lake partitioning functionality"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -69,7 +69,7 @@ class TestDeltaPartitioning:
         filtered_df_gt = spark.read.format("delta").load(delta_table_path).filter("year > 2025")
         assert filtered_df_gt.count() == 2, "GREATER THAN filter should return 2 records for year>2025"  # noqa: PLR2004
 
-    def test_delta_partition_behavior(self, spark, delta_test_data, tmp_path):
+    def test_delta_partitioning_creates_correct_directory_structure(self, spark, delta_test_data, tmp_path):
         delta_path = tmp_path / "partitioned_delta_table"
         delta_table_path = f"file://{delta_path}"
 
@@ -101,7 +101,7 @@ class TestDeltaPartitioning:
 
         assert_file_count_in_partitions(str(delta_path), expected_files_per_partition=1)
 
-    def test_delta_multi_column_partitioning(self, spark, tmp_path):
+    def test_delta_partitioning_by_multiple_columns(self, spark, tmp_path):
         """Test multi-column partitioning behavior."""
         delta_path = tmp_path / "multi_partitioned_delta_table"
 
@@ -155,36 +155,3 @@ class TestDeltaPartitioning:
 
         df_region_ge2 = spark.read.format("delta").load(f"file://{delta_path}").filter("region >= 2")
         assert df_region_ge2.count() == 2, "Region >= 2 should have 2 records"  # noqa: PLR2004
-
-    @pytest.mark.parametrize(
-        ("filter_condition", "expected_count", "description"),
-        [
-            ("year = 2025", 2, "Single year filter"),
-            ("year = 2026", 2, "Different year filter"),
-            ("year >= 2026", 2, "Greater than or equal filter"),
-            ("year < 2026", 2, "Less than filter"),
-            ("year != 2025", 2, "Not equal filter"),
-            ("year IN (2025)", 2, "IN clause with single value"),
-            ("year IN (2025, 2026)", 4, "IN clause with multiple values"),
-        ],
-    )
-    def test_delta_partition_filtering_parametrized(
-        self, spark, tmp_path, filter_condition, expected_count, description
-    ):
-        """Parametrized test for various partition filtering scenarios"""
-        delta_path = tmp_path / "delta_partition_filter_test"
-
-        partition_data = [
-            Row(id=1, event="A", year=2025, score=0.8),
-            Row(id=2, event="B", year=2025, score=0.9),
-            Row(id=3, event="A", year=2026, score=0.7),
-            Row(id=4, event="B", year=2026, score=0.6),
-        ]
-        df = spark.createDataFrame(partition_data)
-
-        df.write.format("delta").mode("overwrite").partitionBy("year").save(str(delta_path))
-
-        filtered_df = spark.read.format("delta").load(f"file://{delta_path}").filter(filter_condition)
-        actual_count = filtered_df.count()
-
-        assert actual_count == expected_count, f"{description}: expected {expected_count} records, got {actual_count}"

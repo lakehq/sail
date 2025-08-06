@@ -9,7 +9,7 @@ from ..utils import get_data_files  # noqa: TID252
 class TestDeltaDataSkipping:
     """Delta Lake data skipping (file pruning) tests"""
 
-    def test_data_skipping_on_numeric_column(self, spark, tmp_path):
+    def test_delta_skipping_on_numeric_column(self, spark, tmp_path):
         """Test data skipping (file pruning) on a non-partitioned numeric column."""
         delta_path = tmp_path / "delta_data_skipping_numeric"
         delta_table_path = f"file://{delta_path}"
@@ -32,7 +32,7 @@ class TestDeltaDataSkipping:
         assert filtered_df.agg({"value": "min"}).collect()[0][0] == 200001.0, "Minimum value should be 200001"  # noqa: PLR2004
         assert filtered_df.agg({"value": "max"}).collect()[0][0] == 200010.0, "Maximum value should be 200010"  # noqa: PLR2004
 
-    def test_data_skipping_on_string_and_date_columns(self, spark, tmp_path):
+    def test_delta_skipping_on_string_and_date(self, spark, tmp_path):
         """Test data skipping on string and date columns."""
         delta_path = tmp_path / "delta_data_skipping_str_date"
         delta_table_path = f"file://{delta_path}"
@@ -56,7 +56,7 @@ class TestDeltaDataSkipping:
         filtered_df_date = spark.read.format("delta").load(delta_table_path).filter("event_date < '2023-03-01'")
         assert filtered_df_date.count() == 3  # noqa: PLR2004
 
-    def test_data_skipping_on_null_counts(self, spark, tmp_path):
+    def test_delta_skipping_with_null_counts(self, spark, tmp_path):
         """Test data skipping using null_count statistics for IS NULL and IS NOT NULL queries."""
         delta_path = tmp_path / "delta_data_skipping_null"
         delta_table_path = f"file://{delta_path}"

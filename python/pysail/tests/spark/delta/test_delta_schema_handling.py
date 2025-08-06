@@ -1,5 +1,5 @@
 """
-Test Delta Lake schema options (mergeSchema and overwriteSchema) in Sail.
+Test Delta Lake schema handling (mergeSchema, overwriteSchema, evolution) in Sail.
 """
 
 import pandas as pd
@@ -7,14 +7,13 @@ import pytest
 from pyspark.sql.types import Row
 
 
-class TestDeltaSchemaOptions:
-    """Test Delta Lake schema options functionality."""
+class TestDeltaSchemaHandling:
+    """Test Delta Lake schema handling functionality."""
 
-    def test_delta_merge_schema_append_new_column(self, spark, tmp_path):
+    def test_delta_schema_evolution_with_merge_schema(self, spark, tmp_path):
         """Test mergeSchema=true allows adding new columns during append."""
         delta_path = tmp_path / "delta_merge_schema"
 
-        # Create initial table with basic schema
         initial_data = [
             Row(id=1, name="Alice"),
             Row(id=2, name="Bob"),
@@ -42,11 +41,10 @@ class TestDeltaSchemaOptions:
             result_pandas.sort_values("id").reset_index(drop=True), expected_data, check_dtype=False
         )
 
-    def test_delta_merge_schema_false_rejects_new_column(self, spark, tmp_path):
+    def test_delta_schema_enforcement_without_merge_schema(self, spark, tmp_path):
         """Test that mergeSchema=false (default) rejects new columns."""
         delta_path = tmp_path / "delta_no_merge_schema"
 
-        # Create initial table
         initial_data = [Row(id=1, name="Alice")]
         df1 = spark.createDataFrame(initial_data)
         df1.write.format("delta").mode("overwrite").save(str(delta_path))
@@ -58,11 +56,10 @@ class TestDeltaSchemaOptions:
         with pytest.raises(Exception, match=r"(?i)(schema|field)"):
             df2.write.format("delta").mode("append").save(str(delta_path))
 
-    def test_delta_overwrite_schema_with_overwrite_mode(self, spark, tmp_path):
+    def test_delta_schema_overwrite_with_overwrite_schema(self, spark, tmp_path):
         """Test overwriteSchema=true with overwrite mode."""
         delta_path = tmp_path / "delta_overwrite_schema"
 
-        # Create initial table
         initial_data = [
             Row(id=1, name="Alice", score=95.5),
             Row(id=2, name="Bob", score=87.2),
@@ -90,11 +87,10 @@ class TestDeltaSchemaOptions:
             result_pandas.sort_values("user_id").reset_index(drop=True), expected_data, check_dtype=False
         )
 
-    def test_delta_overwrite_schema_with_append_mode_fails(self, spark, tmp_path):
+    def test_delta_schema_overwrite_fails_with_append_mode(self, spark, tmp_path):
         """Test that overwriteSchema=true fails with append mode."""
         delta_path = tmp_path / "delta_overwrite_schema_append"
 
-        # Create initial table
         initial_data = [Row(id=1, name="Alice")]
         df1 = spark.createDataFrame(initial_data)
         df1.write.format("delta").mode("overwrite").save(str(delta_path))
@@ -106,11 +102,10 @@ class TestDeltaSchemaOptions:
         with pytest.raises(Exception, match=r"(?i)overwrite.*(?:mode|schema)"):
             df2.write.format("delta").mode("append").option("overwriteSchema", "true").save(str(delta_path))
 
-    def test_delta_both_merge_and_overwrite_schema_fails(self, spark, tmp_path):
+    def test_delta_schema_merge_and_overwrite_fails_together(self, spark, tmp_path):
         """Test that specifying both mergeSchema and overwriteSchema fails."""
         delta_path = tmp_path / "delta_both_options"
 
-        # Create initial table
         initial_data = [Row(id=1, name="Alice")]
         df1 = spark.createDataFrame(initial_data)
         df1.write.format("delta").mode("overwrite").save(str(delta_path))
@@ -124,7 +119,7 @@ class TestDeltaSchemaOptions:
                 "overwriteSchema", "true"
             ).save(str(delta_path))
 
-    def test_delta_merge_schema_with_type_changes(self, spark, tmp_path):
+    def test_delta_schema_merge_with_compatible_types(self, spark, tmp_path):
         """Test mergeSchema behavior with compatible type changes."""
         delta_path = tmp_path / "delta_merge_type_changes"
 
@@ -148,3 +143,29 @@ class TestDeltaSchemaOptions:
         pd.testing.assert_frame_equal(
             result_pandas.sort_values("id").reset_index(drop=True), expected_data, check_dtype=False
         )
+
+    def test_delta_schema_read_with_custom_schema(self, spark, tmp_path):
+        """Test with a custom schema and filter conditions."""
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+        delta_path = tmp_path / "delta_custom_schema"
+        delta_table_path = f"file://{delta_path}"
+
+        schema = StructType(
+            [
+                StructField("id", IntegerType(), False),
+                StructField("name", StringType(), True),
+                StructField("score", IntegerType(), True),
+            ]
+        )
+
+        data = [(1, "Alice", 90), (2, "Bob", None), (3, "Charlie", 85)]
+        spark.createDataFrame(data, schema=schema).write.format("delta").mode("overwrite").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(delta_table_path).filter("name IS NOT NULL AND score > 80")
+        result = result_df.collect()
+        assert len(result) == 2  # noqa: PLR2004
+        assert {row.name for row in result} == {"Alice", "Charlie"}
+
+        loaded_schema = result_df.schema
+        assert loaded_schema == schema, f"Schema mismatch: expected {schema}, got {loaded_schema}"

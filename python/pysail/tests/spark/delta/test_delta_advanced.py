@@ -4,12 +4,12 @@ from pyspark.sql.types import Row
 from pysail.tests.spark.utils import is_jvm_spark
 
 
-class TestDeltaAdvanced:
+class TestDeltaAdvancedFeatures:
     """Delta Lake advanced features tests"""
 
     @pytest.mark.skip(reason="Temporarily skipped")
     @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake time travel")
-    def test_delta_time_travel(self, spark, tmp_path):
+    def test_delta_feature_time_travel(self, spark, tmp_path):
         """Test Delta Lake time travel functionality"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -42,7 +42,7 @@ class TestDeltaAdvanced:
         assert v1_df.collect() == expected_v1
 
     @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake error handling")
-    def test_delta_error_handling(self, spark, tmp_path):
+    def test_delta_feature_error_handling(self, spark, tmp_path):
         """Test Delta Lake error handling"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
