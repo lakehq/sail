@@ -63,6 +63,7 @@ use sail_plan::extension::function::datetime::spark_make_timestamp::SparkMakeTim
 use sail_plan::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_plan::extension::function::datetime::spark_next_day::SparkNextDay;
 use sail_plan::extension::function::datetime::spark_timestamp::SparkTimestamp;
+use sail_plan::extension::function::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_plan::extension::function::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_plan::extension::function::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_plan::extension::function::datetime::timestamp_now::TimestampNow;
@@ -852,6 +853,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_calendar_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
             }
+            "spark_to_chrono_fmt" => Ok(Arc::new(ScalarUDF::from(SparkToChronoFmt::new()))),
             "spark_try_to_timestamp" | "try_to_timestamp" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
             }
@@ -934,6 +936,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkYearMonthInterval>()
             || node.inner().as_any().is::<SparkDayTimeInterval>()
             || node.inner().as_any().is::<SparkCalendarInterval>()
+            || node.inner().as_any().is::<SparkToChronoFmt>()
             || node.inner().as_any().is::<SparkTryToTimestamp>()
             || node.inner().as_any().is::<SparkBin>()
             || node.inner().as_any().is::<SparkExpm1>()
