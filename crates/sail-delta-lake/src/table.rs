@@ -89,7 +89,7 @@ pub async fn create_delta_provider(
 
     let scan_config = DeltaScanConfig {
         file_column_name: None,
-        wrap_partition_values: true,
+        wrap_partition_values: false, // Default to false for Spark compatibility
         enable_parquet_pushdown: true, // Default to true for now
         schema: match schema {
             Some(ref s) if s.fields().is_empty() => None,

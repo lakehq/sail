@@ -656,7 +656,8 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let schema = match config.schema.clone() {
             Some(value) => Ok(value),
-            None => self.snapshot.arrow_schema(),
+            // Change from `arrow_schema` to input_schema for Spark compatibility
+            None => self.snapshot.input_schema(),
         }?;
 
         let logical_schema = df_logical_schema(
