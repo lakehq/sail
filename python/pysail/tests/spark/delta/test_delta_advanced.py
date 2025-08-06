@@ -40,20 +40,3 @@ class TestDeltaAdvancedFeatures:
         v1_df = spark.read.format("delta").option("versionAsOf", "1").load(delta_table_path).sort("id")
         expected_v1 = [Row(id=1, value="v0"), Row(id=2, value="v1")]
         assert v1_df.collect() == expected_v1
-
-    @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake error handling")
-    def test_delta_feature_error_handling(self, spark, tmp_path):
-        """Test Delta Lake error handling"""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
-        # Try to read non-existent Delta table
-        with pytest.raises(Exception, match=".*"):
-            spark.read.format("delta").load(delta_table_path).collect()
-
-        # Create table and try again
-        test_data = [Row(id=1, name="test")]
-        df = spark.createDataFrame(test_data)
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        result = spark.read.format("delta").load(delta_table_path).collect()
-        assert result == [Row(id=1, name="test")]

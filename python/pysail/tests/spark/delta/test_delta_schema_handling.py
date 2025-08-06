@@ -10,6 +10,32 @@ from pyspark.sql.types import Row
 class TestDeltaSchemaHandling:
     """Test Delta Lake schema handling functionality."""
 
+    def test_delta_schema_read_with_custom_schema(self, spark, tmp_path):
+        """Test with a custom schema and filter conditions."""
+        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+        delta_path = tmp_path / "delta_custom_schema"
+        delta_table_path = f"file://{delta_path}"
+
+        schema = StructType(
+            [
+                StructField("id", IntegerType(), False),
+                StructField("name", StringType(), True),
+                StructField("score", IntegerType(), True),
+            ]
+        )
+
+        data = [(1, "Alice", 90), (2, "Bob", None), (3, "Charlie", 85)]
+        spark.createDataFrame(data, schema=schema).write.format("delta").mode("overwrite").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(delta_table_path).filter("name IS NOT NULL AND score > 80")
+        result = result_df.collect()
+        assert len(result) == 2  # noqa: PLR2004
+        assert {row.name for row in result} == {"Alice", "Charlie"}
+
+        loaded_schema = result_df.schema
+        assert loaded_schema == schema, f"Schema mismatch: expected {schema}, got {loaded_schema}"
+
     def test_delta_schema_evolution_with_merge_schema(self, spark, tmp_path):
         """Test mergeSchema=true allows adding new columns during append."""
         delta_path = tmp_path / "delta_merge_schema"
@@ -154,32 +180,6 @@ class TestDeltaSchemaHandling:
         pd.testing.assert_frame_equal(
             result_pandas.sort_values("id").reset_index(drop=True), expected_data, check_dtype=True
         )
-
-    def test_delta_schema_read_with_custom_schema(self, spark, tmp_path):
-        """Test with a custom schema and filter conditions."""
-        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
-
-        delta_path = tmp_path / "delta_custom_schema"
-        delta_table_path = f"file://{delta_path}"
-
-        schema = StructType(
-            [
-                StructField("id", IntegerType(), False),
-                StructField("name", StringType(), True),
-                StructField("score", IntegerType(), True),
-            ]
-        )
-
-        data = [(1, "Alice", 90), (2, "Bob", None), (3, "Charlie", 85)]
-        spark.createDataFrame(data, schema=schema).write.format("delta").mode("overwrite").save(str(delta_path))
-
-        result_df = spark.read.format("delta").load(delta_table_path).filter("name IS NOT NULL AND score > 80")
-        result = result_df.collect()
-        assert len(result) == 2  # noqa: PLR2004
-        assert {row.name for row in result} == {"Alice", "Charlie"}
-
-        loaded_schema = result_df.schema
-        assert loaded_schema == schema, f"Schema mismatch: expected {schema}, got {loaded_schema}"
 
     def test_delta_schema_merge_float_promotion(self, spark, tmp_path):
         """Test mergeSchema with Float32 to Float64 promotion."""
