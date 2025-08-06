@@ -13,6 +13,7 @@ use deltalake::table::state::DeltaTableState;
 use deltalake::Path;
 use uuid::Uuid;
 
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
 use crate::delta_datafusion::{
     datafusion_to_delta_error, find_files, DataFusionMixins, DeltaScanConfigBuilder,
     DeltaTableProvider,
