@@ -113,7 +113,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
     +----------------------------------+
     |                        2021-01-01|
     +----------------------------------+
-    spark.sql("SELECT try_subtract(date'2021-01-01', interval 1 year").show()
+    spark.sql("SELECT try_subtract(date'2021-01-01', interval 1 year)").show()
     xxx
     spark.sql("SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day)").show()
     +----------------------------------------------------------------------------------+
@@ -285,6 +285,9 @@ impl ScalarUDFImpl for SparkTrySubtract {
                 DataType::Timestamp(Microsecond, None),
                 DataType::Duration(Microsecond),
             ]),
+            (DataType::Utf8, DataType::Int32) =>{
+                Ok(vec![DataType::Date32, DataType::Int32])
+            }
 
             _ => Err(unsupported_data_types_exec_err(
                 "spark_try_subtract",
