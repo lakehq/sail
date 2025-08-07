@@ -21,41 +21,6 @@
   description: Whether to enable a secondary Tokio runtime for separating I/O and compute tasks.
   experimental: true
 
-- key: runtime.list_files_cache
-  type: boolean
-  default: "false"
-  description: |
-    Enable cache of file metadata when listing files.
-    This setting avoids repeatedly listing file metadata across all sessions,
-    which may be expensive in certain situations (e.g., remote object storage).
-    When enabled, updates to the underlying location may not be visible until
-    the cache entry expires (controlled by `runtime.list_files_cache_ttl`).
-    Default is disabled.
-
-- key: runtime.list_files_cache_ttl
-  type: number
-  default: "1800"
-  description: |
-    The time-to-live (TTL) in seconds for cached file listings.
-    Entries expire after this duration from when they were cached,
-    ensuring eventual consistency with the file system.
-    This setting is only effective when `runtime.list_files_cache` is enabled.
-    Setting this value to `0` disables the TTL.
-    Note: This setting can only be configured at startup and cannot be changed at runtime.
-    Default is 1800 seconds (30 minutes).
-  experimental: true
-
-- key: runtime.list_files_cache_max_entries
-  type: number
-  default: "10000"
-  description: |
-    Maximum number of directory listings to cache.
-    This setting is only effective when `runtime.list_files_cache` is enabled.
-    Setting this value to `0` disables the limit.
-    Note: This setting can only be configured at startup and cannot be changed at runtime.
-    Default is 10000 entries.
-  experimental: true
-
 - key: cluster.enable_tls
   type: boolean
   default: "false"
@@ -241,6 +206,40 @@
     Should statistics be collected when first creating a table.
     This can slow down the initial DataFrame creation while greatly accelerating queries with certain filters.
     Has no effect after the table is created.
+  experimental: true
+
+- key: execution.file_listing_cache.type
+  type: string
+  default: "none"
+  description: |
+    The type of cache for file metadata when listing files.
+    The cache avoids repeatedly listing file metadata,
+    which may be expensive in certain situations (e.g., when using remote object storage).
+    When the cache is used, updates to the underlying location may not be visible until
+    the cache entry expires (controlled by `execution.file_listing_cache.ttl`).
+    Valid values are `none`, `global` (for a global cache), and `session` (for a per-session cache).
+  experimental: true
+
+- key: execution.file_listing_cache.ttl
+  type: number
+  default: "1800"
+  description: |
+    The time-to-live (TTL) in seconds for cached directory listings.
+    Entries expire after this duration from when they were cached,
+    ensuring eventual consistency with the file system.
+    This setting is only effective when the cache is enabled.
+    Setting the value to `0` disables the TTL.
+    This setting can only be configured at startup and cannot be changed at runtime.
+  experimental: true
+
+- key: execution.file_listing_cache.max_entries
+  type: number
+  default: "10000"
+  description: |
+    Maximum number of directory listings to cache.
+    This setting is only effective when the cache is enabled.
+    Setting the value to `0` disables the limit.
+    This setting can only be configured at startup and cannot be changed at runtime.
   experimental: true
 
 - key: parquet.enable_page_index
@@ -482,39 +481,38 @@
     at the expense of higher memory usage.
   experimental: true
 
-- key: parquet.table_files_statistics_cache
-  type: boolean
-  default: "true"
+- key: parquet.file_statistics_cache.type
+  type: string
+  default: "global"
   description: |
-    (Reading) Enable cache of files statistics when listing Parquet files.
-    This setting avoids repeatedly computing statistics across all sessions,
-    which may be expensive in certain situations (e.g., remote object storage).
+    (Reading) The type of cache for files statistics when reading Parquet files.
+    This setting avoids repeatedly computing statistics,
+    which may be expensive in certain situations (e.g., when using remote object storage).
     The cache is automatically invalidated when the underlying file is modified.
-    Default is enabled.
+    Valid values are `none`, `global` (for a global cache), and `session` (for a per-session cache).
+  experimental: true
 
-- key: parquet.table_files_statistics_cache_ttl
+- key: parquet.file_statistics_cache.ttl
   type: number
   default: "1800"
   description: |
     The time-to-live (TTL) in seconds for cached Parquet files statistics.
     Entries expire after this duration from when they were cached,
     ensuring eventual consistency with the file system.
-    This setting is only effective when `parquet.table_files_statistics_cache` is enabled.
-    Setting this value to `0` disables the TTL.
-    Note: This setting can only be configured at startup and cannot be changed at runtime.
-    Default is 1800 seconds (30 minutes).
+    This setting is only effective when the cache is enabled.
+    Setting the value to `0` disables the TTL.
+    This setting can only be configured at startup and cannot be changed at runtime.
   experimental: true
 
-- key: parquet.table_files_statistics_cache_max_entries
+- key: parquet.file_statistics_cache.max_entries
   type: number
   default: "10000"
   description: |
     Maximum number of Parquet files statistics to cache.
-    This setting is only effective when `parquet.table_files_statistics_cache` is enabled.
+    This setting is only effective when the cache is enabled.
     When the limit is reached, least recently used entries are evicted.
-    Setting this value to `0` disables the limit.
-    Note: This setting can only be configured at startup and cannot be changed at runtime.
-    Default is 10000 entries.
+    Setting the value to `0` disables the limit.
+    This setting can only be configured at startup and cannot be changed at runtime.
   experimental: true
 
 - key: kubernetes.image
