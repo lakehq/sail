@@ -131,7 +131,7 @@ mod tests {
             None,
         ]);
 
-        let result = spark_url_encode(&[input.clone()])?;
+        let result = spark_url_encode(&[input as ArrayRef])?;
         let result = as_string_array(&result)?;
 
         assert_eq!(&expected, result);
