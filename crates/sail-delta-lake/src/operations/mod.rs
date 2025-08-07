@@ -6,4 +6,4 @@
 // pub mod merge;
 // pub mod optimize;
 // pub mod update;
-pub(crate) mod write;
+pub mod write;
