@@ -9,6 +9,8 @@ Sail provides a unified interface for reading and writing data across various st
 
 ## Quick Examples
 
+<!--@include: ../_common/spark-session.md-->
+
 ```python
 # Local file system
 df = spark.read.parquet("/path/to/local/data")
