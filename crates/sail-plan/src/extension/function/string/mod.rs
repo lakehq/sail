@@ -4,3 +4,4 @@ pub mod spark_encode_decode;
 pub mod spark_mask;
 pub mod spark_to_binary;
 pub mod spark_to_number;
+pub mod spark_try_to_number;

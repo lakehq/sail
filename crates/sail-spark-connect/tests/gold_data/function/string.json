@@ -4197,7 +4197,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_number"
+        "success": "ok"
       }
     },
     {
@@ -4219,7 +4219,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_number"
+        "success": "ok"
       }
     },
     {
@@ -4241,7 +4241,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_number"
+        "success": "ok"
       }
     },
     {
@@ -4263,7 +4263,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_number"
+        "success": "ok"
       }
     },
     {
@@ -4285,7 +4285,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_number"
+        "success": "ok"
       }
     },
     {
