@@ -1,9 +1,11 @@
+import platform
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 
-from ..utils import assert_file_lifecycle, get_data_files  # noqa: TID252
+from ..utils import assert_file_lifecycle, get_data_files, escape_sql_string_literal  # noqa: TID252
 
 
 class TestDeltaIO:
@@ -36,7 +38,7 @@ class TestDeltaIO:
         data_files = get_data_files(str(delta_path))
         assert len(data_files) == 1, f"Expected exactly 1 data file, got {len(data_files)}"
 
-        result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
+        result_df = spark.read.format("delta").load(f"{delta_path}").sort("id")
 
         assert_frame_equal(
             result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=False
@@ -45,13 +47,13 @@ class TestDeltaIO:
     def test_delta_io_create_table_with_sql(self, spark, delta_test_data, expected_pandas_df, tmp_path):
         """Test creating Delta table with SQL and querying"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         df = spark.createDataFrame(delta_test_data)
 
         df.write.format("delta").mode("overwrite").save(str(delta_path))
 
-        spark.sql(f"CREATE TABLE my_delta USING delta LOCATION '{delta_table_path}'")
+        spark.sql(f"CREATE TABLE my_delta USING delta LOCATION '{escape_sql_string_literal(delta_table_path)}'")
 
         try:
             result_df = spark.sql("SELECT * FROM my_delta").sort("id")
@@ -65,7 +67,7 @@ class TestDeltaIO:
     def test_delta_io_append_mode(self, spark, delta_test_data, tmp_path):
         """Test Delta Lake append mode"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         df1 = spark.createDataFrame(delta_test_data)
 
@@ -102,7 +104,7 @@ class TestDeltaIO:
     def test_delta_io_overwrite_mode(self, spark, delta_test_data, tmp_path):
         """Test Delta Lake overwrite mode"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         df1 = spark.createDataFrame(delta_test_data)
 
@@ -137,7 +139,7 @@ class TestDeltaIO:
         from pyspark.sql.types import Row
 
         delta_path = tmp_path / "delta_replace_where"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         data = [
             Row(id=1, category="A", value=10),
@@ -169,7 +171,7 @@ class TestDeltaIO:
         from pyspark.sql.types import Row
 
         delta_path = tmp_path / "delta_condition_v2"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
         table_name = "delta_v2_overwrite_test"
 
         table_columns = "(id bigint, category string, value bigint)"
@@ -183,7 +185,7 @@ class TestDeltaIO:
         df = spark.createDataFrame(data)
         df.write.format("delta").mode("overwrite").save(str(delta_path))
 
-        spark.sql(f"CREATE OR REPLACE TABLE {table_name} {table_columns} USING DELTA LOCATION '{delta_table_path}'")
+        spark.sql(f"CREATE OR REPLACE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'")
 
         try:
             new_data = [
@@ -210,7 +212,7 @@ class TestDeltaIO:
         from datetime import UTC, date, datetime
 
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
         complex_data = [
             Row(
                 id=1,
@@ -256,7 +258,7 @@ class TestDeltaIO:
         from pysail.tests.spark.utils import is_jvm_spark
 
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         # Skip for JVM Spark as error handling may differ
         if not is_jvm_spark():

@@ -8,7 +8,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_equality(self, spark, tmp_path):
         """Test partition pruning with equality operators"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         partition_data = [
             Row(id=1, event="A", year=2023, month=1, score=0.8),
@@ -39,7 +39,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_comparison(self, spark, tmp_path):
         """Test partition pruning with comparison operators (>, >=, <, <=)"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         partition_data = []
         for year in [2020, 2021, 2022, 2023, 2024]:
@@ -79,7 +79,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_in_operator(self, spark, tmp_path):
         """Test partition pruning with IN operator"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         partition_data = [
             Row(id=1, event="A", category="cat1", priority=1, value="data1"),
@@ -110,7 +110,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_between_operator(self, spark, tmp_path):
         """Test partition pruning with BETWEEN operator"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         partition_data = []
         for year in range(2020, 2025):
@@ -140,7 +140,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_null_handling(self, spark, tmp_path):
         """Test partition pruning with NULL values and IS NULL/IS NOT NULL"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         partition_data = [
             Row(id=1, region="US", category="A", value="data1"),
@@ -171,7 +171,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_complex_expressions(self, spark, tmp_path):
         """Test partition pruning with complex boolean expressions"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         partition_data = []
         for year in [2022, 2023, 2024]:
@@ -222,7 +222,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_string_partitions(self, spark, tmp_path):
         """Test partition pruning with string partition values"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         partition_data = [
             Row(id=1, department="engineering", team="backend", name="Alice"),
@@ -256,7 +256,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_edge_cases(self, spark, tmp_path):
         """Test partition pruning edge cases and boundary conditions"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         # Create data with edge case values
         partition_data = [
@@ -287,7 +287,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_no_matching_partitions(self, spark, tmp_path):
         """Test partition pruning when no partitions match the filter"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         # Create simple partitioned data
         partition_data = [
@@ -311,7 +311,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_mixed_types(self, spark, tmp_path):
         """Test partition pruning with different data types"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         # Create data with different partition column types
         partition_data = [
@@ -343,7 +343,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_correctness(self, spark, tmp_path):
         """Test partition pruning correctness"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         partition_data = []
         for year in range(2020, 2025):  # 5 years
@@ -405,7 +405,7 @@ class TestDeltaPartitionPruning:
     def test_delta_pruning_with_non_partition_columns(self, spark, tmp_path):
         """Test that partition pruning works correctly when combined with non-partition column filters"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         partition_data = []
         for year in [2023, 2024]:
@@ -469,7 +469,7 @@ class TestDeltaPartitionPruning:
         df = spark.createDataFrame(partition_data)
         df.write.format("delta").partitionBy("year", "month").mode("overwrite").save(str(delta_path))
 
-        return f"file://{delta_path}"
+        return f"{delta_path}"
 
     @pytest.mark.parametrize(
         ("filter_str", "expected_count"),
@@ -527,7 +527,7 @@ class TestDeltaPartitionPruning:
 
         df.write.format("delta").mode("overwrite").partitionBy("year").save(str(delta_path))
 
-        filtered_df = spark.read.format("delta").load(f"file://{delta_path}").filter(filter_condition)
+        filtered_df = spark.read.format("delta").load(f"{delta_path}").filter(filter_condition)
         actual_count = filtered_df.count()
 
         assert actual_count == expected_count, f"{description}: expected {expected_count} records, got {actual_count}"
