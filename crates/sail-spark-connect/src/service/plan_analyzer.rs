@@ -73,7 +73,7 @@ pub(crate) async fn handle_analyze_explain(
     }));
     let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, explain).await?;
     let stream = spark.job_runner().execute(ctx, plan).await?;
-    let batches = read_stream(stream).await?;
+    let batches = read_stream(stream, spark.job_runner().runtime()).await?;
     Ok(ExplainResponse {
         // FIXME: The explain output should not be formatted as a table.
         explain_string: pretty_format_batches(&batches)?.to_string(),

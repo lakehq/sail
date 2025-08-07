@@ -4,21 +4,45 @@ use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 
-use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::execution::SendableRecordBatchStream;
-use futures::stream::{StreamExt, TryStreamExt};
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
-use uuid::Uuid;
-
 use crate::error::{SparkError, SparkResult};
 use crate::schema::to_spark_schema;
 use crate::spark::connect::execute_plan_response::{
     ArrowBatch, Metrics, ObservedMetrics, SqlCommandResult,
 };
 use crate::spark::connect::DataType;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::ipc::writer::StreamWriter;
+use datafusion::execution::SendableRecordBatchStream;
+use futures::stream::{StreamExt, TryStreamExt};
+use sail_runtime::RuntimeHandle;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
+use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
+use uuid::Uuid;
+
+// CHECK HERE DO NOT MERGE IF THIS FEATURE FLAG IS STILL HERE
+pub static EXECUTOR_START_FN_HANDLE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    std::env::var("SAIL_EXECUTOR_START_FN_HANDLE")
+        .map(|v| v.to_lowercase())
+        .unwrap_or_else(|_| "default".to_string())
+});
+
+// CHECK HERE DO NOT MERGE IF THIS FEATURE FLAG IS STILL HERE
+pub static EXECUTOR_START_FN_BUFFER_SIZE: std::sync::LazyLock<usize> =
+    std::sync::LazyLock::new(|| {
+        std::env::var("SAIL_EXECUTOR_START_FN_BUFFER_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1)
+    });
+
+// CHECK HERE DO NOT MERGE IF THIS FEATURE FLAG IS STILL HERE
+pub static EXECUTOR_READ_STREAM_FN_HANDLE: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| {
+        std::env::var("SAIL_EXECUTOR_READ_STREAM_FN_HANDLE")
+            .map(|v| v.to_lowercase())
+            .unwrap_or_else(|_| "default".to_string())
+    });
 
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
@@ -93,6 +117,7 @@ pub(crate) struct ExecutorMetadata {
 pub(crate) struct Executor {
     pub(crate) metadata: ExecutorMetadata,
     state: Mutex<ExecutorState>,
+    runtime: RuntimeHandle,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -145,10 +170,15 @@ enum ExecutorTaskResult {
 }
 
 impl Executor {
-    pub(crate) fn new(metadata: ExecutorMetadata, stream: SendableRecordBatchStream) -> Self {
+    pub(crate) fn new(
+        metadata: ExecutorMetadata,
+        stream: SendableRecordBatchStream,
+        runtime: RuntimeHandle,
+    ) -> Self {
         Self {
             metadata,
             state: Mutex::new(ExecutorState::Pending(ExecutorTaskContext::new(stream))),
+            runtime,
         }
     }
 
@@ -226,10 +256,26 @@ impl Executor {
                 return Err(SparkError::internal("task is being paused"));
             }
         };
-        let (tx, rx) = mpsc::channel(1);
+        let (tx, rx) = mpsc::channel(*EXECUTOR_START_FN_BUFFER_SIZE);
         let (notifier, listener) = oneshot::channel();
         let buffer = Arc::clone(&context.buffer);
-        let handle = tokio::spawn(async move { Executor::run(context, listener, tx).await });
+        let handle = match EXECUTOR_START_FN_HANDLE.to_lowercase().as_str() {
+            "primary" => {
+                let handle = self.runtime.primary().clone();
+                handle.spawn(async move { Executor::run(context, listener, tx).await })
+            }
+            "cpu" => {
+                let handle = self.runtime.cpu().clone();
+                handle.spawn(async move { Executor::run(context, listener, tx).await })
+            }
+            "default" => tokio::spawn(async move { Executor::run(context, listener, tx).await }),
+            other => {
+                log::warn!(
+                    "Unsupported executor start function handle: {other}, using default tokio",
+                );
+                tokio::spawn(async move { Executor::run(context, listener, tx).await })
+            }
+        };
         *state = ExecutorState::Running(ExecutorTask {
             notifier,
             handle,
@@ -280,8 +326,39 @@ impl Executor {
 
 pub(crate) async fn read_stream(
     stream: SendableRecordBatchStream,
+    runtime: &RuntimeHandle,
 ) -> SparkResult<Vec<RecordBatch>> {
-    stream.err_into().try_collect::<Vec<_>>().await
+    match EXECUTOR_READ_STREAM_FN_HANDLE.to_lowercase().as_str() {
+        "primary" => {
+            let handle = runtime.primary().clone();
+            handle
+                .spawn(async move { stream.err_into().try_collect::<Vec<_>>().await })
+                .await
+                .map_err(|e| {
+                    SparkError::internal(format!(
+                        "failed to execute read_stream on Primary runtime: {e}"
+                    ))
+                })?
+        }
+        "cpu" => {
+            let handle = runtime.cpu().clone();
+            handle
+                .spawn(async move { stream.err_into().try_collect::<Vec<_>>().await })
+                .await
+                .map_err(|e| {
+                    SparkError::internal(format!(
+                        "failed to read_stream execute on CPU runtime: {e}"
+                    ))
+                })?
+        }
+        "default" => stream.err_into().try_collect::<Vec<_>>().await,
+        other => {
+            log::warn!(
+                "Unsupported executor read_stream function handle: {other}, not using any handle"
+            );
+            stream.err_into().try_collect::<Vec<_>>().await
+        }
+    }
 }
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {

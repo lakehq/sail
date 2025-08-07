@@ -27,6 +27,14 @@ use crate::spark::connect::{
     WriteOperationV2, WriteStreamOperationStart,
 };
 
+// CHECK HERE DO NOT MERGE IF THIS FEATURE FLAG IS STILL HERE
+pub static EXECUTE_SQL_COMMAND_FN_HANDLE: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| {
+        std::env::var("SAIL_EXECUTE_SQL_COMMAND_FN_HANDLE")
+            .map(|v| v.to_lowercase())
+            .unwrap_or_else(|_| "default".to_string())
+    });
+
 pub struct ExecutePlanResponseStream {
     session_id: String,
     operation_id: String,
@@ -113,13 +121,13 @@ async fn handle_execute_plan(
     let stream = spark.job_runner().execute(ctx, plan).await?;
     let rx = match mode {
         ExecutePlanMode::Lazy => {
-            let executor = Executor::new(metadata, stream);
+            let executor = Executor::new(metadata, stream, spark.job_runner().runtime().clone());
             let rx = executor.start()?;
             spark.add_executor(executor)?;
             rx
         }
         ExecutePlanMode::EagerSilent => {
-            let _ = read_stream(stream).await?;
+            let _ = read_stream(stream, spark.job_runner().runtime()).await?;
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             if metadata.reattachable {
                 tx.send(ExecutorOutput::complete()).await?;
@@ -213,12 +221,48 @@ pub(crate) async fn handle_execute_sql_command(
             let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, command).await?;
             let stream = spark.job_runner().execute(ctx, plan).await?;
             let schema = stream.schema();
-            let data = read_stream(stream).await?;
-            let data = concat_batches(&schema, data.iter())?;
+            let data = read_stream(stream, spark.job_runner().runtime()).await?;
+
+            let arrow_batch = match EXECUTE_SQL_COMMAND_FN_HANDLE.to_lowercase().as_str() {
+                "primary" => spark
+                    .job_runner()
+                    .runtime()
+                    .primary()
+                    .clone()
+                    .spawn_blocking(move || {
+                        let batch = concat_batches(&schema, data.iter())?;
+                        to_arrow_batch(&batch)
+                    })
+                    .await
+                    .map_err(|e| SparkError::internal(e.to_string()))??,
+                "cpu" => spark
+                    .job_runner()
+                    .runtime()
+                    .cpu()
+                    .clone()
+                    .spawn_blocking(move || {
+                        let batch = concat_batches(&schema, data.iter())?;
+                        to_arrow_batch(&batch)
+                    })
+                    .await
+                    .map_err(|e| SparkError::internal(e.to_string()))??,
+                "default" => {
+                    let batch = concat_batches(&schema, data.iter())?;
+                    to_arrow_batch(&batch)?
+                }
+                other => {
+                    log::warn!(
+                "Unsupported handle_execute_sql_command function handle: {other}, not using any handle"
+            );
+                    let batch = concat_batches(&schema, data.iter())?;
+                    to_arrow_batch(&batch)?
+                }
+            };
+
             Relation {
                 common: None,
                 rel_type: Some(relation::RelType::LocalRelation(LocalRelation {
-                    data: Some(to_arrow_batch(&data)?.data),
+                    data: Some(arrow_batch.data),
                     schema: None,
                 })),
             }

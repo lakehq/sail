@@ -93,7 +93,7 @@ mod tests {
                     let plan =
                         resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
                     let stream = spark.job_runner().execute(&context, plan).await?;
-                    read_stream(stream).await
+                    read_stream(stream, &handle).await
                 });
                 // TODO: validate the result against the expected output
                 // TODO: handle non-deterministic results and error messages

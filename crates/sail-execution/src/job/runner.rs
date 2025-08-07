@@ -20,6 +20,8 @@ pub trait JobRunner: Send + Sync + 'static {
     ) -> ExecutionResult<SendableRecordBatchStream>;
 
     async fn stop(&self);
+
+    fn runtime(&self) -> &RuntimeHandle;
 }
 
 pub struct LocalJobRunner {
@@ -67,16 +69,22 @@ impl JobRunner for LocalJobRunner {
     async fn stop(&self) {
         self.stopped.store(true, Ordering::Relaxed);
     }
+
+    fn runtime(&self) -> &RuntimeHandle {
+        &self.runtime
+    }
 }
 
 pub struct ClusterJobRunner {
     driver: ActorHandle<DriverActor>,
+    runtime: RuntimeHandle,
 }
 
 impl ClusterJobRunner {
     pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
+        let runtime = options.runtime.clone();
         let driver = system.spawn(options);
-        Self { driver }
+        Self { driver, runtime }
     }
 }
 
@@ -99,5 +107,9 @@ impl JobRunner for ClusterJobRunner {
 
     async fn stop(&self) {
         let _ = self.driver.send(DriverEvent::Shutdown).await;
+    }
+
+    fn runtime(&self) -> &RuntimeHandle {
+        &self.runtime
     }
 }

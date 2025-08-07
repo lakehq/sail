@@ -23,6 +23,12 @@ use crate::layers::logging::LoggingObjectStore;
 use crate::layers::runtime::RuntimeAwareObjectStore;
 use crate::s3::get_s3_object_store;
 
+// CHECK HERE DO NOT MERGE IF THIS FEATURE FLAG IS STILL HERE
+pub static ENABLE_SECONDARY: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    std::env::var("SAIL_RUNTIME__ENABLE_SECONDARY")
+        .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
+});
+
 #[derive(Debug, Eq, PartialEq, Hash)]
 struct ObjectStoreKey {
     scheme: String,
@@ -77,9 +83,7 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
             .stores
             .entry(key)
             .or_try_insert_with(|| {
-                if std::env::var("SAIL_RUNTIME__ENABLE_SECONDARY")
-                    .is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
-                {
+                if *ENABLE_SECONDARY {
                     Ok(Arc::new(RuntimeAwareObjectStore::try_new(
                         || get_dynamic_object_store(url, None),
                         self.runtime.primary().clone(),
