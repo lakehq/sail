@@ -2363,7 +2363,7 @@ dependencies = [
 [[package]]
 name = "deltalake"
 version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=9a2c8ea#9a2c8eab19f5a121b807461168ff3cad5fec6707"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=5ac08eb#5ac08eb1b2f8fd847af547d26f224c30916e4824"
 dependencies = [
  "delta_kernel",
  "deltalake-core",
@@ -2372,7 +2372,7 @@ dependencies = [
 [[package]]
 name = "deltalake-core"
 version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=9a2c8ea#9a2c8eab19f5a121b807461168ff3cad5fec6707"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=5ac08eb#5ac08eb1b2f8fd847af547d26f224c30916e4824"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -2424,7 +2424,7 @@ dependencies = [
 [[package]]
 name = "deltalake-derive"
 version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=9a2c8ea#9a2c8eab19f5a121b807461168ff3cad5fec6707"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=5ac08eb#5ac08eb1b2f8fd847af547d26f224c30916e4824"
 dependencies = [
  "convert_case",
  "itertools 0.14.0",
@@ -5621,6 +5621,7 @@ dependencies = [
  "serde_yaml",
  "syn",
  "url",
+ "uuid",
 ]
 
 [[package]]

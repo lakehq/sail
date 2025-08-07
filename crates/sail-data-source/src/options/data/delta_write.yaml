@@ -8,7 +8,7 @@
     - replaceWhere
   description: |
     Condition for overwriting a specific subset of data. This is used in conjunction with the `overwrite` save mode.
-  supported: false
+  supported: true
   rust_type: String
 
 - key: user_metadata
@@ -34,7 +34,7 @@
   description: |
     If `true`, allows automatic schema merging during an `append` or `overwrite` operation. The default behavior depends on session configuration `spark.databricks.delta.schema.autoMerge.enabled`.
   default: "false"
-  supported: false
+  supported: true
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
 
@@ -44,7 +44,7 @@
   description: |
     If `true`, allows overwriting the schema of the table when using `overwrite` mode.
   default: "false"
-  supported: false
+  supported: true
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
 
@@ -106,3 +106,23 @@
   supported: false
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: target_file_size
+  aliases:
+    - targetFileSize
+  description: |
+    Target size of files written by the Delta Lake writer. This is a hint and may not be strictly enforced.
+  default: "104857600" # 100 MB
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_non_zero_usize
+
+- key: write_batch_size
+  aliases:
+    - writeBatchSize
+  description: |
+    The number of records to write in a single batch. This can help optimize performance by reducing the number of file writes.
+  default: "1024"
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_non_zero_usize
