@@ -146,15 +146,15 @@ jobs:
           - runner: ubuntu-24.04-x64-8-core
             target: aarch64
             os: linux
-          - runner: windows-2022-x64-8-core
-            target: x64
-            os: windows
-          - runner: macos-14-large
+          - runner: macos-13
             target: x86_64
             os: macos
-          - runner: macos-14-xlarge
+          - runner: macos-14
             target: aarch64
             os: macos
+          - runner: windows-2022
+            target: x64
+            os: windows
     steps:
       - uses: actions/checkout@v4
 
@@ -243,9 +243,9 @@ jobs:
         platform:
           - runner: ubuntu-24.04-x64-8-core
           - runner: ubuntu-24.04-arm-8-core
-          - runner: macos-14-large
-          - runner: macos-14-xlarge
-          - runner: windows-2022-x64-8-core
+          - runner: macos-13
+          - runner: macos-14
+          - runner: windows-2022
     needs:
       - setup
       - build-sdist
@@ -300,11 +300,11 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-24.04-x64-8-core
-          - runner: ubuntu-24.04-arm-8-core
-          - runner: macos-14-large
-          - runner: macos-14-xlarge
-          - runner: windows-2022-x64-8-core
+          - runner: ubuntu-24.04
+          - runner: ubuntu-24.04-arm
+          - runner: macos-13
+          - runner: macos-14
+          - runner: windows-2022
     needs:
       - setup
       - build-wheel
