@@ -84,51 +84,6 @@ impl ScalarUDFImpl for SparkTrySubtract {
             Ok(DataType::Int32)
         }
     }
-    /*
-    > SELECT try_subtract(2, 1);
-     1
-    > SELECT try_subtract(-2147483648, 1);
-     NULL
-    > SELECT try_subtract(date'2021-01-02', 1);
-     2021-01-01
-    > SELECT try_subtract(date'2021-01-01', interval 1 year);
-     2020-01-01
-    > SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day);
-     2021-01-01 00:00:00
-    > SELECT try_subtract(interval 2 year, interval 1 year);
-     1-0
-
-
-    spark.sql("SELECT try_subtract(2, 1);").show()
-    spark.sql("SELECT try_subtract(-2147483648, 1)").show()
-    spark.sql("SELECT try_subtract(-2147483648, 1)").show()
-    +-------------------------------+
-    |try_subtract((- 2147483648), 1)|
-    +-------------------------------+
-    |                    -2147483649|
-    +-------------------------------+
-    spark.sql("SELECT try_subtract(date'2021-01-02', 1)").show()
-    +----------------------------------+
-    |try_subtract(DATE '2021-01-02', 1)|
-    +----------------------------------+
-    |                        2021-01-01|
-    +----------------------------------+
-    spark.sql("SELECT try_subtract(date'2021-01-01', interval 1 year)").show()
-    xxx
-    spark.sql("SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day)").show()
-    +----------------------------------------------------------------------------------+
-    |try_subtract(TIMESTAMP '2021-01-02 00:00:00', INTERVAL '1 00:00:00' DAY TO SECOND)|
-    +----------------------------------------------------------------------------------+
-    |                                                               2020-12-31 23:00:00|
-    +----------------------------------------------------------------------------------+
-    spark.sql("SELECT try_subtract(interval 2 year, interval 1 year)").show()
-    +------------------------------------------------------------------------+
-    |try_subtract(INTERVAL '2-0' YEAR TO MONTH, INTERVAL '1-0' YEAR TO MONTH)|
-    +------------------------------------------------------------------------+
-    |                                                    INTERVAL '1-0' YE...|
-    +------------------------------------------------------------------------+
-
-         */
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
@@ -285,9 +240,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
                 DataType::Timestamp(Microsecond, None),
                 DataType::Duration(Microsecond),
             ]),
-            (DataType::Utf8, DataType::Int32) =>{
-                Ok(vec![DataType::Date32, DataType::Int32])
-            }
+            (DataType::Utf8, DataType::Int32) => Ok(vec![DataType::Date32, DataType::Int32]),
 
             _ => Err(unsupported_data_types_exec_err(
                 "spark_try_subtract",
