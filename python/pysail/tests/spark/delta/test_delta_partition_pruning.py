@@ -1,344 +1,11 @@
-import os
-from datetime import UTC, date, datetime
-
-import pandas as pd
 import pytest
-from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 
-from pysail.tests.spark.utils import is_jvm_spark
 
+class TestDeltaPartitionPruning:
+    """Delta Lake partition pruning tests"""
 
-class TestDeltaLake:
-    """Delta Lake data source read/write tests"""
-
-    @pytest.fixture(scope="class")
-    def delta_test_data(self):
-        """Test data"""
-        return [
-            Row(id=10, event="A", score=0.98),
-            Row(id=11, event="B", score=0.54),
-            Row(id=12, event="A", score=0.76),
-        ]
-
-    @pytest.fixture(scope="class")
-    def expected_pandas_df(self):
-        """Expected pandas DataFrame"""
-        return pd.DataFrame({"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]}).astype(
-            {"id": "int32", "event": "string", "score": "float64"}
-        )
-
-    def test_delta_write_and_read_basic(self, spark, delta_test_data, expected_pandas_df, tmp_path):
-        """Test basic Delta Lake write and read operations"""
-        delta_path = tmp_path / "delta_table"
-
-        df = spark.createDataFrame(delta_test_data)
-
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
-
-        assert_frame_equal(
-            result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=False
-        )
-
-    def test_delta_write_and_read_with_sql(self, spark, delta_test_data, expected_pandas_df, tmp_path):
-        """Test creating Delta table with SQL and querying"""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
-
-        df = spark.createDataFrame(delta_test_data)
-
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        spark.sql(f"CREATE TABLE my_delta USING delta LOCATION '{delta_table_path}'")
-
-        try:
-            result_df = spark.sql("SELECT * FROM my_delta").sort("id")
-
-            assert_frame_equal(
-                result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=False
-            )
-        finally:
-            spark.sql("DROP TABLE IF EXISTS my_delta")
-
-    def test_delta_append_mode(self, spark, delta_test_data, tmp_path):
-        """Test Delta Lake append mode"""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
-
-        df1 = spark.createDataFrame(delta_test_data)
-
-        df1.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        append_data = [
-            Row(id=13, event="C", score=0.89),
-            Row(id=14, event="D", score=0.67),
-        ]
-        df2 = spark.createDataFrame(append_data)
-
-        df2.write.format("delta").mode("append").save(str(delta_path))
-
-        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
-
-        expected_data = pd.DataFrame(
-            {
-                "id": [10, 11, 12, 13, 14],
-                "event": ["A", "B", "A", "C", "D"],
-                "score": [0.98, 0.54, 0.76, 0.89, 0.67],
-            }
-        ).astype({"id": "int32", "event": "string", "score": "float64"})
-
-        assert_frame_equal(
-            result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False
-        )
-
-    def test_delta_overwrite_mode(self, spark, delta_test_data, tmp_path):
-        """Test Delta Lake overwrite mode"""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
-
-        df1 = spark.createDataFrame(delta_test_data)
-
-        df1.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        new_data = [
-            Row(id=20, event="X", score=0.95),
-            Row(id=21, event="Y", score=0.88),
-        ]
-        df2 = spark.createDataFrame(new_data)
-
-        df2.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
-
-        expected_data = pd.DataFrame({"id": [20, 21], "event": ["X", "Y"], "score": [0.95, 0.88]}).astype(
-            {"id": "int32", "event": "string", "score": "float64"}
-        )
-
-        assert_frame_equal(
-            result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False
-        )
-
-    @pytest.mark.skip(reason="Temporarily skipped")
-    def test_delta_schema_evolution(self, spark, tmp_path):
-        """Test Delta Lake schema evolution"""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
-        initial_data = [
-            Row(id=1, name="Alice"),
-            Row(id=2, name="Bob"),
-        ]
-        df1 = spark.createDataFrame(initial_data)
-
-        df1.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        new_data = [
-            Row(id=3, name="Charlie", age=30),
-            Row(id=4, name="Diana", age=25),
-        ]
-        df2 = spark.createDataFrame(new_data)
-
-        df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(delta_path))
-
-        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
-
-        expected_data = pd.DataFrame(
-            {"id": [1, 2, 3, 4], "name": ["Alice", "Bob", "Charlie", "Diana"], "age": [None, None, 30, 25]}
-        ).astype({"id": "int32", "name": "string", "age": "Int32"})
-
-        assert_frame_equal(
-            result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False
-        )
-
-    def test_delta_partition_by(self, spark, tmp_path):
-        """Test Delta Lake partitioning functionality"""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
-        # Create partition data
-        partition_data = [
-            Row(id=1, event="A", year=2025, score=0.8),
-            Row(id=2, event="B", year=2025, score=0.9),
-            Row(id=3, event="A", year=2026, score=0.7),
-            Row(id=4, event="B", year=2026, score=0.6),
-        ]
-        df = spark.createDataFrame(partition_data)
-
-        # Write partitioned table
-        df.write.format("delta").mode("overwrite").partitionBy("year").save(str(delta_path))
-
-        # Read entire table
-        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
-
-        expected_data = pd.DataFrame(
-            {
-                "id": [1, 2, 3, 4],
-                "event": ["A", "B", "A", "B"],
-                "score": [0.8, 0.9, 0.7, 0.6],
-                "year": [2025, 2025, 2026, 2026],
-            }
-        ).astype({"id": "int32", "event": "string", "score": "float64", "year": "int32"})
-
-        assert_frame_equal(
-            result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False
-        )
-
-        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2025").sort("id")
-        expected = 2025
-        expected_filtered = expected_data[expected_data["year"] == expected].sort_values("id").reset_index(drop=True)
-
-        assert_frame_equal(filtered_df.toPandas(), expected_filtered, check_dtype=False)
-        assert filtered_df.count() == 2, "Partition pruning should return exactly 2 records for year=2025"  # noqa: PLR2004
-
-        filtered_df_ne = spark.read.format("delta").load(delta_table_path).filter("year != 2025")
-        assert filtered_df_ne.count() == 2, "NOT EQUAL filter should return 2 records for year!=2025"  # noqa: PLR2004
-
-        filtered_df_gt = spark.read.format("delta").load(delta_table_path).filter("year > 2025")
-        assert filtered_df_gt.count() == 2, "GREATER THAN filter should return 2 records for year>2025"  # noqa: PLR2004
-
-    def test_delta_partition_behavior(self, spark, delta_test_data, tmp_path):
-        delta_path = tmp_path / "partitioned_delta_table"
-        delta_table_path = f"file://{delta_path}"
-
-        df = spark.createDataFrame(delta_test_data)
-
-        df.write.format("delta").mode("overwrite").partitionBy("id").save(str(delta_path))
-
-        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
-
-        expected_data = pd.DataFrame(
-            {"event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76], "id": [10, 11, 12]}
-        ).astype({"event": "string", "score": "float64", "id": "int32"})
-
-        result_pandas = result_df.toPandas()
-        result_pandas = result_pandas.sort_values("id").reset_index(drop=True)
-        expected_data = expected_data.sort_values("id").reset_index(drop=True)
-
-        assert_frame_equal(result_pandas, expected_data, check_dtype=False)
-
-        partition_dirs = []
-        for item in os.listdir(delta_path):
-            item_path = delta_path / item
-            if os.path.isdir(item_path) and item.startswith("id="):
-                partition_dirs.append(item)
-
-        expected_partitions = {"id=10", "id=11", "id=12"}
-        actual_partitions = set(partition_dirs)
-        assert actual_partitions == expected_partitions, f"Expected {expected_partitions}, got {actual_partitions}"
-
-        for partition_dir in partition_dirs:
-            partition_path = delta_path / partition_dir
-            parquet_files = [f for f in os.listdir(partition_path) if f.endswith(".parquet")]
-            assert len(parquet_files) > 0, f"No parquet files found in partition directory {partition_dir}"
-
-    def test_delta_multi_column_partitioning(self, spark, tmp_path):
-        """Test multi-column partitioning behavior."""
-        delta_path = tmp_path / "multi_partitioned_delta_table"
-
-        multi_partition_data = [
-            Row(id=1, region=1, category=1, value=100),
-            Row(id=2, region=1, category=2, value=200),
-            Row(id=3, region=2, category=1, value=300),
-            Row(id=4, region=2, category=2, value=400),
-        ]
-
-        df = spark.createDataFrame(multi_partition_data)
-
-        df.write.format("delta").mode("overwrite").partitionBy("region", "category").save(str(delta_path))
-
-        result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
-
-        expected_data = pd.DataFrame(
-            {"id": [1, 2, 3, 4], "value": [100, 200, 300, 400], "region": [1, 1, 2, 2], "category": [1, 2, 1, 2]}
-        ).astype({"id": "int32", "value": "int32", "region": "int32", "category": "int32"})
-
-        result_pandas = result_df.toPandas().sort_values("id").reset_index(drop=True)
-        expected_data = expected_data.sort_values("id").reset_index(drop=True)
-
-        assert_frame_equal(result_pandas, expected_data, check_dtype=False)
-
-        expected_partition_structure = {
-            "region=1/category=1",
-            "region=1/category=2",
-            "region=2/category=1",
-            "region=2/category=2",
-        }
-
-        actual_partitions = set()
-        for region_dir in os.listdir(delta_path):
-            if region_dir.startswith("region="):
-                region_path = delta_path / region_dir
-                if os.path.isdir(region_path):
-                    for category_dir in os.listdir(region_path):
-                        if category_dir.startswith("category="):
-                            actual_partitions.add(f"{region_dir}/{category_dir}")
-
-        assert (
-            actual_partitions == expected_partition_structure
-        ), f"Expected {expected_partition_structure}, got {actual_partitions}"
-
-    def test_delta_with_different_data_types(self, spark, tmp_path):
-        """Test Delta Lake support for different data types"""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
-        complex_data = [
-            Row(
-                id=1,
-                name="Alice",
-                age=30,
-                salary=50000.50,
-                is_active=True,
-                birth_date=date(1993, 5, 15),
-                created_at=datetime(2025, 1, 1, 10, 30, 0, tzinfo=UTC),
-                tags=["python", "spark"],
-                metadata={"department": "engineering", "level": "senior"},
-            ),
-            Row(
-                id=2,
-                name="Bob",
-                age=25,
-                salary=45000.75,
-                is_active=False,
-                birth_date=date(1998, 8, 22),
-                created_at=datetime(2025, 2, 1, 14, 45, 0, tzinfo=UTC),
-                tags=["java", "scala"],
-                metadata={"department": "product", "level": "junior"},
-            ),
-        ]
-
-        df = spark.createDataFrame(complex_data)
-
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
-
-        result_pandas = result_df.toPandas()
-
-        expected = 2
-        assert len(result_pandas) == expected
-        assert result_pandas["id"].tolist() == [1, 2]
-        assert result_pandas["name"].tolist() == ["Alice", "Bob"]
-        assert result_pandas["age"].tolist() == [30, 25]
-        assert result_pandas["is_active"].tolist() == [True, False]
-
-    @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake error handling")
-    def test_delta_error_handling(self, spark, tmp_path):
-        """Test Delta Lake error handling"""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
-        # Try to read non-existent Delta table
-        with pytest.raises(Exception, match=".*"):
-            spark.read.format("delta").load(delta_table_path).collect()
-
-        # Create table and try again
-        test_data = [Row(id=1, name="test")]
-        df = spark.createDataFrame(test_data)
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        result = spark.read.format("delta").load(delta_table_path).collect()
-        assert result == [Row(id=1, name="test")]
-
-    def test_delta_partition_pruning_equality(self, spark, tmp_path):
+    def test_delta_pruning_with_equality(self, spark, tmp_path):
         """Test partition pruning with equality operators"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -369,7 +36,7 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 4, f"Expected 4 rows for year!=2023, got {result_count}"  # noqa: PLR2004
 
-    def test_delta_partition_pruning_comparison_operators(self, spark, tmp_path):
+    def test_delta_pruning_with_comparison(self, spark, tmp_path):
         """Test partition pruning with comparison operators (>, >=, <, <=)"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -409,7 +76,7 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 12, f"Expected 12 rows for year>=2022 AND month>=6, got {result_count}"  # noqa: PLR2004
 
-    def test_delta_partition_pruning_in_operator(self, spark, tmp_path):
+    def test_delta_pruning_with_in_operator(self, spark, tmp_path):
         """Test partition pruning with IN operator"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -440,7 +107,7 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 4, f"Expected 4 rows for event NOT IN ('A'), got {result_count}"  # noqa: PLR2004
 
-    def test_delta_partition_pruning_between_operator(self, spark, tmp_path):
+    def test_delta_pruning_with_between_operator(self, spark, tmp_path):
         """Test partition pruning with BETWEEN operator"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -470,7 +137,7 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 36, f"Expected 36 rows for year NOT BETWEEN 2021 AND 2022, got {result_count}"  # noqa: PLR2004
 
-    def test_delta_partition_pruning_null_handling(self, spark, tmp_path):
+    def test_delta_pruning_with_null_handling(self, spark, tmp_path):
         """Test partition pruning with NULL values and IS NULL/IS NOT NULL"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -501,7 +168,7 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 2, f"Expected 2 rows for region IS NOT NULL AND category = 'A', got {result_count}"  # noqa: PLR2004
 
-    def test_delta_partition_pruning_complex_expressions(self, spark, tmp_path):
+    def test_delta_pruning_with_complex_expressions(self, spark, tmp_path):
         """Test partition pruning with complex boolean expressions"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -552,7 +219,7 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 64, f"Expected 64 rows for NOT condition, got {result_count}"  # noqa: PLR2004
 
-    def test_delta_partition_pruning_string_partitions(self, spark, tmp_path):
+    def test_delta_pruning_with_string_partitions(self, spark, tmp_path):
         """Test partition pruning with string partition values"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -586,7 +253,7 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 4, f"Expected 4 rows for department > 'engineering', got {result_count}"  # noqa: PLR2004
 
-    def test_delta_partition_pruning_edge_cases(self, spark, tmp_path):
+    def test_delta_pruning_with_edge_cases(self, spark, tmp_path):
         """Test partition pruning edge cases and boundary conditions"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -617,7 +284,7 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 1, f"Expected 1 row for num_partition > 1000, got {result_count}"
 
-    def test_delta_partition_pruning_no_matching_partitions(self, spark, tmp_path):
+    def test_delta_pruning_with_no_matching_partitions(self, spark, tmp_path):
         """Test partition pruning when no partitions match the filter"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -641,7 +308,7 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 0, f"Expected 0 rows for impossible condition, got {result_count}"
 
-    def test_delta_partition_pruning_mixed_types(self, spark, tmp_path):
+    def test_delta_pruning_with_mixed_types(self, spark, tmp_path):
         """Test partition pruning with different data types"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -673,7 +340,7 @@ class TestDeltaLake:
         result_count = filtered_df.count()
         assert result_count == 2, f"Expected 2 rows for mixed type condition, got {result_count}"  # noqa: PLR2004
 
-    def test_delta_partition_pruning_correctness(self, spark, tmp_path):
+    def test_delta_pruning_correctness(self, spark, tmp_path):
         """Test partition pruning correctness"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -735,7 +402,7 @@ class TestDeltaLake:
         expected_count = 2 * 2 * 10  # 2 conditions * 2 days * 10 records
         assert result_count == expected_count, f"Expected {expected_count} rows for OR condition, got {result_count}"
 
-    def test_delta_partition_pruning_with_non_partition_columns(self, spark, tmp_path):
+    def test_delta_pruning_with_non_partition_columns(self, spark, tmp_path):
         """Test that partition pruning works correctly when combined with non-partition column filters"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"file://{delta_path}"
@@ -777,113 +444,90 @@ class TestDeltaLake:
         expected_count = 2 * 3 * 2  # 2 years * 3 categories * 2 records with score = 7
         assert result_count == expected_count, f"Expected {expected_count} rows, got {result_count}"
 
-    @pytest.mark.skip(reason="Temporarily skipped")
-    @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake time travel")
-    def test_delta_time_travel(self, spark, tmp_path):
-        """Test Delta Lake time travel functionality"""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
-        # Version 0: Initial data
-        v0_data = [Row(id=1, value="v0")]
-        df0 = spark.createDataFrame(v0_data)
-        df0.write.format("delta").mode("overwrite").save(str(delta_path))
+    @pytest.fixture(scope="class")
+    def setup_partitioned_table(self, spark, tmp_path_factory):
+        """Fixture to create a partitioned table for parametrized tests"""
+        delta_path = tmp_path_factory.mktemp("partitioned_table")
 
-        # Version 1: Add data
-        v1_data = [Row(id=2, value="v1")]
-        df1 = spark.createDataFrame(v1_data)
-        df1.write.format("delta").mode("append").save(str(delta_path))
+        partition_data = []
+        for year in [2022, 2023]:
+            for month in range(1, 13):  # 12 months
+                for category in ["A", "B"]:
+                    # 10 records per partition
+                    for i in range(10):
+                        partition_data.append(
+                            Row(
+                                id=len(partition_data),
+                                year=year,
+                                month=month,
+                                category=category,
+                                value=f"data_{year}_{month}_{category}_{i}",
+                                score=i % 5,  # scores 0-4
+                            )
+                        )
 
-        # Version 2: Overwrite data
-        v2_data = [Row(id=3, value="v2")]
-        df2 = spark.createDataFrame(v2_data)
-        df2.write.format("delta").mode("overwrite").save(str(delta_path))
+        df = spark.createDataFrame(partition_data)
+        df.write.format("delta").partitionBy("year", "month").mode("overwrite").save(str(delta_path))
 
-        # Read latest version
-        latest_df = spark.read.format("delta").load(delta_table_path)
-        assert latest_df.collect() == [Row(id=3, value="v2")]
+        return f"file://{delta_path}"
 
-        # Read version 0
-        v0_df = spark.read.format("delta").option("versionAsOf", "0").load(delta_table_path)
-        assert v0_df.collect() == [Row(id=1, value="v0")]
+    @pytest.mark.parametrize(
+        ("filter_str", "expected_count"),
+        [
+            ("year = 2023", 12 * 2 * 10),  # 1 year * 12 months * 2 categories * 10 records
+            ("year = 2022 AND month = 6", 2 * 10),  # 1 year * 1 month * 2 categories * 10 records
+            ("year >= 2023 AND month <= 3", 1 * 3 * 2 * 10),  # 1 year * 3 months * 2 categories * 10 records
+            (
+                "year IN (2022, 2023) AND month IN (1, 12)",
+                2 * 2 * 2 * 10,
+            ),  # 2 years * 2 months * 2 categories * 10 records
+            (
+                "year BETWEEN 2022 AND 2023 AND month BETWEEN 6 AND 8",
+                2 * 3 * 2 * 10,
+            ),  # 2 years * 3 months * 2 categories * 10 records
+            ("year != 2022", 1 * 12 * 2 * 10),  # 1 year * 12 months * 2 categories * 10 records
+            ("month > 10", 2 * 2 * 2 * 10),  # 2 years * 2 months (11,12) * 2 categories * 10 records
+            ("month < 3", 2 * 2 * 2 * 10),  # 2 years * 2 months (1,2) * 2 categories * 10 records
+        ],
+    )
+    def test_delta_pruning_parametrized_scenarios(self, spark, setup_partitioned_table, filter_str, expected_count):
+        """Parametrized test for partition pruning scenarios"""
+        delta_table_path = setup_partitioned_table
 
-        # Read version 1
-        v1_df = spark.read.format("delta").option("versionAsOf", "1").load(delta_table_path).sort("id")
-        expected_v1 = [Row(id=1, value="v0"), Row(id=2, value="v1")]
-        assert v1_df.collect() == expected_v1
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter(filter_str)
+        actual_count = filtered_df.count()
 
-    def test_data_skipping_on_numeric_column(self, spark, tmp_path):
-        """Test data skipping (file pruning) on a non-partitioned numeric column."""
-        delta_path = tmp_path / "delta_data_skipping_numeric"
-        delta_table_path = f"file://{delta_path}"
+        assert (
+            actual_count == expected_count
+        ), f"Filter '{filter_str}': expected {expected_count} records, got {actual_count}"
 
-        df1 = spark.createDataFrame([Row(id=i, value=float(i)) for i in range(1, 11)])
-        df1.write.format("delta").mode("overwrite").save(str(delta_path))
+    @pytest.mark.parametrize(
+        ("filter_condition", "expected_count", "description"),
+        [
+            ("year = 2025", 2, "Single year filter"),
+            ("year = 2026", 2, "Different year filter"),
+            ("year >= 2026", 2, "Greater than or equal filter"),
+            ("year < 2026", 2, "Less than filter"),
+            ("year != 2025", 2, "Not equal filter"),
+            ("year IN (2025)", 2, "IN clause with single value"),
+            ("year IN (2025, 2026)", 4, "IN clause with multiple values"),
+        ],
+    )
+    def test_delta_pruning_basic_scenarios(self, spark, tmp_path, filter_condition, expected_count, description):
+        """Parametrized test for various partition filtering scenarios"""
+        delta_path = tmp_path / "delta_partition_filter_test"
 
-        df2 = spark.createDataFrame([Row(id=i, value=float(i)) for i in range(101, 111)])
-        df2.write.format("delta").mode("append").save(str(delta_path))
+        partition_data = [
+            Row(id=1, event="A", year=2025, score=0.8),
+            Row(id=2, event="B", year=2025, score=0.9),
+            Row(id=3, event="A", year=2026, score=0.7),
+            Row(id=4, event="B", year=2026, score=0.6),
+        ]
+        df = spark.createDataFrame(partition_data)
 
-        df3 = spark.createDataFrame([Row(id=i, value=float(i)) for i in range(201, 211)])
-        df3.write.format("delta").mode("append").save(str(delta_path))
+        df.write.format("delta").mode("overwrite").partitionBy("year").save(str(delta_path))
 
-        total_files = len([f for f in os.listdir(delta_path) if f.endswith(".parquet")])
-        assert total_files == 3, "Table should have 3 data files"  # noqa: PLR2004
+        filtered_df = spark.read.format("delta").load(f"file://{delta_path}").filter(filter_condition)
+        actual_count = filtered_df.count()
 
-        filtered_df = spark.read.format("delta").load(delta_table_path).filter("value > 200.0")
-
-        assert filtered_df.count() == 10  # noqa: PLR2004
-        assert filtered_df.agg({"value": "min"}).collect()[0][0] == 201.0  # noqa: PLR2004
-
-    def test_data_skipping_on_string_and_date_columns(self, spark, tmp_path):
-        """Test data skipping on string and date columns."""
-        delta_path = tmp_path / "delta_data_skipping_str_date"
-        delta_table_path = f"file://{delta_path}"
-
-        df1_data = [Row(event_name=chr(65 + i), event_date=date(2023, 1, 1 + i)) for i in range(3)]
-        spark.createDataFrame(df1_data).write.format("delta").mode("overwrite").save(str(delta_path))
-
-        df2_data = [Row(event_name=chr(77 + i), event_date=date(2023, 6, 1 + i)) for i in range(3)]
-        spark.createDataFrame(df2_data).write.format("delta").mode("append").save(str(delta_path))
-
-        df3_data = [Row(event_name=chr(88 + i), event_date=date(2023, 12, 1 + i)) for i in range(3)]
-        spark.createDataFrame(df3_data).write.format("delta").mode("append").save(str(delta_path))
-
-        total_files = len([f for f in os.listdir(delta_path) if f.endswith(".parquet")])
-        assert total_files == 3, "Table should have 3 data files"  # noqa: PLR2004
-
-        filtered_df_str = spark.read.format("delta").load(delta_table_path).filter("event_name > 'W'")
-
-        assert filtered_df_str.count() == 3  # noqa: PLR2004
-
-        filtered_df_date = spark.read.format("delta").load(delta_table_path).filter("event_date < '2023-03-01'")
-        assert filtered_df_date.count() == 3  # noqa: PLR2004
-
-    def test_data_skipping_on_null_counts(self, spark, tmp_path):
-        """Test data skipping using null_count statistics for IS NULL and IS NOT NULL queries."""
-        delta_path = tmp_path / "delta_data_skipping_null"
-        delta_table_path = f"file://{delta_path}"
-
-        df1_data = [Row(id=i, optional_col=f"value_{i}") for i in range(10)]
-        spark.createDataFrame(df1_data).write.format("delta").mode("overwrite").save(str(delta_path))
-
-        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
-
-        schema = StructType(
-            [
-                StructField("id", IntegerType(), False),
-                StructField("optional_col", StringType(), True),
-            ]
-        )
-        df2_data = [(i + 10, None) for i in range(10)]
-        spark.createDataFrame(df2_data, schema=schema).write.format("delta").mode("append").save(str(delta_path))
-
-        df3_data = [Row(id=i + 20, optional_col=f"value_{i}" if i % 2 == 0 else None) for i in range(10)]
-        spark.createDataFrame(df3_data).write.format("delta").mode("append").save(str(delta_path))
-
-        total_files = len([f for f in os.listdir(delta_path) if f.endswith(".parquet")])
-        assert total_files == 3, "Table should have 3 data files"  # noqa: PLR2004
-
-        filtered_df_not_null = spark.read.format("delta").load(delta_table_path).filter("optional_col IS NOT NULL")
-        assert filtered_df_not_null.count() == 10 + 5  # File 1 (10) + File 3 (5)
-
-        filtered_df_is_null = spark.read.format("delta").load(delta_table_path).filter("optional_col IS NULL")
-        assert filtered_df_is_null.count() == 10 + 5  # File 2 (10) + File 3 (5)
+        assert actual_count == expected_count, f"{description}: expected {expected_count} records, got {actual_count}"

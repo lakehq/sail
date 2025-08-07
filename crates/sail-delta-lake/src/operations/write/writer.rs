@@ -19,12 +19,9 @@ use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 use super::async_utils::AsyncShareableBuffer;
 use super::stats::create_add;
-
-/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
-const DEFAULT_TARGET_FILE_SIZE: usize = 104_857_600; // 100MB
-const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
@@ -75,8 +72,8 @@ impl WriterConfig {
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
         writer_properties: Option<WriterProperties>,
-        target_file_size: Option<usize>,
-        write_batch_size: Option<usize>,
+        target_file_size: usize,
+        write_batch_size: usize,
         num_indexed_cols: i32,
         stats_columns: Option<Vec<String>>,
     ) -> Self {
@@ -90,8 +87,8 @@ impl WriterConfig {
             table_schema,
             partition_columns,
             writer_properties,
-            target_file_size: target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE),
-            write_batch_size: write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE),
+            target_file_size,
+            write_batch_size,
             num_indexed_cols,
             stats_columns,
         }
@@ -311,19 +308,25 @@ impl PartitionWriter {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             let slice = batch.slice(offset, length);
             if let Some(writer) = self.arrow_writer.as_mut() {
-                writer
-                    .write(&slice)
-                    .await
-                    .map_err(|e| DeltaTableError::generic(format!("Failed to write batch: {e}")))?;
+                writer.write(&slice).await.map_err(|e| {
+                    DeltaTableError::generic(format!("Failed to write batch slice: {e}"))
+                })?;
             }
 
-            // Check if we need to flush
-            let buffer_size = if let Some(buffer) = self.buffer.as_ref() {
+            // Check if need to flush after writing the slice
+            let buffer_len = if let Some(buffer) = self.buffer.as_ref() {
                 buffer.len().await
             } else {
                 0
             };
-            if buffer_size >= self.config.target_file_size {
+            let in_progress_size = if let Some(writer) = self.arrow_writer.as_ref() {
+                writer.in_progress_size()
+            } else {
+                0
+            };
+            let estimated_size = buffer_len + in_progress_size;
+
+            if estimated_size >= self.config.target_file_size {
                 self.flush_writer().await?;
             }
         }

@@ -5,11 +5,11 @@ use datafusion::catalog::Session;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
 use datafusion_common::{plan_err, Result};
+use sail_common_datafusion::datasource::TableDeltaOptions;
 
 use crate::options::{
     load_default_options, load_options, CsvReadOptions, CsvWriteOptions, DeltaReadOptions,
     DeltaWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
-    TableDeltaOptions,
 };
 
 fn char_to_u8(c: char, option: &str) -> Result<u8> {
@@ -281,7 +281,21 @@ fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) 
 }
 
 fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions) -> Result<()> {
-    let _ = (from, to);
+    if let Some(replace_where) = from.replace_where {
+        to.replace_where = Some(replace_where);
+    }
+    if let Some(merge_schema) = from.merge_schema {
+        to.merge_schema = merge_schema;
+    }
+    if let Some(overwrite_schema) = from.overwrite_schema {
+        to.overwrite_schema = overwrite_schema;
+    }
+    if let Some(target_file_size) = from.target_file_size {
+        to.target_file_size = target_file_size;
+    }
+    if let Some(write_batch_size) = from.write_batch_size {
+        to.write_batch_size = write_batch_size;
+    }
     Ok(())
 }
 

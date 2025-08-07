@@ -20,11 +20,6 @@ mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/delta_write.rs"));
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct TableDeltaOptions {
-    // Placeholder structure for Delta table configuration options
-}
-
 pub trait DataSourceOptions: for<'de> serde::Deserialize<'de> {
     /// A list of allowed keys or aliases for the options.
     /// All values must be lowercased.

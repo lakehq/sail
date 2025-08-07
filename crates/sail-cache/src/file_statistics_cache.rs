@@ -1,4 +1,4 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::common::Statistics;
@@ -8,47 +8,28 @@ use moka::sync::Cache;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
-use crate::try_parse_non_zero_u64;
-
-pub static GLOBAL_FILE_STATISTICS_CACHE: LazyLock<Arc<MokaFileStatisticsCache>> =
-    LazyLock::new(|| {
-        let ttl = std::env::var("SAIL_PARQUET__TABLE_FILES_STATISTICS_CACHE_TTL").ok();
-        let max_entries =
-            std::env::var("SAIL_PARQUET__TABLE_FILES_STATISTICS_CACHE_MAX_ENTRIES").ok();
-        Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
-    });
-
 pub struct MokaFileStatisticsCache {
     statistics: Cache<Path, (ObjectMeta, Arc<Statistics>)>,
 }
 
 impl MokaFileStatisticsCache {
-    pub fn new(ttl: Option<String>, max_entries: Option<String>) -> Self {
+    const NAME: &'static str = "MokaFileStatisticsCache";
+
+    pub fn new(ttl: Option<u64>, max_entries: Option<u64>) -> Self {
         let mut builder = Cache::builder();
 
         if let Some(ttl) = ttl {
-            if let Some(ttl) = try_parse_non_zero_u64(&ttl) {
-                debug!("Setting TTL for MokaFileStatisticsCache to {ttl}");
-                builder = builder.time_to_live(Duration::from_secs(ttl));
-            } else {
-                debug!("Disabled or invalid TTL for MokaFileStatisticsCache: {ttl}");
-            }
-        } else {
-            debug!("No TTL set for MokaFileStatisticsCache");
+            debug!("Setting TTL for {} to {ttl} second(s)", Self::NAME);
+            builder = builder.time_to_live(Duration::from_secs(ttl));
+        }
+        if let Some(max_entries) = max_entries {
+            debug!(
+                "Setting maximum number of entries for {} to {max_entries}",
+                Self::NAME
+            );
+            builder = builder.max_capacity(max_entries);
         }
 
-        if let Some(max_entries) = max_entries {
-            if let Some(max_entries) = try_parse_non_zero_u64(&max_entries) {
-                debug!("Setting max entries for MokaFileStatisticsCache to {max_entries}");
-                builder = builder.max_capacity(max_entries);
-            } else {
-                debug!(
-                    "Disabled or invalid max entries for MokaFileStatisticsCache: {max_entries}"
-                );
-            }
-        } else {
-            debug!("No max entries set for MokaFileStatisticsCache");
-        }
         Self {
             statistics: builder.build(),
         }
@@ -75,7 +56,7 @@ impl CacheAccessor<Path, Arc<Statistics>> for MokaFileStatisticsCache {
     }
 
     fn put(&self, _key: &Path, _value: Arc<Statistics>) -> Option<Arc<Statistics>> {
-        error!("Put cache in MokaFileStatisticsCache without Extra not supported.");
+        error!("Put cache in {} without Extra is not supported", Self::NAME);
         None
     }
 
@@ -105,7 +86,7 @@ impl CacheAccessor<Path, Arc<Statistics>> for MokaFileStatisticsCache {
         self.statistics.invalidate_all();
     }
     fn name(&self) -> String {
-        "MokaFileStatisticsCache".to_string()
+        Self::NAME.to_string()
     }
 }
 
@@ -120,7 +101,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_statistics_cache() {
+    fn test_file_statistics_cache() {
         let meta = ObjectMeta {
             location: Path::from("test"),
             last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")

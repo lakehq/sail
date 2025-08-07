@@ -6,7 +6,7 @@ use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::CatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
-use sail_common::config::{AppConfig, CatalogKind};
+use sail_common::config::{AppConfig, CatalogType};
 
 pub fn create_catalog_manager(config: &AppConfig) -> Result<CatalogManager> {
     let catalogs = config
@@ -15,7 +15,7 @@ pub fn create_catalog_manager(config: &AppConfig) -> Result<CatalogManager> {
         .iter()
         .map(|x| -> CatalogResult<(String, Arc<dyn CatalogProvider>)> {
             match x {
-                CatalogKind::Memory {
+                CatalogType::Memory {
                     name,
                     initial_database,
                     initial_database_comment,
