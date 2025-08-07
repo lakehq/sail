@@ -526,6 +526,7 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
             "Integer numbers's groupings do not match the integer format's groupings: {numbers} vs {format_numbers}"
         );
     }
+
     Ok(())
 }
 
