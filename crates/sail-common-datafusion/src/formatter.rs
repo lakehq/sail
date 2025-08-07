@@ -233,11 +233,7 @@ impl Display for IntervalYearMonthFormatter {
         let years = months / 12;
         let prepend = if years == 0 && months < 0 { "-" } else { "" };
         let months = (months % 12).abs();
-        if months == 0 {
-            write!(f, "INTERVAL '{prepend}{years}' YEAR")
-        } else {
-            write!(f, "INTERVAL '{prepend}{years}-{months}' YEAR TO MONTH")
-        }
+        write!(f, "INTERVAL '{prepend}{years}-{months}' YEAR TO MONTH")
     }
 }
 
