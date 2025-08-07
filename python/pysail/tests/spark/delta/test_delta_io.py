@@ -1,11 +1,9 @@
-import platform
-
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 
-from ..utils import assert_file_lifecycle, get_data_files, escape_sql_string_literal  # noqa: TID252
+from ..utils import assert_file_lifecycle, escape_sql_string_literal, get_data_files  # noqa: TID252
 
 
 class TestDeltaIO:
@@ -185,7 +183,9 @@ class TestDeltaIO:
         df = spark.createDataFrame(data)
         df.write.format("delta").mode("overwrite").save(str(delta_path))
 
-        spark.sql(f"CREATE OR REPLACE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'")
+        spark.sql(
+            f"CREATE OR REPLACE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'"
+        )
 
         try:
             new_data = [
