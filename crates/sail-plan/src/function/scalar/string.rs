@@ -7,7 +7,7 @@ use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::string::contains::ContainsFunc;
 use datafusion::functions_array::string::string_to_array;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, ExprSchemable, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::string::levenshtein::Levenshtein;
@@ -297,6 +297,31 @@ fn contains(str: expr::Expr, search_str: expr::Expr) -> expr::Expr {
     })
 }
 
+fn validate_utf8_or_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr> {
+    let arg = input.arguments.one()?;
+    let data_type = match arg.get_type(input.function_context.schema)? {
+        DataType::LargeBinary | DataType::LargeUtf8 => DataType::LargeUtf8,
+        _ => DataType::Utf8,
+    };
+    Ok(if is_try {
+        try_cast(arg, data_type)
+    } else {
+        cast(arg, data_type)
+    })
+}
+
+fn validate_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    validate_utf8_or_try(input, false)
+}
+
+fn try_validate_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    validate_utf8_or_try(input, true)
+}
+
+fn is_valid_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(try_validate_utf8(input)?.is_not_null())
+}
+
 pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -320,6 +345,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("format_string", F::unknown("format_string")),
         ("initcap", F::unary(expr_fn::initcap)),
         ("instr", F::binary(expr_fn::instr)),
+        ("is_valid_utf8", F::custom(is_valid_utf8)),
         ("lcase", F::unary(expr_fn::lower)),
         ("left", F::binary(expr_fn::left)),
         ("len", F::unary(expr_fn::length)),
@@ -375,9 +401,11 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
         ("try_to_number", F::unknown("try_to_number")),
+        ("try_validate_utf8", F::custom(try_validate_utf8)),
         ("ucase", F::unary(upper)),
         ("unbase64", F::udf(SparkUnbase64::new())),
         ("upper", F::unary(upper)),
+        ("validate_utf8", F::custom(validate_utf8)),
         ("strpos", F::binary(expr_fn::strpos)),
     ]
 }

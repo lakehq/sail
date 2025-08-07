@@ -78,11 +78,6 @@ pub enum ExecutionMode {
 pub struct RuntimeConfig {
     pub stack_size: usize,
     pub enable_secondary: bool,
-    pub list_files_cache: bool,
-    #[serde(deserialize_with = "deserialize_non_zero")]
-    pub list_files_cache_ttl: Option<u64>,
-    #[serde(deserialize_with = "deserialize_non_zero")]
-    pub list_files_cache_max_entries: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -170,6 +165,17 @@ mod retry_strategy {
 pub struct ExecutionConfig {
     pub batch_size: usize,
     pub collect_statistics: bool,
+    pub file_listing_cache: FileListingCacheConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileListingCacheConfig {
+    pub r#type: CacheType,
+    #[serde(deserialize_with = "deserialize_non_zero")]
+    pub ttl: Option<u64>,
+    #[serde(deserialize_with = "deserialize_non_zero")]
+    pub max_entries: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -218,11 +224,25 @@ pub struct ParquetConfig {
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
-    pub table_files_statistics_cache: bool,
+    pub file_statistics_cache: FileStatisticsCacheConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileStatisticsCacheConfig {
+    pub r#type: CacheType,
     #[serde(deserialize_with = "deserialize_non_zero")]
-    pub table_files_statistics_cache_ttl: Option<u64>,
+    pub ttl: Option<u64>,
     #[serde(deserialize_with = "deserialize_non_zero")]
-    pub table_files_statistics_cache_max_entries: Option<u64>,
+    pub max_entries: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheType {
+    None,
+    Global,
+    Session,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -231,13 +251,13 @@ pub struct CatalogConfig {
     pub default_catalog: String,
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
-    pub list: Vec<CatalogKind>,
+    pub list: Vec<CatalogType>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum CatalogKind {
+pub enum CatalogType {
     Memory {
         name: String,
         initial_database: Vec<String>,
