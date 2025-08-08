@@ -88,7 +88,7 @@ SELECT * FROM metrics WHERE year > 2024;
 ### Schema Evolution
 
 Delta Lake handles schema evolution gracefully.
-By default, if you try to write data with a different schema than the existing Delta table, an error will occur.
+By default, if you try to write data with a different schema than the one of the existing Delta table, an error will occur.
 You can enable schema evolution by setting the `mergeSchema` option to `true` when writing data.
 In this case, if you change the data type of an existing column to a compatible type, or add a new column, Delta Lake will automatically update the schema of the table.
 
@@ -97,7 +97,7 @@ df.write.format("delta").mode("append").option("mergeSchema", "true").save(path)
 ```
 
 You can also use the `overwriteSchema` option to overwrite the schema of an existing Delta table.
-But this works only if set the write mode to `overwrite`.
+But this works only if you set the write mode to `overwrite`.
 
 ```python
 df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(path)
