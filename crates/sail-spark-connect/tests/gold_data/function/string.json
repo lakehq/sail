@@ -1689,7 +1689,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: make_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -1711,7 +1711,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: make_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -1733,7 +1733,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: make_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -1755,7 +1755,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: make_valid_utf8"
+        "success": "ok"
       }
     },
     {

@@ -12,7 +12,7 @@ class TestDeltaDataSkipping:
     def test_delta_skipping_on_numeric_column(self, spark, tmp_path):
         """Test data skipping (file pruning) on a non-partitioned numeric column."""
         delta_path = tmp_path / "delta_data_skipping_numeric"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         df1 = spark.createDataFrame([Row(id=i, value=float(i)) for i in range(1, 11)])
         df1.write.format("delta").mode("overwrite").save(str(delta_path))
@@ -35,7 +35,7 @@ class TestDeltaDataSkipping:
     def test_delta_skipping_on_string_and_date(self, spark, tmp_path):
         """Test data skipping on string and date columns."""
         delta_path = tmp_path / "delta_data_skipping_str_date"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         df1_data = [Row(event_name=chr(65 + i), event_date=date(2023, 1, 1 + i)) for i in range(3)]
         spark.createDataFrame(df1_data).write.format("delta").mode("overwrite").save(str(delta_path))
@@ -59,7 +59,7 @@ class TestDeltaDataSkipping:
     def test_delta_skipping_with_null_counts(self, spark, tmp_path):
         """Test data skipping using null_count statistics for IS NULL and IS NOT NULL queries."""
         delta_path = tmp_path / "delta_data_skipping_null"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         df1_data = [Row(id=i, optional_col=f"value_{i}") for i in range(10)]
         spark.createDataFrame(df1_data).write.format("delta").mode("overwrite").save(str(delta_path))

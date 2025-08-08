@@ -23,7 +23,7 @@ class TestDeltaPartitioning:
     def test_delta_partitioning_by_single_column(self, spark, tmp_path):
         """Test Delta Lake partitioning functionality"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
         # Create partition data
         partition_data = [
             Row(id=1, event="A", year=2025, score=0.8),
@@ -71,7 +71,7 @@ class TestDeltaPartitioning:
 
     def test_delta_partitioning_creates_correct_directory_structure(self, spark, delta_test_data, tmp_path):
         delta_path = tmp_path / "partitioned_delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         df = spark.createDataFrame(delta_test_data)
 
@@ -116,7 +116,7 @@ class TestDeltaPartitioning:
 
         df.write.format("delta").mode("overwrite").partitionBy("region", "category").save(str(delta_path))
 
-        result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
+        result_df = spark.read.format("delta").load(f"{delta_path}").sort("id")
 
         expected_data = pd.DataFrame(
             {"id": [1, 2, 3, 4], "value": [100, 200, 300, 400], "region": [1, 1, 2, 2], "category": [1, 2, 1, 2]}
@@ -147,11 +147,11 @@ class TestDeltaPartitioning:
             actual_partitions == expected_partition_structure
         ), f"Expected {expected_partition_structure}, got {actual_partitions}"
 
-        df_region1 = spark.read.format("delta").load(f"file://{delta_path}").filter("region = 1")
+        df_region1 = spark.read.format("delta").load(f"{delta_path}").filter("region = 1")
         assert df_region1.count() == 2, "Region 1 should have 2 records"  # noqa: PLR2004
 
-        df_region2_cat2 = spark.read.format("delta").load(f"file://{delta_path}").filter("region = 2 AND category = 2")
+        df_region2_cat2 = spark.read.format("delta").load(f"{delta_path}").filter("region = 2 AND category = 2")
         assert df_region2_cat2.count() == 1, "Region 2, Category 2 should have 1 record"
 
-        df_region_ge2 = spark.read.format("delta").load(f"file://{delta_path}").filter("region >= 2")
+        df_region_ge2 = spark.read.format("delta").load(f"{delta_path}").filter("region >= 2")
         assert df_region_ge2.count() == 2, "Region >= 2 should have 2 records"  # noqa: PLR2004

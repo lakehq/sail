@@ -29,7 +29,7 @@ class TestDeltaWriteOptions:
             df.write.format("delta").mode("overwrite").option("write_batch_size", str(batch_size)).save(str(batch_path))
 
             # Read back and verify data integrity
-            result_df = spark.read.format("delta").load(f"file://{batch_path}").sort("id")
+            result_df = spark.read.format("delta").load(f"{batch_path}").sort("id")
             result_data = result_df.collect()
 
             # Verify all data is present and correct
@@ -67,7 +67,7 @@ class TestDeltaWriteOptions:
                 len(data_files) > 2  # noqa: PLR2004
             ), f"target_file_size ({file_size}) should create multiple output files, got {len(data_files)} files"
 
-            result_df = spark.read.format("delta").load(f"file://{size_path}").sort("id")
+            result_df = spark.read.format("delta").load(f"{size_path}").sort("id")
             result_data = result_df.collect()
 
             assert len(result_data) == 1000  # noqa: PLR2004
@@ -93,7 +93,7 @@ class TestDeltaWriteOptions:
         ).save(str(delta_path))
 
         # Read back and verify data integrity
-        result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
+        result_df = spark.read.format("delta").load(f"{delta_path}").sort("id")
         result_data = result_df.collect()
 
         # Verify all data is present and correct
@@ -125,7 +125,7 @@ class TestDeltaWriteOptions:
         ).partitionBy("category").save(str(delta_path))
 
         # Read back and verify data integrity
-        result_df = spark.read.format("delta").load(f"file://{delta_path}").sort("id")
+        result_df = spark.read.format("delta").load(f"{delta_path}").sort("id")
         result_data = result_df.collect()
 
         # Verify all data is present and correct
@@ -138,6 +138,6 @@ class TestDeltaWriteOptions:
         assert categories == {"cat_0", "cat_1", "cat_2"}
 
         # Test partition filtering
-        filtered_df = spark.read.format("delta").load(f"file://{delta_path}").filter("category = 'cat_0'")
+        filtered_df = spark.read.format("delta").load(f"{delta_path}").filter("category = 'cat_0'")
         filtered_data = filtered_df.collect()
         assert len(filtered_data) == 20  # 60 rows / 3 categories = 20 rows per category  # noqa: PLR2004

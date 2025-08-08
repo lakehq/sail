@@ -11,6 +11,7 @@ use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::string::levenshtein::Levenshtein;
+use crate::extension::function::string::make_valid_utf8::MakeValidUtf8;
 use crate::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
 use crate::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use crate::extension::function::string::spark_mask::SparkMask;
@@ -323,6 +324,13 @@ fn is_valid_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(try_validate_utf8(input)?.is_not_null())
 }
 
+fn make_valid_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(MakeValidUtf8::new())),
+        args: input.arguments.clone(),
+    }))
+}
+
 pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -360,6 +368,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
             F::var_arg(|args| expr_fn::ltrim(args.into_iter().rev().collect())),
         ),
         ("luhn_check", F::unknown("luhn_check")),
+        ("make_valid_utf8", F::custom(make_valid_utf8)),
         ("mask", F::udf(SparkMask::new())),
         ("octet_length", F::unary(octet_length)),
         ("overlay", F::custom(overlay)),
