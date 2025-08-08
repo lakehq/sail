@@ -12,7 +12,7 @@ class TestDeltaAdvancedFeatures:
     def test_delta_feature_time_travel(self, spark, tmp_path):
         """Test Delta Lake time travel functionality"""
         delta_path = tmp_path / "delta_table"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
         # Version 0: Initial data
         v0_data = [Row(id=1, value="v0")]
         df0 = spark.createDataFrame(v0_data)

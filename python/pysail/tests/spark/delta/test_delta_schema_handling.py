@@ -15,7 +15,7 @@ class TestDeltaSchemaHandling:
         from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
         delta_path = tmp_path / "delta_custom_schema"
-        delta_table_path = f"file://{delta_path}"
+        delta_table_path = f"{delta_path}"
 
         schema = StructType(
             [
