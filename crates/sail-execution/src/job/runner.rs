@@ -11,6 +11,13 @@ use tokio::sync::oneshot;
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
 use crate::error::{ExecutionError, ExecutionResult};
 
+// CHECK HERE DO NOT MERGE IF THIS FEATURE FLAG IS STILL HERE
+pub static RUNNER_EXECUTE_FN_HANDLE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    std::env::var("SAIL_RUNNER_EXECUTE_FN_HANDLE")
+        .map(|v| v.to_lowercase())
+        .unwrap_or_else(|_| "default".to_string())
+});
+
 #[tonic::async_trait]
 pub trait JobRunner: Send + Sync + 'static {
     async fn execute(
@@ -50,20 +57,44 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
-        // Ok(execute_stream(plan, ctx.task_ctx())?)
-        let task_ctx = ctx.task_ctx();
-        let handle = self.runtime.cpu().clone();
-        let result = handle
-            .spawn(async move {
-                let result = execute_stream(plan, task_ctx)?;
-                Ok(result)
-            })
-            .await
-            .map_err(|e| {
-                ExecutionError::InternalError(format!("failed to execute on CPU runtime: {e}"))
-            })?;
 
-        result
+        match RUNNER_EXECUTE_FN_HANDLE.to_lowercase().as_str() {
+            "primary" => {
+                let task_ctx = ctx.task_ctx();
+                let handle = self.runtime.primary().clone();
+                handle
+                    .spawn(async move {
+                        let result = execute_stream(plan, task_ctx)?;
+                        Ok(result)
+                    })
+                    .await
+                    .map_err(|e| {
+                        ExecutionError::InternalError(format!(
+                            "failed to execute on CPU runtime: {e}"
+                        ))
+                    })?
+            }
+            "cpu" => {
+                let task_ctx = ctx.task_ctx();
+                let handle = self.runtime.cpu().clone();
+                handle
+                    .spawn(async move {
+                        let result = execute_stream(plan, task_ctx)?;
+                        Ok(result)
+                    })
+                    .await
+                    .map_err(|e| {
+                        ExecutionError::InternalError(format!(
+                            "failed to execute on CPU runtime: {e}"
+                        ))
+                    })?
+            }
+            "default" => Ok(execute_stream(plan, ctx.task_ctx())?),
+            other => {
+                log::warn!("Unsupported runner execute function handle: {other}, using default",);
+                Ok(execute_stream(plan, ctx.task_ctx())?)
+            }
+        }
     }
 
     async fn stop(&self) {
