@@ -11,6 +11,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::Expr;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
@@ -143,7 +144,7 @@ pub fn get_partition_columns_and_file_schema(
 }
 
 /// Options that control the behavior of Delta Lake tables.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct TableDeltaOptions {
     pub replace_where: Option<String>,
     pub merge_schema: bool,

@@ -5628,32 +5628,23 @@ dependencies = [
 name = "sail-delta-lake"
 version = "0.3.2"
 dependencies = [
- "arrow-buffer",
  "arrow-schema",
  "async-trait",
  "bytes",
  "chrono",
- "dashmap",
  "datafusion",
  "datafusion-common",
- "datafusion-execution",
- "datafusion-expr",
- "datafusion-physical-optimizer",
  "delta_kernel",
  "deltalake",
- "either",
  "futures",
  "indexmap 2.10.0",
- "itertools 0.14.0",
  "log",
  "object_store",
  "parquet",
- "percent-encoding",
  "sail-common",
  "sail-common-datafusion",
  "serde",
  "serde_json",
- "thiserror 2.0.12",
  "tokio",
  "url",
  "uuid",
@@ -5677,6 +5668,7 @@ dependencies = [
  "rand 0.9.2",
  "sail-common",
  "sail-common-datafusion",
+ "sail-delta-lake",
  "sail-object-store",
  "sail-plan",
  "sail-python-udf",
@@ -5687,6 +5679,7 @@ dependencies = [
  "tonic 0.12.3",
  "tonic-build",
  "tonic-types",
+ "url",
 ]
 
 [[package]]
