@@ -9,10 +9,10 @@ next: false
 
 _August 8, 2025_
 
-- Added support for reading and writing Delta Lake tables ([#578](https://github.com/lakehq/sail/pull/578), [#634](https://github.com/lakehq/sail/pull/634), [#677](https://github.com/lakehq/sail/pull/677), and [#680](https://github.com/lakehq/sail/pull/680))
+- Added support for reading and writing Delta Lake tables ([#578](https://github.com/lakehq/sail/pull/578), [#634](https://github.com/lakehq/sail/pull/634), [#677](https://github.com/lakehq/sail/pull/677), [#680](https://github.com/lakehq/sail/pull/680), [#716](https://github.com/lakehq/sail/issues/716), and [#717](https://github.com/lakehq/sail/pull/717))
 - Added support for Azure storage services and Google Cloud Storage (GCS), and improved support for S3 ([#616](https://github.com/lakehq/sail/pull/616) and [#706](https://github.com/lakehq/sail/pull/706))
 - Added support for file listing cache and file statistics cache ([#709](https://github.com/lakehq/sail/pull/709) and [#712](https://github.com/lakehq/sail/pull/712))
-- Added support for the following SQL functions and operators ([#529](https://github.com/lakehq/sail/pull/529), [#580](https://github.com/lakehq/sail/pull/580), [#633](https://github.com/lakehq/sail/pull/633), [#645](https://github.com/lakehq/sail/pull/645), [#638](https://github.com/lakehq/sail/pull/638), [#654](https://github.com/lakehq/sail/pull/654), [#539](https://github.com/lakehq/sail/pull/539), [#661](https://github.com/lakehq/sail/pull/661), [#629](https://github.com/lakehq/sail/pull/629), [#676](https://github.com/lakehq/sail/pull/676), [#672](https://github.com/lakehq/sail/pull/672), [#635](https://github.com/lakehq/sail/pull/635), [#683](https://github.com/lakehq/sail/pull/683), [#702](https://github.com/lakehq/sail/pull/702), [#698](https://github.com/lakehq/sail/pull/698), [#708](https://github.com/lakehq/sail/pull/708), and [#713](https://github.com/lakehq/sail/pull/713)):
+- Added support for the following SQL functions and operators ([#529](https://github.com/lakehq/sail/pull/529), [#580](https://github.com/lakehq/sail/pull/580), [#633](https://github.com/lakehq/sail/pull/633), [#645](https://github.com/lakehq/sail/pull/645), [#638](https://github.com/lakehq/sail/pull/638), [#654](https://github.com/lakehq/sail/pull/654), [#539](https://github.com/lakehq/sail/pull/539), [#661](https://github.com/lakehq/sail/pull/661), [#629](https://github.com/lakehq/sail/pull/629), [#676](https://github.com/lakehq/sail/pull/676), [#672](https://github.com/lakehq/sail/pull/672), [#635](https://github.com/lakehq/sail/pull/635), [#683](https://github.com/lakehq/sail/pull/683), [#702](https://github.com/lakehq/sail/pull/702), [#698](https://github.com/lakehq/sail/pull/698), [#708](https://github.com/lakehq/sail/pull/708), [#713](https://github.com/lakehq/sail/pull/713), and [#719](https://github.com/lakehq/sail/issues/719)):
   - `from_csv`
   - `bround`
   - `conv`
@@ -44,6 +44,7 @@ _August 8, 2025_
   - `is_valid_utf8`
   - `try_validate_utf8`
   - `validate_utf8`
+  - `make_valid_utf8`
 - Added support for the `Column.try_cast()` method in the Spark DataFrame API ([#694](https://github.com/lakehq/sail/pull/694))
 - Improved the following SQL functions ([#609](https://github.com/lakehq/sail/pull/609), [#613](https://github.com/lakehq/sail/pull/613), [#619](https://github.com/lakehq/sail/pull/619), [#621](https://github.com/lakehq/sail/pull/621), [#623](https://github.com/lakehq/sail/pull/623), [#617](https://github.com/lakehq/sail/pull/617), [#640](https://github.com/lakehq/sail/pull/640), [#644](https://github.com/lakehq/sail/pull/644), [#642](https://github.com/lakehq/sail/pull/642), [#643](https://github.com/lakehq/sail/pull/643), [#647](https://github.com/lakehq/sail/pull/647), [#660](https://github.com/lakehq/sail/pull/660), [#666](https://github.com/lakehq/sail/pull/666), [#674](https://github.com/lakehq/sail/pull/674), and [#701](https://github.com/lakehq/sail/pull/701)):
   - `date_part`
