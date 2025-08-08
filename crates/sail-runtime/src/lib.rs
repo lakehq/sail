@@ -13,7 +13,7 @@ pub struct RuntimeManager {
 
 impl RuntimeManager {
     pub fn try_new(config: &RuntimeConfig, name: &str) -> RuntimeResult<Self> {
-        let primary = Self::build_primary_untime(config.stack_size, name)?;
+        let primary = Self::build_primary_runtime(config.stack_size, name)?;
         let cpu = Self::build_cpu_runtime(config.stack_size, name)?;
         Ok(Self { primary, cpu })
     }
