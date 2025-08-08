@@ -65,7 +65,7 @@ The `DESCRIBE QUERY` statement is not supported yet.
 | ----------------------------------- | ------------------ |
 | `INSERT INTO <table>`               | :white_check_mark: |
 | `INSERT OVERWRITE <table>`          | :construction:     |
-| `INSERT OVERWRITE DIRECTORY <path>` | :white_check_mark: |
+| `INSERT OVERWRITE DIRECTORY <path>` | :construction:     |
 | `LOAD DATA`                         | :construction:     |
 
 ### Catalog Management
