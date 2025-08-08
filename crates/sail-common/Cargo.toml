@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 # Ideally we should use the re-exported version of Arrow in DataFusion,
 # but here we depend on the Arrow crates directly so that this crate can be built without DataFusion.
+arrow = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 thiserror = { workspace = true }

@@ -56,8 +56,8 @@ use sail_plan::extension::function::bitmap_count::BitmapCount;
 use sail_plan::extension::function::collection::spark_concat::SparkConcat;
 use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
 use sail_plan::extension::function::csv::spark_from_csv::SparkFromCSV;
+use sail_plan::extension::function::datetime::convert_tz::ConvertTz;
 use sail_plan::extension::function::datetime::spark_date::SparkDate;
-use sail_plan::extension::function::datetime::spark_from_to_utc_timestamp::SparkFromToUtcTimestamp;
 use sail_plan::extension::function::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
@@ -805,15 +805,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkTimestamp::try_new(timezone.map(Arc::from))?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkFromToUtcTimestamp(gen::SparkFromToUtcTimestampUdf {
-                time_unit,
-                is_to,
-            }) => {
-                let time_unit = gen_datafusion_common::TimeUnit::from_str_name(time_unit.as_str())
-                    .ok_or_else(|| plan_datafusion_err!("invalid time unit: {time_unit}"))?;
-                let udf = SparkFromToUtcTimestamp::new(time_unit.into(), is_to);
-                return Ok(Arc::new(ScalarUDF::from(udf)));
-            }
         };
         match name {
             "array_item_with_position" => {
@@ -824,6 +815,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "arrays_zip" => Ok(Arc::new(ScalarUDF::from(ArraysZip::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
+            "convert_tz" => Ok(Arc::new(ScalarUDF::from(ConvertTz::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(Greatest::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(Least::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
@@ -935,6 +927,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ArrayMax>()
             || node.inner().as_any().is::<ArraysZip>()
             || node.inner().as_any().is::<BitmapCount>()
+            || node.inner().as_any().is::<ConvertTz>()
             || node.inner().as_any().is::<Greatest>()
             || node.inner().as_any().is::<Least>()
             || node.inner().as_any().is::<Levenshtein>()
@@ -1078,17 +1071,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkTimestamp>() {
             let timezone = func.timezone().map(|x| x.to_string());
             UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone })
-        } else if let Some(func) = node
-            .inner()
-            .as_any()
-            .downcast_ref::<SparkFromToUtcTimestamp>()
-        {
-            let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
-            let time_unit = time_unit.as_str_name().to_string();
-            UdfKind::SparkFromToUtcTimestamp(gen::SparkFromToUtcTimestampUdf {
-                time_unit,
-                is_to: func.is_to(),
-            })
         } else {
             return Ok(());
         };
