@@ -4,7 +4,14 @@ use log::error;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 
-const ACTOR_CHANNEL_SIZE: usize = 8;
+// const ACTOR_CHANNEL_SIZE: usize = 8;
+// CHECK HERE DO NOT MERGE IF THIS FEATURE FLAG IS STILL HERE
+static ACTOR_CHANNEL_SIZE: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+    std::env::var("SAIL_ACTOR_CHANNEL_SIZE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8)
+});
 
 #[tonic::async_trait]
 pub trait Actor: Sized + Send + 'static {
@@ -123,7 +130,7 @@ impl ActorSystem {
     }
 
     pub fn spawn<T: Actor>(&mut self, options: T::Options) -> ActorHandle<T> {
-        let (tx, rx) = mpsc::channel(ACTOR_CHANNEL_SIZE);
+        let (tx, rx) = mpsc::channel(*ACTOR_CHANNEL_SIZE);
         let handle = ActorHandle { sender: tx };
         let runner = ActorRunner {
             actor: T::new(options),
