@@ -10,11 +10,12 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
     ArrowSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
 };
+use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
-use datafusion::physical_expr::LexOrdering;
+use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -36,12 +37,14 @@ use datafusion_proto::physical_plan::to_proto::{
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
+    PhysicalSortExprNodeCollection,
 };
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
+use sail_delta_lake::delta_format::DeltaDataSink;
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
 use sail_plan::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
@@ -129,13 +132,14 @@ use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapI
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
+use url::Url;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::{
-    ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
+    DeltaSink, ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
 use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::reader::TaskReadLocation;
@@ -422,6 +426,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     null_equality,
                 )?))
             }
+            NodeKind::DeltaSink(gen::DeltaSinkExecNode {
+                input,
+                sink,
+                sink_schema,
+                sort_order,
+            }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                let sink = if let Some(sink) = sink {
+                    self.try_decode_delta_sink(sink)?
+                } else {
+                    return plan_err!("no DeltaSink found");
+                };
+                let sink_schema = self.try_decode_schema(&sink_schema)?;
+                let sort_order = sort_order
+                    .map(|x| self.try_decode_lex_requirement(&x, registry, &sink_schema))
+                    .transpose()?
+                    .flatten();
+                Ok(Arc::new(DataSinkExec::new(
+                    input,
+                    Arc::new(sink),
+                    sort_order,
+                )))
+            }
             // TODO: StreamingTableExec?
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
@@ -630,6 +657,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 })
             } else {
                 return plan_err!("unsupported data source node: {data_source:?}");
+            }
+        } else if let Some(data_sink) = node.as_any().downcast_ref::<DataSinkExec>() {
+            let input = self.try_encode_plan(data_sink.input().clone())?;
+            let sort_order = data_sink
+                .sort_order()
+                .as_ref()
+                .map(|x| self.try_encode_lex_requirement(x))
+                .transpose()?;
+            let sink_schema = self.try_encode_schema(&data_sink.schema())?;
+            if let Some(sink) = data_sink.sink().as_any().downcast_ref::<DeltaDataSink>() {
+                let sink = self.try_encode_delta_sink(sink)?;
+                NodeKind::DeltaSink(gen::DeltaSinkExecNode {
+                    input,
+                    sink: Some(sink),
+                    sink_schema,
+                    sort_order,
+                })
+            } else {
+                return plan_err!("unsupported data sink: {data_sink:?}");
             }
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
@@ -1215,6 +1261,47 @@ impl RemoteExecutionCodec {
         Self { context }
     }
 
+    fn try_decode_delta_sink(&self, sink: DeltaSink) -> Result<DeltaDataSink> {
+        let table_url = Url::parse(&sink.table_url)
+            .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+        let options =
+            serde_json::from_str(&sink.options).map_err(|e| plan_datafusion_err!("{e}"))?;
+        let schema = self.try_decode_schema(&sink.schema)?;
+        let initial_actions =
+            serde_json::from_str(&sink.initial_actions).map_err(|e| plan_datafusion_err!("{e}"))?;
+        let operation = match sink.operation {
+            Some(op) => Some(serde_json::from_str(&op).map_err(|e| plan_datafusion_err!("{e}"))?),
+            None => None,
+        };
+        Ok(DeltaDataSink::new(
+            table_url,
+            options,
+            Arc::new(schema),
+            sink.partition_columns,
+            initial_actions,
+            operation,
+            sink.table_exists,
+        ))
+    }
+
+    fn try_encode_delta_sink(&self, sink: &DeltaDataSink) -> Result<DeltaSink> {
+        Ok(DeltaSink {
+            table_url: sink.table_url().to_string(),
+            options: serde_json::to_string(sink.options())
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            schema: self.try_encode_schema(sink.schema())?,
+            partition_columns: sink.partition_columns().to_vec(),
+            initial_actions: serde_json::to_string(sink.initial_actions())
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            operation: sink
+                .operation()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            table_exists: sink.table_exists(),
+        })
+    }
+
     fn try_decode_stream_udf(&self, udf: ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
         let ExtendedStreamUdf { stream_udf_kind } = udf;
         let stream_udf_kind = match stream_udf_kind {
@@ -1335,6 +1422,40 @@ impl RemoteExecutionCodec {
         };
         Ok(ExtendedStreamUdf {
             stream_udf_kind: Some(stream_udf_kind),
+        })
+    }
+
+    fn try_decode_lex_requirement(
+        &self,
+        buf: &[u8],
+        registry: &dyn FunctionRegistry,
+        schema: &Schema,
+    ) -> Result<Option<LexRequirement>> {
+        let collection: PhysicalSortExprNodeCollection = self.try_decode_message(buf)?;
+        let exprs = parse_physical_sort_exprs(
+            &collection.physical_sort_expr_nodes,
+            registry,
+            schema,
+            self,
+        )?;
+        Ok(LexRequirement::new(exprs.into_iter().map(Into::into)))
+    }
+
+    fn try_encode_lex_requirement(&self, lex_requirement: &LexRequirement) -> Result<Vec<u8>> {
+        let expr = lex_requirement
+            .iter()
+            .map(|requirement| {
+                let expr: PhysicalSortExpr = requirement.to_owned().into();
+                let sort_expr = PhysicalSortExprNode {
+                    expr: Some(Box::new(serialize_physical_expr(&expr.expr, self)?)),
+                    asc: !expr.options.descending,
+                    nulls_first: expr.options.nulls_first,
+                };
+                Ok(sort_expr)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.try_encode_message(PhysicalSortExprNodeCollection {
+            physical_sort_expr_nodes: expr,
         })
     }
 
