@@ -25,7 +25,7 @@ impl RuntimeManager {
         RuntimeHandle { primary, cpu }
     }
 
-    fn build_primary_untime(stack_size: usize, name: &str) -> RuntimeResult<Runtime> {
+    fn build_primary_runtime(stack_size: usize, name: &str) -> RuntimeResult<Runtime> {
         tokio::runtime::Builder::new_multi_thread()
             .thread_name(format!("Primary-{name}"))
             .thread_stack_size(stack_size)

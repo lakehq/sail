@@ -4,12 +4,6 @@ use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 
-use crate::error::{SparkError, SparkResult};
-use crate::schema::to_spark_schema;
-use crate::spark::connect::execute_plan_response::{
-    ArrowBatch, Metrics, ObservedMetrics, SqlCommandResult,
-};
-use crate::spark::connect::DataType;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
@@ -19,6 +13,13 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
+
+use crate::error::{SparkError, SparkResult};
+use crate::schema::to_spark_schema;
+use crate::spark::connect::execute_plan_response::{
+    ArrowBatch, Metrics, ObservedMetrics, SqlCommandResult,
+};
+use crate::spark::connect::DataType;
 
 // CHECK HERE DO NOT MERGE IF THIS FEATURE FLAG IS STILL HERE
 pub static EXECUTOR_START_FN_HANDLE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {

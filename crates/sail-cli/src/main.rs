@@ -1,8 +1,9 @@
+use std::ffi::NulError;
+use std::str::FromStr;
+
 use pyo3::ffi::{PyUnicode_AsWideCharString, PyUnicode_FromString, Py_Main};
 use sail_common::config::{CliConfig, CliConfigEnv};
 use sail_common::error::CommonError;
-use std::ffi::NulError;
-use std::str::FromStr;
 
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
