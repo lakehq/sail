@@ -4,7 +4,6 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-# Core sail dependencies
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 
@@ -12,21 +11,14 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 deltalake = { workspace = true }
 delta_kernel = { workspace = true }
 
-dashmap = { workspace = true }
-
 # DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
-datafusion-expr = { workspace = true }
-datafusion-execution = { workspace = true }
-datafusion-physical-optimizer = { workspace = true }
 
 # Arrow dependencies
-arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 
 # Essential utilities
-thiserror = { workspace = true }
 async-trait = { workspace = true }
 object_store = { workspace = true }
 chrono = { workspace = true }
@@ -34,14 +26,11 @@ serde_json = { workspace = true }
 url = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-either.workspace = true
-itertools = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 parquet = { workspace = true }
 bytes = { workspace = true }
 indexmap = { workspace = true }
-percent-encoding = { workspace = true }
 log = { workspace = true }
 
 [lints]
