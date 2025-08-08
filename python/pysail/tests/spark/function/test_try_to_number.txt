@@ -125,11 +125,11 @@
 +------+------------+
 
 >>> spark.sql("SELECT try_to_number('-$123,456.32', 'S$999,999.999999PR') AS result, typeof(try_to_number('-$123,456.32', 'S$999,999.999999PR')) AS type").show(truncate=False)
-+------+-------------+
-|result|type         |
-+------+-------------+
-|NULL  |decimal(12,6)|
-+------+-------------+
++--------------+-------------+
+|result        |type         |
++--------------+-------------+
+|-123456.320000|decimal(12,6)|
++--------------+-------------+
 
 >>> spark.sql("SELECT try_to_number('-123,456.32-', 'MI$999,999.99S') AS result, typeof(try_to_number('-123,456.32-', 'MI$999,999.99S')) AS type").show(truncate=False)
 +------+------------+
