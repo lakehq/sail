@@ -7,7 +7,7 @@ use log::info;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeManager;
+use sail_runtime::RuntimeManager;
 use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
 use sail_telemetry::telemetry::init_telemetry;
 use tokio::net::TcpListener;
@@ -57,9 +57,10 @@ impl SparkConnectServer {
         let config = AppConfig::load().map_err(|e| {
             PyErr::new::<PyRuntimeError, _>(format!("failed to load the application config: {e}"))
         })?;
-        let runtime = RuntimeManager::try_new(&config.runtime).map_err(|e| {
-            PyErr::new::<PyRuntimeError, _>(format!("failed to create the runtime: {e}"))
-        })?;
+        let runtime =
+            RuntimeManager::try_new(&config.runtime, "Python Spark Connect").map_err(|e| {
+                PyErr::new::<PyRuntimeError, _>(format!("failed to create the runtime: {e}"))
+            })?;
         Ok(Self {
             ip: ip.to_string(),
             port,

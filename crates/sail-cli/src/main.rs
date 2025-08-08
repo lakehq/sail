@@ -1,4 +1,5 @@
 use std::ffi::NulError;
+use std::str::FromStr;
 
 use pyo3::ffi::{PyUnicode_AsWideCharString, PyUnicode_FromString, Py_Main};
 use sail_common::config::{CliConfig, CliConfigEnv};
@@ -8,7 +9,17 @@ use sail_common::error::CommonError;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+// CHECK HERE DO NOT MERGE IF THIS FEATURE FLAG IS STILL HERE
+pub static USE_CONSOLE_SUBSCRIBER: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    std::env::var("SAIL_USE_CONSOLE_SUBSCRIBER").is_ok_and(|v| bool::from_str(&v).unwrap_or(false))
+});
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if *USE_CONSOLE_SUBSCRIBER {
+        log::info!("[sail_cli::main] Initializing console subscriber for logging");
+        console_subscriber::init();
+    }
+
     if rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .is_err()

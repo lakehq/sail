@@ -14,7 +14,6 @@ use log::{debug, info};
 use sail_cache::file_listing_cache::MokaFileListingCache;
 use sail_cache::file_statistics_cache::MokaFileStatisticsCache;
 use sail_common::config::{AppConfig, CacheType, ExecutionMode};
-use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
@@ -25,6 +24,7 @@ use sail_plan::function::{
     BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
 };
 use sail_plan::new_query_planner;
+use sail_runtime::RuntimeHandle;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use sail_session::catalog::create_catalog_manager;
 use tokio::sync::oneshot;
@@ -94,7 +94,7 @@ impl SessionManagerActor {
     ) -> SparkResult<SessionContext> {
         let options = &self.options;
         let job_runner: Box<dyn JobRunner> = match options.config.mode {
-            ExecutionMode::Local => Box::new(LocalJobRunner::new()),
+            ExecutionMode::Local => Box::new(LocalJobRunner::new(options.runtime.clone())),
             ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
                 let options = DriverOptions::try_new(&options.config, options.runtime.clone())?;
                 let mut system = system.lock()?;

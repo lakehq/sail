@@ -7,10 +7,10 @@ mod tests {
     use datafusion::arrow::error::ArrowError;
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
     use sail_common::config::AppConfig;
-    use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_plan::resolve_and_execute_plan;
+    use sail_runtime::RuntimeManager;
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
@@ -54,7 +54,7 @@ mod tests {
     #[test]
     fn test_sql_function() -> Result<(), Box<dyn std::error::Error>> {
         let config = Arc::new(AppConfig::load()?);
-        let runtime = RuntimeManager::try_new(&config.runtime)?;
+        let runtime = RuntimeManager::try_new(&config.runtime, "test")?;
         let handle = runtime.handle();
         let options = SessionManagerOptions {
             config,
@@ -93,7 +93,7 @@ mod tests {
                     let plan =
                         resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
                     let stream = spark.job_runner().execute(&context, plan).await?;
-                    read_stream(stream).await
+                    read_stream(stream, &handle).await
                 });
                 // TODO: validate the result against the expected output
                 // TODO: handle non-deterministic results and error messages
