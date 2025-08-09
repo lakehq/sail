@@ -276,7 +276,8 @@ jobs:
         # We do not have this issue when building wheels since the temporary directory
         # in that case is much shorter than the temporary directory created by pip.
         run: |
-          if [[ "${TEST_SDIST_RUNS_ON}" =~ "^windows-" ]]; then
+          if [[ "${TEST_SDIST_RUNS_ON}" == windows-* ]]; then
+            echo 'Setting temporary directory to a shorter path on Windows...'
             mkdir -p 'C:\Temp'
             export TEMP='C:\Temp'
           fi

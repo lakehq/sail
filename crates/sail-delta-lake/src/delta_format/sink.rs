@@ -66,6 +66,34 @@ impl DeltaDataSink {
         }
     }
 
+    pub fn table_url(&self) -> &Url {
+        &self.table_url
+    }
+
+    pub fn options(&self) -> &TableDeltaOptions {
+        &self.options
+    }
+
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    pub fn partition_columns(&self) -> &[String] {
+        &self.partition_columns
+    }
+
+    pub fn initial_actions(&self) -> &[Action] {
+        &self.initial_actions
+    }
+
+    pub fn operation(&self) -> Option<&DeltaOperation> {
+        self.operation.as_ref()
+    }
+
+    pub fn table_exists(&self) -> bool {
+        self.table_exists
+    }
+
     /// Get object store from TaskContext
     fn get_object_store(
         &self,
@@ -357,12 +385,6 @@ impl DataSink for DeltaDataSink {
 
         let storage_config = StorageConfig::default();
         let object_store = self.get_object_store(context)?;
-
-        use crate::delta_datafusion::create_object_store_url;
-        let object_store_url = create_object_store_url(&self.table_url);
-        context
-            .runtime_env()
-            .register_object_store(object_store_url.as_ref(), object_store.clone());
 
         let table = if self.table_exists {
             open_table_with_object_store(

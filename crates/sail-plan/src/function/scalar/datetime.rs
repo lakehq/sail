@@ -9,8 +9,8 @@ use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, BinaryExpr, Operator, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::datetime::convert_tz::ConvertTz;
 use crate::extension::function::datetime::spark_date_part::SparkDatePart;
-use crate::extension::function::datetime::spark_from_to_utc_timestamp::SparkFromToUtcTimestamp;
 use crate::extension::function::datetime::spark_last_day::SparkLastDay;
 use crate::extension::function::datetime::spark_make_interval::SparkMakeInterval;
 use crate::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
@@ -160,18 +160,18 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
     })
 }
 
+fn session_timezone(input: &ScalarFunctionInput) -> Expr {
+    lit(input
+        .function_context
+        .plan_config
+        .session_timezone
+        .to_string())
+}
+
 fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let session_tz = session_timezone(&input);
     input.arguments.zero()?;
-    Ok(Expr::Literal(
-        ScalarValue::Utf8(Some(
-            input
-                .function_context
-                .plan_config
-                .session_timezone
-                .to_string(),
-        )),
-        None,
-    ))
+    Ok(session_tz)
 }
 
 fn to_chrono_fmt(format: Expr) -> PlanResult<Expr> {
@@ -333,14 +333,40 @@ fn current_localtimestamp_microseconds(input: ScalarFunctionInput) -> PlanResult
     Ok(expr_fn::to_local_time(vec![expr]))
 }
 
-fn from_to_utc_timestamp(timestamp: Expr, timezone: Expr, is_to: bool) -> Expr {
+fn convert_tz(from_tz: Expr, to_tz: Expr, ts: Expr) -> Expr {
     Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(SparkFromToUtcTimestamp::new(
-            TimeUnit::Microsecond,
-            is_to,
-        ))),
-        args: vec![timestamp, timezone],
+        func: Arc::new(ScalarUDF::from(ConvertTz::new())),
+        args: vec![from_tz, to_tz, ts],
     })
+}
+
+fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let session_tz = session_timezone(&input);
+    let args = input.arguments;
+    let (from_tz, to_tz, ts) = match args.len() {
+        3 => Ok(args.three()?),
+        2 => {
+            let (to_tz, ts) = args.two()?;
+            Ok((session_tz, to_tz, ts))
+        }
+        _ => Err(PlanError::invalid(format!(
+            "convert_timezone takes 2 or three arguments, got {:?}",
+            args
+        ))),
+    }?;
+    Ok(convert_tz(from_tz, to_tz, ts))
+}
+
+fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let session_tz = session_timezone(&input);
+    let (ts, to_tz) = input.arguments.two()?;
+    Ok(convert_tz(session_tz, to_tz, ts))
+}
+
+fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let session_tz = session_timezone(&input);
+    let (ts, from_tz) = input.arguments.two()?;
+    Ok(convert_tz(from_tz, session_tz, ts))
 }
 
 fn make_ym_interval(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -362,9 +388,20 @@ fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
             args: input.arguments,
         }))
     } else if input.arguments.len() == 7 {
-        Err(PlanError::todo(
-            "make_timestamp with timezone is not yet implemented",
-        ))
+        let session_tz = session_timezone(&input);
+        let mut args = input.arguments;
+        let from_tz = args.pop().ok_or_else(|| {
+            PlanError::invalid(
+                "make_timestamp: empty args array with len = 7, should be unreachable",
+            )
+        })?;
+
+        let ntz_ts = Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())),
+            args,
+        });
+
+        Ok(convert_tz(from_tz, session_tz, ntz_ts))
     } else {
         Err(PlanError::invalid(format!(
             "make_timestamp requires 6 or 7 arguments, got {:?}",
@@ -396,7 +433,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "add_days",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
         ),
-        ("convert_timezone", F::unknown("convert_timezone")),
+        ("convert_timezone", F::custom(convert_timezone)),
         ("curdate", F::nullary(expr_fn::current_date)),
         ("current_date", F::nullary(expr_fn::current_date)),
         (
@@ -439,10 +476,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("dayofyear", F::unary(|arg| integer_part(arg, "DOY"))),
         ("extract", F::binary(date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
-        (
-            "from_utc_timestamp",
-            F::binary(|ts, tz| from_to_utc_timestamp(ts, tz, false)),
-        ),
+        ("from_utc_timestamp", F::custom(from_utc_timestamp)),
         ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),
         ("last_day", F::udf(SparkLastDay::new())),
         (
@@ -453,7 +487,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("make_dt_interval", F::unknown("make_dt_interval")),
         ("make_interval", F::udf(SparkMakeInterval::new())),
         ("make_timestamp", F::custom(make_timestamp)),
-        ("make_timestamp_ltz", F::unknown("make_timestamp_ltz")),
+        ("make_timestamp_ltz", F::custom(make_timestamp)),
         ("make_timestamp_ntz", F::udf(SparkMakeTimestampNtz::new())),
         ("make_ym_interval", F::custom(make_ym_interval)),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
@@ -502,10 +536,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("to_timestamp_ltz", F::custom(to_timestamp)),
         ("to_timestamp_ntz", F::custom(to_timestamp)),
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
-        (
-            "to_utc_timestamp",
-            F::binary(|ts, tz| from_to_utc_timestamp(ts, tz, true)),
-        ),
+        ("to_utc_timestamp", F::custom(to_utc_timestamp)),
         ("trunc", F::custom(trunc)),
         ("try_to_timestamp", F::custom(try_to_timestamp)),
         (
