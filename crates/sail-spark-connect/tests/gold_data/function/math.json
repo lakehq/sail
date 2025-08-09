@@ -2263,7 +2263,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_mod"
+        "success": "ok"
       }
     },
     {
@@ -2285,7 +2285,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_mod"
+        "success": "ok"
       }
     },
     {
@@ -2307,7 +2307,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_mod"
+        "success": "ok"
       }
     },
     {
@@ -2329,7 +2329,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_mod"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'try_mod' user-defined coercion failed with \"Execution error: Unsupported Data Type: Spark `spark_try_mod` function expects Int32 o Int64, got Decimal128(2, 1), Decimal128(2, 1)\" No function matches the given name and argument types 'try_mod(Decimal128(2, 1), Decimal128(2, 1))'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttry_mod(UserDefined)"
       }
     },
     {
