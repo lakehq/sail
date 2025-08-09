@@ -1,5 +1,6 @@
 use core::any::type_name;
 use std::any::Any;
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -284,6 +285,7 @@ pub fn parse_number(
 
     // Matching the raw value pattern weather it's correct or not is not
     let value_captures: Captures = match_regex(value, value_regex)?;
+    match_angled_condition(value)?;
     let factor: i8 = get_sign_factor(&value_captures);
 
     // Check if the numbers groupings match the format
@@ -396,7 +398,7 @@ impl Display for PatternExpression {
             }
             PatternExpression::Currency(currency) => write!(f, "(?<currency>[{currency}])"),
             PatternExpression::Brackets(expr) => {
-                write!(f, "(?<angled_left>[<]){expr}(?<angled_right>[>])")
+                write!(f, "(?<angled_left>[<])?{expr}(?<angled_right>[>])?")
             }
             PatternExpression::Number => write!(f, "(?<numbers>[0-9,G]+)"),
             PatternExpression::Dot(dot) => write!(f, "(?<dot>[{dot}])?"),
@@ -482,13 +484,13 @@ pub fn handle_currency(
 // ****************************************************************************
 
 /// Extracts the positions of grouping characters in a numeric string.
-fn get_grouping_positions(numbers: &str) -> Vec<(usize, char)> {
+fn get_grouping_positions(numbers: &str) -> HashSet<(usize, char)> {
     numbers
         .chars()
         .rev()
         .enumerate()
         .filter(|(_, c)| *c == ',' || *c == 'G')
-        .collect::<Vec<_>>()
+        .collect::<HashSet<_>>()
 }
 
 /// Computes the sign factor based on captured sign information.
@@ -501,6 +503,15 @@ fn get_sign_factor(captures: &Captures) -> i8 {
     angle_factor * sign_left_factor * sign_right_factor
 }
 
+/// Validates the angled brackets in the format string
+fn match_angled_condition(value: &str) -> Result<()> {
+    let cond =
+        value.contains("<") && value.contains(">") || !value.contains("<") && !value.contains(">");
+    if !cond {
+        return exec_err!("Angled brackets are not well formed");
+    }
+    Ok(())
+}
 /// Validates the grouping of numbers against the specified format to ensure conformity.
 fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<()> {
     let numbers = get_capture_group!(value_captures, "numbers")?;
@@ -508,24 +519,23 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
 
     // Get the positions of the groupings in the format
     let format_positions = get_grouping_positions(&format_numbers);
-    let number_positions = get_grouping_positions(&numbers);
 
     //Check if format has only ',' or 'G' characters
     let all_character_same = [',', 'G']
         .iter()
         .any(|c| format_positions.iter().all(|(_, d)| *d == *c));
+
     if !all_character_same {
-        return exec_err!(
-            "Malformed integer format related groupings: {format_numbers}. Use only ',' or 'G', not both"
-        );
+        return exec_err!("Malformed integer format related groupings: {format_numbers}. Only groupings with ',' or 'G' are allowed.");
     };
 
-    // Check if the number groupings match the format
-    if format_positions < number_positions {
-        return exec_err!(
-            "Integer numbers's groupings do not match the integer format's groupings: {numbers} vs {format_numbers}"
-        );
+    // Check if the groupings are in the correct order position
+    for (pos, sep) in &format_positions {
+        if pos < &numbers.len() && numbers.chars().rev().nth(*pos) != Some(*sep) {
+            return exec_err!("Malformed integer format related groupings: {format_numbers}.");
+        }
     }
+
     Ok(())
 }
 
