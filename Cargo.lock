@@ -5561,6 +5561,7 @@ dependencies = [
 name = "sail-common"
 version = "0.3.2"
 dependencies = [
+ "arrow",
  "arrow-buffer",
  "arrow-schema",
  "figment",
