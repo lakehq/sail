@@ -62,7 +62,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
             | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
             [DataType::Date32, DataType::Int32]
             | [DataType::Date32, DataType::Interval(YearMonth)]
-            | [DataType::Date32, DataType::Interval(MonthDayNano)] 
+            | [DataType::Date32, DataType::Interval(MonthDayNano)]
             | [DataType::Int32, DataType::Date32]
             | [DataType::Interval(YearMonth), DataType::Date32]
             | [DataType::Interval(MonthDayNano), DataType::Date32] => Ok(DataType::Date32),
