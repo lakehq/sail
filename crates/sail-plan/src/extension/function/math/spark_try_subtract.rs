@@ -55,33 +55,28 @@ impl ScalarUDFImpl for SparkTrySubtract {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.contains(&DataType::Date32) {
-            Ok(DataType::Date32)
-        } else if arg_types.contains(&DataType::Int64) {
-            Ok(DataType::Int64)
-        } else if matches!(
-            arg_types,
-            [DataType::Interval(YearMonth), DataType::Interval(YearMonth)]
-        ) {
-            Ok(DataType::Interval(YearMonth))
-        } else if matches!(
-            arg_types,
-            [
-                DataType::Interval(MonthDayNano),
-                DataType::Interval(MonthDayNano)
-            ]
-        ) {
-            Ok(DataType::Interval(MonthDayNano))
-        } else if matches!(
-            arg_types,
-            [
-                DataType::Timestamp(Microsecond, _),
-                DataType::Duration(Microsecond)
-            ]
-        ) {
-            Ok(DataType::Timestamp(Microsecond, None))
-        } else {
-            Ok(DataType::Int32)
+        match arg_types {
+            [DataType::Int32, DataType::Int32]=> Ok(DataType::Int32),
+            [DataType::Int64, DataType::Int64]
+            | [DataType::Int32,DataType::Int64]
+            | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
+            [DataType::Date32, DataType::Int32]
+            | [DataType::Date32, DataType::Interval(YearMonth)]
+            | [DataType::Date32, DataType::Interval(MonthDayNano)]
+            | [DataType::Int32, DataType::Date32]
+            | [DataType::Interval(YearMonth), DataType::Date32]
+            | [DataType::Interval(MonthDayNano), DataType::Date32] => Ok(DataType::Date32),
+            [DataType::Interval(YearMonth), DataType::Interval(YearMonth)] => Ok(DataType::Interval(YearMonth)),
+            [DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)] => Ok(DataType::Interval(MonthDayNano)),
+            [DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)] => {
+                Ok(DataType::Timestamp(Microsecond, None))
+            }
+
+            _ => Err(unsupported_data_types_exec_err(
+                "try_subtract",
+                "Int32, Int64, Date32, Interval(YearMonth), Interval(MonthDayNano), Timestamp(Microsecond), Duration(Microsecond)",
+                arg_types,
+            )),
         }
     }
 
@@ -141,14 +136,6 @@ impl ScalarUDFImpl for SparkTrySubtract {
 
                 binary_op_scalar_or_array(left, right, result)
             }
-            (DataType::Interval(YearMonth), DataType::Interval(YearMonth)) => {
-                let l= left_arr.as_primitive::<IntervalYearMonthType>();
-                let r = right_arr.as_primitive::<IntervalYearMonthType>();
-                let result = try_op_interval_yearmonth(l, r, i32::checked_sub);
-
-                binary_op_scalar_or_array(left, right, result)
-            }
-
             (DataType::Date32, DataType::Interval(MonthDayNano)) => {
                 let l= left_arr.as_primitive::<Date32Type>();
                 let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
@@ -162,7 +149,13 @@ impl ScalarUDFImpl for SparkTrySubtract {
 
                 binary_op_scalar_or_array(left, right, result)
             }
+            (DataType::Interval(YearMonth), DataType::Interval(YearMonth)) => {
+                let l= left_arr.as_primitive::<IntervalYearMonthType>();
+                let r = right_arr.as_primitive::<IntervalYearMonthType>();
+                let result = try_op_interval_yearmonth(l, r, i32::checked_sub);
 
+                binary_op_scalar_or_array(left, right, result)
+            }
             (DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)) => {
                 let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
                 let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
@@ -240,6 +233,7 @@ impl ScalarUDFImpl for SparkTrySubtract {
                 DataType::Timestamp(Microsecond, None),
                 DataType::Duration(Microsecond),
             ]),
+            (DataType::Utf8, DataType::Int32) => Ok(vec![DataType::Date32, DataType::Int32]),
 
             _ => Err(unsupported_data_types_exec_err(
                 "spark_try_subtract",

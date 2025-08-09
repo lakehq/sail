@@ -1624,7 +1624,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_interval"
+        "success": "ok"
       }
     },
     {
@@ -1646,7 +1646,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_interval"
+        "success": "ok"
       }
     },
     {
@@ -1668,7 +1668,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_interval"
+        "success": "ok"
       }
     },
     {

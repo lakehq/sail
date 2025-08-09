@@ -4,9 +4,10 @@ use arrow::array::{Array, AsArray};
 use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use arrow::datatypes::{
     Date32Type, DurationMicrosecondType, Int32Type, Int64Type, IntervalMonthDayNanoType,
-    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
+    IntervalYearMonthType, TimestampMicrosecondType,
 };
 use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::TimeUnit::Microsecond;
 use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
@@ -52,33 +53,31 @@ impl ScalarUDFImpl for SparkTryAdd {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.contains(&DataType::Date32) {
-            Ok(DataType::Date32)
-        } else if arg_types.contains(&DataType::Int64) {
-            Ok(DataType::Int64)
-        } else if matches!(
-            arg_types,
-            [DataType::Interval(YearMonth), DataType::Interval(YearMonth)]
-        ) {
-            Ok(DataType::Interval(YearMonth))
-        } else if matches!(
-            arg_types,
-            [
-                DataType::Interval(MonthDayNano),
-                DataType::Interval(MonthDayNano)
-            ]
-        ) {
-            Ok(DataType::Interval(MonthDayNano))
-        } else if matches!(
-            arg_types,
-            [
-                DataType::Timestamp(TimeUnit::Microsecond, _),
-                DataType::Duration(TimeUnit::Microsecond)
-            ]
-        ) {
-            Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
-        } else {
-            Ok(DataType::Int32)
+        match arg_types {
+            [DataType::Int32, DataType::Int32] => Ok(DataType::Int32),
+            [DataType::Int64, DataType::Int64]
+            | [DataType::Int32, DataType::Int64]
+            | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
+            [DataType::Date32, _] | [_, DataType::Date32] => Ok(DataType::Date32),
+            [DataType::Interval(YearMonth), _] | [_, DataType::Interval(YearMonth)] => {
+                Ok(DataType::Interval(YearMonth))
+            }
+            [DataType::Interval(MonthDayNano), DataType::Int32]
+            | [DataType::Int32, DataType::Interval(MonthDayNano)]
+            | [DataType::Interval(MonthDayNano), DataType::Int64]
+            | [DataType::Int64, DataType::Interval(MonthDayNano)]
+            | [DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)] => {
+                Ok(DataType::Interval(MonthDayNano))
+            }
+            [DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)] => {
+                Ok(DataType::Timestamp(Microsecond, None))
+            }
+
+            _ => Err(unsupported_data_types_exec_err(
+                "try_add",
+                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
+                arg_types,
+            )),
         }
     }
 
@@ -159,10 +158,7 @@ impl ScalarUDFImpl for SparkTryAdd {
 
                 binary_op_scalar_or_array(left, right, result)
             }
-            (
-                DataType::Timestamp(TimeUnit::Microsecond, _),
-                DataType::Duration(TimeUnit::Microsecond),
-            ) => {
+            (DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)) => {
                 let l = left_arr.as_primitive::<TimestampMicrosecondType>();
                 let r = right_arr.as_primitive::<DurationMicrosecondType>();
                 let result = try_op_timestamp_duration(l, r, i64::checked_add);
@@ -198,8 +194,8 @@ impl ScalarUDFImpl for SparkTryAdd {
                 | (DataType::Interval(YearMonth), DataType::Date32)
                 | (DataType::Interval(YearMonth), DataType::Interval(YearMonth))
                 | (
-                    DataType::Timestamp(TimeUnit::Microsecond, _),
-                    DataType::Duration(TimeUnit::Microsecond)
+                    DataType::Timestamp(Microsecond, _),
+                    DataType::Duration(Microsecond)
                 )
                 | (
                     DataType::Interval(MonthDayNano),
