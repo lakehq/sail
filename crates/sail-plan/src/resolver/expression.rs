@@ -23,6 +23,7 @@ use datafusion_expr::{
     Operator, ScalarUDF,
 };
 use datafusion_functions_nested::expr_fn::array_element;
+use sail_common::datetime::time_unit_to_multiplier;
 use sail_common::spec;
 use sail_common_datafusion::datetime::localize_with_fallback;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
@@ -2250,15 +2251,6 @@ fn qualifier_matches(qualifier: Option<&TableReference>, target: Option<&TableRe
             table,
         }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
         None => true,
-    }
-}
-
-fn time_unit_to_multiplier(time_unit: &TimeUnit) -> i64 {
-    match time_unit {
-        TimeUnit::Second => 1i64,
-        TimeUnit::Millisecond => 1000i64,
-        TimeUnit::Microsecond => 1_000_000i64,
-        TimeUnit::Nanosecond => 1_000_000_000i64,
     }
 }
 
