@@ -2263,7 +2263,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_mod"
+        "success": "ok"
       }
     },
     {
@@ -2285,7 +2285,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_mod"
+        "success": "ok"
       }
     },
     {
@@ -2307,7 +2307,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_mod"
+        "success": "ok"
       }
     },
     {
@@ -2329,7 +2329,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_mod"
+        "success": "ok"
       }
     },
     {
