@@ -113,7 +113,7 @@ impl ScalarUDFImpl for SparkTryMod {
             }
             (l, r) => Err(unsupported_data_types_exec_err(
                 "spark_try_mod",
-                "Int32 o Int64",
+                "Int32, Int64 o Decimal128",
                 &[l.clone(), r.clone()],
             )),
         }
@@ -136,41 +136,35 @@ impl ScalarUDFImpl for SparkTryMod {
         } else if *right == DataType::Null {
             return Ok(vec![left.clone(), left.clone()]);
         }
-        if let (DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)) = (left, right) {
-            let p = (*pl).max(*pr);
-            let s = (*sl).max(*sr);
-            return Ok(vec![DataType::Decimal128(p, s), DataType::Decimal128(p, s)]);
-        }
 
         let is_int = |t: &DataType| matches!(t, DataType::Int32 | DataType::Int64);
-        if let (true, DataType::Decimal128(p, s)) = (is_int(left), right) {
-            return Ok(vec![
-                DataType::Decimal128(*p, *s),
-                DataType::Decimal128(*p, *s),
-            ]);
-        }
-        if let (DataType::Decimal128(p, s), true) = (left, is_int(right)) {
-            return Ok(vec![
-                DataType::Decimal128(*p, *s),
-                DataType::Decimal128(*p, *s),
-            ]);
-        }
 
-        let both_int: bool = matches!(left, DataType::Int32 | DataType::Int64)
-            && matches!(right, DataType::Int32 | DataType::Int64);
-
-        if both_int {
-            if *left == DataType::Int64 || *right == DataType::Int64 {
-                return Ok(vec![DataType::Int64, DataType::Int64]);
-            } else {
-                return Ok(vec![DataType::Int32, DataType::Int32]);
+        match (left, right) {
+            (DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)) => {
+                let p = (*pl).max(*pr);
+                let s = (*sl).max(*sr);
+                Ok(vec![DataType::Decimal128(p, s), DataType::Decimal128(p, s)])
             }
+            (DataType::Decimal128(p, s), r) if is_int(r) => Ok(vec![
+                DataType::Decimal128(*p, *s),
+                DataType::Decimal128(*p, *s),
+            ]),
+            (l, DataType::Decimal128(p, s)) if is_int(l) => Ok(vec![
+                DataType::Decimal128(*p, *s),
+                DataType::Decimal128(*p, *s),
+            ]),
+            (l, r) if is_int(l) && is_int(r) => {
+                if *l == DataType::Int64 || *r == DataType::Int64 {
+                    Ok(vec![DataType::Int64, DataType::Int64])
+                } else {
+                    Ok(vec![DataType::Int32, DataType::Int32])
+                }
+            }
+            _ => Err(unsupported_data_types_exec_err(
+                "spark_try_mod",
+                "Int32, Int64 o Decimal128",
+                types,
+            )),
         }
-
-        Err(unsupported_data_types_exec_err(
-            "spark_try_mod",
-            "Int32 o Int64",
-            types,
-        ))
     }
 }
