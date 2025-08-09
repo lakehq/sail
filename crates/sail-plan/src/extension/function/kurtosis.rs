@@ -1,8 +1,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/kurtosis.rs>
-use datafusion::arrow::array::{ArrayRef, Float64Array, UInt64Array};
+use datafusion::arrow::array::{ArrayRef, Float64Array};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::cast::as_float64_array;
 use datafusion::common::downcast_value;
@@ -15,6 +14,8 @@ use datafusion_common::types::{
     logical_int8, logical_uint16, logical_uint32, logical_uint64, logical_uint8, NativeType,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+
+use crate::extension::function::skewness::SkewnessAccumulator;
 
 pub struct KurtosisFunction {
     signature: Signature,
@@ -84,35 +85,26 @@ impl AggregateUDFImpl for KurtosisFunction {
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
-            Field::new("count", DataType::UInt64, true).into(),
-            Field::new("sum", DataType::Float64, true).into(),
-            Field::new("sum_sqr", DataType::Float64, true).into(),
-            Field::new("sum_cub", DataType::Float64, true).into(),
-            Field::new("sum_four", DataType::Float64, true).into(),
+            Field::new("n", DataType::Float64, true).into(),
+            Field::new("avg", DataType::Float64, true).into(),
+            Field::new("m2", DataType::Float64, true).into(),
+            Field::new("m3", DataType::Float64, true).into(),
+            Field::new("m4", DataType::Float64, true).into(),
         ])
     }
 }
 
-/// Accumulator for calculating the excess kurtosis (Fisher’s definition) with bias correction according to the sample size.
-/// This implementation follows the [DuckDB implementation]:
-/// <https://github.com/duckdb/duckdb/blob/main/src/core_functions/aggregate/distributive/kurtosis.cpp>
 #[derive(Debug, Default)]
 pub struct KurtosisAccumulator {
-    count: u64,
-    sum: f64,
-    sum_sqr: f64,
-    sum_cub: f64,
-    sum_four: f64,
+    s: SkewnessAccumulator,
+    m4: f64,
 }
 
 impl KurtosisAccumulator {
     pub fn new() -> Self {
         Self {
-            count: 0,
-            sum: 0.0,
-            sum_sqr: 0.0,
-            sum_cub: 0.0,
-            sum_four: 0.0,
+            s: SkewnessAccumulator::new(),
+            m4: 0.0,
         }
     }
 }
@@ -121,38 +113,16 @@ impl Accumulator for KurtosisAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = as_float64_array(&values[0])?;
         for value in array.iter().flatten() {
-            self.count += 1;
-            self.sum += value;
-            self.sum_sqr += value.powi(2);
-            self.sum_cub += value.powi(3);
-            self.sum_four += value.powi(4);
+            let (delta, delta_n, delta2, delta_n2) = self.s.update_one(value);
+            self.m4 += -4.0 * delta_n * self.s.m3() - 6.0 * delta_n2 * self.s.m2()
+                + delta * (delta * delta2 - delta_n * delta_n2);
         }
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.count <= 3 {
-            return Ok(ScalarValue::Float64(None));
-        }
-
-        let count_64 = 1_f64 / self.count as f64;
-        let m4 = count_64
-            * (self.sum_four - 4.0 * self.sum_cub * self.sum * count_64
-                + 6.0 * self.sum_sqr * self.sum.powi(2) * count_64.powi(2)
-                - 3.0 * self.sum.powi(4) * count_64.powi(3));
-
-        let m2 = (self.sum_sqr - self.sum.powi(2) * count_64) * count_64;
-        if m2 <= 0.0 {
-            return Ok(ScalarValue::Float64(None));
-        }
-
-        let count = self.count as f64;
-        let numerator = (count - 1.0) * ((count + 1.0) * m4 / m2.powi(2) - 3.0 * (count - 1.0));
-        let denominator = (count - 2.0) * (count - 3.0);
-
-        let target = numerator / denominator;
-
-        Ok(ScalarValue::Float64(Some(target)))
+        self.s
+            .null_or_value(self.s.n() * self.m4 / self.s.m2().powi(2) - 3.0)
     }
 
     fn size(&self) -> usize {
@@ -160,32 +130,39 @@ impl Accumulator for KurtosisAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![
-            ScalarValue::from(self.count),
-            ScalarValue::from(self.sum),
-            ScalarValue::from(self.sum_sqr),
-            ScalarValue::from(self.sum_cub),
-            ScalarValue::from(self.sum_four),
-        ])
+        Ok([self.s.state()?.as_slice(), [self.m4.into()].as_slice()].concat())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = downcast_value!(states[0], UInt64Array);
-        let sums = downcast_value!(states[1], Float64Array);
-        let sum_sqrs = downcast_value!(states[2], Float64Array);
-        let sum_cubs = downcast_value!(states[3], Float64Array);
-        let sum_fours = downcast_value!(states[4], Float64Array);
+        let ns = downcast_value!(states[0], Float64Array);
+        let avgs = downcast_value!(states[1], Float64Array);
+        let m2s = downcast_value!(states[2], Float64Array);
+        let m3s = downcast_value!(states[3], Float64Array);
+        let m4s = downcast_value!(states[4], Float64Array);
 
-        for i in 0..counts.len() {
-            let c = counts.value(i);
-            if c == 0 {
+        for i in 0..ns.len() {
+            let n2 = ns.value(i);
+            if n2 == 0.0 {
                 continue;
             }
-            self.count += c;
-            self.sum += sums.value(i);
-            self.sum_sqr += sum_sqrs.value(i);
-            self.sum_cub += sum_cubs.value(i);
-            self.sum_four += sum_fours.value(i);
+
+            let n1 = self.s.n();
+            let m2_left = self.s.m2();
+            let m3_left = self.s.m3();
+
+            let avg_right = avgs.value(i);
+            let m2_right = m2s.value(i);
+            let m3_right = m3s.value(i);
+            let m4_right = m4s.value(i);
+
+            let (delta, delta_n) = self.s.merge_one(n2, avg_right, m2_right, m3_right);
+
+            // higher order moments computed according to:
+            // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Higher-order_statistics
+            self.m4 += m4_right
+                + delta_n * delta_n * delta_n * delta * n1 * n2 * (n1 * n1 - n1 * n2 + n2 * n2)
+                + 6.0 * delta_n * delta_n * (n1 * n1 * m2_right + n2 * n2 * m2_left)
+                + 4.0 * delta_n * (n1 * m3_right - n2 * m3_left);
         }
 
         Ok(())

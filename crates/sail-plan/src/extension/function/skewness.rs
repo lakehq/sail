@@ -1,11 +1,9 @@
 use std::any::Any;
 use std::fmt::Debug;
-use std::ops::{Div, Mul, Sub};
 
-/// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/skewness.rs>
-use datafusion::arrow::array::{ArrayRef, AsArray};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Float64Type, UInt64Type};
-use datafusion::common::{Result, ScalarValue};
+use datafusion::arrow::array::{ArrayRef, AsArray, Float64Array};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Float64Type};
+use datafusion::common::{downcast_value, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_common::types::{
@@ -86,67 +84,104 @@ impl AggregateUDFImpl for SkewnessFunc {
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![
-            Field::new("count", DataType::UInt64, true).into(),
-            Field::new("sum", DataType::Float64, true).into(),
-            Field::new("sum_sqr", DataType::Float64, true).into(),
-            Field::new("sum_cub", DataType::Float64, true).into(),
+            Field::new("n", DataType::Float64, true).into(),
+            Field::new("avg", DataType::Float64, true).into(),
+            Field::new("m2", DataType::Float64, true).into(),
+            Field::new("m3", DataType::Float64, true).into(),
         ])
     }
 }
 
-/// Accumulator for calculating the skewness
-/// This implementation follows the DuckDB implementation:
-/// <https://github.com/duckdb/duckdb/blob/main/src/core_functions/aggregate/distributive/skew.cpp>
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SkewnessAccumulator {
-    count: u64,
-    sum: f64,
-    sum_sqr: f64,
-    sum_cub: f64,
+    n: f64,
+    avg: f64,
+    m2: f64,
+    m3: f64,
 }
 
 impl SkewnessAccumulator {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            count: 0,
-            sum: 0f64,
-            sum_sqr: 0f64,
-            sum_cub: 0f64,
+            n: 0.0,
+            avg: 0.0,
+            m2: 0.0,
+            m3: 0.0,
         }
+    }
+
+    pub fn update_one(&mut self, value: f64) -> (f64, f64, f64, f64) {
+        self.n += 1.0;
+        let delta = value - self.avg;
+        let delta_n = delta / self.n;
+        self.avg += delta_n;
+        self.m2 += delta * (delta - delta_n);
+
+        let delta2 = delta * delta;
+        let delta_n2 = delta_n * delta_n;
+        self.m3 = self.m3 - 3.0 * delta_n * self.m2 + delta * (delta2 - delta_n2);
+        (delta, delta_n, delta2, delta_n2)
+    }
+
+    pub fn merge_one(
+        &mut self,
+        n_right: f64,
+        avg_right: f64,
+        m2_right: f64,
+        m3_right: f64,
+    ) -> (f64, f64) {
+        self.n += n_right;
+
+        let delta = avg_right - self.avg;
+        let delta_n = if self.n == 0.0 { 0.0 } else { delta / self.n };
+        self.avg += delta_n * n_right;
+
+        // higher order moments computed according to:
+        // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Higher-order_statistics
+        self.m2 += m2_right + delta * delta_n * self.n * n_right;
+
+        self.m3 += m3_right
+            + delta_n * delta_n * delta * self.n * n_right * (self.n - n_right)
+            + 3.0 * delta_n * (self.n * m2_right - n_right * self.m2);
+
+        (delta, delta_n)
+    }
+
+    pub fn n(&self) -> f64 {
+        self.n
+    }
+    pub fn avg(&self) -> f64 {
+        self.avg
+    }
+    pub fn m2(&self) -> f64 {
+        self.m2
+    }
+    pub fn m3(&self) -> f64 {
+        self.m3
+    }
+
+    pub fn null_or_value(&self, value: f64) -> Result<ScalarValue> {
+        Ok(ScalarValue::Float64(
+            if (self.n() == 0.0) || (self.avg() == 0.0) {
+                None
+            } else {
+                Some(value)
+            },
+        ))
     }
 }
 
 impl Accumulator for SkewnessAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion::common::Result<()> {
         let array = values[0].as_primitive::<Float64Type>();
-        for val in array.iter().flatten() {
-            self.count += 1;
-            self.sum += val;
-            self.sum_sqr += val.powi(2);
-            self.sum_cub += val.powi(3);
+        for value in array.iter().flatten() {
+            self.update_one(value);
         }
         Ok(())
     }
+
     fn evaluate(&mut self) -> datafusion::common::Result<ScalarValue> {
-        if self.count <= 2 {
-            return Ok(ScalarValue::Float64(None));
-        }
-        let count = self.count as f64;
-        let t1 = 1f64 / count;
-        let p = (t1 * (self.sum_sqr - self.sum * self.sum * t1))
-            .powi(3)
-            .max(0f64);
-        let div = p.sqrt();
-        if div == 0f64 {
-            return Ok(ScalarValue::Float64(None));
-        }
-        let t2 = count.mul(count.sub(1f64)).sqrt().div(count.sub(2f64));
-        let res = t2
-            * t1
-            * (self.sum_cub - 3f64 * self.sum_sqr * self.sum * t1
-                + 2f64 * self.sum.powi(3) * t1 * t1)
-            / div;
-        Ok(ScalarValue::Float64(Some(res)))
+        self.null_or_value(self.n.sqrt() * self.m3 / (self.m2.powi(3)).sqrt())
     }
 
     fn size(&self) -> usize {
@@ -155,28 +190,29 @@ impl Accumulator for SkewnessAccumulator {
 
     fn state(&mut self) -> datafusion::common::Result<Vec<ScalarValue>> {
         Ok(vec![
-            ScalarValue::from(self.count),
-            ScalarValue::from(self.sum),
-            ScalarValue::from(self.sum_sqr),
-            ScalarValue::from(self.sum_cub),
+            ScalarValue::from(self.n),
+            ScalarValue::from(self.avg),
+            ScalarValue::from(self.m2),
+            ScalarValue::from(self.m3),
         ])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion::common::Result<()> {
-        let counts = states[0].as_primitive::<UInt64Type>();
-        let sums = states[1].as_primitive::<Float64Type>();
-        let sum_sqrs = states[2].as_primitive::<Float64Type>();
-        let sum_cubs = states[3].as_primitive::<Float64Type>();
+        let ns = downcast_value!(states[0], Float64Array);
+        let avgs = downcast_value!(states[1], Float64Array);
+        let m2s = downcast_value!(states[2], Float64Array);
+        let m3s = downcast_value!(states[3], Float64Array);
 
-        for i in 0..counts.len() {
-            let c = counts.value(i);
-            if c == 0 {
+        for i in 0..ns.len() {
+            let n_right = ns.value(i);
+            if n_right == 0.0 {
                 continue;
             }
-            self.count += c;
-            self.sum += sums.value(i);
-            self.sum_sqr += sum_sqrs.value(i);
-            self.sum_cub += sum_cubs.value(i);
+            let avg_right = avgs.value(i);
+            let m2_right = m2s.value(i);
+            let m3_right = m3s.value(i);
+
+            self.merge_one(n_right, avg_right, m2_right, m3_right);
         }
         Ok(())
     }
