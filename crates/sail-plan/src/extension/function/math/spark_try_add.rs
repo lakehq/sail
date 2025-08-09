@@ -51,58 +51,33 @@ impl ScalarUDFImpl for SparkTryAdd {
     fn signature(&self) -> &Signature {
         &self.signature
     }
-    /*
-    correcto
-    SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day);
-     2021-01-02 00:00:00
 
-
-    spark.sql("SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day)").show()
-    +-----------------------------------------------------------------------------+
-    |try_add(TIMESTAMP '2021-01-01 00:00:00', INTERVAL '1 00:00:00' DAY TO SECOND)|
-    +-----------------------------------------------------------------------------+
-    |                                                          2021-01-01 23:00:00|
-    +-----------------------------------------------------------------------------+
-
-    correcto:
-    SELECT try_add(interval 1 year, interval 2 year);
-     3-0
-
-    spark.sql("SELECT try_add(interval 1 year, interval 2 year)").show()
-    +-------------------------------------------------------------------+
-    |try_add(INTERVAL '1-0' YEAR TO MONTH, INTERVAL '2-0' YEAR TO MONTH)|
-    +-------------------------------------------------------------------+
-    |                                               INTERVAL '3-0' YE...|
-    +-------------------------------------------------------------------+
-     */
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.contains(&DataType::Date32) {
-            Ok(DataType::Date32)
-        } else if arg_types.contains(&DataType::Int64) {
-            Ok(DataType::Int64)
-        } else if matches!(
-            arg_types,
-            [DataType::Interval(YearMonth), DataType::Interval(YearMonth)]
-        ) {
-            Ok(DataType::Interval(YearMonth))
-        } else if matches!(
-            arg_types,
-            [
-                DataType::Interval(MonthDayNano),
-                DataType::Interval(MonthDayNano)
-            ]
-        ) {
-            Ok(DataType::Interval(MonthDayNano))
-        } else if matches!(
-            arg_types,
-            [
-                DataType::Timestamp(Microsecond, _),
-                DataType::Duration(Microsecond)
-            ]
-        ) {
-            Ok(DataType::Timestamp(Microsecond, None))
-        } else {
-            Ok(DataType::Int32)
+        match arg_types {
+            [DataType::Int32, DataType::Int32] => Ok(DataType::Int32),
+            [DataType::Int64, DataType::Int64]
+            | [DataType::Int32, DataType::Int64]
+            | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
+            [DataType::Date32, _] | [_, DataType::Date32] => Ok(DataType::Date32),
+            [DataType::Interval(YearMonth), _] | [_, DataType::Interval(YearMonth)] => {
+                Ok(DataType::Interval(YearMonth))
+            }
+            [DataType::Interval(MonthDayNano), DataType::Int32]
+            | [DataType::Int32, DataType::Interval(MonthDayNano)]
+            | [DataType::Interval(MonthDayNano), DataType::Int64]
+            | [DataType::Int64, DataType::Interval(MonthDayNano)]
+            | [DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)] => {
+                Ok(DataType::Interval(MonthDayNano))
+            }
+            [DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)] => {
+                Ok(DataType::Timestamp(Microsecond, None))
+            }
+
+            _ => Err(unsupported_data_types_exec_err(
+                "try_add",
+                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano) con escalar",
+                arg_types,
+            )),
         }
     }
 
