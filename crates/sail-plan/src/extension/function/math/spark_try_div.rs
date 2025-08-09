@@ -54,20 +54,16 @@ impl ScalarUDFImpl for SparkTryDiv {
             | [DataType::Int64, DataType::Int64]
             | [DataType::Int32, DataType::Int64]
             | [DataType::Int64, DataType::Int32] => Ok(DataType::Float64),
-
             [DataType::Interval(YearMonth), DataType::Int32] => Ok(DataType::Interval(YearMonth)),
-
             [DataType::Interval(MonthDayNano), DataType::Int32] => {
                 Ok(DataType::Interval(MonthDayNano))
             }
-
             [DataType::Interval(MonthDayNano), DataType::Int64] => {
                 Ok(DataType::Interval(MonthDayNano))
             }
-
             _ => Err(unsupported_data_types_exec_err(
                 "try_divide",
-                "Int32, Int64 o Interval(YearMonth|MonthDayNano) / escalar",
+                "Int32, Int64 o Interval(YearMonth|MonthDayNano)",
                 arg_types,
             )),
         }

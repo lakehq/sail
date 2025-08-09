@@ -54,10 +54,8 @@ impl ScalarUDFImpl for SparkTryMult {
             [DataType::Int64, DataType::Int64]
             | [DataType::Int32, DataType::Int64]
             | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
-
             [DataType::Interval(YearMonth), DataType::Int32]
             | [DataType::Int32, DataType::Interval(YearMonth)] => Ok(DataType::Interval(YearMonth)),
-
             [DataType::Interval(MonthDayNano), DataType::Int32]
             | [DataType::Int32, DataType::Interval(MonthDayNano)]
             | [DataType::Interval(MonthDayNano), DataType::Int64]
@@ -67,7 +65,7 @@ impl ScalarUDFImpl for SparkTryMult {
 
             _ => Err(unsupported_data_types_exec_err(
                 "try_multiply",
-                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano) con escalar",
+                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
                 arg_types,
             )),
         }

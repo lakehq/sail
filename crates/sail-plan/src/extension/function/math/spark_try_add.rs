@@ -75,7 +75,7 @@ impl ScalarUDFImpl for SparkTryAdd {
 
             _ => Err(unsupported_data_types_exec_err(
                 "try_add",
-                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano) con escalar",
+                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
                 arg_types,
             )),
         }
