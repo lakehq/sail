@@ -93,7 +93,7 @@ use sail_plan::extension::function::math::spark_signum::SparkSignum;
 use sail_plan::extension::function::math::spark_try_add::SparkTryAdd;
 use sail_plan::extension::function::math::spark_try_div::SparkTryDiv;
 use sail_plan::extension::function::math::spark_try_mult::SparkTryMult;
-use sail_plan::extension::function::math::spark_try_substract::SparkTrySubtract;
+use sail_plan::extension::function::math::spark_try_subtract::SparkTrySubtract;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
