@@ -165,11 +165,9 @@ impl ScalarUDFImpl for SparkTryMod {
 
         match (left, right) {
             (DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)) => {
-                let (result_scale, result_precision) =
-                    Self::get_scale_and_precision(pl, sl, pr, sr);
                 Ok(vec![
-                    DataType::Decimal128(result_precision, result_scale),
-                    DataType::Decimal128(result_precision, result_scale),
+                    DataType::Decimal128(*pl, *sl),
+                    DataType::Decimal128(*pr, *sr),
                 ])
             }
             (DataType::Decimal128(p, s), r) if is_int(r) => Ok(vec![
