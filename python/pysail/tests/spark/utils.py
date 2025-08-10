@@ -99,6 +99,10 @@ def get_data_files(path: str, extension: str = ".parquet") -> list[str]:
     return sorted(data_files)
 
 
+def get_data_directory_size(path: str, extension: str = ".parquet") -> int:
+    return sum(os.path.getsize(os.path.join(str(path), f)) for f in os.listdir(path) if f.endswith(extension))
+
+
 def get_partition_structure(path: str) -> set[str]:
     """Get partition structure."""
     partitions = set()
