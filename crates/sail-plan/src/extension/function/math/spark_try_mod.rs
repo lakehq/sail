@@ -164,12 +164,10 @@ impl ScalarUDFImpl for SparkTryMod {
         let is_int = |t: &DataType| matches!(t, DataType::Int32 | DataType::Int64);
 
         match (left, right) {
-            (DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)) => {
-                Ok(vec![
-                    DataType::Decimal128(*pl, *sl),
-                    DataType::Decimal128(*pr, *sr),
-                ])
-            }
+            (DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)) => Ok(vec![
+                DataType::Decimal128(*pl, *sl),
+                DataType::Decimal128(*pr, *sr),
+            ]),
             (DataType::Decimal128(p, s), r) if is_int(r) => Ok(vec![
                 DataType::Decimal128(*p, *s),
                 DataType::Decimal128(*p, *s),
