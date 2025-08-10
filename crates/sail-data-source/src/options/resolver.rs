@@ -437,6 +437,7 @@ impl<'a> DataSourceOptionsResolver<'a> {
         &self,
         options: Vec<HashMap<String, String>>,
     ) -> Result<TableTextOptions> {
+        // CHECK HERE: Add tests.
         let mut text_options = TableTextOptions::default();
         apply_text_read_options(load_default_options()?, &mut text_options)?;
         for opt in options {
@@ -449,6 +450,7 @@ impl<'a> DataSourceOptionsResolver<'a> {
         &self,
         options: Vec<HashMap<String, String>>,
     ) -> Result<TableTextOptions> {
+        // CHECK HERE: Add tests.
         let mut text_options = TableTextOptions::default();
         apply_text_write_options(load_default_options()?, &mut text_options)?;
         for opt in options {
