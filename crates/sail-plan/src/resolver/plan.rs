@@ -3597,8 +3597,7 @@ fn resolve_values_nan_types(
             .iter()
             .try_fold(false, |has_float64, t| match t {
                 adt::DataType::Utf8 | adt::DataType::LargeUtf8 => Err(PlanError::invalid(format!(
-                    "Found invalid input types in {:?}",
-                    schema.field_names()[idx]
+                    "Found incompatible types in column number {idx:?}"
                 ))),
                 adt::DataType::Float64
                 | adt::DataType::Decimal128(..)
