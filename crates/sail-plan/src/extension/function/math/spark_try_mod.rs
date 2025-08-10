@@ -1,7 +1,7 @@
 use std::any::Any;
 
-use arrow::array::{Array, AsArray};
-use arrow::datatypes::{DataType, Decimal128Type, Int32Type, Int64Type};
+use arrow::array::{Array, AsArray, PrimitiveArray};
+use arrow::datatypes::{DataType, DecimalType, Int32Type, Int64Type};
 use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
@@ -97,20 +97,36 @@ impl ScalarUDFImpl for SparkTryMod {
 
                 binary_op_scalar_or_array(left, right, result)
             }
-            (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => {
+            (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+                use arrow::datatypes::Decimal128Type;
+
                 let l = left_arr.as_primitive::<Decimal128Type>();
                 let r = right_arr.as_primitive::<Decimal128Type>();
-                let result =
-                    try_binary_op_primitive::<Decimal128Type, _>(l, r, |a: i128, b: i128| {
-                        if b == 0 {
-                            None
-                        } else {
-                            Some(a % b)
-                        }
-                    });
 
-                binary_op_scalar_or_array(left, right, result)
+                let result_scale: i8 = (*s1).max(*s2);
+                let int_digits_l = *p1 as i8 - *s1;
+                let int_digits_r = *p2 as i8 - *s2;
+                let result_precision: u8 =
+                    (result_scale.saturating_add(int_digits_l.min(int_digits_r)) as u8)
+                        .min(Decimal128Type::MAX_PRECISION);
+
+                let l_mul: i128 = 10i128.wrapping_pow((result_scale - *s1) as u32);
+                let r_mul: i128 = 10i128.wrapping_pow((result_scale - *s2) as u32);
+
+                let raw = try_binary_op_primitive::<Decimal128Type, _>(l, r, |a: i128, b: i128| {
+                    let a = a.checked_mul(l_mul)?;
+                    let b = b.checked_mul(r_mul)?;
+                    if b == 0 {
+                        None
+                    } else {
+                        Some(a % b)
+                    }
+                });
+                let adjusted: PrimitiveArray<Decimal128Type> =
+                    raw.with_precision_and_scale(result_precision, result_scale)?;
+                binary_op_scalar_or_array(left, right, adjusted)
             }
+
             (l, r) => Err(unsupported_data_types_exec_err(
                 "spark_try_mod",
                 "Int32, Int64 o Decimal128",
