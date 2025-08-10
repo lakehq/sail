@@ -99,7 +99,7 @@
   default: "\n"
   description: |
     Sets the single character line separator that should be used for parsing.
-    Supports \\r, \\r\\n and \\n.
+    CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
     For writing, defaults to \\n.
   supported: false
   rust_type: Option<char>
