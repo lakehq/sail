@@ -1,0 +1,31 @@
+# References:
+#   - https://spark.apache.org/docs/latest/sql-data-sources-text.html
+
+- key: line_sep
+  aliases:
+    - lineSep
+    - terminator
+  default: "\n"
+  description: |
+    Sets the single character line separator that should be used for parsing.
+    CSV built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
+    For writing, defaults to \\n.
+  supported: true
+  rust_type: Option<char>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_char
+
+# CHECK HERE: MAKE SURE ALL LISTED ARE SUPPORTED BEFORE MERGING IN
+- key: compression
+  aliases:
+    - codec
+  default: "UNCOMPRESSED"
+  description: |
+    Specifies the file compression type. The following case-insensitive compression types are supported:
+      - `"NONE"`, `"UNCOMPRESSED"`, or `""`
+      - `"BZIP2"` or `"BZ2"`
+      - `"GZIP"` or `"GZ"`
+      - `"ZSTD"` or `"ZST"`
+      - `"SNAPPY"`
+      - `"LZ4"`
+      - `"XZ"`
+  supported: true

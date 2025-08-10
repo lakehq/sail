@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use crate::formats::text::TableTextOptions;
+use crate::options::{
+    load_default_options, load_options, CsvReadOptions, CsvWriteOptions, DeltaReadOptions,
+    DeltaWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
+    TextReadOptions, TextWriteOptions,
+};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
 use datafusion_common::{plan_err, Result};
 use sail_common_datafusion::datasource::TableDeltaOptions;
-
-use crate::options::{
-    load_default_options, load_options, CsvReadOptions, CsvWriteOptions, DeltaReadOptions,
-    DeltaWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
-};
 
 fn char_to_u8(c: char, option: &str) -> Result<u8> {
     if c.is_ascii() {
@@ -299,6 +300,26 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
     Ok(())
 }
 
+fn apply_text_read_options(from: TextReadOptions, to: &mut TableTextOptions) -> Result<()> {
+    if let Some(whole_text) = from.whole_text {
+        to.whole_text = Some(whole_text);
+    }
+    if let Some(Some(line_sep)) = from.line_sep {
+        to.line_sep = Some(line_sep);
+    }
+    Ok(())
+}
+
+fn apply_text_write_options(from: TextWriteOptions, to: &mut TableTextOptions) -> Result<()> {
+    if let Some(Some(line_sep)) = from.line_sep {
+        to.line_sep = Some(line_sep);
+    }
+    if let Some(compression) = from.compression {
+        to.compression = Some(compression);
+    }
+    Ok(())
+}
+
 pub struct DataSourceOptionsResolver<'a> {
     ctx: &'a dyn Session,
 }
@@ -410,6 +431,30 @@ impl<'a> DataSourceOptionsResolver<'a> {
             apply_delta_write_options(load_options(opt)?, &mut delta_options)?;
         }
         Ok(delta_options)
+    }
+
+    pub fn resolve_text_read_options(
+        &self,
+        options: Vec<HashMap<String, String>>,
+    ) -> Result<TableTextOptions> {
+        let mut text_options = TableTextOptions::default();
+        apply_text_read_options(load_default_options()?, &mut text_options)?;
+        for opt in options {
+            apply_text_read_options(load_options(opt)?, &mut text_options)?;
+        }
+        Ok(text_options)
+    }
+
+    pub fn resolve_text_write_options(
+        &self,
+        options: Vec<HashMap<String, String>>,
+    ) -> Result<TableTextOptions> {
+        let mut text_options = TableTextOptions::default();
+        apply_text_write_options(load_default_options()?, &mut text_options)?;
+        for opt in options {
+            apply_text_write_options(load_options(opt)?, &mut text_options)?;
+        }
+        Ok(text_options)
     }
 }
 

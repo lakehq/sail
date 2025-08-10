@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::formats::text::TextFileFormat;
+use crate::options::DataSourceOptionsResolver;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::{Session, TableProvider};
@@ -19,8 +21,7 @@ use datafusion_common::{internal_err, not_impl_err, Result};
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
 };
-
-use crate::options::DataSourceOptionsResolver;
+use serde::{Deserialize, Serialize};
 
 // TODO: infer compression type from file extension
 // TODO: support global configuration to ignore file extension (by setting it to empty)
@@ -329,5 +330,37 @@ impl ListingFormat for ParquetListingFormat {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_parquet_write_options(options)?;
         Ok(Arc::new(ParquetFormat::default().with_options(options)))
+    }
+}
+
+// Text
+pub(crate) type TextTableFormat = ListingTableFormat<TextListingFormat>;
+
+#[derive(Debug, Default)]
+pub(crate) struct TextListingFormat;
+
+impl ListingFormat for TextListingFormat {
+    fn name(&self) -> &'static str {
+        "txt"
+    }
+
+    fn create_read_format(
+        &self,
+        ctx: &dyn Session,
+        options: Vec<HashMap<String, String>>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        let resolver = DataSourceOptionsResolver::new(ctx);
+        let options = resolver.resolve_text_read_options(options)?;
+        Ok(Arc::new(TextFileFormat::new(options)))
+    }
+
+    fn create_write_format(
+        &self,
+        ctx: &dyn Session,
+        options: Vec<HashMap<String, String>>,
+    ) -> Result<Arc<dyn FileFormat>> {
+        let resolver = DataSourceOptionsResolver::new(ctx);
+        let options = resolver.resolve_text_write_options(options)?;
+        Ok(Arc::new(TextFileFormat::new(options)))
     }
 }
