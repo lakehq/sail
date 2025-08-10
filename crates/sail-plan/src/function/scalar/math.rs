@@ -290,10 +290,6 @@ fn hypot(expr1: Expr, expr2: Expr) -> Expr {
     cast(expr_fn::sqrt(sum_squared), DataType::Float64)
 }
 
-fn log1p(expr: Expr) -> Expr {
-    expr_fn::ln(expr + lit(1.0_f64))
-}
-
 fn positive(expr: Expr) -> Expr {
     expr
 }
@@ -302,13 +298,10 @@ fn rint(expr: Expr) -> Expr {
     cast(expr_fn::round(vec![expr]), DataType::Float64)
 }
 
-fn spark_ln(expr: Expr) -> Expr {
+fn positive_or_null(expr: Expr) -> Expr {
     Expr::Case(expr::Case {
         expr: None,
-        when_then_expr: vec![(
-            Box::new(expr.clone().not_eq(lit(0_i64))),
-            Box::new(expr_fn::ln(expr)),
-        )],
+        when_then_expr: vec![(Box::new(expr.clone().gt(lit(0_f64))), Box::new(expr))],
         else_expr: None,
     })
 }
@@ -429,11 +422,20 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("hex", F::udf(SparkHex::new())),
         ("hypot", F::binary(hypot)),
         ("least", F::udf(least_greatest::Least::new())),
-        ("ln", F::unary(spark_ln)),
-        ("log", F::binary(expr_fn::log)),
-        ("log10", F::unary(expr_fn::log10)),
-        ("log1p", F::unary(log1p)),
-        ("log2", F::unary(expr_fn::log2)),
+        ("ln", F::unary(|arg| expr_fn::ln(positive_or_null(arg)))),
+        (
+            "log",
+            F::binary(|base, num| expr_fn::log(base, positive_or_null(num))),
+        ),
+        (
+            "log10",
+            F::unary(|arg| expr_fn::log10(positive_or_null(arg))),
+        ),
+        (
+            "log1p",
+            F::unary(|arg| expr_fn::ln(positive_or_null(arg + lit(1.0_f64)))),
+        ),
+        ("log2", F::unary(|arg| expr_fn::log2(positive_or_null(arg)))),
         ("mod", F::binary_op(Operator::Modulo)),
         ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
         ("pi", F::nullary(expr_fn::pi)),
