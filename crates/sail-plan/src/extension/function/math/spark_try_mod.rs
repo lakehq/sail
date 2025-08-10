@@ -110,18 +110,7 @@ impl ScalarUDFImpl for SparkTryMod {
                     (result_scale.saturating_add(int_digits_l.min(int_digits_r)) as u8)
                         .min(Decimal128Type::MAX_PRECISION);
 
-                let l_mul: i128 = 10i128.wrapping_pow((result_scale - *s1) as u32);
-                let r_mul: i128 = 10i128.wrapping_pow((result_scale - *s2) as u32);
-
-                let raw = try_binary_op_primitive::<Decimal128Type, _>(l, r, |a: i128, b: i128| {
-                    let a = a.checked_mul(l_mul)?;
-                    let b = b.checked_mul(r_mul)?;
-                    if b == 0 {
-                        None
-                    } else {
-                        Some(a % b)
-                    }
-                });
+                let raw = try_binary_op_primitive::<Decimal128Type, _>(l, r, i128::checked_rem);
                 let adjusted: PrimitiveArray<Decimal128Type> =
                     raw.with_precision_and_scale(result_precision, result_scale)?;
                 binary_op_scalar_or_array(left, right, adjusted)
