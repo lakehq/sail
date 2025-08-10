@@ -1,7 +1,8 @@
 use std::any::Any;
 
+use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::{Array, AsArray, PrimitiveArray};
-use arrow::datatypes::{DataType, DecimalType, Int32Type, Int64Type};
+use arrow::datatypes::{DataType, Decimal128Type, DecimalType, Int32Type, Int64Type};
 use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
@@ -29,6 +30,21 @@ impl SparkTryMod {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
+
+    fn get_scale_and_precision(
+        precision_left: &u8,
+        scale_left: &i8,
+        precision_right: &u8,
+        scale_right: &i8,
+    ) -> (i8, u8) {
+        let result_scale: i8 = (*scale_left).max(*scale_right);
+        let int_digits_l: i8 = *precision_left as i8 - *scale_left;
+        let int_digits_r: i8 = *precision_right as i8 - *scale_right;
+        let result_precision: u8 = (result_scale.saturating_add(int_digits_l.min(int_digits_r))
+            as u8)
+            .min(Decimal128Type::MAX_PRECISION);
+        (result_scale, result_precision)
+    }
 }
 
 impl ScalarUDFImpl for SparkTryMod {
@@ -46,7 +62,8 @@ impl ScalarUDFImpl for SparkTryMod {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if let [DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)] = arg_types {
-            return Ok(DataType::Decimal128((*pl).max(*pr), (*sl).max(*sr)));
+            let (result_scale, result_precision) = Self::get_scale_and_precision(pl, sl, pr, sr);
+            return Ok(DataType::Decimal128(result_precision, result_scale));
         }
         if arg_types.contains(&DataType::Int64) {
             Ok(DataType::Int64)
@@ -98,19 +115,21 @@ impl ScalarUDFImpl for SparkTryMod {
                 binary_op_scalar_or_array(left, right, result)
             }
             (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-                use arrow::datatypes::Decimal128Type;
+                let (result_scale, result_precision) =
+                    Self::get_scale_and_precision(p1, s1, p2, s2);
 
-                let l = left_arr.as_primitive::<Decimal128Type>();
-                let r = right_arr.as_primitive::<Decimal128Type>();
+                let l_in = left_arr.as_primitive::<Decimal128Type>();
+                let r_in = right_arr.as_primitive::<Decimal128Type>();
 
-                let result_scale: i8 = (*s1).max(*s2);
-                let int_digits_l = *p1 as i8 - *s1;
-                let int_digits_r = *p2 as i8 - *s2;
-                let result_precision: u8 =
-                    (result_scale.saturating_add(int_digits_l.min(int_digits_r)) as u8)
-                        .min(Decimal128Type::MAX_PRECISION);
+                let l_rescaled = rescale_decimal_up(l_in, *s1, result_scale, *p1)?;
+                let r_rescaled = rescale_decimal_up(r_in, *s2, result_scale, *p2)?;
 
-                let raw = try_binary_op_primitive::<Decimal128Type, _>(l, r, i128::checked_rem);
+                let raw = try_binary_op_primitive::<Decimal128Type, _>(
+                    &l_rescaled,
+                    &r_rescaled,
+                    i128::checked_rem,
+                );
+
                 let adjusted: PrimitiveArray<Decimal128Type> =
                     raw.with_precision_and_scale(result_precision, result_scale)?;
                 binary_op_scalar_or_array(left, right, adjusted)
@@ -146,9 +165,12 @@ impl ScalarUDFImpl for SparkTryMod {
 
         match (left, right) {
             (DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)) => {
-                let p = (*pl).max(*pr);
-                let s = (*sl).max(*sr);
-                Ok(vec![DataType::Decimal128(p, s), DataType::Decimal128(p, s)])
+                let (result_scale, result_precision) =
+                    Self::get_scale_and_precision(pl, sl, pr, sr);
+                Ok(vec![
+                    DataType::Decimal128(result_precision, result_scale),
+                    DataType::Decimal128(result_precision, result_scale),
+                ])
             }
             (DataType::Decimal128(p, s), r) if is_int(r) => Ok(vec![
                 DataType::Decimal128(*p, *s),
@@ -172,4 +194,38 @@ impl ScalarUDFImpl for SparkTryMod {
             )),
         }
     }
+}
+
+fn rescale_decimal_up(
+    arr: &PrimitiveArray<Decimal128Type>,
+    from_scale: i8,
+    to_scale: i8,
+    precision: u8,
+) -> Result<PrimitiveArray<Decimal128Type>> {
+    let delta: u32 = (to_scale - from_scale) as u32;
+
+    let Some(mul): Option<i128> = 10i128.checked_pow(delta) else {
+        let mut b = PrimitiveBuilder::<Decimal128Type>::with_capacity(arr.len());
+        for _ in 0..arr.len() {
+            b.append_null();
+        }
+        let out = b.finish().with_precision_and_scale(precision, to_scale)?;
+        return Ok(out);
+    };
+
+    let mut b = PrimitiveBuilder::<Decimal128Type>::with_capacity(arr.len());
+    for i in 0..arr.len() {
+        if arr.is_null(i) {
+            b.append_null();
+        } else {
+            let v = arr.value(i);
+            match v.checked_mul(mul) {
+                Some(scaled) => b.append_value(scaled),
+                None => b.append_null(),
+            }
+        }
+    }
+    let out: PrimitiveArray<Decimal128Type> =
+        b.finish().with_precision_and_scale(precision, to_scale)?;
+    Ok(out)
 }
