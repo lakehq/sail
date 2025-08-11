@@ -1,9 +1,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, AsArray, Float32Array, Int32Array, IntervalMonthDayNanoBuilder};
+use arrow::array::{Array, AsArray, Float64Array, Int32Array, IntervalMonthDayNanoBuilder};
 use arrow::datatypes::IntervalUnit::MonthDayNano;
-use arrow::datatypes::{Float32Type, Int32Type, IntervalMonthDayNano};
+use arrow::datatypes::{Float64Type, Int32Type, IntervalMonthDayNano};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -62,7 +62,7 @@ impl ScalarUDFImpl for SparkMakeInterval {
         let mut args = args;
         while args.len() < 7 {
             if args.len() == 6 {
-                args.push(ColumnarValue::Scalar(ScalarValue::Float32(Some(0.0))));
+                args.push(ColumnarValue::Scalar(ScalarValue::Float64(Some(0.0))));
             } else {
                 args.push(ColumnarValue::Scalar(ScalarValue::Int32(Some(0))));
             }
@@ -74,20 +74,28 @@ impl ScalarUDFImpl for SparkMakeInterval {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(value))) => {
                     Ok(Int32Array::from_value(*value, number_rows))
                 }
+                ColumnarValue::Scalar(ScalarValue::Null)
+                | ColumnarValue::Scalar(ScalarValue::Int32(None)) => {
+                    Ok(Int32Array::from(vec![None; number_rows]))
+                }
                 other => {
-                    exec_err!("Unsupported  arg {other:?} for Spark function `make_timestamp_ntz`")
+                    exec_err!("Unsupported arg {other:?} for Spark function `make_interval`")
                 }
             }
         };
 
-        let to_float32_array_fn = |col: &ColumnarValue| -> Result<Float32Array> {
+        let to_float64_array_fn = |col: &ColumnarValue| -> Result<Float64Array> {
             match col {
-                ColumnarValue::Array(array) => Ok(array.as_primitive::<Float32Type>().to_owned()),
-                ColumnarValue::Scalar(ScalarValue::Float32(Some(value))) => {
-                    Ok(Float32Array::from_value(*value, number_rows))
+                ColumnarValue::Array(array) => Ok(array.as_primitive::<Float64Type>().to_owned()),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(value))) => {
+                    Ok(Float64Array::from_value(*value, number_rows))
+                }
+                ColumnarValue::Scalar(ScalarValue::Null)
+                | ColumnarValue::Scalar(ScalarValue::Float64(None)) => {
+                    Ok(Float64Array::from(vec![None; number_rows]))
                 }
                 other => {
-                    exec_err!("Unsupported arg {other:?} for Spark function `make_timestamp_ntz`")
+                    exec_err!("Unsupported arg {other:?} for Spark function `make_interval`")
                 }
             }
         };
@@ -98,7 +106,7 @@ impl ScalarUDFImpl for SparkMakeInterval {
         let days = to_int32_array_fn(&args[3]);
         let hours = to_int32_array_fn(&args[4]);
         let mins = to_int32_array_fn(&args[5]);
-        let secs = to_float32_array_fn(&args[6]);
+        let secs = to_float64_array_fn(&args[6]);
         let years = match years {
             Ok(years) => years,
             Err(_) => {
@@ -175,7 +183,7 @@ impl ScalarUDFImpl for SparkMakeInterval {
                 days.value(i),
                 hours.value(i),
                 mins.value(i),
-                secs.value(i) as f64,
+                secs.value(i),
             ) {
                 Ok(interval) => builder.append_value(interval),
                 Err(_) => builder.append_null(),
@@ -197,7 +205,7 @@ impl ScalarUDFImpl for SparkMakeInterval {
         Ok((0..arg_types.len())
             .map(|i| {
                 if i == 6 {
-                    DataType::Float32
+                    DataType::Float64
                 } else {
                     DataType::Int32
                 }
@@ -218,47 +226,47 @@ fn make_interval_month_day_nano(
     use datafusion_common::DataFusionError;
 
     if !sec.is_finite() {
-        return Err(DataFusionError::Execution(
-            "seconds value is NaN or infinite".to_string(),
-        ));
+        return Err(DataFusionError::Execution("seconds is NaN/Inf".into()));
     }
 
     let months = year
         .checked_mul(12)
         .and_then(|v| v.checked_add(month))
-        .ok_or_else(|| {
-            DataFusionError::Execution("overflow while calculating total months".to_string())
-        })?;
+        .ok_or_else(|| DataFusionError::Execution("months overflow".into()))?;
 
     let total_days = week
         .checked_mul(7)
         .and_then(|v| v.checked_add(day))
-        .ok_or_else(|| {
-            DataFusionError::Execution("overflow while calculating total days".to_string())
-        })?;
+        .ok_or_else(|| DataFusionError::Execution("days overflow".into()))?;
 
-    let hours = i64::checked_mul(hour as i64, 3_600_000_000_000).ok_or_else(|| {
-        DataFusionError::Execution("overflow while calculating nanoseconds from hours".to_string())
-    })?;
+    let hours_nanos = (hour as i64)
+        .checked_mul(3_600_000_000_000)
+        .ok_or_else(|| DataFusionError::Execution("hours to nanos overflow".into()))?;
+    let mins_nanos = (min as i64)
+        .checked_mul(60_000_000_000)
+        .ok_or_else(|| DataFusionError::Execution("minutes to nanos overflow".into()))?;
 
-    let mins = i64::checked_mul(min as i64, 60_000_000_000).ok_or_else(|| {
-        DataFusionError::Execution(
-            "overflow while calculating nanoseconds from minutes".to_string(),
-        )
-    })?;
+    let sec_int = sec.trunc() as i64;
+    let frac = sec - sec.trunc();
+    let mut frac_nanos = (frac * 1_000_000_000.0).round() as i64;
 
-    let secs = i64::checked_mul(sec.round() as i64, 1_000_000_000).ok_or_else(|| {
-        DataFusionError::Execution(
-            "overflow while calculating nanoseconds from seconds".to_string(),
-        )
-    })?;
+    if frac_nanos.abs() >= 1_000_000_000 {
+        if frac_nanos > 0 {
+            frac_nanos -= 1_000_000_000;
+        } else {
+            frac_nanos += 1_000_000_000;
+        }
+    }
 
-    let total_nanos = hours
-        .checked_add(mins)
-        .and_then(|v| v.checked_add(secs))
-        .ok_or_else(|| {
-            DataFusionError::Execution("overflow while summing total nanoseconds".to_string())
-        })?;
+    let secs_nanos = sec_int
+        .checked_mul(1_000_000_000)
+        .ok_or_else(|| DataFusionError::Execution("seconds to nanos overflow".into()))?;
+
+    let total_nanos = hours_nanos
+        .checked_add(mins_nanos)
+        .and_then(|v| v.checked_add(secs_nanos))
+        .and_then(|v| v.checked_add(frac_nanos))
+        .ok_or_else(|| DataFusionError::Execution("sum nanos overflow".into()))?;
 
     Ok(IntervalMonthDayNano::new(months, total_days, total_nanos))
 }
